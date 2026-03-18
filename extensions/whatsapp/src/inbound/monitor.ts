@@ -8,6 +8,7 @@ import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { jidToE164, resolveJidToE164 } from "openclaw/plugin-sdk/text-runtime";
+import { getActiveWebListener, type ActiveWebSendOptions } from "../active-listener.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
@@ -40,6 +41,30 @@ export async function monitorWebInbox(options: {
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
   });
+
+  // Track message IDs sent by the bot to detect and skip echoes in self-chat mode.
+  // Without this, the bot's own outgoing messages echo back and are processed as user input.
+  const sentMessageIds = new Set<string>();
+  const trackSendMessage = async (jid: string, content: AnyMessageContent) => {
+    const result = await sock.sendMessage(jid, content);
+    const msgId = (result as { key?: { id?: string } })?.key?.id;
+    if (msgId) {
+      sentMessageIds.add(msgId);
+      const t = setTimeout(() => sentMessageIds.delete(msgId), 120_000);
+      if (typeof t === "object" && t && "unref" in t) (t as NodeJS.Timeout).unref();
+    }
+    return result;
+  };
+
+  // Buffer messages.upsert events that arrive during connection setup.
+  // Without this, messages sent during the reconnection window are lost because
+  // the real handler isn't registered until after all setup code runs.
+  const pendingUpserts: Array<{ type?: string; messages?: Array<WAMessage> }> = [];
+  const bufferUpserts = (upsert: { type?: string; messages?: Array<WAMessage> }) => {
+    pendingUpserts.push(upsert);
+  };
+  sock.ev.on("messages.upsert", bufferUpserts);
+
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
 
@@ -178,6 +203,11 @@ export async function monitorWebInbox(options: {
 
     const group = isJidGroup(remoteJid) === true;
     if (id) {
+      // Skip echoes of our own sent messages (critical for self-chat mode).
+      if (sentMessageIds.has(id)) {
+        sentMessageIds.delete(id);
+        return null;
+      }
       const dedupeKey = `${options.accountId}:${remoteJid}:${id}`;
       if (isRecentInboundMessage(dedupeKey)) {
         return null;
@@ -215,7 +245,7 @@ export async function monitorWebInbox(options: {
       isFromMe: Boolean(msg.key?.fromMe),
       messageTimestampMs,
       connectedAtMs,
-      sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
+      sock: { sendMessage: (jid, content) => trackSendMessage(jid, content) },
       remoteJid,
     });
     if (!access.allowed) {
@@ -320,18 +350,92 @@ export async function monitorWebInbox(options: {
     enriched: EnrichedInboundMessage,
   ) => {
     const chatJid = inbound.remoteJid;
+    let socketDead = false;
     const sendComposing = async () => {
       try {
-        await sock.sendPresenceUpdate("composing", chatJid);
-      } catch (err) {
-        logVerbose(`Presence update failed: ${String(err)}`);
+        if (!socketDead) {
+          await sock.sendPresenceUpdate("composing", chatJid);
+        } else {
+          const listener = getActiveWebListener(options.accountId);
+          if (listener) await listener.sendComposingTo(chatJid);
+        }
+      } catch {
+        // best-effort; typing indicator is non-critical
       }
     };
+
+    // Send via the current active listener, retrying until one is available.
+    // After the original socket dies, this polls for a working listener (new connection).
+    // Subsequent calls reuse the active listener immediately (no reconnect wait per message).
+    const sendViaListener = async (
+      fn: (listener: NonNullable<ReturnType<typeof getActiveWebListener>>) => Promise<unknown>,
+      timeoutMs = 30_000,
+    ) => {
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        const listener = getActiveWebListener(options.accountId);
+        if (listener) {
+          try {
+            await fn(listener);
+            return;
+          } catch {
+            // Listener found but send failed (stale socket), keep polling
+          }
+        }
+        await new Promise((r) => setTimeout(r, 1_000));
+      }
+      throw new Error("Connection Closed - could not deliver after reconnection");
+    };
+
     const reply = async (text: string) => {
-      await sock.sendMessage(chatJid, { text });
+      if (!socketDead) {
+        try {
+          await trackSendMessage(chatJid, { text });
+          return;
+        } catch (err) {
+          if (!/closed|reset|disconnect/i.test(String(err))) throw err;
+          socketDead = true;
+          logVerbose(`Reply socket dead, delivering via active listener to ${chatJid}…`);
+        }
+      }
+      await sendViaListener((l) => l.sendMessage(chatJid, text));
     };
     const sendMedia = async (payload: AnyMessageContent) => {
-      await sock.sendMessage(chatJid, payload);
+      if (!socketDead) {
+        try {
+          await trackSendMessage(chatJid, payload);
+          return;
+        } catch (err) {
+          if (!/closed|reset|disconnect/i.test(String(err))) throw err;
+          socketDead = true;
+          logVerbose(`Media socket dead, delivering via active listener to ${chatJid}…`);
+        }
+      }
+      const p = payload as Record<string, unknown>;
+      const caption = (p.caption as string) ?? "";
+      let mediaBuffer: Buffer | undefined;
+      let mediaType: string | undefined;
+      let sendOpts: ActiveWebSendOptions | undefined;
+      if ("image" in payload) {
+        mediaBuffer = p.image as Buffer;
+        mediaType = (p.mimetype as string) ?? "image/jpeg";
+      } else if ("audio" in payload) {
+        mediaBuffer = p.audio as Buffer;
+        mediaType = (p.mimetype as string) ?? "audio/ogg";
+      } else if ("video" in payload) {
+        mediaBuffer = p.video as Buffer;
+        mediaType = (p.mimetype as string) ?? "video/mp4";
+      } else if ("document" in payload) {
+        mediaBuffer = p.document as Buffer;
+        mediaType = (p.mimetype as string) ?? "application/octet-stream";
+        sendOpts = { fileName: p.fileName as string };
+      } else if ("text" in payload) {
+        await sendViaListener((l) => l.sendMessage(chatJid, p.text as string));
+        return;
+      }
+      await sendViaListener((l) =>
+        l.sendMessage(chatJid, caption, mediaBuffer, mediaType, sendOpts),
+      );
     };
     const timestamp = inbound.messageTimestampMs;
     const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
@@ -430,7 +534,22 @@ export async function monitorWebInbox(options: {
       await enqueueInboundMessage(msg, inbound, enriched);
     }
   };
+  // Replace the buffer handler with the real one and process any buffered events.
+  const evWithOff = sock.ev as unknown as {
+    off?: (event: string, listener: (...args: unknown[]) => void) => void;
+  };
+  if (typeof evWithOff.off === "function") {
+    evWithOff.off("messages.upsert", bufferUpserts as unknown as (...args: unknown[]) => void);
+  }
   sock.ev.on("messages.upsert", handleMessagesUpsert);
+  for (const buffered of pendingUpserts) {
+    try {
+      await handleMessagesUpsert(buffered);
+    } catch (err) {
+      logVerbose(`Failed processing buffered message: ${String(err)}`);
+    }
+  }
+  pendingUpserts.length = 0;
 
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
@@ -453,7 +572,7 @@ export async function monitorWebInbox(options: {
 
   const sendApi = createWebSendApi({
     sock: {
-      sendMessage: (jid: string, content: AnyMessageContent) => sock.sendMessage(jid, content),
+      sendMessage: (jid: string, content: AnyMessageContent) => trackSendMessage(jid, content),
       sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
     },
     defaultAccountId: options.accountId,
@@ -462,22 +581,31 @@ export async function monitorWebInbox(options: {
   return {
     close: async () => {
       try {
+        // Remove ALL event listeners from this socket to prevent listener leak across
+        // reconnect cycles. Previously only specific handlers were removed, but the
+        // listeners added in createWaSocket() (creds.update, connection.update, ws.error)
+        // were never cleaned up, causing progressive degradation over time.
         const ev = sock.ev as unknown as {
+          removeAllListeners?: () => void;
           off?: (event: string, listener: (...args: unknown[]) => void) => void;
           removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
         };
-        const messagesUpsertHandler = handleMessagesUpsert as unknown as (
-          ...args: unknown[]
-        ) => void;
-        const connectionUpdateHandler = handleConnectionUpdate as unknown as (
-          ...args: unknown[]
-        ) => void;
-        if (typeof ev.off === "function") {
-          ev.off("messages.upsert", messagesUpsertHandler);
-          ev.off("connection.update", connectionUpdateHandler);
-        } else if (typeof ev.removeListener === "function") {
-          ev.removeListener("messages.upsert", messagesUpsertHandler);
-          ev.removeListener("connection.update", connectionUpdateHandler);
+        if (typeof ev.removeAllListeners === "function") {
+          ev.removeAllListeners();
+        } else {
+          const messagesUpsertHandler = handleMessagesUpsert as unknown as (
+            ...args: unknown[]
+          ) => void;
+          const connectionUpdateHandler = handleConnectionUpdate as unknown as (
+            ...args: unknown[]
+          ) => void;
+          if (typeof ev.off === "function") {
+            ev.off("messages.upsert", messagesUpsertHandler);
+            ev.off("connection.update", connectionUpdateHandler);
+          } else if (typeof ev.removeListener === "function") {
+            ev.removeListener("messages.upsert", messagesUpsertHandler);
+            ev.removeListener("connection.update", connectionUpdateHandler);
+          }
         }
         sock.ws?.close();
       } catch (err) {
