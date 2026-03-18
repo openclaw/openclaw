@@ -76,13 +76,6 @@ describe("isDangerousHostEnvVarName", () => {
   });
 });
 
-describe("isDangerousHostEnvOverrideVarName", () => {
-  it("blocks GRADLE_USER_HOME as override-only (path redirect, not direct injection)", () => {
-    expect(isDangerousHostEnvOverrideVarName("GRADLE_USER_HOME")).toBe(true);
-    expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
-  });
-});
-
 describe("sanitizeHostExecEnv", () => {
   it("removes dangerous inherited keys while preserving PATH", () => {
     const env = sanitizeHostExecEnv({
@@ -217,6 +210,8 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("editor")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("NPM_CONFIG_USERCONFIG")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("git_config_global")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GRADLE_USER_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("BASH_ENV")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("FOO")).toBe(false);
   });
