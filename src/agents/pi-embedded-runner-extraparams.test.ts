@@ -80,10 +80,8 @@ vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
       const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
       return createOpenRouterSystemCacheWrapper(createOpenRouterWrapper(streamFn, thinkingLevel));
     },
-    resolveProviderCapabilitiesWithPlugin: (params: {
-      provider: string;
-      workspaceDir?: string;
-    }) => resolveProviderCapabilitiesWithPluginMock(params),
+    resolveProviderCapabilitiesWithPlugin: (params: { provider: string; workspaceDir?: string }) =>
+      resolveProviderCapabilitiesWithPluginMock(params),
   };
 });
 
