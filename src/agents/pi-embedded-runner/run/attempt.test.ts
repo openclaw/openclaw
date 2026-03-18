@@ -878,6 +878,47 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(toolCall.name).toBe("SESSIONS_SPAWN");
     expect(toolCall.input?.attachments?.[0]?.content).toBe(attachmentContent);
   });
+
+  it("drops orphaned tool results after replay sanitization removes a tool-call turn", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "read", arguments: {} }],
+        stopReason: "error",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_missing",
+        toolName: "read",
+        content: [{ type: "text", text: "stale result" }],
+        isError: false,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ role?: string }>;
+    };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+  });
 });
 
 describe("wrapStreamFnRepairMalformedToolCallArguments", () => {

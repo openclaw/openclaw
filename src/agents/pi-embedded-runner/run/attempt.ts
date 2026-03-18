@@ -916,9 +916,10 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     if (sanitized === messages) {
       return baseFn(model, context, options);
     }
+    const paired = sanitizeToolUseResultPairing(sanitized);
     const nextContext = {
       ...(context as unknown as Record<string, unknown>),
-      messages: sanitized,
+      messages: paired,
     } as unknown;
     return baseFn(model, nextContext as typeof context, options);
   };
