@@ -1,12 +1,13 @@
 import {
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
+  createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildOpenGroupPolicyWarning,
   collectAllowlistProviderGroupPolicyWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { buildTrafficStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
@@ -14,9 +15,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/matrix";
-import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
-import { buildTrafficStatusSummary } from "../../shared/channel-status-summary.js";
+} from "../runtime-api.js";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import {
@@ -32,6 +31,7 @@ import {
 } from "./matrix/accounts.js";
 import { normalizeMatrixAllowList, normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import { getMatrixRuntime } from "./runtime.js";
+import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import { matrixSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
@@ -39,11 +39,9 @@ import type { CoreConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
 
-type MatrixChannelRuntime = typeof import("./channel.runtime.js").matrixChannelRuntime;
-
-const loadMatrixChannelRuntime = createLazyRuntimeSurface(
+const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
-  ({ matrixChannelRuntime }) => matrixChannelRuntime,
+  "matrixChannelRuntime",
 );
 
 const meta = {
@@ -70,17 +68,16 @@ function normalizeMatrixMessagingTarget(raw: string): string | undefined {
   return stripped || undefined;
 }
 
-const matrixConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) =>
-    resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }),
-  resolveAllowFrom: (account) => account.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) => normalizeMatrixAllowList(allowFrom),
-});
-
-const matrixConfigBase = createScopedChannelConfigBase<ResolvedMatrixAccount, CoreConfig>({
+const matrixConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedMatrixAccount,
+  ReturnType<typeof resolveMatrixAccountConfig>,
+  CoreConfig
+>({
   sectionKey: "matrix",
   listAccountIds: listMatrixAccountIds,
   resolveAccount: (cfg, accountId) => resolveMatrixAccount({ cfg, accountId }),
+  resolveAccessorAccount: ({ cfg, accountId }) =>
+    resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }),
   defaultAccountId: resolveDefaultMatrixAccountId,
   clearBaseFields: [
     "name",
@@ -91,6 +88,8 @@ const matrixConfigBase = createScopedChannelConfigBase<ResolvedMatrixAccount, Co
     "deviceName",
     "initialSyncLimit",
   ],
+  resolveAllowFrom: (account) => account.dm?.allowFrom,
+  formatAllowFrom: (allowFrom) => normalizeMatrixAllowList(allowFrom),
 });
 
 const resolveMatrixDmPolicy = createScopedDmSecurityResolver<ResolvedMatrixAccount>({
@@ -123,7 +122,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   reload: { configPrefixes: ["channels.matrix"] },
   configSchema: buildChannelConfigSchema(MatrixConfigSchema),
   config: {
-    ...matrixConfigBase,
+    ...matrixConfigAdapter,
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({
       accountId: account.accountId,
@@ -132,7 +131,6 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       configured: account.configured,
       baseUrl: account.homeserver,
     }),
-    ...matrixConfigAccessors,
   },
   security: {
     resolveDmPolicy: resolveMatrixDmPolicy,
@@ -174,6 +172,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeMatrixMessagingTarget,
+    resolveOutboundSessionRoute: (params) => resolveMatrixOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: (raw) => {
         const trimmed = raw.trim();

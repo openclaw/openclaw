@@ -1,25 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type {
-  MarkdownTableMode,
-  OpenClawConfig,
-  OutboundReplyPayload,
-} from "openclaw/plugin-sdk/zalo";
-import {
-  createTypingCallbacks,
-  createScopedPairingAccess,
-  createReplyPrefixOptions,
-  issuePairingChallenge,
-  logTypingFailure,
-  resolveDirectDmAuthorizationOutcome,
-  resolveSenderCommandAuthorizationWithRuntime,
-  resolveOutboundMediaUrls,
-  resolveDefaultGroupPolicy,
-  resolveInboundRouteEnvelopeBuilderWithRuntime,
-  sendMediaWithLeadingCaption,
-  resolveWebhookPath,
-  waitForAbortSignal,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/zalo";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
   ZaloApiError,
@@ -48,6 +27,23 @@ import {
   type ZaloWebhookTarget,
 } from "./monitor.webhook.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
+import type { MarkdownTableMode, OpenClawConfig, OutboundReplyPayload } from "./runtime-api.js";
+import {
+  createTypingCallbacks,
+  createScopedPairingAccess,
+  createReplyPrefixOptions,
+  issuePairingChallenge,
+  logTypingFailure,
+  resolveDirectDmAuthorizationOutcome,
+  resolveSenderCommandAuthorizationWithRuntime,
+  resolveOutboundMediaUrls,
+  resolveDefaultGroupPolicy,
+  resolveInboundRouteEnvelopeBuilderWithRuntime,
+  sendMediaWithLeadingCaption,
+  resolveWebhookPath,
+  waitForAbortSignal,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "./runtime-api.js";
 import { getZaloRuntime } from "./runtime.js";
 
 export type ZaloRuntimeEnv = {

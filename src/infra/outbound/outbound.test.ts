@@ -972,9 +972,45 @@ describe("resolveOutboundSessionRoute", () => {
         from?: string;
         to?: string;
         threadId?: string | number;
-        chatType?: "direct" | "group";
+        chatType?: "channel" | "direct" | "group";
       };
     }> = [
+      {
+        name: "WhatsApp group jid",
+        cfg: baseConfig,
+        channel: "whatsapp",
+        target: "120363040000000000@g.us",
+        expected: {
+          sessionKey: "agent:main:whatsapp:group:120363040000000000@g.us",
+          from: "120363040000000000@g.us",
+          to: "120363040000000000@g.us",
+          chatType: "group",
+        },
+      },
+      {
+        name: "Matrix room target",
+        cfg: baseConfig,
+        channel: "matrix",
+        target: "room:!ops:matrix.example",
+        expected: {
+          sessionKey: "agent:main:matrix:channel:!ops:matrix.example",
+          from: "matrix:channel:!ops:matrix.example",
+          to: "room:!ops:matrix.example",
+          chatType: "channel",
+        },
+      },
+      {
+        name: "MSTeams conversation target",
+        cfg: baseConfig,
+        channel: "msteams",
+        target: "conversation:19:meeting_abc@thread.tacv2",
+        expected: {
+          sessionKey: "agent:main:msteams:channel:19:meeting_abc@thread.tacv2",
+          from: "msteams:channel:19:meeting_abc@thread.tacv2",
+          to: "conversation:19:meeting_abc@thread.tacv2",
+          chatType: "channel",
+        },
+      },
       {
         name: "Slack thread",
         cfg: baseConfig,
@@ -1047,6 +1083,18 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Nextcloud Talk room target",
+        cfg: baseConfig,
+        channel: "nextcloud-talk",
+        target: "room:opsroom42",
+        expected: {
+          sessionKey: "agent:main:nextcloud-talk:group:opsroom42",
+          from: "nextcloud-talk:room:opsroom42",
+          to: "nextcloud-talk:opsroom42",
+          chatType: "group",
+        },
+      },
+      {
         name: "BlueBubbles chat_* prefix stripping",
         cfg: baseConfig,
         channel: "bluebubbles",
@@ -1057,6 +1105,18 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Zalo direct target",
+        cfg: perChannelPeerCfg,
+        channel: "zalo",
+        target: "zl:123456",
+        expected: {
+          sessionKey: "agent:main:zalo:direct:123456",
+          from: "zalo:123456",
+          to: "zalo:123456",
+          chatType: "direct",
+        },
+      },
+      {
         name: "Zalo Personal DM target",
         cfg: perChannelPeerCfg,
         channel: "zalouser",
@@ -1064,6 +1124,30 @@ describe("resolveOutboundSessionRoute", () => {
         expected: {
           sessionKey: "agent:main:zalouser:direct:123456",
           chatType: "direct",
+        },
+      },
+      {
+        name: "Nostr prefixed target",
+        cfg: perChannelPeerCfg,
+        channel: "nostr",
+        target: "nostr:npub1example",
+        expected: {
+          sessionKey: "agent:main:nostr:direct:npub1example",
+          from: "nostr:npub1example",
+          to: "nostr:npub1example",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Tlon group target",
+        cfg: baseConfig,
+        channel: "tlon",
+        target: "group:~zod/main",
+        expected: {
+          sessionKey: "agent:main:tlon:group:chat/~zod/main",
+          from: "tlon:group:chat/~zod/main",
+          to: "tlon:chat/~zod/main",
+          chatType: "group",
         },
       },
       {
