@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin } from "../types.js";
 
-const resolvePluginProvidersMock = vi.fn();
+const resolvePluginProvidersMock = vi.hoisted(() => vi.fn());
 
 let buildProviderPluginMethodChoice: typeof import("../provider-wizard.js").buildProviderPluginMethodChoice;
 let providerContractPluginIds: typeof import("./registry.js").providerContractPluginIds;

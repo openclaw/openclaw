@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import type { ThinkLevel } from "../agents/model-selection.js";
 import * as modelSelection from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -164,7 +165,7 @@ async function runStoredOverrideAndExpectModel(params: {
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
-    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
+    vi.spyOn(modelSelection, "resolveThinkingDefault").mockImplementation((): ThinkLevel => "off");
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
@@ -507,7 +508,9 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("passes through the resolved default thinking level", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(modelSelection.resolveThinkingDefault).mockReturnValueOnce("low");
+      vi.spyOn(modelSelection, "resolveThinkingDefault").mockImplementationOnce(
+        (): ThinkLevel => "low",
+      );
 
       await runCronTurn(home, {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,

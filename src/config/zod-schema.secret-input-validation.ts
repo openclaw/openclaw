@@ -1,5 +1,6 @@
-import { z } from "zod";
+import type { RefinementCtx } from "zod";
 import { hasConfiguredSecretInput } from "./types.secrets.js";
+import { z } from "./zod-compat.js";
 
 type TelegramAccountLike = {
   enabled?: unknown;
@@ -42,7 +43,7 @@ function forEachEnabledAccount<T extends { enabled?: unknown }>(
 
 export function validateTelegramWebhookSecretRequirements(
   value: TelegramConfigLike,
-  ctx: z.RefinementCtx,
+  ctx: RefinementCtx,
 ): void {
   const baseWebhookUrl = typeof value.webhookUrl === "string" ? value.webhookUrl.trim() : "";
   const hasBaseWebhookSecret = hasConfiguredSecretInput(value.webhookSecret);
@@ -73,7 +74,7 @@ export function validateTelegramWebhookSecretRequirements(
 
 export function validateSlackSigningSecretRequirements(
   value: SlackConfigLike,
-  ctx: z.RefinementCtx,
+  ctx: RefinementCtx,
 ): void {
   const baseMode = value.mode === "http" || value.mode === "socket" ? value.mode : "socket";
   if (baseMode === "http" && !hasConfiguredSecretInput(value.signingSecret)) {

@@ -1,16 +1,26 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
-import { loadProviderUsageSummary } from "./provider-usage.load.js";
-import { ignoredErrors } from "./provider-usage.shared.js";
 import {
   loadUsageWithAuth,
   type ProviderUsageAuth,
   usageNow,
 } from "./provider-usage.test-support.js";
 
-type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
+type LoadProviderUsageSummary =
+  (typeof import("./provider-usage.load.js"))["loadProviderUsageSummary"];
+type IgnoredErrors = (typeof import("./provider-usage.shared.js"))["ignoredErrors"];
+type ProviderAuth = ProviderUsageAuth<LoadProviderUsageSummary>;
+
+let loadProviderUsageSummary: LoadProviderUsageSummary;
+let ignoredErrors: IgnoredErrors;
 
 describe("provider-usage.load", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ loadProviderUsageSummary } = await import("./provider-usage.load.js"));
+    ({ ignoredErrors } = await import("./provider-usage.shared.js"));
+  });
+
   it("loads snapshots for copilot gemini codex and xiaomi", async () => {
     const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("api.github.com/copilot_internal/user")) {

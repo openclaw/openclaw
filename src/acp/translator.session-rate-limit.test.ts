@@ -8,10 +8,11 @@ import type {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
-import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import { createInMemorySessionStore } from "./session.js";
-import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+
+let AcpGatewayAgent: typeof import("./translator.js").AcpGatewayAgent;
+let resetProviderRuntimeHookCacheForTest: typeof import("../plugins/provider-runtime.js").resetProviderRuntimeHookCacheForTest;
 
 function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
   return {
@@ -120,7 +121,10 @@ async function expectOversizedPromptRejected(params: { sessionId: string; text: 
   sessionStore.clearAllSessionsForTest();
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  ({ AcpGatewayAgent } = await import("./translator.js"));
+  ({ resetProviderRuntimeHookCacheForTest } = await import("../plugins/provider-runtime.js"));
   resetProviderRuntimeHookCacheForTest();
 });
 

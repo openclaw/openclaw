@@ -42,8 +42,7 @@ vi.mock("../../plugins/provider-auth-choice.runtime.js", () => ({
   runProviderModelSelectedHook: runProviderModelSelectedHookMock,
 }));
 
-const { resolvePreferredProviderForAuthChoice } =
-  await import("../../plugins/provider-auth-choice-preference.js");
+let resolvePreferredProviderForAuthChoice: typeof import("../../plugins/provider-auth-choice-preference.js").resolvePreferredProviderForAuthChoice;
 
 type StoredAuthProfile = {
   type?: string;
@@ -73,7 +72,8 @@ describe("provider auth-choice contract", () => {
     lifecycle.setStateDir(env.stateDir);
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue(uniqueProviderContractProviders);
     resolveProviderPluginChoiceMock.mockReset();
@@ -92,6 +92,8 @@ describe("provider auth-choice contract", () => {
         ) ?? null;
       return method ? { provider, method } : null;
     });
+    ({ resolvePreferredProviderForAuthChoice } =
+      await import("../../plugins/provider-auth-choice-preference.js"));
   });
 
   afterEach(async () => {

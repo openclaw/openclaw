@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "./zod-compat.js";
 
 const ExecApprovalForwardTargetSchema = z
   .object({

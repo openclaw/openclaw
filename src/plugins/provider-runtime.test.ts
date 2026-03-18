@@ -11,21 +11,27 @@ type ResolveNonBundledProviderPluginIds =
   typeof import("./providers.js").resolveNonBundledProviderPluginIds;
 type ResolveOwningPluginIdsForProvider =
   typeof import("./providers.js").resolveOwningPluginIdsForProvider;
+type ResolvePluginProvidersParams = Parameters<ResolvePluginProviders>[0];
+type ResolveNonBundledProviderPluginIdsParams = Parameters<ResolveNonBundledProviderPluginIds>[0];
+type ResolveOwningPluginIdsForProviderParams = Parameters<ResolveOwningPluginIdsForProvider>[0];
 
-const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
-const resolveNonBundledProviderPluginIdsMock = vi.fn<ResolveNonBundledProviderPluginIds>(
-  (_) => [] as string[],
+const resolvePluginProvidersMock = vi.fn(
+  (_params: ResolvePluginProvidersParams) => [] as ProviderPlugin[],
 );
-const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForProvider>(
-  (_) => undefined as string[] | undefined,
+const resolveNonBundledProviderPluginIdsMock = vi.fn(
+  (_params: ResolveNonBundledProviderPluginIdsParams) => [] as string[],
+);
+const resolveOwningPluginIdsForProviderMock = vi.fn(
+  (_params: ResolveOwningPluginIdsForProviderParams) => undefined as string[] | undefined,
 );
 
 vi.mock("./providers.js", () => ({
-  resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
-  resolveNonBundledProviderPluginIds: (params: unknown) =>
-    resolveNonBundledProviderPluginIdsMock(params as never),
-  resolveOwningPluginIdsForProvider: (params: unknown) =>
-    resolveOwningPluginIdsForProviderMock(params as never),
+  resolvePluginProviders: (params: ResolvePluginProvidersParams) =>
+    resolvePluginProvidersMock(params),
+  resolveNonBundledProviderPluginIds: (params: ResolveNonBundledProviderPluginIdsParams) =>
+    resolveNonBundledProviderPluginIdsMock(params),
+  resolveOwningPluginIdsForProvider: (params: ResolveOwningPluginIdsForProviderParams) =>
+    resolveOwningPluginIdsForProviderMock(params),
 }));
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
@@ -169,7 +175,7 @@ describe("provider-runtime", () => {
       displayName: "Demo",
       windows: [{ label: "Day", usedPercent: 25 }],
     }));
-    resolvePluginProvidersMock.mockImplementation((_params: unknown) => {
+    resolvePluginProvidersMock.mockImplementation((_params: ResolvePluginProvidersParams) => {
       return [
         {
           id: "demo",

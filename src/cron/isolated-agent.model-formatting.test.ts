@@ -1,6 +1,7 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import type { ThinkLevel } from "../agents/model-selection.js";
 import * as modelSelection from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
@@ -126,7 +127,7 @@ async function expectInvalidModel(home: string, model: string) {
 
 describe("cron model formatting and precedence edge cases", () => {
   beforeEach(() => {
-    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
+    vi.spyOn(modelSelection, "resolveThinkingDefault").mockImplementation((): ThinkLevel => "off");
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });

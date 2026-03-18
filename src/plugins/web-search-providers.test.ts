@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
+import type { PluginWebSearchProviderEntry } from "./types.js";
 import {
   resolvePluginWebSearchProviders,
   resolveRuntimeWebSearchProviders,
@@ -12,7 +13,7 @@ describe("resolvePluginWebSearchProviders", () => {
   });
 
   it("returns bundled providers in auto-detect order", () => {
-    const providers = resolvePluginWebSearchProviders({});
+    const providers: PluginWebSearchProviderEntry[] = resolvePluginWebSearchProviders({});
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
       "brave:brave",
@@ -39,7 +40,7 @@ describe("resolvePluginWebSearchProviders", () => {
   });
 
   it("can augment restrictive allowlists for bundled compatibility", () => {
-    const providers = resolvePluginWebSearchProviders({
+    const providers: PluginWebSearchProviderEntry[] = resolvePluginWebSearchProviders({
       config: {
         plugins: {
           allow: ["openrouter"],
@@ -71,7 +72,7 @@ describe("resolvePluginWebSearchProviders", () => {
   });
 
   it("preserves explicit bundled provider entry state", () => {
-    const providers = resolvePluginWebSearchProviders({
+    const providers: PluginWebSearchProviderEntry[] = resolvePluginWebSearchProviders({
       config: {
         plugins: {
           entries: {

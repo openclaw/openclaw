@@ -4,7 +4,6 @@ import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
 } from "../../../test/helpers/extensions/subagent-hooks.js";
-import { registerDiscordSubagentHooks } from "./subagent-hooks.js";
 
 type ThreadBindingRecord = {
   accountId: string;
@@ -47,6 +46,8 @@ vi.mock("./monitor/thread-bindings.js", () => ({
   listThreadBindingsBySessionKey: hookMocks.listThreadBindingsBySessionKey,
   unbindThreadBindingsBySessionKey: hookMocks.unbindThreadBindingsBySessionKey,
 }));
+
+let registerDiscordSubagentHooks: typeof import("./subagent-hooks.js").registerDiscordSubagentHooks;
 
 function registerHandlersForTest(
   config: Record<string, unknown> = {
@@ -165,7 +166,9 @@ async function expectSubagentSpawningError(params?: {
 }
 
 describe("discord subagent hook handlers", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ registerDiscordSubagentHooks } = await import("./subagent-hooks.js"));
     hookMocks.resolveDiscordAccount.mockClear();
     hookMocks.resolveDiscordAccount.mockImplementation((params?: { accountId?: string }) => ({
       accountId: params?.accountId?.trim() || "default",

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import type { RefinementCtx } from "zod";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
 import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
 import {
@@ -12,6 +12,7 @@ import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
 } from "./telegram-custom-commands.js";
+import { z } from "./zod-compat.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelHealthMonitorSchema,
@@ -122,7 +123,7 @@ const TelegramCustomCommandSchema = z
 
 const validateTelegramCustomCommands = (
   value: { customCommands?: Array<{ command?: string; description?: string }> },
-  ctx: z.RefinementCtx,
+  ctx: RefinementCtx,
 ) => {
   if (!value.customCommands || value.customCommands.length === 0) {
     return;
@@ -1161,9 +1162,9 @@ export const IrcAccountSchemaBase = z
   })
   .strict();
 
-type IrcBaseConfig = z.infer<typeof IrcAccountSchemaBase>;
+type IrcBaseConfig = ReturnType<typeof IrcAccountSchemaBase.parse>;
 
-function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: z.RefinementCtx): void {
+function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: RefinementCtx): void {
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,

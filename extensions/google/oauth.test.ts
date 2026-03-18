@@ -5,8 +5,24 @@ vi.mock("../../src/infra/wsl.js", () => ({
   isWSL2Sync: () => false,
 }));
 
-vi.mock("../../src/infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: async (params: {
+const mockExistsSync = vi.fn();
+const mockReadFileSync = vi.fn();
+const mockRealpathSync = vi.fn();
+const mockReaddirSync = vi.fn();
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    existsSync: (...args: Parameters<typeof actual.existsSync>) => mockExistsSync(...args),
+    readFileSync: (...args: Parameters<typeof actual.readFileSync>) => mockReadFileSync(...args),
+    realpathSync: (...args: Parameters<typeof actual.realpathSync>) => mockRealpathSync(...args),
+    readdirSync: (...args: Parameters<typeof actual.readdirSync>) => mockReaddirSync(...args),
+  };
+});
+
+const fetchGuardStub = vi.fn(
+  async (params: {
     url: string;
     init?: RequestInit;
     fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -19,13 +35,26 @@ vi.mock("../../src/infra/net/fetch-guard.js", () => ({
       release: async () => {},
     };
   },
+);
+
+vi.mock("../../src/infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: (params: Parameters<typeof fetchGuardStub>[0]) => fetchGuardStub(params),
 }));
 
-const mockExistsSync = vi.fn();
-const mockReadFileSync = vi.fn();
-const mockRealpathSync = vi.fn();
-const mockReaddirSync = vi.fn();
-
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (params: Parameters<typeof fetchGuardStub>[0]) => fetchGuardStub(params),
+  };
+});
+vi.mock("openclaw/plugin-sdk/infra-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (params: Parameters<typeof fetchGuardStub>[0]) => fetchGuardStub(params),
+  };
+});
 describe("extractGeminiCliCredentials", () => {
   const normalizePath = (value: string) =>
     value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();

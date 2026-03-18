@@ -13,6 +13,21 @@ vi.mock("./api.js", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/googlechat", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/googlechat")>();
+  return {
+    ...actual,
+    probeGoogleChat: vi.fn().mockResolvedValue({ ok: true }),
+  };
+});
+vi.mock("openclaw/plugin-sdk/googlechat.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/googlechat")>();
+  return {
+    ...actual,
+    probeGoogleChat: vi.fn().mockResolvedValue({ ok: true }),
+  };
+});
+
 import { googlechatPlugin } from "./channel.js";
 import { setGoogleChatRuntime } from "./runtime.js";
 

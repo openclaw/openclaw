@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "./zod-compat.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import { GroupPolicySchema } from "./zod-schema.core.js";
 import {

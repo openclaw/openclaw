@@ -9,17 +9,21 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+type ResolveApiKeyForProviderParams = Parameters<ResolveApiKeyForProvider>[0];
+type ResolveApiKeyForProviderResult = Awaited<ReturnType<ResolveApiKeyForProvider>>;
 
 const resolveApiKeyForProviderMock = vi.hoisted(() =>
-  vi.fn<ResolveApiKeyForProvider>(async () => ({
-    apiKey: "test-key", // pragma: allowlist secret
-    source: "test",
-    mode: "api-key",
-  })),
+  vi.fn(
+    async (_params: ResolveApiKeyForProviderParams): Promise<ResolveApiKeyForProviderResult> => ({
+      apiKey: "test-key", // pragma: allowlist secret
+      source: "test",
+      mode: "api-key",
+    }),
+  ),
 );
 const hasAvailableAuthForProviderMock = vi.hoisted(() =>
-  vi.fn(async (...args: Parameters<ResolveApiKeyForProvider>) => {
-    const resolved = await resolveApiKeyForProviderMock(...args);
+  vi.fn(async (params: ResolveApiKeyForProviderParams) => {
+    const resolved = await resolveApiKeyForProviderMock(params);
     return Boolean(resolved?.apiKey);
   }),
 );

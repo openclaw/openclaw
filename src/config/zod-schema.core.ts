@@ -1,5 +1,5 @@
 import path from "node:path";
-import { z } from "zod";
+import type { RefinementCtx } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -8,6 +8,7 @@ import {
 } from "../secrets/ref-contract.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS } from "./types.models.js";
+import { z } from "./zod-compat.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -520,7 +521,7 @@ export const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
 export const requireOpenAllowFrom = (params: {
   policy?: string;
   allowFrom?: Array<string | number>;
-  ctx: z.RefinementCtx;
+  ctx: RefinementCtx;
   path: Array<string | number>;
   message: string;
 }) => {
@@ -546,7 +547,7 @@ export const requireOpenAllowFrom = (params: {
 export const requireAllowlistAllowFrom = (params: {
   policy?: string;
   allowFrom?: Array<string | number>;
-  ctx: z.RefinementCtx;
+  ctx: RefinementCtx;
   path: Array<string | number>;
   message: string;
 }) => {

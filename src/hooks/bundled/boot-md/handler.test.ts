@@ -27,7 +27,7 @@ vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => createMockLogger(),
 }));
 
-const { default: runBootChecklist } = await import("./handler.js");
+let runBootChecklist: typeof import("./handler.js").default;
 
 function makeEvent(overrides?: Partial<InternalHookEvent>): InternalHookEvent {
   return {
@@ -57,8 +57,10 @@ describe("boot-md handler", () => {
     return cfg;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    ({ default: runBootChecklist } = await import("./handler.js"));
   });
 
   it("skips non-gateway events", async () => {

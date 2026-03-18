@@ -1,6 +1,7 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import type { ThinkLevel } from "../agents/model-selection.js";
 import * as modelSelection from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
@@ -73,7 +74,7 @@ async function runTelegramAnnounceTurn(params: {
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
-    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
+    vi.spyOn(modelSelection, "resolveThinkingDefault").mockImplementation((): ThinkLevel => "off");
     setupIsolatedAgentTurnMocks({ fast: true });
   });
 

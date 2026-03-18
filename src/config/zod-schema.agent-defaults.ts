@@ -1,5 +1,5 @@
-import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
+import { z } from "./zod-compat.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,

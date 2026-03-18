@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -8,12 +8,14 @@ import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-u
 import {
   formatUsageReportLines,
   formatUsageSummaryLine,
-  loadProviderUsageSummary,
   type UsageSummary,
 } from "./provider-usage.js";
 import { loadUsageWithAuth, usageNow } from "./provider-usage.test-support.js";
 
 const minimaxRemainsEndpoint = "api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
+type LoadProviderUsageSummary = (typeof import("./provider-usage.js"))["loadProviderUsageSummary"];
+
+let loadProviderUsageSummary: LoadProviderUsageSummary;
 
 function expectSingleAnthropicProvider(summary: UsageSummary) {
   expect(summary.providers).toHaveLength(1);
@@ -116,6 +118,11 @@ describe("provider usage formatting", () => {
 });
 
 describe("provider usage loading", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ loadProviderUsageSummary } = await import("./provider-usage.js"));
+  });
+
   it("loads usage snapshots with injected auth", async () => {
     const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("api.anthropic.com")) {

@@ -1,4 +1,5 @@
-import { z } from "zod";
+import type { RefinementCtx } from "zod";
+import { z } from "./zod-compat.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelHealthMonitorSchema,
@@ -65,7 +66,7 @@ const WhatsAppSharedSchema = z.object({
 function enforceOpenDmPolicyAllowFromStar(params: {
   dmPolicy: unknown;
   allowFrom: unknown;
-  ctx: z.RefinementCtx;
+  ctx: RefinementCtx;
   message: string;
   path?: Array<string | number>;
 }) {
@@ -88,7 +89,7 @@ function enforceOpenDmPolicyAllowFromStar(params: {
 function enforceAllowlistDmPolicyAllowFrom(params: {
   dmPolicy: unknown;
   allowFrom: unknown;
-  ctx: z.RefinementCtx;
+  ctx: RefinementCtx;
   message: string;
   path?: Array<string | number>;
 }) {

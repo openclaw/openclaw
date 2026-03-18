@@ -20,7 +20,7 @@ WORKDIR /app
 
 COPY --chown=appuser:appuser package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY --chown=appuser:appuser ui/package.json ./ui/package.json
-COPY --chown=appuser:appuser extensions ./extensions
+COPY --chown=appuser:appuser extensions/memory-core/package.json ./extensions/memory-core/package.json
 COPY --chown=appuser:appuser patches ./patches
 
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/home/appuser/.local/share/pnpm/store,sharing=locked \

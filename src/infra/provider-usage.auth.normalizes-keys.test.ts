@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
-import { resolveProviderAuths, type ProviderAuth } from "./provider-usage.auth.js";
+import type { ProviderAuth } from "./provider-usage.auth.js";
+
+let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
 
 describe("resolveProviderAuths key normalization", () => {
   let suiteRoot = "";
@@ -24,6 +26,11 @@ describe("resolveProviderAuths key normalization", () => {
     await fs.rm(suiteRoot, { recursive: true, force: true });
     suiteRoot = "";
     suiteCase = 0;
+  });
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
   });
 
   async function withSuiteHome<T>(

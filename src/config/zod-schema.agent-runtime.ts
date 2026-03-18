@@ -1,6 +1,7 @@
-import { z } from "zod";
+import type { RefinementCtx } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { z } from "./zod-compat.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
 import {
   GroupChatSchema,
@@ -366,7 +367,7 @@ type AllowlistPolicy = {
 
 function addAllowAlsoAllowConflictIssue(
   value: AllowlistPolicy,
-  ctx: z.RefinementCtx,
+  ctx: RefinementCtx,
   message: string,
 ): void {
   if (value.allow && value.allow.length > 0 && value.alsoAllow && value.alsoAllow.length > 0) {

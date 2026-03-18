@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "./zod-compat.js";
 
 const AllowDenyActionSchema = z.union([z.literal("allow"), z.literal("deny")]);
 

@@ -18,12 +18,18 @@ vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => createMockLogger(),
 }));
 
-const { default: runBootChecklist } = await import("./handler.js");
-const { clearInternalHooks, createInternalHookEvent, registerInternalHook, triggerInternalHook } =
-  await import("../../internal-hooks.js");
+let runBootChecklist: typeof import("./handler.js").default;
+let clearInternalHooks: typeof import("../../internal-hooks.js").clearInternalHooks;
+let createInternalHookEvent: typeof import("../../internal-hooks.js").createInternalHookEvent;
+let registerInternalHook: typeof import("../../internal-hooks.js").registerInternalHook;
+let triggerInternalHook: typeof import("../../internal-hooks.js").triggerInternalHook;
 
 describe("boot-md startup hook integration", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ default: runBootChecklist } = await import("./handler.js"));
+    ({ clearInternalHooks, createInternalHookEvent, registerInternalHook, triggerInternalHook } =
+      await import("../../internal-hooks.js"));
     runBootOnce.mockClear();
     clearInternalHooks();
   });

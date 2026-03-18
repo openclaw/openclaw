@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "./zod-compat.js";
 
 export const ChannelHeartbeatVisibilitySchema = z
   .object({

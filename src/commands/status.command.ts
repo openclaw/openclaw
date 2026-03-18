@@ -110,7 +110,9 @@ export async function statusCommand(
       }),
     );
   const securityAudit = opts.json
-    ? await runSecurityAudit()
+    ? opts.all
+      ? await runSecurityAudit()
+      : undefined
     : await withProgress(
         {
           label: "Running security audit…",
@@ -220,12 +222,13 @@ export async function statusCommand(
           gatewayService: daemon,
           nodeService: nodeDaemon,
           agents: agentStatus,
-          securityAudit,
           secretDiagnostics,
           pluginCompatibility: {
             count: pluginCompatibility.length,
             warnings: pluginCompatibility,
           },
+          ...(securityAudit ? { securityAudit } : {}),
+          ...(securityAudit ? { securityAudit } : {}),
           ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
         },
         null,
@@ -233,6 +236,10 @@ export async function statusCommand(
       ),
     );
     return;
+  }
+
+  if (!securityAudit) {
+    throw new Error("status security audit unavailable");
   }
 
   const rich = true;

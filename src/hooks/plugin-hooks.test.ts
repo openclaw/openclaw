@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -106,8 +105,8 @@ describe("bundle plugin hooks", () => {
     expect(entries[0]?.hook.name).toBe("bundle-hook");
     expect(entries[0]?.hook.source).toBe("openclaw-plugin");
     expect(entries[0]?.hook.pluginId).toBe("sample-bundle");
-    expect(entries[0]?.hook.baseDir).toBe(
-      fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
+    expect(await fsp.realpath(entries[0]?.hook.baseDir ?? "")).toBe(
+      await fsp.realpath(path.join(bundleRoot, "hooks", "bundle-hook")),
     );
     expect(entries[0]?.metadata?.events).toEqual(["command:new"]);
   });

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { z } from "zod";
+import { z } from "./zod-compat.js";
 import { InstallRecordShape } from "./zod-schema.installs.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
