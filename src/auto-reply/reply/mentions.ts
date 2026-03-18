@@ -228,5 +228,9 @@ export function stripMentions(
   }
   // Generic mention patterns like @123456789 or plain digits
   result = result.replace(/@[0-9+]{5,}/g, " ");
+  // Slack mention syntax can appear even when the plugin mention registry isn't available in-process.
+  if (providerId === "slack") {
+    result = result.replace(/<@[^>]+>/g, " ");
+  }
   return result.replace(/\s+/g, " ").trim();
 }

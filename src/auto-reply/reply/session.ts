@@ -34,7 +34,7 @@ import { resolveConversationIdFromTargets } from "../../infra/outbound/conversat
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -153,17 +153,53 @@ function resolveBoundAcpSessionForReset(params: {
 }): string | undefined {
   const activeSessionKey = normalizeConversationText(params.ctx.SessionKey);
   const bindingContext = resolveAcpResetBindingContext(params.ctx);
-  return resolveEffectiveResetTargetSessionKey({
+  const resolvedAnyTarget = resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
     channel: bindingContext?.channel,
     accountId: bindingContext?.accountId,
     conversationId: bindingContext?.conversationId,
     parentConversationId: bindingContext?.parentConversationId,
     activeSessionKey,
-    allowNonAcpBindingSessionKey: false,
+    // Detect active binding targets even if they point to non-ACP session keys.
+    allowNonAcpBindingSessionKey: true,
     skipConfiguredFallbackWhenActiveSessionNonAcp: true,
     fallbackToActiveAcpWhenUnbound: false,
   });
+  // If an active binding points to a non-ACP session key, do not bypass resets here.
+  if (resolvedAnyTarget && !isAcpSessionKey(resolvedAnyTarget)) {
+    return undefined;
+  }
+  if (resolvedAnyTarget) {
+    return resolvedAnyTarget;
+  }
+  // Fallback: if we're currently in an ACP session key and config includes a matching ACP binding,
+  // treat it as bound even when binding adapters are unavailable in this process.
+  if (!activeSessionKey || !isAcpSessionKey(activeSessionKey) || !bindingContext) {
+    return undefined;
+  }
+  const bindings = Array.isArray((params.cfg as { bindings?: unknown }).bindings)
+    ? ((params.cfg as { bindings?: unknown[] }).bindings ?? [])
+    : [];
+  for (const binding of bindings) {
+    const b = binding as {
+      type?: string;
+      match?: { channel?: string; accountId?: string; peer?: { kind?: string; id?: string } };
+    };
+    if (b?.type !== "acp") {
+      continue;
+    }
+    const match = b.match;
+    const peer = match?.peer;
+    if (
+      match?.channel === bindingContext.channel &&
+      (match?.accountId ?? "default") === bindingContext.accountId &&
+      peer?.kind === "channel" &&
+      peer?.id === bindingContext.conversationId
+    ) {
+      return activeSessionKey;
+    }
+  }
+  return undefined;
 }
 
 export async function initSessionState(params: {

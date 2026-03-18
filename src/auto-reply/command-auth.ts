@@ -229,8 +229,14 @@ function resolveSenderCandidates(params: {
     candidates.push(trimmed);
   };
   if (params.providerId === "whatsapp") {
+    // WhatsApp LID sender IDs are not stable identifiers for command auth.
+    // Prefer the E164 when present so allowFrom behaves as expected.
+    const senderId = (params.senderId ?? "").trim();
+    const isLid = senderId.toLowerCase().endsWith("@lid");
     pushCandidate(params.senderE164);
-    pushCandidate(params.senderId);
+    if (!isLid) {
+      pushCandidate(params.senderId);
+    }
   } else {
     pushCandidate(params.senderId);
     pushCandidate(params.senderE164);
@@ -275,7 +281,11 @@ export function resolveCommandAuthorization(params: {
 
   const allowFromRaw = plugin?.config?.resolveAllowFrom
     ? plugin.config.resolveAllowFrom({ cfg, accountId: ctx.AccountId })
-    : [];
+    : ((providerId &&
+        (cfg as unknown as { channels?: Record<string, { allowFrom?: unknown }> }).channels?.[
+          providerId
+        ]?.allowFrom) ??
+      []);
   const allowFromList = formatAllowFromList({
     plugin,
     cfg,
@@ -350,7 +360,10 @@ export function resolveCommandAuthorization(params: {
     isInternalMessageChannel(ctx.Provider) &&
     Array.isArray(ctx.GatewayClientScopes) &&
     ctx.GatewayClientScopes.includes("operator.admin");
-  const ownerAllowlistConfigured = ownerAllowAll || explicitOwners.length > 0;
+  const ownerAllowlistConfigured =
+    ownerAllowAll ||
+    explicitOwners.length > 0 ||
+    (!allowAll && ownerCandidatesForCommands.length > 0);
   const senderIsOwner = senderIsOwnerByIdentity || senderIsOwnerByScope || ownerAllowAll;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
