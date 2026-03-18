@@ -55,6 +55,7 @@ describe("amazon-bedrock provider plugin", () => {
       config: {
         models: {
           providers: {
+            // "bedrock" is a known alias that normalizeProviderId maps to "amazon-bedrock"
             bedrock: {
               models: [{ id: arn, name: "Claude Sonnet 4.6 via Inference Profile" }],
             },

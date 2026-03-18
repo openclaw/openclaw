@@ -420,9 +420,10 @@ export function isAnthropicBedrockModel(modelId: string, modelName?: string): bo
 
 /**
  * Returns true when the ID looks like a short Application Inference Profile ID
- * (opaque alphanumeric string without dots, colons, or slashes).
- * Examples: "gdkqufd9flgg", "s3rr0t98ews8"
+ * (opaque alphanumeric-and-hyphen string, cannot start/end with a hyphen).
+ * Requires at least 2 characters; single-char IDs are not realistic model IDs.
+ * Examples: "gdkqufd9flgg", "s3rr0t98ews8", "my-claude-profile"
  */
 function looksLikeShortProfileId(normalizedId: string): boolean {
-  return /^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(normalizedId) || /^[a-z0-9]+$/.test(normalizedId);
+  return /^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(normalizedId);
 }
