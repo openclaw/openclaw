@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveAccount } from "./accounts.js";
-import { createNaverWorksPlugin } from "./channel.js";
+import { createNaverWorksPlugin, resolveAutoThinkingDirective } from "./channel.js";
 
 describe("naverworks channel plugin", () => {
   it("marks account configured when botId + auth are present", async () => {
@@ -49,5 +49,51 @@ describe("naverworks channel plugin", () => {
         text: "hello",
       }),
     ).rejects.toThrow(/not configured for outbound delivery/i);
+  });
+
+  it("resolves auto thinking directive from keyword rules", () => {
+    const account = resolveAccount(
+      {
+        channels: {
+          naverworks: {
+            autoThinking: {
+              enabled: true,
+              defaultLevel: "medium",
+              lowKeywords: ["요약"],
+              highKeywords: ["분석", "비교"],
+            },
+          },
+        },
+      },
+      "default",
+    );
+
+    expect(resolveAutoThinkingDirective({ text: "이 로그 좀 분석해줘", account })).toBe(
+      "/think high",
+    );
+    expect(resolveAutoThinkingDirective({ text: "긴 문서를 요약해줘", account })).toBe(
+      "/think low",
+    );
+    expect(resolveAutoThinkingDirective({ text: "안녕", account })).toBe("/think medium");
+  });
+
+  it("does not auto-inject when user already sent a think directive", () => {
+    const account = resolveAccount(
+      {
+        channels: {
+          naverworks: {
+            autoThinking: {
+              enabled: true,
+              defaultLevel: "high",
+            },
+          },
+        },
+      },
+      "default",
+    );
+
+    expect(
+      resolveAutoThinkingDirective({ text: "/think low 그리고 답변해줘", account }),
+    ).toBeUndefined();
   });
 });

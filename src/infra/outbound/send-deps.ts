@@ -11,8 +11,7 @@ type LegacyOutboundSendDeps = {
 
 /**
  * Dynamic bag of per-channel send functions, keyed by channel ID.
- * Each outbound adapter resolves its own function from this record and
- * falls back to a direct import when the key is absent.
+ * Keep legacy aliases here for older plugin/runtime imports.
  */
 export type OutboundSendDeps = LegacyOutboundSendDeps & { [channelId: string]: unknown };
 

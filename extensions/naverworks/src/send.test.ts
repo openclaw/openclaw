@@ -187,6 +187,40 @@ describe("sendMessageNaverWorks", () => {
     expect(body).toContain('"text":"# Report\\n- cpu 40%"');
   });
 
+  it("posts sticker payload when sticker is provided", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await sendMessageNaverWorks({
+      account: {
+        accountId: "default",
+        enabled: true,
+        webhookPath: "/naverworks/events",
+        dmPolicy: "open",
+        allowFrom: [],
+        botName: "bot",
+        strictBinding: true,
+        botId: "bot-1",
+        accessToken: "token-1",
+        tokenUrl: "https://auth.worksmobile.com/oauth2/v2.0/token",
+        apiBaseUrl: "https://www.worksapis.com/v1.0",
+        markdownMode: "auto-flex",
+        markdownTheme: "auto",
+      },
+      toUserId: "user-1",
+      sticker: {
+        packageId: "1",
+        stickerId: "2",
+      },
+    });
+
+    expect(result).toEqual({ ok: true });
+    const body = getRequestBody(fetchMock);
+    expect(body).toContain('"type":"sticker"');
+    expect(body).toContain('"packageId":"1"');
+    expect(body).toContain('"stickerId":"2"');
+  });
+
   it("issues oauth token with JWT auth when accessToken is omitted", async () => {
     const fetchMock = vi
       .fn()

@@ -1,3 +1,8 @@
+export type NaverWorksStickerRef = {
+  packageId: string;
+  stickerId: string;
+};
+
 export type NaverWorksAccount = {
   accountId: string;
   enabled: boolean;
@@ -19,6 +24,18 @@ export type NaverWorksAccount = {
   apiBaseUrl: string;
   markdownMode: "plain" | "auto-flex";
   markdownTheme: "light" | "dark" | "auto";
+  autoThinking?: {
+    enabled: boolean;
+    defaultLevel?: "low" | "medium" | "high";
+    lowKeywords: string[];
+    highKeywords: string[];
+  };
+  statusStickers?: {
+    enabled: boolean;
+    received?: NaverWorksStickerRef;
+    processing?: NaverWorksStickerRef;
+    failed?: NaverWorksStickerRef;
+  };
 };
 
 export type NaverWorksInboundEvent = {

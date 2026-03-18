@@ -141,4 +141,67 @@ describe("resolveAccount", () => {
 
     expect(account.markdownMode).toBe("auto-flex");
   });
+
+  it("merges statusStickers with account override", () => {
+    const account = resolveAccount(
+      {
+        channels: {
+          naverworks: {
+            statusStickers: {
+              enabled: true,
+              received: { packageId: "1", stickerId: "1" },
+              failed: { packageId: "1", stickerId: "3" },
+            },
+            accounts: {
+              default: {
+                statusStickers: {
+                  processing: { packageId: "1", stickerId: "2" },
+                },
+              },
+            },
+          },
+        },
+      },
+      "default",
+    );
+
+    expect(account.statusStickers?.enabled).toBe(true);
+    expect(account.statusStickers?.received).toEqual({ packageId: "1", stickerId: "1" });
+    expect(account.statusStickers?.processing).toEqual({ packageId: "1", stickerId: "2" });
+    expect(account.statusStickers?.failed).toEqual({ packageId: "1", stickerId: "3" });
+  });
+
+  it("applies contextual default status stickers when enabled without explicit refs", () => {
+    const account = resolveAccount(
+      {
+        channels: {
+          naverworks: {
+            statusStickers: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      "default",
+    );
+
+    expect(account.statusStickers?.received).toEqual({ packageId: "789", stickerId: "10855" });
+    expect(account.statusStickers?.processing).toEqual({
+      packageId: "534",
+      stickerId: "2429",
+    });
+    expect(account.statusStickers?.failed).toEqual({ packageId: "1", stickerId: "3" });
+  });
+
+  it("enables status stickers by default", () => {
+    const account = resolveAccount({ channels: { naverworks: {} } }, "default");
+
+    expect(account.statusStickers?.enabled).toBe(true);
+    expect(account.statusStickers?.received).toEqual({ packageId: "789", stickerId: "10855" });
+    expect(account.statusStickers?.processing).toEqual({
+      packageId: "534",
+      stickerId: "2429",
+    });
+    expect(account.statusStickers?.failed).toEqual({ packageId: "1", stickerId: "3" });
+  });
 });

@@ -1,6 +1,8 @@
 import {
   DEFAULT_ACCOUNT_ID,
   buildChannelConfigSchema,
+  type ChannelOutboundContext,
+  type ChannelPlugin,
   registerPluginHttpRoute,
   resolveOutboundMediaUrls,
   setAccountEnabledInConfigSection,
@@ -10,6 +12,7 @@ import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { getNaverWorksRuntime } from "./runtime.js";
 import { resolveNaverWorksAccessToken, sendMessageNaverWorks } from "./send.js";
+import type { NaverWorksAccount } from "./types.js";
 import { createNaverWorksWebhookHandler } from "./webhook-handler.js";
 
 const CHANNEL_ID = "naverworks";
@@ -34,11 +37,142 @@ const NaverWorksConfigSchema = buildChannelConfigSchema(
       jwtIssuer: z.string().optional(),
       apiBaseUrl: z.string().optional(),
       markdownMode: z.enum(["plain", "auto-flex"]).optional(),
+      autoThinking: z
+        .object({
+          enabled: z.boolean().optional(),
+          defaultLevel: z.enum(["low", "medium", "high"]).optional(),
+          lowKeywords: z.array(z.string()).optional(),
+          highKeywords: z.array(z.string()).optional(),
+        })
+        .optional(),
+      statusStickers: z
+        .object({
+          enabled: z.boolean().optional(),
+          received: z.object({ packageId: z.string(), stickerId: z.string() }).optional(),
+          processing: z.object({ packageId: z.string(), stickerId: z.string() }).optional(),
+          failed: z.object({ packageId: z.string(), stickerId: z.string() }).optional(),
+        })
+        .optional(),
     })
     .passthrough(),
 );
 
 const activeRouteUnregisters = new Map<string, () => void>();
+const INLINE_THINK_DIRECTIVE_RE = /(^|\s)\/(?:think|thinking|t)(?::|\s|$)/i;
+const PROCESSING_STICKER_INTERVAL_MS = 60_000;
+const FAILED_REPLY_NOTICE = "처리에 실패했습니다. 잠시 후 다시 시도해주세요.";
+
+type AutoThinkingLevel = "low" | "medium" | "high";
+
+function resolveAutoThinkingLevel(params: {
+  text?: string;
+  account: ReturnType<typeof resolveAccount>;
+}): AutoThinkingLevel | undefined {
+  const text = params.text?.trim();
+  if (!text || !params.account.autoThinking?.enabled) {
+    return undefined;
+  }
+  if (INLINE_THINK_DIRECTIVE_RE.test(text)) {
+    return undefined;
+  }
+
+  const normalized = text.toLowerCase();
+  const { highKeywords = [], lowKeywords = [] } = params.account.autoThinking;
+  if (highKeywords.some((keyword) => keyword && normalized.includes(keyword.toLowerCase()))) {
+    return "high";
+  }
+  if (lowKeywords.some((keyword) => keyword && normalized.includes(keyword.toLowerCase()))) {
+    return "low";
+  }
+  return params.account.autoThinking.defaultLevel;
+}
+
+export function resolveAutoThinkingDirective(params: {
+  text?: string;
+  account: ReturnType<typeof resolveAccount>;
+}): string | undefined {
+  const level = resolveAutoThinkingLevel(params);
+  return level ? `/think ${level}` : undefined;
+}
+
+async function sendStatusSticker(params: {
+  account: ReturnType<typeof resolveAccount>;
+  userId: string;
+  phase: "received" | "processing" | "failed";
+  log?: {
+    info?: (...args: unknown[]) => void;
+    warn?: (...args: unknown[]) => void;
+    error?: (...args: unknown[]) => void;
+  };
+}): Promise<void> {
+  if (!params.account.statusStickers?.enabled) {
+    params.log?.info?.(
+      `naverworks[${params.account.accountId}]: status sticker skipped phase=${params.phase} (statusStickers disabled)`,
+    );
+    return;
+  }
+  const sticker = params.account.statusStickers[params.phase];
+  if (!sticker) {
+    params.log?.warn?.(
+      `naverworks[${params.account.accountId}]: status sticker skipped phase=${params.phase} (sticker not configured)`,
+    );
+    return;
+  }
+
+  params.log?.info?.(
+    `naverworks[${params.account.accountId}]: sending ${params.phase} sticker to ${params.userId} (packageId=${sticker.packageId}, stickerId=${sticker.stickerId})`,
+  );
+
+  try {
+    const sent = await sendMessageNaverWorks({
+      account: params.account,
+      toUserId: params.userId,
+      sticker,
+    });
+    if (!sent.ok) {
+      params.log?.warn?.(
+        `naverworks[${params.account.accountId}]: failed to send ${params.phase} sticker to ${params.userId} (reason=${sent.reason}, status=${sent.status ?? "unknown"}, body=${sent.body?.slice(0, 300) ?? ""})`,
+      );
+      return;
+    }
+    params.log?.info?.(
+      `naverworks[${params.account.accountId}]: sent ${params.phase} sticker to ${params.userId}`,
+    );
+  } catch (error) {
+    params.log?.error?.(
+      `naverworks[${params.account.accountId}]: status sticker send threw phase=${params.phase} userId=${params.userId}: ${String(error)}`,
+    );
+  }
+}
+
+function startProcessingStickerHeartbeat(params: {
+  account: ReturnType<typeof resolveAccount>;
+  userId: string;
+  log?: {
+    info?: (...args: unknown[]) => void;
+    warn?: (...args: unknown[]) => void;
+    error?: (...args: unknown[]) => void;
+  };
+}): () => void {
+  params.log?.info?.(
+    `naverworks[${params.account.accountId}]: starting processing sticker heartbeat for ${params.userId} intervalMs=${PROCESSING_STICKER_INTERVAL_MS}`,
+  );
+  const timer = setInterval(() => {
+    void sendStatusSticker({
+      account: params.account,
+      userId: params.userId,
+      phase: "processing",
+      log: params.log,
+    });
+  }, PROCESSING_STICKER_INTERVAL_MS);
+
+  return () => {
+    clearInterval(timer);
+    params.log?.info?.(
+      `naverworks[${params.account.accountId}]: stopped processing sticker heartbeat for ${params.userId}`,
+    );
+  };
+}
 
 function hasNaverWorksOutboundAuth(account: ReturnType<typeof resolveAccount>): boolean {
   if (account.accessToken?.trim()) {
@@ -60,7 +194,11 @@ async function downloadInboundMedia(params: {
   runtime: ReturnType<typeof getNaverWorksRuntime>;
   account: ReturnType<typeof resolveAccount>;
   event: { mediaUrl?: string; mediaMimeType?: string; mediaFileName?: string; mediaKind?: string };
-  log?: { warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void };
+  log?: {
+    info?: (...args: unknown[]) => void;
+    warn?: (...args: unknown[]) => void;
+    error?: (...args: unknown[]) => void;
+  };
 }): Promise<{ path?: string; mediaType?: string }> {
   const mediaUrl = params.event.mediaUrl?.trim();
   if (!mediaUrl) {
@@ -103,7 +241,7 @@ async function downloadInboundMedia(params: {
   }
 }
 
-export function createNaverWorksPlugin() {
+export function createNaverWorksPlugin(): ChannelPlugin<NaverWorksAccount> {
   return {
     id: CHANNEL_ID,
 
@@ -170,7 +308,7 @@ export function createNaverWorksPlugin() {
 
     outbound: {
       deliveryMode: "direct",
-      sendText: async ({ cfg, to, text, accountId }) => {
+      sendText: async ({ cfg, to, text, accountId }: ChannelOutboundContext) => {
         const account = resolveAccount(cfg as Record<string, unknown>, accountId);
         const sent = await sendMessageNaverWorks({
           account,
@@ -192,7 +330,7 @@ export function createNaverWorksPlugin() {
           messageId: `naverworks:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
         };
       },
-      sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) => {
+      sendMedia: async ({ cfg, to, text, mediaUrl, accountId }: ChannelOutboundContext) => {
         const account = resolveAccount(cfg as Record<string, unknown>, accountId);
         const caption = text?.trim();
         if (caption) {
@@ -315,6 +453,19 @@ export function createNaverWorksPlugin() {
 
             const inboundBody =
               event.text?.trim() || (event.mediaKind ? `<media:${event.mediaKind}>` : "<media>");
+            const autoThinkingDirective = resolveAutoThinkingDirective({
+              text: event.text,
+              account,
+            });
+            const bodyWithAutoThinking = autoThinkingDirective
+              ? `${autoThinkingDirective}\n${inboundBody}`
+              : inboundBody;
+            await sendStatusSticker({
+              account,
+              userId: event.userId,
+              phase: "received",
+              log,
+            });
             log?.info?.(
               `naverworks[${account.accountId}]: preparing inbound context bodyType=${event.mediaKind ? "media" : "text"} mediaUrl=${event.mediaUrl ? "yes" : "no"}`,
             );
@@ -340,10 +491,10 @@ export function createNaverWorksPlugin() {
 
             const locationContext = event.location ? toLocationContext(event.location) : undefined;
             const msgCtx = {
-              Body: inboundBody,
-              BodyForAgent: inboundBody,
-              RawBody: inboundBody,
-              CommandBody: inboundBody,
+              Body: bodyWithAutoThinking,
+              BodyForAgent: bodyWithAutoThinking,
+              RawBody: bodyWithAutoThinking,
+              CommandBody: bodyWithAutoThinking,
               From: `naverworks:${event.userId}`,
               To: `naverworks:${account.accountId}`,
               SessionKey: route.sessionKey,
@@ -368,96 +519,132 @@ export function createNaverWorksPlugin() {
             log?.info?.(
               `naverworks[${account.accountId}]: dispatching buffered reply sessionKey=${route.sessionKey}`,
             );
-            await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-              ctx: msgCtx,
-              cfg: freshCfg,
-              dispatcherOptions: {
-                onReplyStart: () => {
-                  log?.info?.(`naverworks: reply started for ${event.userId} (${route.agentId})`);
-                },
-                deliver: async (payload: {
-                  text?: string;
-                  body?: string;
-                  mediaUrl?: string;
-                  mediaUrls?: string[];
-                  audioAsVoice?: boolean;
-                }) => {
-                  const text = payload?.text ?? payload?.body;
-                  const mediaUrls = resolveOutboundMediaUrls(payload ?? {});
-                  const remoteMediaUrls = mediaUrls.filter((url) => /^https?:\/\//i.test(url));
-                  const localMediaPaths = mediaUrls.filter((url) => !/^https?:\/\//i.test(url));
-                  log?.info?.(
-                    `naverworks[${account.accountId}]: deliver callback text=${text ? "yes" : "no"} remoteMedia=${remoteMediaUrls.length} localMedia=${localMediaPaths.length}`,
-                  );
-
-                  if (localMediaPaths.length > 0) {
-                    log?.warn?.(
-                      `naverworks[${account.accountId}]: skipped ${localMediaPaths.length} local media attachment(s); NAVER WORKS requires remotely reachable media URLs`,
-                    );
-                  }
-
-                  if (text) {
-                    const sent = await sendMessageNaverWorks({
-                      account,
-                      toUserId: event.userId,
-                      text,
-                    });
-
-                    if (!sent.ok) {
-                      if (sent.reason === "not-configured") {
-                        log?.warn?.(
-                          `naverworks[${account.accountId}]: outbound skipped (set botId and auth settings to enable delivery)`,
-                        );
-                        return;
-                      }
-                      if (sent.reason === "auth-error") {
-                        log?.error?.(
-                          `naverworks[${account.accountId}]: outbound auth failed status=${sent.status ?? "unknown"} body=${sent.body?.slice(0, 300) ?? ""} (check accessToken or JWT auth settings)`,
-                        );
-                        return;
-                      }
-                      log?.error?.(
-                        `naverworks[${account.accountId}]: outbound send failed status=${sent.status ?? "unknown"} body=${sent.body?.slice(0, 300) ?? ""}`,
-                      );
+            let stopProcessingStickerHeartbeat = () => {};
+            let processingStickerHeartbeatStarted = false;
+            try {
+              await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+                ctx: msgCtx,
+                cfg: freshCfg,
+                dispatcherOptions: {
+                  onReplyStart: async () => {
+                    log?.info?.(`naverworks: reply started for ${event.userId} (${route.agentId})`);
+                    if (processingStickerHeartbeatStarted) {
                       return;
                     }
-
-                    log?.info?.(
-                      `naverworks[${account.accountId}]: outbound text delivered to ${event.userId}`,
-                    );
-                  }
-
-                  for (const mediaUrl of remoteMediaUrls) {
-                    const sentMedia = await sendMessageNaverWorks({
+                    processingStickerHeartbeatStarted = true;
+                    stopProcessingStickerHeartbeat = startProcessingStickerHeartbeat({
                       account,
-                      toUserId: event.userId,
-                      mediaUrl,
+                      userId: event.userId,
+                      log,
                     });
-                    if (!sentMedia.ok) {
-                      if (sentMedia.reason === "not-configured") {
-                        log?.warn?.(
-                          `naverworks[${account.accountId}]: outbound media skipped (set botId and auth settings to enable delivery)`,
-                        );
-                        return;
-                      }
-                      if (sentMedia.reason === "auth-error") {
-                        log?.error?.(
-                          `naverworks[${account.accountId}]: outbound media auth failed status=${sentMedia.status ?? "unknown"} body=${sentMedia.body?.slice(0, 300) ?? ""}`,
-                        );
-                        return;
-                      }
-                      log?.error?.(
-                        `naverworks[${account.accountId}]: outbound media send failed status=${sentMedia.status ?? "unknown"} body=${sentMedia.body?.slice(0, 300) ?? ""}`,
-                      );
-                      return;
-                    }
+                  },
+                  deliver: async (payload: {
+                    text?: string;
+                    body?: string;
+                    mediaUrl?: string;
+                    mediaUrls?: string[];
+                    audioAsVoice?: boolean;
+                  }) => {
+                    const text = payload?.text ?? payload?.body;
+                    const mediaUrls = resolveOutboundMediaUrls(payload ?? {});
+                    const remoteMediaUrls = mediaUrls.filter((url) => /^https?:\/\//i.test(url));
+                    const localMediaPaths = mediaUrls.filter((url) => !/^https?:\/\//i.test(url));
                     log?.info?.(
-                      `naverworks[${account.accountId}]: outbound media delivered to ${event.userId}`,
+                      `naverworks[${account.accountId}]: deliver callback text=${text ? "yes" : "no"} remoteMedia=${remoteMediaUrls.length} localMedia=${localMediaPaths.length}`,
                     );
-                  }
+
+                    if (localMediaPaths.length > 0) {
+                      log?.warn?.(
+                        `naverworks[${account.accountId}]: skipped ${localMediaPaths.length} local media attachment(s); NAVER WORKS requires remotely reachable media URLs`,
+                      );
+                    }
+
+                    if (text) {
+                      const sent = await sendMessageNaverWorks({
+                        account,
+                        toUserId: event.userId,
+                        text,
+                      });
+
+                      if (!sent.ok) {
+                        if (sent.reason === "not-configured") {
+                          log?.warn?.(
+                            `naverworks[${account.accountId}]: outbound skipped (set botId and auth settings to enable delivery)`,
+                          );
+                          return;
+                        }
+                        if (sent.reason === "auth-error") {
+                          log?.error?.(
+                            `naverworks[${account.accountId}]: outbound auth failed status=${sent.status ?? "unknown"} body=${sent.body?.slice(0, 300) ?? ""} (check accessToken or JWT auth settings)`,
+                          );
+                          return;
+                        }
+                        log?.error?.(
+                          `naverworks[${account.accountId}]: outbound send failed status=${sent.status ?? "unknown"} body=${sent.body?.slice(0, 300) ?? ""}`,
+                        );
+                        return;
+                      }
+
+                      log?.info?.(
+                        `naverworks[${account.accountId}]: outbound text delivered to ${event.userId}`,
+                      );
+                    }
+
+                    for (const mediaUrl of remoteMediaUrls) {
+                      const sentMedia = await sendMessageNaverWorks({
+                        account,
+                        toUserId: event.userId,
+                        mediaUrl,
+                      });
+                      if (!sentMedia.ok) {
+                        if (sentMedia.reason === "not-configured") {
+                          log?.warn?.(
+                            `naverworks[${account.accountId}]: outbound media skipped (set botId and auth settings to enable delivery)`,
+                          );
+                          return;
+                        }
+                        if (sentMedia.reason === "auth-error") {
+                          log?.error?.(
+                            `naverworks[${account.accountId}]: outbound media auth failed status=${sentMedia.status ?? "unknown"} body=${sentMedia.body?.slice(0, 300) ?? ""}`,
+                          );
+                          return;
+                        }
+                        log?.error?.(
+                          `naverworks[${account.accountId}]: outbound media send failed status=${sentMedia.status ?? "unknown"} body=${sentMedia.body?.slice(0, 300) ?? ""}`,
+                        );
+                        return;
+                      }
+                      log?.info?.(
+                        `naverworks[${account.accountId}]: outbound media delivered to ${event.userId}`,
+                      );
+                    }
+                  },
                 },
-              },
-            });
+              });
+              stopProcessingStickerHeartbeat();
+            } catch (error) {
+              stopProcessingStickerHeartbeat();
+              await sendStatusSticker({
+                account,
+                userId: event.userId,
+                phase: "failed",
+                log,
+              });
+              const failedNoticeSent = await sendMessageNaverWorks({
+                account,
+                toUserId: event.userId,
+                text: FAILED_REPLY_NOTICE,
+              });
+              if (!failedNoticeSent.ok) {
+                log?.warn?.(
+                  `naverworks[${account.accountId}]: failed to send failure notice to ${event.userId} (reason=${failedNoticeSent.reason}, status=${failedNoticeSent.status ?? "unknown"}, body=${failedNoticeSent.body?.slice(0, 300) ?? ""})`,
+                );
+              }
+              log?.error?.(
+                `naverworks[${account.accountId}]: reply pipeline failed for ${event.userId}: ${String(error)}`,
+              );
+              return;
+            }
             log?.info?.(`naverworks[${account.accountId}]: buffered reply dispatch complete`);
             log?.info?.(
               `naverworks[${account.accountId}]: inbound event handled for ${event.userId} (agent=${route.agentId})`,

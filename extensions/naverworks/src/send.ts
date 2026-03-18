@@ -3,7 +3,7 @@ import {
   markdownToNaverWorksFlexTemplate,
   type NaverWorksFlexContainer,
 } from "./markdown-to-flex.js";
-import type { NaverWorksAccount } from "./types.js";
+import type { NaverWorksAccount, NaverWorksStickerRef } from "./types.js";
 
 type OAuthTokenCacheEntry = {
   token: string;
@@ -20,7 +20,8 @@ type NaverWorksOutboundContent =
       contents: NaverWorksFlexContainer;
       i18nAltTexts?: Array<{ language: string; altText: string }>;
     }
-  | { type: "image" | "audio" | "file"; resourceUrl: string };
+  | { type: "image" | "audio" | "file"; resourceUrl: string }
+  | { type: "sticker"; packageId: string; stickerId: string };
 
 type NaverWorksAuthTokenResult =
   | {
@@ -236,6 +237,7 @@ function buildOutboundContent(params: {
   markdownTheme: NaverWorksAccount["markdownTheme"];
   text?: string;
   mediaUrl?: string;
+  sticker?: NaverWorksStickerRef;
 }): NaverWorksOutboundContent | null {
   const text = params.text?.trim();
   if (text) {
@@ -251,6 +253,14 @@ function buildOutboundContent(params: {
     }
     return { type: "text", text };
   }
+  const sticker = params.sticker;
+  if (sticker?.packageId && sticker.stickerId) {
+    return {
+      type: "sticker",
+      packageId: sticker.packageId,
+      stickerId: sticker.stickerId,
+    };
+  }
   const mediaUrl = params.mediaUrl?.trim();
   if (!mediaUrl) {
     return null;
@@ -263,6 +273,7 @@ export async function sendMessageNaverWorks(params: {
   toUserId: string;
   text?: string;
   mediaUrl?: string;
+  sticker?: NaverWorksStickerRef;
 }): Promise<
   | { ok: true }
   | {
@@ -278,6 +289,7 @@ export async function sendMessageNaverWorks(params: {
     markdownTheme: account.markdownTheme,
     text: params.text,
     mediaUrl: params.mediaUrl,
+    sticker: params.sticker,
   });
   if (!account.botId || !content) {
     return { ok: false, reason: "not-configured" };
