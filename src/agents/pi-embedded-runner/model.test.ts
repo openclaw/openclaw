@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { discoverModels } from "../pi-model-discovery.js";
 
 vi.mock("../pi-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
@@ -664,6 +665,271 @@ describe("resolveModel", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
+  });
+
+  it("prefers the codex gpt-5.4 forward-compat model over stale discovered metadata", () => {
+    mockOpenAICodexTemplateModel();
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex" || modelId !== "gpt-5.4") {
+          return null;
+        }
+        return {
+          ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+          contextWindow: 272000,
+          maxTokens: 128000,
+        };
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("preserves configured openai-codex overrides when stale discovery loses to the dynamic gpt-5.4 model", () => {
+    mockOpenAICodexTemplateModel();
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex" || modelId !== "gpt-5.4") {
+          return null;
+        }
+        return {
+          ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+          contextWindow: 272000,
+          maxTokens: 64000,
+        };
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://custom.example.com",
+            models: [{ id: "gpt-5.4", maxTokens: 64_000 }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+      baseUrl: "https://custom.example.com",
+      contextWindow: 1_050_000,
+      maxTokens: 64_000,
+    });
+  });
+
+  it("prefers the codex gpt-5.4 forward-compat model on async resolve when discovery is stale", async () => {
+    mockOpenAICodexTemplateModel();
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex" || modelId !== "gpt-5.4") {
+          return null;
+        }
+        return {
+          ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+          contextWindow: 272000,
+          maxTokens: 128000,
+        };
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = await resolveModelAsync("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("preserves discovered baseUrl and headers when dynamic gpt-5.4 wins", () => {
+    mockOpenAICodexTemplateModel();
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex" || modelId !== "gpt-5.4") {
+          return null;
+        }
+        return {
+          ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+          contextWindow: 272000,
+          maxTokens: 128000,
+          baseUrl: "https://proxy.example.com/backend-api",
+          headers: { "X-Test-Route": "tenant-a" },
+        };
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+      baseUrl: "https://proxy.example.com/backend-api",
+      contextWindow: 1_050_000,
+    });
+    expect((result.model as { headers?: Record<string, string> }).headers).toMatchObject({
+      "X-Test-Route": "tenant-a",
+    });
+  });
+
+  it("preserves discovered api and compat when dynamic gpt-5.4 wins", () => {
+    mockOpenAICodexTemplateModel();
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex" || modelId !== "gpt-5.4") {
+          return null;
+        }
+        return {
+          ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+          api: "openai-completions",
+          compat: { supportsStore: false },
+          contextWindow: 272000,
+          maxTokens: 128000,
+        };
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+      api: "openai-completions",
+      compat: { supportsStore: false },
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("keeps model-level api overrides when dynamic gpt-5.4 wins", () => {
+    mockOpenAICodexTemplateModel();
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex" || modelId !== "gpt-5.4") {
+          return null;
+        }
+        return {
+          ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+          api: "openai-completions",
+          contextWindow: 272000,
+          maxTokens: 128000,
+        };
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            models: [{ id: "gpt-5.4", api: "openai-responses" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+      api: "openai-responses",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("preserves discovered input when dynamic gpt-5.4 wins", () => {
+    mockOpenAICodexTemplateModel();
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex" || modelId !== "gpt-5.4") {
+          return null;
+        }
+        return {
+          ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+          input: ["text"],
+          contextWindow: 272000,
+          maxTokens: 128000,
+        };
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+      input: ["text"],
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("preserves discovered maxTokens when dynamic gpt-5.4 wins", () => {
+    mockOpenAICodexTemplateModel();
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex" || modelId !== "gpt-5.4") {
+          return null;
+        }
+        return {
+          ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+          maxTokens: 64_000,
+          contextWindow: 272000,
+        };
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+      contextWindow: 1_050_000,
+      maxTokens: 64_000,
+    });
+  });
+
+  it("keeps discovered gpt-5.4 metadata when no codex template exists", () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex" || modelId !== "gpt-5.4") {
+          return null;
+        }
+        return {
+          ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+          api: "openai-responses",
+          input: ["text"],
+          contextWindow: 272000,
+          maxTokens: 128000,
+          cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+        };
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+      api: "openai-responses",
+      input: ["text"],
+      contextWindow: 272000,
+      maxTokens: 128000,
+      cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+    });
   });
 
   it("builds an openai-codex fallback for gpt-5.3-codex-spark", () => {
