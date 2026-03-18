@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   registerMemoryPromptSection,
   buildMemoryPromptSection,
+  clearMemoryPromptSection,
   _resetMemoryPromptSection,
 } from "./prompt-section.js";
 
@@ -19,7 +20,9 @@ describe("memory prompt section registry", () => {
 
   it("delegates to the registered builder", () => {
     registerMemoryPromptSection(({ availableTools }) => {
-      if (!availableTools.has("memory_search")) return [];
+      if (!availableTools.has("memory_search")) {
+        return [];
+      }
       return ["## Custom Memory", "Use custom memory tools.", ""];
     });
 
@@ -48,5 +51,14 @@ describe("memory prompt section registry", () => {
 
     const result = buildMemoryPromptSection({ availableTools: new Set() });
     expect(result).toEqual(["second"]);
+  });
+
+  it("clearMemoryPromptSection resets the builder", () => {
+    registerMemoryPromptSection(() => ["stale section"]);
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["stale section"]);
+
+    clearMemoryPromptSection();
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
   });
 });
