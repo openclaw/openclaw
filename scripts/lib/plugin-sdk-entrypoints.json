@@ -93,6 +93,7 @@
   "json-store",
   "keyed-async-queue",
   "provider-auth",
+  "provider-auth-login",
   "provider-catalog",
   "provider-models",
   "provider-onboard",
