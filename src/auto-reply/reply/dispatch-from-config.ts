@@ -414,6 +414,18 @@ export async function dispatchReplyFromConfig(params: {
     );
   }
 
+  // General inbound_claim: let plugins (e.g. speedtrap) claim a message
+  // before it triggers agent dispatch. If claimed, the message is buffered
+  // by the plugin and never reaches the agent runner.
+  if (hookRunner?.hasHooks("inbound_claim")) {
+    const claimResult = await hookRunner.runInboundClaim(inboundClaimEvent, inboundClaimContext);
+    if (claimResult?.handled) {
+      logVerbose("dispatch-from-config: inbound claimed by plugin, skipping agent dispatch");
+      recordProcessed("completed", { reason: "inbound_claimed" });
+      return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+    }
+  }
+
   markProcessing();
 
   try {
