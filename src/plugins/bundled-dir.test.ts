@@ -68,4 +68,25 @@ describe("resolveBundledPluginsDir", () => {
       fs.realpathSync(path.join(repoRoot, "extensions")),
     );
   });
+
+  it("prefers source extensions in a git checkout even without vitest env", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-dir-git-");
+    fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "dist-runtime", "extensions"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "dist", "extensions"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, ".git"), "gitdir: /tmp/fake.git\n", "utf8");
+    fs.writeFileSync(
+      path.join(repoRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
+      "utf8",
+    );
+
+    process.chdir(repoRoot);
+    delete process.env.VITEST;
+
+    expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
+      fs.realpathSync(path.join(repoRoot, "extensions")),
+    );
+  });
 });
