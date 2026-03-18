@@ -10,6 +10,13 @@
 - GitHub searching footgun: don't limit yourself to the first 500 issues or PRs when wanting to search all. Unless you're supposed to look at the most recent, keep going until you've reached the last page in the search
 - Security advisory analysis: before triage/severity decisions, read `SECURITY.md` to align with OpenClaw's trust model and design boundaries.
 
+## Local Fork Principle
+
+- This local OpenClaw repo exists to build features we actually need, but it still needs to rebase and merge cleanly onto newer upstream releases later.
+- Prefer the least-coupled solution that solves the real need, so local changes stay easier to carry forward and produce fewer upstream merge conflicts.
+- If deeper integration is truly necessary, do it, but keep that tradeoff explicit instead of defaulting to the most intertwined design.
+- For this fork, `local/junyu` is the local integration branch where we merge/rebase new features. When creating PRs in this fork, target `local/junyu` by default, not `main`, unless explicitly told otherwise.
+
 ## Auto-close labels (issues and PRs)
 
 - If an issue/PR matches one of the reasons below, apply the label and let `.github/workflows/auto-response.yml` handle comment/close/lock.
