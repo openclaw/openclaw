@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { readStringParam } from "../../../../src/agents/tools/common.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
+import { readStringParam, type OpenClawConfig } from "openclaw/plugin-sdk/discord-core";
 import { createDiscordActionGate } from "../accounts.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordMessagingAction } from "./runtime.messaging.js";
