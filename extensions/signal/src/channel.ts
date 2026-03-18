@@ -16,7 +16,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   type ChannelPlugin,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/signal";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import {
@@ -31,8 +31,8 @@ import { getSignalRuntime } from "./runtime.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
   collectSignalSecurityWarnings,
+  signalConfigAdapter,
   createSignalPluginBase,
-  signalConfigAccessors,
   signalResolveDmPolicy,
   signalSetupWizard,
 } from "./shared.js";
@@ -290,7 +290,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
       channelId: "signal",
       normalize: ({ cfg, accountId, values }) =>
-        signalConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+        signalConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
       resolvePaths: (scope) => ({
         readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
         writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],

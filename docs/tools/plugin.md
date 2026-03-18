@@ -570,7 +570,8 @@ Native OpenClaw plugins can register capabilities and surfaces:
 - **Skills** (by listing `skills` directories in the plugin manifest)
 - **Auto-reply commands** (execute without invoking the AI agent)
 
-Native OpenClaw plugins run **in‑process** with the Gateway, so treat them as trusted code.
+Native OpenClaw plugins run in-process with the Gateway (see
+[Execution model](#execution-model) for trust implications).
 Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
 
 Think of these registrations as **capability claims**. A plugin is not supposed
@@ -1139,6 +1140,54 @@ authoring plugins:
   `openclaw/plugin-sdk/twitch`, `openclaw/plugin-sdk/voice-call`,
   `openclaw/plugin-sdk/zalo`, and `openclaw/plugin-sdk/zalouser`.
 
+## Channel target resolution
+
+Channel plugins should own channel-specific target semantics. Keep the shared
+outbound host generic and use the messaging adapter surface for provider rules:
+
+- `messaging.inferTargetChatType({ to })` decides whether a normalized target
+  should be treated as `direct`, `group`, or `channel` before directory lookup.
+- `messaging.targetResolver.looksLikeId(raw, normalized)` tells core whether an
+  input should skip straight to id-like resolution instead of directory search.
+- `messaging.targetResolver.resolveTarget(...)` is the plugin fallback when
+  core needs a final provider-owned resolution after normalization or after a
+  directory miss.
+- `messaging.resolveOutboundSessionRoute(...)` owns provider-specific session
+  route construction once a target is resolved.
+
+Recommended split:
+
+- Use `inferTargetChatType` for category decisions that should happen before
+  searching peers/groups.
+- Use `looksLikeId` for “treat this as an explicit/native target id” checks.
+- Use `resolveTarget` for provider-specific normalization fallback, not for
+  broad directory search.
+- Keep provider-native ids like chat ids, thread ids, JIDs, handles, and room
+  ids inside `target` values or provider-specific params, not in generic SDK
+  fields.
+
+## Config-backed directories
+
+Plugins that derive directory entries from config should keep that logic in the
+plugin and reuse the shared helpers from
+`openclaw/plugin-sdk/directory-runtime`.
+
+Use this when a channel needs config-backed peers/groups such as:
+
+- allowlist-driven DM peers
+- configured channel/group maps
+- account-scoped static directory fallbacks
+
+The shared helpers in `directory-runtime` only handle generic operations:
+
+- query filtering
+- limit application
+- deduping/normalization helpers
+- building `ChannelDirectoryEntry[]`
+
+Channel-specific account inspection and id normalization should stay in the
+plugin implementation.
+
 ## Provider catalogs
 
 Provider plugins can define model catalogs for inference with
@@ -1609,7 +1658,7 @@ openclaw plugins install ./extensions/voice-call # relative path ok
 openclaw plugins install ./plugin.tgz           # install from a local tarball
 openclaw plugins install ./plugin.zip           # install from a local zip
 openclaw plugins install -l ./extensions/voice-call # link (no copy) for dev
-openclaw plugins install @openclaw/voice-call # install from npm
+openclaw plugins install @openclaw/voice-call   # install from npm
 openclaw plugins install @openclaw/voice-call --pin # store exact resolved name@version
 openclaw plugins update <id>
 openclaw plugins update --all
@@ -1618,14 +1667,11 @@ openclaw plugins disable <id>
 openclaw plugins doctor
 ```
 
-`openclaw plugins list` shows the top-level format as `openclaw` or `bundle`.
-Verbose list/inspect output also shows bundle subtype (`codex`, `claude`, or
-`cursor`) plus detected bundle capabilities.
+See [`openclaw plugins` CLI reference](/cli/plugins) for full details on each
+command (install rules, inspect output, marketplace installs, uninstall).
 
-`plugins update` only works for npm installs tracked under `plugins.installs`.
-If stored integrity metadata changes between updates, OpenClaw warns and asks for confirmation (use global `--yes` to bypass prompts).
-
-Plugins may also register their own top‑level commands (example: `openclaw voicecall`).
+Plugins may also register their own top-level commands (example:
+`openclaw voicecall`).
 
 ## Plugin API (overview)
 
@@ -2433,7 +2479,7 @@ See [Voice Call](/plugins/voice-call) and `extensions/voice-call/README.md` for 
 
 ## Safety notes
 
-Plugins run in-process with the Gateway. Treat them as trusted code:
+Plugins run in-process with the Gateway (see [Execution model](#execution-model)):
 
 - Only install plugins you trust.
 - Prefer `plugins.allow` allowlists.

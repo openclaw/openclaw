@@ -56,12 +56,7 @@ const apiStub: ApiStub = {
   setMyCommands: vi.fn(async () => undefined),
 };
 
-beforeEach(() => {
-  resetInboundDedupe();
-  resetSaveMediaBufferMock();
-});
-
-vi.mock("grammy", () => ({
+export const telegramBotRuntimeForTest = {
   Bot: class {
     api = apiStub;
     use = middlewareUseSpy;
@@ -71,20 +66,51 @@ vi.mock("grammy", () => ({
     catch = vi.fn();
     constructor(public token: string) {}
   },
-  InputFile: class {},
-  webhookCallback: vi.fn(),
-}));
-
-vi.mock("@grammyjs/runner", () => ({
   sequentialize: () => vi.fn(),
-}));
+  apiThrottler: () => throttlerSpy(),
+};
+
+const mediaHarnessReplySpy = vi.hoisted(() =>
+  vi.fn(async (_ctx, opts) => {
+    await opts?.onReplyStart?.();
+    return undefined;
+  }),
+);
+const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
+  vi.fn(async (params) => {
+    await params.dispatcherOptions?.typingCallbacks?.start?.();
+    const reply = await mediaHarnessReplySpy(params.ctx, params.replyOptions);
+    const payloads = reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
+    for (const payload of payloads) {
+      await params.dispatcherOptions?.deliver?.(payload, { kind: "final" });
+    }
+    return { queuedFinal: false, counts: {} };
+  }),
+);
+export const telegramBotDepsForTest = {
+  loadConfig: () => ({
+    channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+  }),
+  resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/telegram-media-sessions.json"),
+  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
+  enqueueSystemEvent: vi.fn(),
+  dispatchReplyWithBufferedBlockDispatcher: mediaHarnessDispatchReplyWithBufferedBlockDispatcher,
+  listSkillCommandsForAgents: vi.fn(() => []),
+  wasSentByBot: vi.fn(() => false),
+};
+
+beforeEach(() => {
+  resetInboundDedupe();
+  resetSaveMediaBufferMock();
+});
 
 const throttlerSpy = vi.fn(() => "throttler");
-vi.mock("@grammyjs/transformer-throttler", () => ({
-  apiThrottler: () => throttlerSpy(),
+
+vi.doMock("./bot.runtime.js", () => ({
+  ...telegramBotRuntimeForTest,
 }));
 
-vi.mock("undici", async (importOriginal) => {
+vi.doMock("undici", async (importOriginal) => {
   const actual = await importOriginal<typeof import("undici")>();
   return {
     ...actual,
@@ -92,7 +118,7 @@ vi.mock("undici", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+vi.doMock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   const mockModule = Object.create(null) as Record<string, unknown>;
   Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
@@ -105,7 +131,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   return mockModule;
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
@@ -115,7 +141,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
@@ -123,7 +149,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
+vi.doMock("openclaw/plugin-sdk/conversation-runtime", () => ({
   readChannelAllowFromStore: vi.fn(async () => [] as string[]),
   upsertChannelPairingRequest: vi.fn(async () => ({
     code: "PAIRCODE",
@@ -131,10 +157,11 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => {
-  const replySpy = vi.fn(async (_ctx, opts) => {
-    await opts?.onReplyStart?.();
-    return undefined;
-  });
-  return { getReplyFromConfig: replySpy, __replySpy: replySpy };
+vi.doMock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    getReplyFromConfig: mediaHarnessReplySpy,
+    __replySpy: mediaHarnessReplySpy,
+  };
 });

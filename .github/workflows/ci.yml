@@ -398,6 +398,100 @@ jobs:
           echo "::error::Web search provider boundary grace period ended at ${WEB_SEARCH_PROVIDER_BOUNDARY_ENFORCE_AFTER}. ${fix_instructions}"
           exit "$status"
 
+  extension-src-outside-plugin-sdk-boundary:
+    name: "extension-src-outside-plugin-sdk-boundary"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    env:
+      EXTENSION_PLUGIN_SDK_BOUNDARY_ENFORCE_AFTER: "2026-03-24T05:00:00Z"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run extension src boundary guard with grace period
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tmp_output="$(mktemp)"
+          if pnpm run lint:extensions:no-src-outside-plugin-sdk >"$tmp_output" 2>&1; then
+            cat "$tmp_output"
+            rm -f "$tmp_output"
+            exit 0
+          fi
+
+          status=$?
+          cat "$tmp_output"
+          rm -f "$tmp_output"
+
+          now_epoch="$(date -u +%s)"
+          enforce_epoch="$(date -u -d "$EXTENSION_PLUGIN_SDK_BOUNDARY_ENFORCE_AFTER" +%s)"
+          fix_instructions="If you are an LLM agent fixing this: run 'pnpm run lint:extensions:no-src-outside-plugin-sdk', move extension imports off core src paths and onto src/plugin-sdk/**, and if the remaining inventory is intentional for now update test/fixtures/extension-src-outside-plugin-sdk-inventory.json in the same PR."
+
+          if [ "$now_epoch" -lt "$enforce_epoch" ]; then
+            echo "::warning::Extension src boundary violations are temporarily allowed until ${EXTENSION_PLUGIN_SDK_BOUNDARY_ENFORCE_AFTER}. This grace period ends in one week from the rollout date. After that timestamp this job will fail unless the inventory is reduced or the baseline is intentionally updated. ${fix_instructions}"
+            exit 0
+          fi
+
+          echo "::error::Extension src boundary grace period ended at ${EXTENSION_PLUGIN_SDK_BOUNDARY_ENFORCE_AFTER}. ${fix_instructions}"
+          exit "$status"
+
+  extension-plugin-sdk-internal-boundary:
+    name: "extension-plugin-sdk-internal-boundary"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    env:
+      EXTENSION_PLUGIN_SDK_INTERNAL_ENFORCE_AFTER: "2026-03-24T05:00:00Z"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run extension plugin-sdk-internal guard with grace period
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tmp_output="$(mktemp)"
+          if pnpm run lint:extensions:no-plugin-sdk-internal >"$tmp_output" 2>&1; then
+            cat "$tmp_output"
+            rm -f "$tmp_output"
+            exit 0
+          fi
+
+          status=$?
+          cat "$tmp_output"
+          rm -f "$tmp_output"
+
+          now_epoch="$(date -u +%s)"
+          enforce_epoch="$(date -u -d "$EXTENSION_PLUGIN_SDK_INTERNAL_ENFORCE_AFTER" +%s)"
+          fix_instructions="If you are an LLM agent fixing this: run 'pnpm run lint:extensions:no-plugin-sdk-internal', remove extension imports of src/plugin-sdk-internal/** in favor of src/plugin-sdk/**, and if the remaining inventory is intentional for now update test/fixtures/extension-plugin-sdk-internal-inventory.json in the same PR."
+
+          if [ "$now_epoch" -lt "$enforce_epoch" ]; then
+            echo "::warning::Extension plugin-sdk-internal boundary violations are temporarily allowed until ${EXTENSION_PLUGIN_SDK_INTERNAL_ENFORCE_AFTER}. This grace period ends in one week from the rollout date. After that timestamp this job will fail unless the inventory is reduced or the baseline is intentionally updated. ${fix_instructions}"
+            exit 0
+          fi
+
+          echo "::error::Extension plugin-sdk-internal boundary grace period ended at ${EXTENSION_PLUGIN_SDK_INTERNAL_ENFORCE_AFTER}. ${fix_instructions}"
+          exit "$status"
+
   build-smoke:
     name: "build-smoke"
     needs: [docs-scope, changed-scope]

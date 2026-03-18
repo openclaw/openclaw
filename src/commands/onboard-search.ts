@@ -44,12 +44,14 @@ export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
 }
 
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
-  const search = config.tools?.web?.search;
   const entry = resolvePluginWebSearchProviders({
     config,
     bundledAllowlistCompat: true,
   }).find((candidate) => candidate.id === provider);
-  return entry?.getCredentialValue(search as Record<string, unknown> | undefined);
+  return (
+    entry?.getConfiguredCredentialValue?.(config) ??
+    entry?.getCredentialValue(config.tools?.web?.search as Record<string, unknown> | undefined)
+  );
 }
 
 /** Returns the plaintext key string, or undefined for SecretRefs/missing. */
@@ -99,17 +101,24 @@ export function applySearchKey(
     config,
     bundledAllowlistCompat: true,
   }).find((candidate) => candidate.id === provider);
-  const search = { ...config.tools?.web?.search, provider, enabled: true };
-  if (providerEntry) {
-    providerEntry.setCredentialValue(search as Record<string, unknown>, key);
-  }
   const nextBase = {
     ...config,
     tools: {
       ...config.tools,
-      web: { ...config.tools?.web, search },
+      web: {
+        ...config.tools?.web,
+        search: { ...config.tools?.web?.search, provider, enabled: true },
+      },
     },
   };
+  if (providerEntry?.setConfiguredCredentialValue) {
+    providerEntry.setConfiguredCredentialValue(nextBase, key);
+  } else {
+    const search = nextBase.tools?.web?.search as Record<string, unknown> | undefined;
+    if (providerEntry && search) {
+      providerEntry.setCredentialValue(search, key);
+    }
+  }
   return providerEntry?.applySelectionConfig?.(nextBase) ?? nextBase;
 }
 

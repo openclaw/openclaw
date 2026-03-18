@@ -19,6 +19,10 @@ import {
 } from "./accounts.js";
 import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
 import {
+  listDiscordDirectoryGroupsFromConfig,
+  listDiscordDirectoryPeersFromConfig,
+} from "./directory-config.js";
+import {
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./exec-approvals.js";
@@ -41,8 +45,6 @@ import {
   type ChannelPlugin,
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
@@ -51,7 +53,7 @@ import {
 import { getDiscordRuntime } from "./runtime.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
 import { discordSetupAdapter } from "./setup-core.js";
-import { createDiscordPluginBase, discordConfigAccessors } from "./shared.js";
+import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./targets.js";
 import { DiscordUiContainer } from "./ui.js";
@@ -305,7 +307,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
       channelId: "discord",
       normalize: ({ cfg, accountId, values }) =>
-        discordConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+        discordConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
       resolvePaths: resolveLegacyDmAllowlistConfigPaths,
     }),
   },
