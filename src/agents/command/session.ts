@@ -323,6 +323,7 @@ export function resolveSession(opts: {
         }),
         now,
         policy: resetPolicy,
+        cfg: opts.cfg,
       }).fresh
     : false;
   const sessionId =

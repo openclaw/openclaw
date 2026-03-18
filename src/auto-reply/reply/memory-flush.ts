@@ -3,6 +3,23 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  formatHumanDayKey,
+  resolveHumanResetCycleKey,
+} from "../../infra/format-time/human-day.js";
+
+export function resolveMemoryFlushRelativePathForRun(params: {
+  cfg?: OpenClawConfig;
+  nowMs?: number;
+  resetAtHour?: number;
+}): string {
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const dateStamp =
+    typeof params.resetAtHour === "number" && Number.isFinite(params.resetAtHour)
+      ? resolveHumanResetCycleKey(nowMs, Math.floor(params.resetAtHour), params.cfg)
+      : formatHumanDayKey(nowMs, params.cfg);
+  return `memory/${dateStamp}.md`;
+}
 
 export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;

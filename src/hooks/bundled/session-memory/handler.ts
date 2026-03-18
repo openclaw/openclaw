@@ -14,6 +14,11 @@ import {
 } from "../../../agents/agent-scope.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  formatHumanDayKey,
+  formatHumanTime,
+  resolveHumanTimezone,
+} from "../../../infra/format-time/human-day.js";
 import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
@@ -27,63 +32,6 @@ import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
-
-function pickDateTimePart(
-  parts: Intl.DateTimeFormatPart[],
-  type: Intl.DateTimeFormatPartTypes,
-): string | undefined {
-  return parts.find((part) => part.type === type)?.value;
-}
-
-function resolveLocalTimeZone(): string | undefined {
-  const timeZone = process.env.TZ?.trim();
-  if (!timeZone) {
-    return undefined;
-  }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
-    return timeZone;
-  } catch {
-    return undefined;
-  }
-}
-
-function formatLocalSessionTimestamp(date: Date): {
-  date: string;
-  time: string;
-  timeSlug: string;
-  timeZoneName?: string;
-} {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: resolveLocalTimeZone(),
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-    timeZoneName: "short",
-  }).formatToParts(date);
-
-  const year = pickDateTimePart(parts, "year") ?? String(date.getFullYear()).padStart(4, "0");
-  const month = pickDateTimePart(parts, "month") ?? String(date.getMonth() + 1).padStart(2, "0");
-  const day = pickDateTimePart(parts, "day") ?? String(date.getDate()).padStart(2, "0");
-  const hour = pickDateTimePart(parts, "hour") ?? String(date.getHours()).padStart(2, "0");
-  const minute = pickDateTimePart(parts, "minute") ?? String(date.getMinutes()).padStart(2, "0");
-  const second = pickDateTimePart(parts, "second") ?? String(date.getSeconds()).padStart(2, "0");
-  const timeZoneName = [...parts]
-    .toReversed()
-    .find((part) => part.type === "timeZoneName")
-    ?.value?.trim();
-
-  return {
-    date: `${year}-${month}-${day}`,
-    time: `${hour}:${minute}:${second}`,
-    timeSlug: `${hour}${minute}`,
-    timeZoneName,
-  };
-}
 
 function resolveDisplaySessionKey(params: {
   cfg?: OpenClawConfig;
@@ -137,11 +85,6 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Use the user's local timezone for memory artifact names and headings.
-    const now = new Date(event.timestamp);
-    const localTimestamp = formatLocalSessionTimestamp(now);
-    const dateStr = localTimestamp.date;
-
     // Generate descriptive slug from session using LLM
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
     const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
@@ -181,6 +124,14 @@ const saveSessionToMemory: HookHandler = async (event) => {
     });
 
     const sessionFile = currentSessionFile || undefined;
+    const eventTimestampMs = event.timestamp.getTime();
+    const sessionTimestampMs =
+      typeof sessionEntry.updatedAt === "number" && Number.isFinite(sessionEntry.updatedAt)
+        ? Math.floor(sessionEntry.updatedAt)
+        : eventTimestampMs;
+    const dateStr = formatHumanDayKey(sessionTimestampMs, cfg);
+    const timeStr = formatHumanTime(sessionTimestampMs, cfg, { includeSeconds: true });
+    const timeZone = resolveHumanTimezone(cfg);
 
     // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
@@ -218,7 +169,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // If no slug, use timestamp
     if (!slug) {
-      slug = localTimestamp.timeSlug;
+      slug = formatHumanTime(eventTimestampMs, cfg, { compact: true });
       log.debug("Using fallback timestamp slug", { slug });
     }
 
@@ -230,16 +181,13 @@ const saveSessionToMemory: HookHandler = async (event) => {
       path: memoryFilePath.replace(os.homedir(), "~"),
     });
 
-    const timeStr = localTimestamp.time;
-    const timeZoneSuffix = localTimestamp.timeZoneName ? ` ${localTimestamp.timeZoneName}` : "";
-
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const source = (context.commandSource as string) || "unknown";
 
     // Build Markdown entry
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr}${timeZoneSuffix}`,
+      `# Session: ${dateStr} ${timeStr} (${timeZone})`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,

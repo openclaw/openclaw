@@ -7,6 +7,7 @@ import {
   formatDurationSeconds,
 } from "./format-duration.js";
 import { formatTimeAgo, formatRelativeTimestamp } from "./format-relative.js";
+import { formatHumanDayKey, formatHumanTime, resolveHumanResetCycleKey } from "./human-day.js";
 
 const invalidDurationInputs = [null, undefined, -100] as const;
 
@@ -195,6 +196,33 @@ describe("format-datetime", () => {
         undefined,
       );
     });
+  });
+});
+
+describe("human-day", () => {
+  const shanghaiCfg = {
+    agents: {
+      defaults: {
+        userTimezone: "Asia/Shanghai",
+      },
+    },
+  };
+
+  it("formats human day keys using userTimezone", () => {
+    expect(formatHumanDayKey(Date.UTC(2026, 2, 18, 16, 30, 0), shanghaiCfg)).toBe("2026-03-19");
+  });
+
+  it("formats compact and full human times using userTimezone", () => {
+    const ts = Date.UTC(2026, 2, 18, 16, 30, 45);
+    expect(formatHumanTime(ts, shanghaiCfg, { compact: true })).toBe("0030");
+    expect(formatHumanTime(ts, shanghaiCfg, { includeSeconds: true })).toBe("00:30:45");
+  });
+
+  it("computes reset cycles using the human local day", () => {
+    const beforeReset = Date.UTC(2026, 2, 18, 19, 30, 0); // 03:30 on Mar 19 in Asia/Shanghai
+    const afterReset = Date.UTC(2026, 2, 18, 21, 0, 0); // 05:00 on Mar 19 in Asia/Shanghai
+    expect(resolveHumanResetCycleKey(beforeReset, 4, shanghaiCfg)).toBe("2026-03-18");
+    expect(resolveHumanResetCycleKey(afterReset, 4, shanghaiCfg)).toBe("2026-03-19");
   });
 });
 

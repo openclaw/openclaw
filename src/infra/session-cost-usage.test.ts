@@ -176,6 +176,67 @@ describe("session cost usage", () => {
     });
   });
 
+  it("groups daily totals by userTimezone instead of host or UTC day", async () => {
+    const root = await makeSessionCostRoot("cost-timezone");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-tz.jsonl");
+
+    const entries = [
+      {
+        type: "message",
+        timestamp: "2026-03-18T15:30:00.000Z", // 2026-03-18 23:30 in Asia/Shanghai
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: 5,
+            output: 5,
+            totalTokens: 10,
+            cost: { total: 0.01 },
+          },
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-03-18T16:30:00.000Z", // 2026-03-19 00:30 in Asia/Shanghai
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: 7,
+            output: 8,
+            totalTokens: 15,
+            cost: { total: 0.02 },
+          },
+        },
+      },
+    ];
+
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    const config = {
+      agents: {
+        defaults: {
+          userTimezone: "Asia/Shanghai",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.daily.map((entry) => entry.date)).toEqual(["2026-03-18", "2026-03-19"]);
+      expect(summary.daily[0]?.totalTokens).toBe(10);
+      expect(summary.daily[1]?.totalTokens).toBe(15);
+    });
+  });
+
   it("summarizes a single session file", async () => {
     const root = await makeSessionCostRoot("cost-session");
     const sessionFile = path.join(root, "session.jsonl");

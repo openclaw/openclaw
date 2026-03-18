@@ -135,6 +135,7 @@ export function resolveCronSession(params: {
       }),
       now: params.nowMs,
       policy: resetPolicy,
+      cfg: params.cfg,
     });
 
     if (freshness.fresh) {

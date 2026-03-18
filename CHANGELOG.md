@@ -232,6 +232,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/agents: avoid rebuilding core tools for plugin-only allowlists and keep the full plugin registry cache warm across scoped plugin loads, reducing per-turn latency spikes. Fixes #75882, #75907, #75906, #75887, and #75851. (#75922) Thanks @obviyus.
 - Agents/failover: classify bare `status: internal server error` provider messages as retryable server errors so model fallback can rotate instead of stopping. (#73844) Thanks @thesomewhatyou.
 - Gateway/startup: return the shared retryable startup-sidecars error for startup-gated control-plane RPCs such as sessions.create, sessions.send, sessions.abort, agent.wait, and tools.effective, so clients can retry early sidecar races. (#76012) Thanks @scoootscooob.
+- Sessions: align daily reset, session-memory, memory-flush, and usage day boundaries with the configured user timezone instead of host or UTC dates. Thanks @CNZSMJ.
 
 ## 2026.4.30
 
