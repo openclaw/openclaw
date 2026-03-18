@@ -15,6 +15,24 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
+const POLL_STOP_GRACE_MS = 15_000;
+
+const waitForGracefulStop = async (stop: () => Promise<void>) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      stop(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, POLL_STOP_GRACE_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+};
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
@@ -250,8 +268,8 @@ export class TelegramPollingSession {
     } finally {
       clearInterval(watchdog);
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
-      await stopRunner();
-      await stopBot();
+      await waitForGracefulStop(stopRunner);
+      await waitForGracefulStop(stopBot);
       this.#activeRunner = undefined;
       if (this.#activeFetchAbort === fetchAbortController) {
         this.#activeFetchAbort = undefined;
