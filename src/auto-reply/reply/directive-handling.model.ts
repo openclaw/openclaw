@@ -357,15 +357,10 @@ export async function maybeHandleModelDirectiveInfo(params: {
   return { text: lines.join("\n") };
 }
 
-function resolveStoredNumericProfileModelDirective(params: {
-  raw: string;
-  agentDir: string;
-  defaultProvider: string;
-  aliasIndex: ModelAliasIndex;
-}): {
+function resolveStoredNumericProfileModelDirective(params: { raw: string; agentDir: string }): {
   modelRaw: string;
   profileId: string;
-  resolved: NonNullable<ReturnType<typeof resolveModelRefFromString>>;
+  profileProvider: string;
 } | null {
   const trimmed = params.raw.trim();
   const lastSlash = trimmed.lastIndexOf("/");
@@ -392,23 +387,7 @@ function resolveStoredNumericProfileModelDirective(params: {
     return null;
   }
 
-  const resolved = resolveModelRefFromString({
-    raw: modelRaw,
-    defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-  });
-  if (!resolved) {
-    return null;
-  }
-
-  if (
-    normalizeProviderIdForAuth(profile.provider) !==
-    normalizeProviderIdForAuth(resolved.ref.provider)
-  ) {
-    return null;
-  }
-
-  return { modelRaw, profileId, resolved };
+  return { modelRaw, profileId, profileProvider: profile.provider };
 }
 
 export function resolveModelSelectionFromDirective(params: {
@@ -439,11 +418,23 @@ export function resolveModelSelectionFromDirective(params: {
       ? resolveStoredNumericProfileModelDirective({
           raw,
           agentDir: params.agentDir,
-          defaultProvider: params.defaultProvider,
-          aliasIndex: params.aliasIndex,
         })
       : null;
-  const modelRaw = storedNumericProfile?.modelRaw ?? raw;
+  const storedNumericProfileSelection = storedNumericProfile
+    ? resolveModelDirectiveSelection({
+        raw: storedNumericProfile.modelRaw,
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
+        aliasIndex: params.aliasIndex,
+        allowedModelKeys: params.allowedModelKeys,
+      })
+    : null;
+  const useStoredNumericProfile =
+    Boolean(storedNumericProfileSelection?.selection) &&
+    normalizeProviderIdForAuth(storedNumericProfileSelection?.selection?.provider ?? "") ===
+      normalizeProviderIdForAuth(storedNumericProfile?.profileProvider ?? "");
+  const modelRaw =
+    useStoredNumericProfile && storedNumericProfile ? storedNumericProfile.modelRaw : raw;
   let modelSelection: ModelDirectiveSelection | undefined;
 
   if (/^[0-9]+$/.test(raw)) {
@@ -457,13 +448,11 @@ export function resolveModelSelectionFromDirective(params: {
     };
   }
 
-  const explicit =
-    storedNumericProfile?.resolved ??
-    resolveModelRefFromString({
-      raw: modelRaw,
-      defaultProvider: params.defaultProvider,
-      aliasIndex: params.aliasIndex,
-    });
+  const explicit = resolveModelRefFromString({
+    raw: modelRaw,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+  });
   if (explicit) {
     const explicitKey = modelKey(explicit.ref.provider, explicit.ref.model);
     if (params.allowedModelKeys.size === 0 || params.allowedModelKeys.has(explicitKey)) {
@@ -497,7 +486,9 @@ export function resolveModelSelectionFromDirective(params: {
   }
 
   let profileOverride: string | undefined;
-  const rawProfile = params.directives.rawModelProfile ?? storedNumericProfile?.profileId;
+  const rawProfile =
+    params.directives.rawModelProfile ??
+    (useStoredNumericProfile ? storedNumericProfile?.profileId : undefined);
   if (modelSelection && rawProfile) {
     const profileResolved = resolveProfileOverride({
       rawProfile,

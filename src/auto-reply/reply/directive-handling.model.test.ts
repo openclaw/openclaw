@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "../../agents/auth-profiles.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -29,14 +32,7 @@ vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
 
-vi.mock("../../agents/auth-profiles.js", async () => {
-  return {
-    ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
-    resolveAuthStorePathForDisplay: vi.fn(() => "/tmp/agent/auth-profiles.json"),
-  };
-});
-
-const mockedEnsureAuthProfileStore = vi.mocked(ensureAuthProfileStore);
+const TEST_AGENT_DIR = "/tmp/agent";
 
 function baseAliasIndex(): ModelAliasIndex {
   return { byAlias: new Map(), byKey: new Map() };
@@ -50,9 +46,25 @@ function baseConfig(): OpenClawConfig {
 }
 
 beforeEach(() => {
-  mockedEnsureAuthProfileStore.mockReset();
-  mockedEnsureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} } as never);
+  clearRuntimeAuthProfileStoreSnapshots();
+  replaceRuntimeAuthProfileStoreSnapshots([
+    {
+      agentDir: TEST_AGENT_DIR,
+      store: { version: 1, profiles: {} },
+    },
+  ]);
 });
+
+function setAuthProfiles(
+  profiles: Record<string, { type: "api_key"; provider: string; key: string }>,
+) {
+  replaceRuntimeAuthProfileStoreSnapshots([
+    {
+      agentDir: TEST_AGENT_DIR,
+      store: { version: 1, profiles },
+    },
+  ]);
+}
 
 function resolveModelSelectionForCommand(params: {
   command: string;
@@ -62,7 +74,7 @@ function resolveModelSelectionForCommand(params: {
   return resolveModelSelectionFromDirective({
     directives: parseInlineDirectives(params.command),
     cfg: { commands: { text: true } } as unknown as OpenClawConfig,
-    agentDir: "/tmp/agent",
+    agentDir: TEST_AGENT_DIR,
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-5",
     aliasIndex: baseAliasIndex(),
@@ -78,7 +90,7 @@ async function resolveModelInfoReply(
   return maybeHandleModelDirectiveInfo({
     directives: parseInlineDirectives("/model"),
     cfg: baseConfig(),
-    agentDir: "/tmp/agent",
+    agentDir: TEST_AGENT_DIR,
     activeAgentId: "main",
     provider: "anthropic",
     model: "claude-opus-4-5",
@@ -198,16 +210,13 @@ describe("/model chat UX", () => {
   });
 
   it("treats @YYYYMMDD as a profile override when that profile exists for the resolved provider", () => {
-    mockedEnsureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "20251001": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-test",
-        },
+    setAuthProfiles({
+      "20251001": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-test",
       },
-    } as never);
+    });
 
     const resolved = resolveModelSelectionForCommand({
       command: "/model openai/gpt-4o@20251001",
@@ -225,16 +234,13 @@ describe("/model chat UX", () => {
   });
 
   it("supports alias selections with numeric auth-profile overrides", () => {
-    mockedEnsureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "20251001": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-test",
-        },
+    setAuthProfiles({
+      "20251001": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-test",
       },
-    } as never);
+    });
 
     const aliasIndex: ModelAliasIndex = {
       byAlias: new Map([["gpt", { alias: "gpt", ref: { provider: "openai", model: "gpt-4o" } }]]),
@@ -263,17 +269,38 @@ describe("/model chat UX", () => {
     expect(resolved.profileOverride).toBe("20251001");
   });
 
-  it("keeps @YYYYMMDD as part of the model when the stored numeric profile is for another provider", () => {
-    mockedEnsureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        "20251001": {
-          type: "api_key",
-          provider: "anthropic",
-          key: "sk-test",
-        },
+  it("supports providerless allowlist selections with numeric auth-profile overrides", () => {
+    setAuthProfiles({
+      "20251001": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-test",
       },
-    } as never);
+    });
+
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model gpt-4o@20251001",
+      allowedModelKeys: new Set(["openai/gpt-4o"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "openai",
+      model: "gpt-4o",
+      isDefault: false,
+    });
+    expect(resolved.profileOverride).toBe("20251001");
+  });
+
+  it("keeps @YYYYMMDD as part of the model when the stored numeric profile is for another provider", () => {
+    setAuthProfiles({
+      "20251001": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-test",
+      },
+    });
 
     const resolved = resolveModelSelectionForCommand({
       command: "/model custom/vertex-ai_claude-haiku-4-5@20251001",
