@@ -546,14 +546,26 @@ export async function dispatchCronDelivery(
       };
     }
 
-    // Suppress SILENT_REPLY_TOKEN before delivery path selection (#45909).
-    // This check previously only lived inside finalizeTextDelivery, so the
-    // direct delivery path (thread-based / structured content) leaked NO_REPLY.
+    // Finalize descendant/subagent output first for text-only cron runs, then
+    // send through the real outbound adapter so delivered=true always reflects
+    // an actual channel send instead of internal announce routing.
+    const useDirectDelivery =
+      params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
+
+    // Suppress SILENT_REPLY_TOKEN on the direct delivery path only (#45909).
+    // The text path already suppresses inside finalizeTextDelivery, which also
+    // waits for active descendants — short-circuiting before that would skip
+    // descendant fallback summaries. Only suppress when payloads carry no real
+    // media/structured content.
     if (
+      useDirectDelivery &&
       synthesizedText?.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase() &&
-      deliveryPayloads.every(
-        (p) => !p.text || p.text.trim().toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase(),
-      )
+      deliveryPayloads.every((p) => {
+        const hasMedia = Boolean(p.mediaUrl || (p.mediaUrls && p.mediaUrls.length > 0));
+        const hasChannelData = Boolean(p.channelData && Object.keys(p.channelData).length > 0);
+        if (hasMedia || hasChannelData) return false;
+        return !p.text || p.text.trim().toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase();
+      })
     ) {
       return {
         result: params.withRunSession({
@@ -572,11 +584,6 @@ export async function dispatchCronDelivery(
       };
     }
 
-    // Finalize descendant/subagent output first for text-only cron runs, then
-    // send through the real outbound adapter so delivered=true always reflects
-    // an actual channel send instead of internal announce routing.
-    const useDirectDelivery =
-      params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
     if (useDirectDelivery) {
       const directResult = await deliverViaDirect(params.resolvedDelivery);
       if (directResult) {
