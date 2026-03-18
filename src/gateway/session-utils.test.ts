@@ -479,6 +479,29 @@ describe("resolveSessionModelRef", () => {
 
     expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
+
+  test("preserves openrouter providerOverride when modelOverride contains vendor prefix (#49379)", () => {
+    // When user selects an OpenRouter model from the Control UI dropdown,
+    // the picker sends modelOverride="anthropic/claude-opus-4.6" with
+    // providerOverride="openrouter". We must NOT parse the model string
+    // for provider prefix, as that would extract "anthropic" instead of
+    // preserving the stored "openrouter" provider.
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "openrouter-session",
+      updatedAt: Date.now(),
+      modelOverride: "anthropic/claude-opus-4.6",
+      providerOverride: "openrouter",
+    });
+
+    expect(resolved).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude-opus-4.6",
+    });
+  });
 });
 
 describe("resolveSessionModelIdentityRef", () => {
