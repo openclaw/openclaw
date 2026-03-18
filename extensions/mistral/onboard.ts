@@ -1,13 +1,13 @@
 import {
-  applyAgentDefaultModelPrimary,
-  applyProviderConfigWithDefaultModel,
-} from "../../src/commands/onboard-auth.config-shared.js";
-import {
   buildMistralModelDefinition,
   MISTRAL_BASE_URL,
   MISTRAL_DEFAULT_MODEL_ID,
-} from "../../src/commands/onboard-auth.models.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+} from "openclaw/plugin-sdk/provider-models";
+import {
+  applyAgentDefaultModelPrimary,
+  applyProviderConfigWithDefaultModel,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 
 export const MISTRAL_DEFAULT_MODEL_REF = `mistral/${MISTRAL_DEFAULT_MODEL_ID}`;
 

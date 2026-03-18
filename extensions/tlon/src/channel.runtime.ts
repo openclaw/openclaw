@@ -1,13 +1,21 @@
 import crypto from "node:crypto";
 import { configureClient } from "@tloncorp/api";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
 import type {
+  ChannelAccountSnapshot,
   ChannelOutboundAdapter,
-  ChannelPlugin,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/tlon";
+} from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createLoggerBackedRuntime } from "openclaw/plugin-sdk/runtime";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
-import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
+import {
+  formatTargetHint,
+  normalizeShip,
+  parseTlonTarget,
+  resolveTlonOutboundTarget,
+} from "./targets.js";
 import { resolveTlonAccount } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
 import { ssrfPolicyFromAllowPrivateNetwork } from "./urbit/context.js";
@@ -131,19 +139,7 @@ async function withHttpPokeAccountApi<T>(
 export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 10000,
-  resolveTarget: ({ to }) => {
-    const parsed = parseTlonTarget(to ?? "");
-    if (!parsed) {
-      return {
-        ok: false,
-        error: new Error(`Invalid Tlon target. Use ${formatTargetHint()}`),
-      };
-    }
-    if (parsed.kind === "dm") {
-      return { ok: true, to: parsed.ship };
-    }
-    return { ok: true, to: parsed.nest };
-  },
+  resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
   sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
     const { account, parsed } = resolveOutboundContext({ cfg, accountId, to });
     return withHttpPokeAccountApi(account, async (api) => {
@@ -237,7 +233,7 @@ export async function startTlonGatewayAccount(
     accountId: account.accountId,
     ship: account.ship,
     url: account.url,
-  } as import("openclaw/plugin-sdk/tlon").ChannelAccountSnapshot);
+  } as ChannelAccountSnapshot);
   ctx.log?.info(`[${account.accountId}] starting Tlon provider for ${account.ship ?? "tlon"}`);
   return monitorTlonProvider({
     runtime: ctx.runtime,

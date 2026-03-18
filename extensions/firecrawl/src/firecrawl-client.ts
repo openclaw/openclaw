@@ -1,5 +1,6 @@
-import { markdownToText, truncateText } from "../../../src/agents/tools/web-fetch-utils.js";
-import { withTrustedWebToolsEndpoint } from "../../../src/agents/tools/web-guarded-fetch.js";
+import { markdownToText, truncateText } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { withTrustedWebToolsEndpoint } from "openclaw/plugin-sdk/provider-web-search";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
@@ -7,9 +8,8 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   writeCache,
-} from "../../../src/agents/tools/web-shared.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { wrapExternalContent, wrapWebContent } from "../../../src/security/external-content.js";
+} from "openclaw/plugin-sdk/provider-web-search";
+import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveFirecrawlApiKey,
   resolveFirecrawlBaseUrl,
@@ -234,7 +234,7 @@ export async function runFirecrawlSearch(
   const apiKey = resolveFirecrawlApiKey(params.cfg);
   if (!apiKey) {
     throw new Error(
-      "web_search (firecrawl) needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure tools.web.search.firecrawl.apiKey.",
+      "web_search (firecrawl) needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webSearch.apiKey.",
     );
   }
   const count =

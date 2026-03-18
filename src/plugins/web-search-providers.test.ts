@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { resolvePluginWebSearchProviders } from "./web-search-providers.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { createEmptyPluginRegistry } from "./registry.js";
+import { setActivePluginRegistry } from "./runtime.js";
+import {
+  resolvePluginWebSearchProviders,
+  resolveRuntimeWebSearchProviders,
+} from "./web-search-providers.js";
 
 describe("resolvePluginWebSearchProviders", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
   it("returns bundled providers in auto-detect order", () => {
     const providers = resolvePluginWebSearchProviders({});
 
@@ -13,6 +22,20 @@ describe("resolvePluginWebSearchProviders", () => {
       "perplexity:perplexity",
       "firecrawl:firecrawl",
     ]);
+    expect(providers.map((provider) => provider.credentialPath)).toEqual([
+      "plugins.entries.brave.config.webSearch.apiKey",
+      "plugins.entries.google.config.webSearch.apiKey",
+      "plugins.entries.xai.config.webSearch.apiKey",
+      "plugins.entries.moonshot.config.webSearch.apiKey",
+      "plugins.entries.perplexity.config.webSearch.apiKey",
+      "plugins.entries.firecrawl.config.webSearch.apiKey",
+    ]);
+    expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
+      expect.any(Function),
+    );
+    expect(
+      providers.find((provider) => provider.id === "perplexity")?.resolveRuntimeMetadata,
+    ).toEqual(expect.any(Function));
   });
 
   it("can augment restrictive allowlists for bundled compatibility", () => {
@@ -71,5 +94,38 @@ describe("resolvePluginWebSearchProviders", () => {
     });
 
     expect(providers).toEqual([]);
+  });
+
+  it("prefers the active plugin registry for runtime resolution", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push({
+      pluginId: "custom-search",
+      pluginName: "Custom Search",
+      provider: {
+        id: "custom",
+        label: "Custom Search",
+        hint: "Custom runtime provider",
+        envVars: ["CUSTOM_SEARCH_API_KEY"],
+        placeholder: "custom-...",
+        signupUrl: "https://example.com/signup",
+        autoDetectOrder: 1,
+        credentialPath: "tools.web.search.custom.apiKey",
+        getCredentialValue: () => "configured",
+        setCredentialValue: () => {},
+        createTool: () => ({
+          description: "custom",
+          parameters: {},
+          execute: async () => ({}),
+        }),
+      },
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const providers = resolveRuntimeWebSearchProviders({});
+
+    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+      "custom-search:custom",
+    ]);
   });
 });

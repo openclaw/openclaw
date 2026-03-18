@@ -157,3 +157,20 @@
   padding-left: 0;
   padding-right: 1em;
 }
+
+@media (max-width: 640px) {
+  .chat-text :where(pre) {
+    padding: 8px 10px;
+    font-size: 12px;
+    border-radius: 4px;
+  }
+
+  .chat-text :where(.markdown-inline-image) {
+    max-width: 100%;
+    max-height: 240px;
+  }
+
+  .chat-text :where(blockquote) {
+    padding: 6px 10px;
+  }
+}

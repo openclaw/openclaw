@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../auth-choice.preferred-provider.js", () => ({
+vi.mock("../../../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice,
 }));
 
@@ -11,10 +11,11 @@ const resolveOwningPluginIdsForProvider = vi.hoisted(() => vi.fn(() => undefined
 const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 vi.mock("./auth-choice.plugin-providers.runtime.js", () => ({
-  resolveOwningPluginIdsForProvider,
-  resolveProviderPluginChoice,
-  resolvePluginProviders,
-  PROVIDER_PLUGIN_CHOICE_PREFIX: "provider-plugin:",
+  authChoicePluginProvidersRuntime: {
+    resolveOwningPluginIdsForProvider,
+    resolveProviderPluginChoice,
+    resolvePluginProviders,
+  },
 }));
 
 beforeEach(() => {

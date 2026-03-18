@@ -11,6 +11,7 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
+import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
@@ -495,6 +496,8 @@ function createPluginRecord(params: {
     channelIds: [],
     providerIds: [],
     speechProviderIds: [],
+    mediaUnderstandingProviderIds: [],
+    imageGenerationProviderIds: [],
     webSearchProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
@@ -1032,6 +1035,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       origin: candidate.origin,
       config: normalized,
       rootConfig: cfg,
+      enabledByDefault: manifestRecord.enabledByDefault,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
@@ -1098,12 +1102,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const unsupportedCapabilities = (record.bundleCapabilities ?? []).filter(
         (capability) =>
           capability !== "skills" &&
+          capability !== "mcpServers" &&
           capability !== "settings" &&
           !(
-            capability === "commands" &&
+            (capability === "commands" ||
+              capability === "agents" ||
+              capability === "outputStyles" ||
+              capability === "lspServers") &&
             (record.bundleFormat === "claude" || record.bundleFormat === "cursor")
           ) &&
-          !(capability === "hooks" && record.bundleFormat === "codex"),
+          !(
+            capability === "hooks" &&
+            (record.bundleFormat === "codex" || record.bundleFormat === "claude")
+          ),
       );
       for (const capability of unsupportedCapabilities) {
         registry.diagnostics.push({
@@ -1112,6 +1123,36 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           source: record.source,
           message: `bundle capability detected but not wired into OpenClaw yet: ${capability}`,
         });
+      }
+      if (
+        enableState.enabled &&
+        record.rootDir &&
+        record.bundleFormat &&
+        (record.bundleCapabilities ?? []).includes("mcpServers")
+      ) {
+        const runtimeSupport = inspectBundleMcpRuntimeSupport({
+          pluginId: record.id,
+          rootDir: record.rootDir,
+          bundleFormat: record.bundleFormat,
+        });
+        for (const message of runtimeSupport.diagnostics) {
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message,
+          });
+        }
+        if (runtimeSupport.unsupportedServerNames.length > 0) {
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message:
+              "bundle MCP servers use unsupported transports or incomplete configs " +
+              `(stdio only today): ${runtimeSupport.unsupportedServerNames.join(", ")}`,
+          });
+        }
       }
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
