@@ -99,7 +99,7 @@ const bundledMediaUnderstandingPlugins: RegistrablePlugin[] = [
   zaiPlugin,
 ];
 
-const bundledImageGenerationPlugins: RegistrablePlugin[] = [googlePlugin, openAIPlugin];
+const bundledImageGenerationPlugins: RegistrablePlugin[] = [falPlugin, googlePlugin, openAIPlugin];
 
 function captureRegistrations(plugin: RegistrablePlugin) {
   const captured = createCapturedPluginRegistration();
