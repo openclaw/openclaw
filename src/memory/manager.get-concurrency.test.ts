@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
@@ -34,18 +34,21 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
+let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 let closeAllMemoryIndexManagers: ManagerModule["closeAllMemoryIndexManagers"];
 let RawMemoryIndexManager: ManagerModule["MemoryIndexManager"];
 
 describe("memory manager cache hydration", () => {
   let workspaceDir = "";
 
-  beforeEach(async () => {
-    vi.resetModules();
-    await import("./test-runtime-mocks.js");
-    ({ getMemorySearchManager } = await import("./index.js"));
+  beforeAll(async () => {
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     ({ closeAllMemoryIndexManagers, MemoryIndexManager: RawMemoryIndexManager } =
       await import("./manager.js"));
+  });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-concurrent-"));
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
@@ -54,6 +57,7 @@ describe("memory manager cache hydration", () => {
   });
 
   afterEach(async () => {
+    await closeAllMemorySearchManagers();
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
