@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createJiti } from "jiti";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 async function importFreshPluginTestModules() {
@@ -3339,6 +3340,82 @@ module.exports = {
     expect(options.extensions).toContain(".js");
     expect(options.extensions).toContain(".ts");
     expect("alias" in options).toBe(false);
+  });
+
+  it("uses transpiled Jiti loads for source TypeScript plugin entries", () => {
+    expect(__testing.shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(true);
+    expect(
+      __testing.shouldPreferNativeJiti("/repo/extensions/discord/src/channel.runtime.ts"),
+    ).toBe(false);
+  });
+
+  it("loads source runtime shims through the non-native Jiti boundary", async () => {
+    const jiti = createJiti(import.meta.url, {
+      ...__testing.buildPluginLoaderJitiOptions({}),
+      tryNative: false,
+    });
+    const discordChannelRuntime = path.join(
+      process.cwd(),
+      "extensions",
+      "discord",
+      "src",
+      "channel.runtime.ts",
+    );
+    const discordVoiceRuntime = path.join(
+      process.cwd(),
+      "extensions",
+      "discord",
+      "src",
+      "voice",
+      "manager.runtime.ts",
+    );
+
+    await expect(jiti.import(discordChannelRuntime)).resolves.toMatchObject({
+      discordSetupWizard: expect.any(Object),
+    });
+    await expect(jiti.import(discordVoiceRuntime)).resolves.toMatchObject({
+      DiscordVoiceManager: expect.any(Function),
+      DiscordVoiceReadyListener: expect.any(Function),
+    });
+  });
+
+  it("loads source TypeScript plugins that route through local runtime shims", () => {
+    const plugin = writePlugin({
+      id: "source-runtime-shim",
+      filename: "source-runtime-shim.ts",
+      body: `import "./runtime-shim.ts";
+
+export default {
+  id: "source-runtime-shim",
+  register() {},
+};`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "runtime-shim.ts"),
+      `import { helperValue } from "./helper.js";
+
+export const runtimeValue = helperValue;`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "helper.ts"),
+      `export const helperValue = "ok";`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["source-runtime-shim"],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "source-runtime-shim");
+    expect(record?.status).toBe("loaded");
   });
 
   it.each([
