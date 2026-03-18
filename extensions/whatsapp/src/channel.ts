@@ -5,6 +5,10 @@ import {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
 } from "./directory-config.js";
+import {
+  resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
+} from "./group-policy.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
 import {
   createActionGate,
@@ -13,8 +17,6 @@ import {
   formatWhatsAppConfigAllowFromEntries,
   readStringParam,
   resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppGroupRequireMention,
-  resolveWhatsAppGroupToolPolicy,
   resolveWhatsAppOutboundTarget,
   resolveWhatsAppHeartbeatRecipients,
   resolveWhatsAppMentionStripRegexes,
