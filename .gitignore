@@ -4,10 +4,12 @@ node_modules
 docker-compose.override.yml
 docker-compose.extra.yml
 dist
+dist-runtime
 pnpm-lock.yaml
 bun.lock
 bun.lockb
 coverage
+__openclaw_vitest__/
 __pycache__/
 *.pyc
 .tsbuildinfo

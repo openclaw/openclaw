@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
-} from "../../plugin-sdk/windows-spawn.js";
+} from "openclaw/plugin-sdk/windows-spawn";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 import type { EnvSanitizationOptions } from "./sanitize-env-vars.js";
 
@@ -557,10 +557,13 @@ export async function ensureSandboxContainer(params: {
   }
   await updateRegistry({
     containerName,
+    backendId: "docker",
+    runtimeLabel: containerName,
     sessionKey: scopeKey,
     createdAtMs: now,
     lastUsedAtMs: now,
     image: params.cfg.docker.image,
+    configLabelKind: "Image",
     configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
   });
   return containerName;

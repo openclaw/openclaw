@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/diffs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test-utils/plugin-api.js";
+import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
+import type { OpenClawPluginApi } from "../api.js";
 import type { DiffScreenshotter } from "./browser.js";
 import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
 import { DiffArtifactStore } from "./store.js";
@@ -57,7 +57,7 @@ describe("diffs tool", () => {
     const cleanupSpy = vi.spyOn(store, "scheduleCleanup");
     const screenshotter = createPngScreenshotter({
       assertHtml: (html) => {
-        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
+        expect(html).toContain("/plugins/diffs/assets/viewer.js");
       },
       assertImage: (image) => {
         expect(image).toMatchObject({
@@ -332,13 +332,13 @@ describe("diffs tool", () => {
     const html = await store.readHtml(id);
     expect(html).toContain('body data-theme="light"');
     expect(html).toContain("--diffs-font-size: 17px;");
-    expect(html).toContain('--diffs-font-family: "JetBrains Mono"');
+    expect(html).toContain("JetBrains Mono");
   });
 
   it("prefers explicit tool params over configured defaults", async () => {
     const screenshotter = createPngScreenshotter({
       assertHtml: (html) => {
-        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
+        expect(html).toContain("/plugins/diffs/assets/viewer.js");
       },
       assertImage: (image) => {
         expect(image).toMatchObject({

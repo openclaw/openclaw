@@ -1,6 +1,6 @@
-import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/bluebubbles";
+import type { DmPolicy, GroupPolicy } from "./runtime-api.js";
 
-export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/bluebubbles";
+export type { DmPolicy, GroupPolicy } from "./runtime-api.js";
 
 export type BlueBubblesGroupConfig = {
   /** If true, only respond in this group when mentioned. */
@@ -57,6 +57,10 @@ export type BlueBubblesAccountConfig = {
   allowPrivateNetwork?: boolean;
   /** Per-group configuration keyed by chat GUID or identifier. */
   groups?: Record<string, BlueBubblesGroupConfig>;
+  /** Channel health monitor overrides for this channel/account. */
+  healthMonitor?: {
+    enabled?: boolean;
+  };
 };
 
 export type BlueBubblesActionConfig = {

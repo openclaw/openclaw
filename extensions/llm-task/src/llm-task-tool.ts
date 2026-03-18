@@ -3,44 +3,12 @@ import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
 import {
-  formatThinkingLevels,
   formatXHighModelHint,
   normalizeThinkLevel,
   resolvePreferredOpenClawTmpDir,
   supportsXHighThinking,
-} from "openclaw/plugin-sdk/llm-task";
-// NOTE: This extension is intended to be bundled with OpenClaw.
-// When running from source (tests/dev), OpenClaw internals live under src/.
-// When running from a built install, internals live under dist/ (no src/ tree).
-// So we resolve internal imports dynamically with src-first, dist-fallback.
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/llm-task";
-
-type RunEmbeddedPiAgentFn = (params: Record<string, unknown>) => Promise<unknown>;
-
-async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
-  // Source checkout (tests/dev)
-  try {
-    const mod = await import("../../../src/agents/pi-embedded-runner.js");
-    // oxlint-disable-next-line typescript/no-explicit-any
-    if (typeof (mod as any).runEmbeddedPiAgent === "function") {
-      // oxlint-disable-next-line typescript/no-explicit-any
-      return (mod as any).runEmbeddedPiAgent;
-    }
-  } catch {
-    // ignore
-  }
-
-  // Bundled install (built)
-  // NOTE: there is no src/ tree in a packaged install. Prefer a stable internal entrypoint.
-  const distExtensionApi = "../../../dist/extensionAPI.js";
-  const mod = (await import(distExtensionApi)) as { runEmbeddedPiAgent?: unknown };
-  // oxlint-disable-next-line typescript/no-explicit-any
-  const fn = (mod as any).runEmbeddedPiAgent;
-  if (typeof fn !== "function") {
-    throw new Error("Internal error: runEmbeddedPiAgent not available");
-  }
-  return fn as RunEmbeddedPiAgentFn;
-}
+} from "../api.js";
+import type { OpenClawPluginApi } from "../api.js";
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
@@ -75,6 +43,9 @@ type PluginCfg = {
   maxTokens?: number;
   timeoutMs?: number;
 };
+
+const INVALID_THINKING_LEVELS_HINT =
+  "off, minimal, low, medium, high, adaptive, and xhigh where supported";
 
 export function createLlmTaskTool(api: OpenClawPluginApi) {
   return {
@@ -156,7 +127,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const thinkLevel = thinkingRaw ? normalizeThinkLevel(thinkingRaw) : undefined;
       if (thinkingRaw && !thinkLevel) {
         throw new Error(
-          `Invalid thinking level "${thinkingRaw}". Use one of: ${formatThinkingLevels(provider, model)}.`,
+          `Invalid thinking level "${thinkingRaw}". Use one of: ${INVALID_THINKING_LEVELS_HINT}.`,
         );
       }
       if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
@@ -209,9 +180,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         const sessionId = `llm-task-${Date.now()}`;
         const sessionFile = path.join(tmpDir, "session.json");
 
-        const runEmbeddedPiAgent = await loadRunEmbeddedPiAgent();
-
-        const result = await runEmbeddedPiAgent({
+        const result = await api.runtime.agent.runEmbeddedPiAgent({
           sessionId,
           sessionFile,
           workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
