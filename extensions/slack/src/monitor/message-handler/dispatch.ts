@@ -65,8 +65,13 @@ export function resolveSlackDeliveryThreadTs(params: {
   forcedThreadTs?: string;
   plannedThreadTs?: string;
   usedReplyThreadTs?: string;
+  allowUsedReplyThreadTs?: boolean;
 }): string | undefined {
-  return params.forcedThreadTs ?? params.plannedThreadTs ?? params.usedReplyThreadTs;
+  return (
+    params.forcedThreadTs ??
+    params.plannedThreadTs ??
+    (params.allowUsedReplyThreadTs ? params.usedReplyThreadTs : undefined)
+  );
 }
 
 function shouldUseStreaming(params: {
@@ -237,11 +242,19 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
 
-  const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
+  const deliverNormally = async (
+    payload: ReplyPayload,
+    options?: {
+      forcedThreadTs?: string;
+      allowUsedReplyThreadTs?: boolean;
+    },
+  ): Promise<void> => {
+    const plannedThreadTs = options?.forcedThreadTs ? undefined : replyPlan.nextThreadTs();
     const replyThreadTs = resolveSlackDeliveryThreadTs({
-      forcedThreadTs,
-      plannedThreadTs: replyPlan.nextThreadTs(),
+      forcedThreadTs: options?.forcedThreadTs,
+      plannedThreadTs,
       usedReplyThreadTs,
+      allowUsedReplyThreadTs: options?.allowUsedReplyThreadTs,
     });
     await deliverReplies({
       replies: [payload],
@@ -261,14 +274,21 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     replyPlan.markSent();
   };
 
-  const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
+  const deliverWithStreaming = async (
+    payload: ReplyPayload,
+    kind: "tool" | "block" | "final",
+  ): Promise<void> => {
+    const allowUsedReplyThreadTs = kind === "block";
     if (
       streamFailed ||
       hasMedia(payload) ||
       readSlackReplyBlocks(payload)?.length ||
       !payload.text?.trim()
     ) {
-      await deliverNormally(payload, streamSession?.threadTs);
+      await deliverNormally(payload, {
+        forcedThreadTs: streamSession?.threadTs,
+        allowUsedReplyThreadTs,
+      });
       return;
     }
 
@@ -283,7 +303,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             "slack-stream: no reply thread target for stream start, falling back to normal delivery",
           );
           streamFailed = true;
-          await deliverNormally(payload);
+          await deliverNormally(payload, { allowUsedReplyThreadTs });
           return;
         }
 
@@ -309,7 +329,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
       );
       streamFailed = true;
-      await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
+      await deliverNormally(payload, {
+        forcedThreadTs: streamSession?.threadTs ?? plannedThreadTs,
+        allowUsedReplyThreadTs,
+      });
     }
   };
 
@@ -317,9 +340,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
-    deliver: async (payload) => {
+    deliver: async (payload, info) => {
       if (useStreaming) {
-        await deliverWithStreaming(payload);
+        await deliverWithStreaming(payload, info.kind);
         return;
       }
 
@@ -378,7 +401,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         hasStreamedMessage = false;
       }
 
-      await deliverNormally(payload);
+      await deliverNormally(payload, {
+        allowUsedReplyThreadTs: info.kind === "block",
+      });
     },
     onError: (err, info) => {
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
@@ -395,6 +420,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const ts = resolveSlackDeliveryThreadTs({
         plannedThreadTs: replyPlan.nextThreadTs(),
         usedReplyThreadTs,
+        allowUsedReplyThreadTs: true,
       });
       if (ts) {
         usedReplyThreadTs ??= ts;
