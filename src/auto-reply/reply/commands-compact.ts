@@ -30,10 +30,20 @@ function humanizeCompactionReason(reason: string | undefined): string | undefine
     return undefined;
   }
   const lower = trimmed.toLowerCase();
-  // "Compaction cancelled" is the generic SDK surface for any extension
-  // { cancel: true } — including low-context skips, missing model/API key,
-  // and summarization failures. We can't distinguish them here, so keep the
-  // original wording but make it less alarming.
+  // The safeguard extension now sets specific reasons via lastCancelReason,
+  // which compact.ts retrieves and passes through instead of the generic
+  // "Compaction cancelled" from the SDK. Handle both the new specific reasons
+  // and the old generic fallback.
+  if (lower === "no compaction model configured") {
+    return "no compaction model is configured — check your model settings";
+  }
+  if (lower === "no api key available for compaction model") {
+    return "no API key available for the compaction model";
+  }
+  if (lower.startsWith("summarization failed:")) {
+    return trimmed; // Already descriptive enough
+  }
+  // Generic SDK fallback (should be rare now that safeguard sets specific reasons)
   if (lower === "compaction cancelled" || lower === "compaction canceled") {
     return "compaction was not needed or could not run — check /status for details";
   }
@@ -137,10 +147,17 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   });
 
   const rawReason = result.reason?.trim();
+  const rawReasonLower = rawReason?.toLowerCase();
+  // Treat all benign safeguard cancellations as "skipped" rather than "failed".
+  // This includes: generic SDK cancellations, no model/API key, no messages,
+  // and summarization failures (which are not user errors).
   const isCancellation =
-    rawReason?.toLowerCase() === "compaction cancelled" ||
-    rawReason?.toLowerCase() === "compaction canceled" ||
-    rawReason?.toLowerCase() === "no real conversation messages";
+    rawReasonLower === "compaction cancelled" ||
+    rawReasonLower === "compaction canceled" ||
+    rawReasonLower === "no real conversation messages" ||
+    rawReasonLower === "no compaction model configured" ||
+    rawReasonLower === "no api key available for compaction model" ||
+    (rawReasonLower?.startsWith("summarization failed:") ?? false);
   // Treat SDK cancellations (e.g. safeguard deciding context is too low) as
   // skips rather than failures — the system worked as intended.
   const compactLabel = result.ok

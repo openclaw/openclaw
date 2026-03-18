@@ -1110,7 +1110,19 @@ export async function compactEmbeddedPiSessionDirect(
       await sessionLock.release();
     }
   } catch (err) {
-    const reason = describeUnknownError(err);
+    let reason = describeUnknownError(err);
+    // When the safeguard extension cancels compaction, the SDK throws the generic
+    // "Compaction cancelled" error. Check if the safeguard stored a specific reason.
+    if (reason.toLowerCase().includes("compaction cancelled") || reason.toLowerCase().includes("compaction canceled")) {
+      try {
+        const { lastCancelReason } = await import("../pi-extensions/compaction-safeguard.js");
+        if (lastCancelReason) {
+          reason = lastCancelReason;
+        }
+      } catch {
+        // If the import fails (e.g. safeguard not loaded), keep the generic reason
+      }
+    }
     return fail(reason);
   } finally {
     restoreSkillEnv?.();

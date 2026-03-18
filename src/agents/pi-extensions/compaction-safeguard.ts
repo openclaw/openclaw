@@ -702,6 +702,8 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
+    // Reset cancel reason at the start of each compaction attempt
+    lastCancelReason = undefined;
     const hasRealSummarizable = preparation.messagesToSummarize.some(isRealConversationMessage);
     const hasRealTurnPrefix = preparation.turnPrefixMessages.some(isRealConversationMessage);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
@@ -761,6 +763,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             "was not called and model was not passed through runtime registry.",
         );
       }
+      lastCancelReason = "no compaction model configured";
       return { cancel: true };
     }
 
@@ -769,6 +772,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       log.warn(
         "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
       );
+      lastCancelReason = "no API key available for compaction model";
       return { cancel: true };
     }
 
@@ -1006,10 +1010,23 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      lastCancelReason = `summarization failed: ${error instanceof Error ? error.message : String(error)}`;
       return { cancel: true };
     }
   });
 }
+
+/**
+ * Stores the specific reason for the most recent safeguard cancellation.
+ * The Pi SDK's `{ cancel: true }` mechanism does not support a reason field,
+ * so the SDK always throws the generic "Compaction cancelled" error.
+ * This exported variable allows compact.ts to retrieve the actual reason
+ * and surface it to the user.
+ *
+ * Reset to undefined before each compaction attempt; set immediately before
+ * returning `{ cancel: true }`.
+ */
+export let lastCancelReason: string | undefined;
 
 export const __testing = {
   collectToolFailures,
