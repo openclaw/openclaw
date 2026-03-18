@@ -33,7 +33,7 @@ describe("fetchKilocodeUsage", () => {
     expect(result.error).toBeUndefined();
   });
 
-  it("returns depleted error when isDepleted is true", async () => {
+  it("shows depleted label in plan when isDepleted is true", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, { balance: 0, isDepleted: true }),
     );
@@ -41,8 +41,18 @@ describe("fetchKilocodeUsage", () => {
     const result = await fetchKilocodeUsage("key", 5000, mockFetch);
 
     expect(result.provider).toBe("kilocode");
-    expect(result.plan).toBe("$0.00");
-    expect(result.error).toBe("Depleted");
+    expect(result.plan).toBe("$0.00 (depleted)");
+    expect(result.error).toBeUndefined();
+    expect(result.windows).toHaveLength(0);
+  });
+
+  it("shows depleted label without balance when isDepleted and no balance", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, { isDepleted: true }));
+
+    const result = await fetchKilocodeUsage("key", 5000, mockFetch);
+
+    expect(result.plan).toBe("depleted");
+    expect(result.error).toBeUndefined();
     expect(result.windows).toHaveLength(0);
   });
 
