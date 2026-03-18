@@ -63,6 +63,8 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
     dispatchInboundMessage: (...args: unknown[]) => dispatchMock(...args),
     dispatchInboundMessageWithDispatcher: (...args: unknown[]) => dispatchMock(...args),
     dispatchInboundMessageWithBufferedDispatcher: (...args: unknown[]) => dispatchMock(...args),
+    dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchMock(...args),
+    dispatchReplyWithDispatcher: (...args: unknown[]) => dispatchMock(...args),
   };
 });
 
@@ -101,5 +103,9 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
     resolveSessionKey: vi.fn(),
+    readSessionUpdatedAt: vi.fn(() => undefined),
+    loadSessionStore: vi.fn(() => ({})),
+    updateSessionStore: vi.fn(),
+    recordSessionMetaFromInbound: vi.fn(),
   };
 });

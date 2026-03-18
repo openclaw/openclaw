@@ -73,11 +73,25 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: () => config,
+    resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
+    updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
+    readSessionUpdatedAt: vi.fn(() => undefined),
+    recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
   };
 });
 
+// Mock reply-runtime barrel so extension imports get real exports (incl. dispatchReplyWithBufferedBlockDispatcher).
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    getReplyFromConfig: (...args: unknown[]) => replyMock(...args),
+  };
+});
+
+// Also mock the source module so dispatchInboundMessage internally picks up the mocked getReplyFromConfig.
+vi.mock("../../../src/auto-reply/reply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/auto-reply/reply.js")>();
   return {
     ...actual,
     getReplyFromConfig: (...args: unknown[]) => replyMock(...args),
@@ -90,19 +104,12 @@ vi.mock("./send.js", () => ({
   sendReadReceiptSignal: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
-    resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
-    updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
-    readSessionUpdatedAt: vi.fn(() => undefined),
-    recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
+    readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
   };
 });
 
