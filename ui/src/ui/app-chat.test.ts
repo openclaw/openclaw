@@ -119,9 +119,10 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
+    // Bare model name is now qualified with the catalog provider before sending.
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
-      model: "gpt-5-mini",
+      model: "openai/gpt-5-mini",
     });
     expect(host.chatModelOverrides.main).toEqual({
       kind: "qualified",

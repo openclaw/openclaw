@@ -267,6 +267,11 @@ describe("executeSlashCommand directives", () => {
 
   it("mirrors resolved provider-qualified model refs after /model changes", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "models.list") {
+        return {
+          models: [{ id: "gpt-5-mini", provider: "openai", name: "GPT-5 Mini" }],
+        };
+      }
       if (method === "sessions.patch") {
         return {
           ok: true,
@@ -287,13 +292,55 @@ describe("executeSlashCommand directives", () => {
       "gpt-5-mini",
     );
 
+    // Bare model name is qualified with the catalog provider before sending.
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
-      model: "gpt-5-mini",
+      model: "openai/gpt-5-mini",
     });
     expect(result.sessionPatch?.modelOverride).toEqual({
       kind: "qualified",
       value: "openai/gpt-5-mini",
+    });
+  });
+
+  it("uses the selected model's own provider when switching between providers", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "models.list") {
+        return {
+          models: [
+            { id: "claude-opus-4-6", provider: "anthropic", name: "Claude Opus" },
+            { id: "gemini-2.5-pro", provider: "google", name: "Gemini 2.5 Pro" },
+          ],
+        };
+      }
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          key: "main",
+          resolved: {
+            modelProvider: "google",
+            model: "gemini-2.5-pro",
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "gemini-2.5-pro",
+    );
+
+    // Must send "google/gemini-2.5-pro", NOT "anthropic/gemini-2.5-pro".
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "google/gemini-2.5-pro",
+    });
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "google/gemini-2.5-pro",
     });
   });
 

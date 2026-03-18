@@ -16,7 +16,11 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
-import { createChatModelOverride, resolveServerChatModelValue } from "../chat-model-ref.ts";
+import {
+  buildQualifiedChatModelValue,
+  createChatModelOverride,
+  resolveServerChatModelValue,
+} from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   AgentsListResult,
@@ -151,16 +155,35 @@ async function executeModel(
   }
 
   try {
+    // Qualify bare model names with their catalog provider so the server
+    // does not fall back to the session's current provider (which may
+    // belong to a completely different provider).
+    const modelArg = args.trim();
+    let qualifiedModel = modelArg;
+    if (!modelArg.includes("/")) {
+      try {
+        const catalog = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {});
+        const match = catalog?.models?.find(
+          (m: ModelCatalogEntry) => m.id.toLowerCase() === modelArg.toLowerCase(),
+        );
+        if (match?.provider) {
+          qualifiedModel = buildQualifiedChatModelValue(match.id, match.provider);
+        }
+      } catch {
+        // Catalog unavailable — send the bare name and let the server resolve.
+      }
+    }
+
     const patched = await client.request<SessionsPatchResult>("sessions.patch", {
       key: sessionKey,
-      model: args.trim(),
+      model: qualifiedModel,
     });
     const resolvedValue = resolveServerChatModelValue(
-      patched.resolved?.model ?? args.trim(),
+      patched.resolved?.model ?? modelArg,
       patched.resolved?.modelProvider,
     );
     return {
-      content: `Model set to \`${args.trim()}\`.`,
+      content: `Model set to \`${modelArg}\`.`,
       action: "refresh",
       sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
     };
