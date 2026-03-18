@@ -15,6 +15,10 @@ export type UsageLike = {
   completion_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  // OpenAI-compatible servers sometimes emit snake_case input/output aliases.
+  // Examples: mlx-vlm, vLLM.
+  input_tokens?: number;
+  output_tokens?: number;
   // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
   cached_tokens?: number;
   // Kimi K2 uses prompt_tokens_details.cached_tokens for automatic prefix caching.

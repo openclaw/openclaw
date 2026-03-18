@@ -71,6 +71,21 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("handles mlx-vlm/vLLM input_tokens and output_tokens aliases", () => {
+    const usage = normalizeUsage({
+      input_tokens: 11,
+      output_tokens: 5,
+      total_tokens: 16,
+    });
+    expect(usage).toEqual({
+      input: 11,
+      output: 5,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 16,
+    });
+  });
+
   it("handles Kimi K2 prompt_tokens_details.cached_tokens field", () => {
     // Kimi K2 uses automatic prefix caching and returns cached_tokens in prompt_tokens_details
     const usage = normalizeUsage({
