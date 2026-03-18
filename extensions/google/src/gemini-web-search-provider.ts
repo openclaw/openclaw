@@ -14,7 +14,6 @@ import {
   resolveSearchTimeoutSeconds,
   resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
-  type OpenClawConfig,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
@@ -54,15 +53,8 @@ type GeminiGroundingResponse = {
   };
 };
 
-function resolveGeminiConfig(
-  config?: OpenClawConfig,
-  searchConfig?: SearchConfigRecord,
-): GeminiConfig {
-  const pluginConfig = resolveProviderWebSearchPluginConfig(config, "google");
-  if (pluginConfig) {
-    return pluginConfig as GeminiConfig;
-  }
-  const gemini = (searchConfig as Record<string, unknown> | undefined)?.gemini;
+function resolveGeminiConfig(searchConfig?: SearchConfigRecord): GeminiConfig {
+  const gemini = searchConfig?.gemini;
   return gemini && typeof gemini === "object" && !Array.isArray(gemini)
     ? (gemini as GeminiConfig)
     : {};
@@ -70,7 +62,7 @@ function resolveGeminiConfig(
 
 function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
   return (
-    readConfiguredSecretString(gemini?.apiKey, "plugins.entries.google.config.webSearch.apiKey") ??
+    readConfiguredSecretString(gemini?.apiKey, "tools.web.search.gemini.apiKey") ??
     readProviderEnvValue(["GEMINI_API_KEY"])
   );
 }
@@ -177,7 +169,6 @@ function createGeminiSchema() {
 }
 
 function createGeminiToolDefinition(
-  config?: OpenClawConfig,
   searchConfig?: SearchConfigRecord,
 ): WebSearchProviderToolDefinition {
   return {
@@ -204,13 +195,13 @@ function createGeminiToolDefinition(
         }
       }
 
-      const geminiConfig = resolveGeminiConfig(config, searchConfig);
+      const geminiConfig = resolveGeminiConfig(searchConfig);
       const apiKey = resolveGeminiApiKey(geminiConfig);
       if (!apiKey) {
         return {
           error: "missing_gemini_api_key",
           message:
-            "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, or configure plugins.entries.google.config.webSearch.apiKey.",
+            "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, or configure tools.web.search.gemini.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
@@ -290,8 +281,19 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "google", "apiKey", value);
     },
-    createTool: (ctx) =>
-      createGeminiToolDefinition(ctx.config, ctx.searchConfig as SearchConfigRecord | undefined),
+    createTool: (ctx) => {
+      const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "google");
+      const searchConfig = {
+        ...(ctx.searchConfig as SearchConfigRecord | undefined),
+        gemini: {
+          ...((ctx.searchConfig as SearchConfigRecord | undefined)?.gemini as
+            | Record<string, unknown>
+            | undefined),
+          ...(pluginConfig as Record<string, unknown> | undefined),
+        },
+      } as SearchConfigRecord;
+      return createGeminiToolDefinition(searchConfig);
+    },
   };
 }
 
