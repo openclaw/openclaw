@@ -39,7 +39,7 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
   const resolved = await params.resolveApiKey({
     provider: "gigachat",
     cfg: params.baseConfig,
-    flagValue: params.opts.gigachatApiKey,
+    flagValue: params.opts.gigachatApiKey ?? params.opts.token,
     flagName: "--gigachat-api-key",
     envVar: "GIGACHAT_CREDENTIALS",
     runtime: params.runtime,
