@@ -29,12 +29,9 @@ export function resolveChannelLifecyclePluginRuntimeState(
   const currentChannelIds = collectChannelIds(current.registry);
   const activeChannelIds = collectChannelIds(activeRegistry);
 
-  // Channel lifecycle rebinds must follow legitimate live upgrades such as
-  // lazy outbound bootstrap, but should refuse active snapshots that would
-  // drop channel plugins the gateway already knows about.
-  if (activeChannelIds.size <= currentChannelIds.size) {
-    return current;
-  }
+  // Channel lifecycle rebinds must follow legitimate live registry upgrades,
+  // including same-channel replacements that add tools/providers/hooks, but
+  // should still refuse active snapshots that would drop known channels.
   for (const channelId of currentChannelIds) {
     if (!activeChannelIds.has(channelId)) {
       return current;
