@@ -202,7 +202,7 @@ The current boundary is:
   channel-specific schema fragments
 - channel plugins execute the final action through their action adapter
 
-For channel plugins, the preferred SDK surface is
+For channel plugins, the SDK surface is
 `ChannelMessageActionAdapter.describeMessageTool(...)`. That unified discovery
 call lets a plugin return its visible actions, capabilities, and schema
 contributions together so those pieces do not drift apart.
