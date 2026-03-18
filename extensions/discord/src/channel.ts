@@ -360,6 +360,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeDiscordMessagingTarget,
+    resolveSessionTarget: ({ id }) => normalizeDiscordMessagingTarget(`channel:${id}`),
     parseExplicitTarget: ({ raw }) => parseDiscordExplicitTarget(raw),
     inferTargetChatType: ({ to }) => parseDiscordExplicitTarget(to)?.chatType,
     buildCrossContextComponents: buildDiscordCrossContextComponents,
