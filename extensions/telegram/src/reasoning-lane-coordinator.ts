@@ -16,7 +16,10 @@ const REASONING_TAG_PREFIXES = [
 ];
 const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 
-function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
+function extractThinkingFromTaggedStreamOutsideCode(
+  text: string,
+  options?: { finalText?: boolean },
+): string {
   if (!text) {
     return "";
   }
@@ -24,6 +27,8 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
   let result = "";
   let lastIndex = 0;
   let inThinking = false;
+  // Track how much non-thinking content appeared before the current open tag.
+  let contentBeforeOpenTag = "";
   THINKING_TAG_RE.lastIndex = 0;
   for (const match of text.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
@@ -32,12 +37,19 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
     }
     if (inThinking) {
       result += text.slice(lastIndex, idx);
+    } else {
+      contentBeforeOpenTag += text.slice(lastIndex, idx);
     }
     const isClose = match[1] === "/";
     inThinking = !isClose;
     lastIndex = idx + match[0].length;
   }
   if (inThinking) {
+    // In final text, an unclosed <think> after meaningful content is a literal
+    // mention — do not extract trailing text as reasoning.
+    if (options?.finalText && contentBeforeOpenTag.trim().length > 0) {
+      return result.trim();
+    }
     result += text.slice(lastIndex);
   }
   return result.trim();
@@ -59,7 +71,10 @@ export type TelegramReasoningSplit = {
   answerText?: string;
 };
 
-export function splitTelegramReasoningText(text?: string): TelegramReasoningSplit {
+export function splitTelegramReasoningText(
+  text?: string,
+  options?: { finalText?: boolean },
+): TelegramReasoningSplit {
   if (typeof text !== "string") {
     return {};
   }
@@ -75,8 +90,13 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
     return { reasoningText: trimmed };
   }
 
-  const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
-  const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+  const finalText = options?.finalText ?? false;
+  const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text, { finalText });
+  const strippedAnswer = stripReasoningTagsFromText(text, {
+    mode: "strict",
+    trim: "both",
+    finalText,
+  });
 
   if (!taggedReasoning && strippedAnswer === text) {
     return { answerText: text };

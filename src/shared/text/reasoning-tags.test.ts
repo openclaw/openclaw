@@ -207,6 +207,71 @@ describe("stripReasoningTagsFromText", () => {
     });
   });
 
+  describe("finalText option (issue #49104)", () => {
+    it("preserves unclosed <think> as literal text when meaningful content precedes it", () => {
+      const cases = [
+        {
+          name: "mid-sentence mention",
+          input: "use the <think> tag for reasoning",
+          expected: "use the <think> tag for reasoning",
+        },
+        {
+          name: "quoted mention without backticks",
+          input: 'Good — confirmed ("Reasoning OFF — hide <think>"). Status: active.',
+          expected: 'Good — confirmed ("Reasoning OFF — hide <think>"). Status: active.',
+        },
+        {
+          name: "tag at end of text",
+          input: "here is <think>",
+          expected: "here is <think>",
+        },
+      ] as const;
+      for (const { name, input, expected } of cases) {
+        expect(stripReasoningTagsFromText(input, { mode: "strict", finalText: true }), name).toBe(
+          expected,
+        );
+      }
+    });
+
+    it("still strips unclosed <think> at start (likely reasoning leak)", () => {
+      expect(
+        stripReasoningTagsFromText("<think>partial reasoning", {
+          mode: "strict",
+          finalText: true,
+        }),
+      ).toBe("");
+    });
+
+    it("still strips unclosed <think> when only whitespace precedes it", () => {
+      expect(
+        stripReasoningTagsFromText("  <think>partial reasoning", {
+          mode: "strict",
+          finalText: true,
+        }),
+      ).toBe("");
+    });
+
+    it("strips closed reasoning blocks and preserves unclosed literal mentions", () => {
+      const input = "<think>reasoning here</think>Answer mentioning <think> tag.";
+      expect(stripReasoningTagsFromText(input, { mode: "strict", finalText: true })).toBe(
+        "Answer mentioning <think> tag.",
+      );
+    });
+
+    it("does not change behavior without finalText flag (backward compat)", () => {
+      expect(stripReasoningTagsFromText("use the <think> tag", { mode: "strict" })).toBe("use the");
+    });
+
+    it("handles closed tags normally with finalText", () => {
+      expect(
+        stripReasoningTagsFromText("Hello <think>hidden</think> world", {
+          mode: "strict",
+          finalText: true,
+        }),
+      ).toBe("Hello  world");
+    });
+  });
+
   describe("trim options", () => {
     it("applies configured trim strategies", () => {
       const cases = [

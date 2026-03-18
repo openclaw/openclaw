@@ -21,6 +21,10 @@ export function stripReasoningTagsFromText(
   options?: {
     mode?: ReasoningTagMode;
     trim?: ReasoningTagTrim;
+    /** When true, an unclosed `<think>` after non-empty content is treated as
+     *  literal text rather than a reasoning block start. Use for final/complete
+     *  text; leave false for streaming partials where an unclosed tag is normal. */
+    finalText?: boolean;
   },
 ): string {
   if (!text) {
@@ -32,6 +36,7 @@ export function stripReasoningTagsFromText(
 
   const mode = options?.mode ?? "strict";
   const trimMode = options?.trim ?? "both";
+  const finalText = options?.finalText ?? false;
 
   let cleaned = text;
   if (FINAL_TAG_RE.test(cleaned)) {
@@ -63,6 +68,9 @@ export function stripReasoningTagsFromText(
   let result = "";
   let lastIndex = 0;
   let inThinking = false;
+  // Track position of the last unclosed opening tag so we can restore it when
+  // the tag is a literal mention in final text (no closing tag follows).
+  let unclosedOpenTagStart = -1;
 
   for (const match of cleaned.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
@@ -76,9 +84,11 @@ export function stripReasoningTagsFromText(
       result += cleaned.slice(lastIndex, idx);
       if (!isClose) {
         inThinking = true;
+        unclosedOpenTagStart = idx;
       }
     } else if (isClose) {
       inThinking = false;
+      unclosedOpenTagStart = -1;
     }
 
     lastIndex = idx + match[0].length;
@@ -86,6 +96,10 @@ export function stripReasoningTagsFromText(
 
   if (!inThinking || mode === "preserve") {
     result += cleaned.slice(lastIndex);
+  } else if (finalText && result.trim().length > 0 && unclosedOpenTagStart >= 0) {
+    // In final text: an unclosed <think> that appears after meaningful content
+    // is a literal mention, not a reasoning block. Restore the tag and trailing text.
+    result += cleaned.slice(unclosedOpenTagStart);
   }
 
   return applyTrim(result, trimMode);

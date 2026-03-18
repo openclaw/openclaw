@@ -273,8 +273,11 @@ export const dispatchTelegramMessage = async ({
     segments: SplitLaneSegment[];
     suppressedReasoningOnly: boolean;
   };
-  const splitTextIntoLaneSegments = (text?: string): SplitLaneSegmentsResult => {
-    const split = splitTelegramReasoningText(text);
+  const splitTextIntoLaneSegments = (
+    text?: string,
+    options?: { finalText?: boolean },
+  ): SplitLaneSegmentsResult => {
+    const split = splitTelegramReasoningText(text, options);
     const segments: SplitLaneSegment[] = [];
     const suppressReasoning = resolvedReasoningLevel === "off";
     if (split.reasoningText && !suppressReasoning) {
@@ -563,7 +566,9 @@ export const dispatchTelegramMessage = async ({
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
           )?.buttons;
-          const split = splitTextIntoLaneSegments(payload.text);
+          const split = splitTextIntoLaneSegments(payload.text, {
+            finalText: info.kind === "final",
+          });
           const segments = split.segments;
           const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
