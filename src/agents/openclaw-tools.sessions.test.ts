@@ -635,7 +635,21 @@ describe("sessions tools", () => {
         lane: "nested",
         inputProvenance: { kind: "inter_session" },
       });
+    }
+    const initialSendCalls = agentCalls.filter(
+      (call) =>
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
+          "Agent-to-agent message context",
+        ),
+    );
+    expect(initialSendCalls).toHaveLength(2);
+    for (const call of initialSendCalls) {
       expect((call.params as { channel?: string }).channel).toBeUndefined();
+    }
+    const followUpCalls = agentCalls.filter((call) => !initialSendCalls.includes(call));
+    for (const call of followUpCalls) {
+      expect((call.params as { channel?: string }).channel).toBe("webchat");
     }
     expect(
       agentCalls.some(
@@ -815,7 +829,21 @@ describe("sessions tools", () => {
         lane: "nested",
         inputProvenance: { kind: "inter_session" },
       });
-      expect((call.params as { channel?: string }).channel).toBeUndefined();
+    }
+    const initialSendCalls = agentCalls.filter(
+      (call) =>
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
+          "Agent-to-agent message context",
+        ),
+    );
+    expect(initialSendCalls).toHaveLength(1);
+    expect(
+      (initialSendCalls[0]?.params as { channel?: string } | undefined)?.channel,
+    ).toBeUndefined();
+    const followUpCalls = agentCalls.filter((call) => !initialSendCalls.includes(call));
+    for (const call of followUpCalls) {
+      expect((call.params as { channel?: string }).channel).toBe("webchat");
     }
 
     const replySteps = calls.filter(
