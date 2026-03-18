@@ -7,6 +7,7 @@ export type UsageState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   usageLoading: boolean;
+  usageRequestVersion: number;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
   usageError: string | null;
@@ -190,17 +191,17 @@ export async function loadUsage(
   if (!client || !state.connected) {
     return;
   }
-  if (state.usageLoading) {
-    return;
-  }
+  const requestVersion = bumpRequestVersion(state.usageRequestVersion);
+  state.usageRequestVersion = requestVersion;
   state.usageLoading = true;
   state.usageError = null;
   try {
     const startDate = overrides?.startDate ?? state.usageStartDate;
     const endDate = overrides?.endDate ?? state.usageEndDate;
+    const usageTimeZone = state.usageTimeZone;
     const runUsageRequests = async (includeDateInterpretation: boolean) => {
       const dateInterpretation = buildDateInterpretationParams(
-        state.usageTimeZone,
+        usageTimeZone,
         includeDateInterpretation,
       );
       return await Promise.all([
@@ -220,6 +221,9 @@ export async function loadUsage(
     };
 
     const applyUsageResults = (sessionsRes: unknown, costRes: unknown) => {
+      if (state.usageRequestVersion !== requestVersion) {
+        return;
+      }
       if (sessionsRes) {
         state.usageResult = sessionsRes as SessionsUsageResult;
       }
@@ -244,9 +248,13 @@ export async function loadUsage(
       }
     }
   } catch (err) {
-    state.usageError = toErrorMessage(err);
+    if (state.usageRequestVersion === requestVersion) {
+      state.usageError = toErrorMessage(err);
+    }
   } finally {
-    state.usageLoading = false;
+    if (state.usageRequestVersion === requestVersion) {
+      state.usageLoading = false;
+    }
   }
 }
 

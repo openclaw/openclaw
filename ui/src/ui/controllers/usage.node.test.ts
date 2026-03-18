@@ -15,6 +15,7 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
     client: { request } as unknown as UsageState["client"],
     connected: true,
     usageLoading: false,
+    usageRequestVersion: 0,
     usageResult: null,
     usageCostSummary: null,
     usageError: null,
@@ -178,6 +179,61 @@ describe("usage controller date interpretation params", () => {
     expect(__test.shouldSendLegacyDateInterpretation(state)).toBe(false);
 
     vi.unstubAllGlobals();
+  });
+});
+
+describe("usage loading", () => {
+  it("keeps only the latest usage results when a new range is requested mid-flight", async () => {
+    const firstSessions = createDeferred<unknown>();
+    const firstCost = createDeferred<unknown>();
+    const secondSessions = createDeferred<unknown>();
+    const secondCost = createDeferred<unknown>();
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
+      async (method, params) => {
+        const startDate = (params as { startDate?: string } | undefined)?.startDate;
+        if (startDate === "2026-02-17") {
+          return method === "sessions.usage" ? secondSessions.promise : secondCost.promise;
+        }
+        return method === "sessions.usage" ? firstSessions.promise : firstCost.promise;
+      },
+    );
+    const state = createState(request);
+    const latestUsageResult = {
+      sessions: [{ key: "latest" }],
+      aggregates: { messages: { total: 1 } },
+    };
+    const latestCostSummary = { daily: [], totals: { totalTokens: 2 } };
+
+    const firstLoad = loadUsage(state, {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+    });
+    const secondLoad = loadUsage(state, {
+      startDate: "2026-02-17",
+      endDate: "2026-02-17",
+    });
+
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(state.usageLoading).toBe(true);
+
+    secondSessions.resolve(latestUsageResult);
+    secondCost.resolve(latestCostSummary);
+    await secondLoad;
+
+    expect(state.usageResult).toEqual(latestUsageResult);
+    expect(state.usageCostSummary).toEqual(latestCostSummary);
+    expect(state.usageLoading).toBe(false);
+
+    firstSessions.resolve({
+      sessions: [{ key: "stale" }],
+      aggregates: { messages: { total: 99 } },
+    });
+    firstCost.resolve({ daily: [], totals: { totalTokens: 999 } });
+    await firstLoad;
+
+    expect(state.usageResult).toEqual(latestUsageResult);
+    expect(state.usageCostSummary).toEqual(latestCostSummary);
+    expect(state.usageLoading).toBe(false);
   });
 });
 

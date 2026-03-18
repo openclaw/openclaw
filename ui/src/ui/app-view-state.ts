@@ -193,6 +193,7 @@ export type AppViewState = {
   sessionsPageSize: number;
   sessionsActionsOpenKey: string | null;
   usageLoading: boolean;
+  usageRequestVersion: number;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
   usageError: string | null;
