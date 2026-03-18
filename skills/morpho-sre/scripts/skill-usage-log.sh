@@ -44,7 +44,7 @@ case "${1:---help}" in
     fi
 
     # Build JSON safely using jq to escape special characters
-    if [ -n "$DURATION" ]; then
+    if [ -n "$DURATION" ] && printf '%s' "$DURATION" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
       ENTRY=$(jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --arg key "$KEY" --arg name "$NAME" --arg ctx "$CONTEXT" \
         --argjson dur "$DURATION" \

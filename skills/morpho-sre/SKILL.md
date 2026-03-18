@@ -342,7 +342,7 @@ curl -s 'http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.loc
 
 - Never present ABI encoding theories without a live `cast call`, `cast abi-decode`, or Foundry test as evidence.
 - Decode actual revert data from Sentry/logs/traces before theorizing about the cause.
-- Use `foundry-evm-debug` skill for Forge-based reproduction when available.
+- For onchain state inspection, transaction replay, forked simulation, or EVM execution traces, use the bundled `foundry-evm-debug` skill instead of ad hoc `cast` or `anvil` commands.
 - If blocked (no RPC, no Foundry), mark as `*Unverified theory:*`.
 
 ```bash
@@ -368,17 +368,16 @@ cast calldata-decode <abi_types> <calldata>                            # decode 
 ## Linear Ticket Ops Guardrail
 
 ```bash
-linear-ticket-api.sh issue get PLA-318                                    # inspect
-linear-ticket-api.sh issue create --title "..." --file /tmp/desc.md \     # create
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue get PLA-318
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue create --title "..." --file /tmp/desc.md \
   --team Platform --project "[PLATFORM] Backlog" --assignee florian \
   --state "In Progress" --priority 2 --labels "openclaw-sre|Bug"
-linear-ticket-api.sh issue get-branch PLA-318                             # branch name
-linear-ticket-api.sh issue ensure-label PLA-318 openclaw-sre              # tracking label
-linear-ticket-api.sh issue add-attachment PLA-318 <PR_URL>                # link PR
-linear-ticket-api.sh probe-write PLA-318                                  # verify access
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue get-branch PLA-318
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue ensure-label PLA-318 openclaw-sre
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue add-attachment PLA-318 <PR_URL>
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh probe-write PLA-318
 ```
 
-All commands above use full path `/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh`.
 See `sre-auto-remediation` companion skill for the full PR pipeline (autofix-pr.sh, confidence gates, Linear linking).
 
 ## Agent-Specific Modes
