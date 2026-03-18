@@ -8,6 +8,8 @@ import {
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
   collectAllowlistProviderGroupPolicyWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -24,10 +26,8 @@ import {
   type ChannelPlugin,
   type ChannelStatusIssue,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/googlechat";
-import { GoogleChatConfigSchema } from "openclaw/plugin-sdk/googlechat";
-import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+} from "../runtime-api.js";
+import { GoogleChatConfigSchema } from "../runtime-api.js";
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
