@@ -42,6 +42,22 @@ import {
 
 export type { UsageColumnId, SessionLogEntry, SessionLogRole };
 
+function shouldUseDailyTotalsForDisplay(params: {
+  selectedSessions: string[];
+  selectedDays: string[];
+  selectedHours: number[];
+  hasQuery: boolean;
+}): boolean {
+  return (
+    params.selectedSessions.length === 0 &&
+    params.selectedDays.length > 0 &&
+    params.selectedHours.length === 0 &&
+    !params.hasQuery
+  );
+}
+
+export { shouldUseDailyTotalsForDisplay };
+
 function createEmptyUsageTotals(): UsageTotals {
   return {
     input: 0,
@@ -275,7 +291,14 @@ export function renderUsage(props: UsageProps) {
     );
     displayTotals = computeSessionTotals(selectedSessionEntries);
     displaySessionCount = selectedSessionEntries.length;
-  } else if (props.selectedDays.length > 0 && props.selectedHours.length === 0) {
+  } else if (
+    shouldUseDailyTotalsForDisplay({
+      selectedSessions: props.selectedSessions,
+      selectedDays: props.selectedDays,
+      selectedHours: props.selectedHours,
+      hasQuery,
+    })
+  ) {
     // Days selected - use daily aggregates for accurate per-day totals
     displayTotals = computeDailyTotals(props.selectedDays);
     displaySessionCount = filteredSessions.length;
