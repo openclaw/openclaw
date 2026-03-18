@@ -167,5 +167,18 @@ export function createWhatsAppPluginBase(params: {
     },
     setup: params.setup,
     groups: params.groups,
-  });
+  }) as Pick<
+    ChannelPlugin<ResolvedWhatsAppAccount>,
+    | "id"
+    | "meta"
+    | "setupWizard"
+    | "capabilities"
+    | "reload"
+    | "gatewayMethods"
+    | "configSchema"
+    | "config"
+    | "security"
+    | "setup"
+    | "groups"
+  >;
 }
