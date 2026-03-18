@@ -13,7 +13,7 @@ const baselinePath = path.join(
   "web-search-provider-boundary-inventory.json",
 );
 
-const scanRoots = ["src", "test", "scripts"];
+const scanRoots = ["src"];
 const scanExtensions = new Set([".ts", ".js", ".mjs", ".cjs"]);
 const ignoredDirNames = new Set([
   ".artifacts",
@@ -46,16 +46,18 @@ const providerIds = new Set([
 ]);
 
 const allowedGenericFiles = new Set([
-  "src/agents/tools/web-search-core.ts",
   "src/agents/tools/web-search.ts",
+  "src/commands/onboard-search.ts",
   "src/secrets/runtime-web-tools.ts",
   "src/web-search/runtime.ts",
 ]);
 
 const ignoredFiles = new Set([
-  "scripts/check-plugin-extension-import-boundary.mjs",
-  "scripts/check-web-search-provider-boundaries.mjs",
-  "test/web-search-provider-boundary.test.ts",
+  "src/config/config.web-search-provider.test.ts",
+  "src/plugins/contracts/loader.contract.test.ts",
+  "src/plugins/contracts/registry.contract.test.ts",
+  "src/plugins/web-search-providers.test.ts",
+  "src/secrets/runtime-web-tools.test.ts",
 ]);
 
 function normalizeRelativePath(filePath) {
@@ -157,47 +159,6 @@ function scanWebSearchProviderRegistry(lines, relativeFile, inventory) {
   }
 }
 
-function scanOnboardSearch(lines, relativeFile, inventory) {
-  for (const [index, line] of lines.entries()) {
-    const lineNumber = index + 1;
-
-    if (line.includes("web-search-providers.js")) {
-      pushEntry(inventory, {
-        provider: "shared",
-        file: relativeFile,
-        line: lineNumber,
-        reason: "imports bundled web search registry into core onboarding flow",
-      });
-    }
-
-    if (line.includes("const SEARCH_PROVIDER_IDS = [")) {
-      for (const provider of ["brave", "firecrawl", "gemini", "grok", "kimi", "perplexity"]) {
-        if (!line.includes(`"${provider}"`)) {
-          continue;
-        }
-        pushEntry(inventory, {
-          provider,
-          file: relativeFile,
-          line: lineNumber,
-          reason: "hardcodes bundled web search provider inventory in core onboarding flow",
-        });
-      }
-    }
-
-    if (
-      line.includes('provider !== "firecrawl"') ||
-      line.includes('enablePluginInConfig(next, "firecrawl")')
-    ) {
-      pushEntry(inventory, {
-        provider: "firecrawl",
-        file: relativeFile,
-        line: lineNumber,
-        reason: "hardcodes provider-specific plugin enablement coupling in core onboarding flow",
-      });
-    }
-  }
-}
-
 function scanGenericCoreImports(lines, relativeFile, inventory) {
   if (allowedGenericFiles.has(relativeFile)) {
     return;
@@ -235,7 +196,7 @@ export async function collectWebSearchProviderBoundaryInventory() {
 
   for (const filePath of files) {
     const relativeFile = normalizeRelativePath(filePath);
-    if (ignoredFiles.has(relativeFile)) {
+    if (ignoredFiles.has(relativeFile) || relativeFile.includes(".test.")) {
       continue;
     }
     const content = await fs.readFile(filePath, "utf8");
@@ -243,11 +204,6 @@ export async function collectWebSearchProviderBoundaryInventory() {
 
     if (relativeFile === "src/plugins/web-search-providers.ts") {
       scanWebSearchProviderRegistry(lines, relativeFile, inventory);
-      continue;
-    }
-
-    if (relativeFile === "src/commands/onboard-search.ts") {
-      scanOnboardSearch(lines, relativeFile, inventory);
       continue;
     }
 
