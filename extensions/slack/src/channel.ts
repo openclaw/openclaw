@@ -20,8 +20,6 @@ import {
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromRequiredCredentialStatuses,
-  resolveSlackGroupRequireMention,
-  resolveSlackGroupToolPolicy,
   type ChannelPlugin,
   type OpenClawConfig,
   type SlackActionContext,
@@ -36,6 +34,7 @@ import {
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { createSlackActions } from "./channel-actions.js";
 import { createSlackWebClient } from "./client.js";
+import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
 import type { SlackProbe } from "./probe.js";
