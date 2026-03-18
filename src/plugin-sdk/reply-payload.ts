@@ -52,6 +52,17 @@ export function resolveOutboundMediaUrls(payload: {
   return [];
 }
 
+/** Preserve caller-provided chunking, but fall back to the full text when chunkers return nothing. */
+export function resolveTextChunksWithFallback(text: string, chunks: readonly string[]): string[] {
+  if (chunks.length > 0) {
+    return [...chunks];
+  }
+  if (!text) {
+    return [];
+  }
+  return [text];
+}
+
 /** Send media-first payloads intact, or chunk text-only payloads through the caller's transport hooks. */
 export async function sendPayloadWithChunkedTextAndMedia<
   TContext extends { payload: object },
@@ -129,25 +140,93 @@ export async function sendMediaWithLeadingCaption(params: {
   mediaUrls: string[];
   caption: string;
   send: (payload: { mediaUrl: string; caption?: string }) => Promise<void>;
-  onError?: (error: unknown, mediaUrl: string) => void;
+  onError?: (params: {
+    error: unknown;
+    mediaUrl: string;
+    caption?: string;
+    index: number;
+    isFirst: boolean;
+  }) => Promise<void> | void;
 }): Promise<boolean> {
   if (params.mediaUrls.length === 0) {
     return false;
   }
 
-  let first = true;
-  for (const mediaUrl of params.mediaUrls) {
-    const caption = first ? params.caption : undefined;
-    first = false;
+  for (const [index, mediaUrl] of params.mediaUrls.entries()) {
+    const isFirst = index === 0;
+    const caption = isFirst ? params.caption : undefined;
     try {
       await params.send({ mediaUrl, caption });
     } catch (error) {
       if (params.onError) {
-        params.onError(error, mediaUrl);
+        await params.onError({
+          error,
+          mediaUrl,
+          caption,
+          index,
+          isFirst,
+        });
         continue;
       }
       throw error;
     }
   }
+  return true;
+}
+
+export async function deliverTextOrMediaReply(params: {
+  payload: OutboundReplyPayload;
+  text: string;
+  chunkText?: (text: string) => readonly string[];
+  sendText: (text: string) => Promise<void>;
+  sendMedia: (payload: { mediaUrl: string; caption?: string }) => Promise<void>;
+  onMediaError?: (params: {
+    error: unknown;
+    mediaUrl: string;
+    caption?: string;
+    index: number;
+    isFirst: boolean;
+  }) => Promise<void> | void;
+}): Promise<"empty" | "text" | "media"> {
+  const mediaUrls = resolveOutboundMediaUrls(params.payload);
+  const sentMedia = await sendMediaWithLeadingCaption({
+    mediaUrls,
+    caption: params.text,
+    send: params.sendMedia,
+    onError: params.onMediaError,
+  });
+  if (sentMedia) {
+    return "media";
+  }
+  if (!params.text) {
+    return "empty";
+  }
+  const chunks = params.chunkText ? params.chunkText(params.text) : [params.text];
+  let sentText = false;
+  for (const chunk of chunks) {
+    if (!chunk) {
+      continue;
+    }
+    await params.sendText(chunk);
+    sentText = true;
+  }
+  return sentText ? "text" : "empty";
+}
+
+export async function deliverFormattedTextWithAttachments(params: {
+  payload: OutboundReplyPayload;
+  send: (params: { text: string; replyToId?: string }) => Promise<void>;
+}): Promise<boolean> {
+  const text = formatTextWithAttachmentLinks(
+    params.payload.text,
+    resolveOutboundMediaUrls(params.payload),
+  );
+  if (!text) {
+    return false;
+  }
+  await params.send({
+    text,
+    replyToId: params.payload.replyToId,
+  });
   return true;
 }

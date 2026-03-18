@@ -1,10 +1,13 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAllowlistProviderRestrictSendersWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
+  createAttachedChannelResultAdapter,
   createEmptyChannelDirectoryAdapter,
+  createEmptyChannelResult,
   createPairingPrefixStripper,
   createTextPairingAdapter,
 } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import {
   buildChannelConfigSchema,
   buildComputedAccountStatusSnapshot,
@@ -184,7 +187,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const chunks = processed.text
         ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
         : [];
-      const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+      const mediaUrls = resolveOutboundMediaUrls(payload);
       const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
       const sendMediaMessages = async () => {
         for (const url of mediaUrls) {
@@ -317,54 +320,45 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       }
 
       if (lastResult) {
-        return { channel: "line", ...lastResult };
+        return createEmptyChannelResult("line", { ...lastResult });
       }
-      return { channel: "line", messageId: "empty", chatId: to };
+      return createEmptyChannelResult("line", { messageId: "empty", chatId: to });
     },
-    sendText: async ({ cfg, to, text, accountId }) => {
-      const runtime = getLineRuntime();
-      const sendText = runtime.channel.line.pushMessageLine;
-      const sendFlex = runtime.channel.line.pushFlexMessage;
-
-      // Process markdown: extract tables/code blocks, strip formatting
-      const processed = processLineMessage(text);
-
-      // Send cleaned text first (if non-empty)
-      let result: { messageId: string; chatId: string };
-      if (processed.text.trim()) {
-        result = await sendText(to, processed.text, {
+    ...createAttachedChannelResultAdapter({
+      channel: "line",
+      sendText: async ({ cfg, to, text, accountId }) => {
+        const runtime = getLineRuntime();
+        const sendText = runtime.channel.line.pushMessageLine;
+        const sendFlex = runtime.channel.line.pushFlexMessage;
+        const processed = processLineMessage(text);
+        let result: { messageId: string; chatId: string };
+        if (processed.text.trim()) {
+          result = await sendText(to, processed.text, {
+            verbose: false,
+            cfg,
+            accountId: accountId ?? undefined,
+          });
+        } else {
+          result = { messageId: "processed", chatId: to };
+        }
+        for (const flexMsg of processed.flexMessages) {
+          const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
+          await sendFlex(to, flexMsg.altText, flexContents, {
+            verbose: false,
+            cfg,
+            accountId: accountId ?? undefined,
+          });
+        }
+        return result;
+      },
+      sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) =>
+        await getLineRuntime().channel.line.sendMessageLine(to, text, {
           verbose: false,
+          mediaUrl,
           cfg,
           accountId: accountId ?? undefined,
-        });
-      } else {
-        // If text is empty after processing, still need a result
-        result = { messageId: "processed", chatId: to };
-      }
-
-      // Send flex messages for tables/code blocks
-      for (const flexMsg of processed.flexMessages) {
-        // LINE SDK expects FlexContainer but we receive contents as unknown
-        const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
-        await sendFlex(to, flexMsg.altText, flexContents, {
-          verbose: false,
-          cfg,
-          accountId: accountId ?? undefined,
-        });
-      }
-
-      return { channel: "line", ...result };
-    },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) => {
-      const send = getLineRuntime().channel.line.sendMessageLine;
-      const result = await send(to, text, {
-        verbose: false,
-        mediaUrl,
-        cfg,
-        accountId: accountId ?? undefined,
-      });
-      return { channel: "line", ...result };
-    },
+        }),
+    }),
   },
   status: {
     defaultRuntime: {

@@ -25,6 +25,10 @@ import {
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { executePluginCommand, matchPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  resolveOutboundMediaUrls,
+  resolveTextChunksWithFallback,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import type {
   ChatCommandDefinition,
@@ -887,7 +891,7 @@ async function deliverDiscordInteractionReply(params: {
   chunkMode: "length" | "newline";
 }) {
   const { interaction, payload, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
-  const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+  const mediaList = resolveOutboundMediaUrls(payload);
   const text = payload.text ?? "";
   const discordData = payload.channelData?.discord as
     | { components?: TopLevelComponents[] }
@@ -945,14 +949,14 @@ async function deliverDiscordInteractionReply(params: {
         };
       }),
     );
-    const chunks = chunkDiscordTextWithMode(text, {
-      maxChars: textLimit,
-      maxLines: maxLinesPerMessage,
-      chunkMode,
-    });
-    if (!chunks.length && text) {
-      chunks.push(text);
-    }
+    const chunks = resolveTextChunksWithFallback(
+      text,
+      chunkDiscordTextWithMode(text, {
+        maxChars: textLimit,
+        maxLines: maxLinesPerMessage,
+        chunkMode,
+      }),
+    );
     const caption = chunks[0] ?? "";
     await sendMessage(caption, media, firstMessageComponents);
     for (const chunk of chunks.slice(1)) {
@@ -967,14 +971,17 @@ async function deliverDiscordInteractionReply(params: {
   if (!text.trim() && !firstMessageComponents) {
     return;
   }
-  const chunks = chunkDiscordTextWithMode(text, {
-    maxChars: textLimit,
-    maxLines: maxLinesPerMessage,
-    chunkMode,
-  });
-  if (!chunks.length && (text || firstMessageComponents)) {
-    chunks.push(text);
-  }
+  const chunks =
+    text || firstMessageComponents
+      ? resolveTextChunksWithFallback(
+          text,
+          chunkDiscordTextWithMode(text, {
+            maxChars: textLimit,
+            maxLines: maxLinesPerMessage,
+            chunkMode,
+          }),
+        )
+      : [];
   for (const chunk of chunks) {
     if (!chunk.trim() && !firstMessageComponents) {
       continue;

@@ -8,6 +8,11 @@ import {
   retryAsync,
   type RetryConfig,
 } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  resolveOutboundMediaUrls,
+  resolveTextChunksWithFallback,
+  sendMediaWithLeadingCaption,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -209,35 +214,6 @@ async function sendDiscordChunkWithFallback(params: {
   );
 }
 
-async function sendAdditionalDiscordMedia(params: {
-  cfg: OpenClawConfig;
-  target: string;
-  token: string;
-  rest?: RequestClient;
-  accountId?: string;
-  mediaUrls: string[];
-  mediaLocalRoots?: readonly string[];
-  resolveReplyTo: () => string | undefined;
-  retryConfig: ResolvedRetryConfig;
-}) {
-  for (const mediaUrl of params.mediaUrls) {
-    const replyTo = params.resolveReplyTo();
-    await sendWithRetry(
-      () =>
-        sendMessageDiscord(params.target, "", {
-          cfg: params.cfg,
-          token: params.token,
-          rest: params.rest,
-          mediaUrl,
-          accountId: params.accountId,
-          mediaLocalRoots: params.mediaLocalRoots,
-          replyTo,
-        }),
-      params.retryConfig,
-    );
-  }
-}
-
 export async function deliverDiscordReply(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
@@ -292,7 +268,7 @@ export async function deliverDiscordReply(params: {
     : undefined;
   let deliveredAny = false;
   for (const payload of params.replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const mediaList = resolveOutboundMediaUrls(payload);
     const rawText = payload.text ?? "";
     const tableMode = params.tableMode ?? "code";
     const text = convertMarkdownTables(rawText, tableMode);
@@ -301,14 +277,14 @@ export async function deliverDiscordReply(params: {
     }
     if (mediaList.length === 0) {
       const mode = params.chunkMode ?? "length";
-      const chunks = chunkDiscordTextWithMode(text, {
-        maxChars: chunkLimit,
-        maxLines: params.maxLinesPerMessage,
-        chunkMode: mode,
-      });
-      if (!chunks.length && text) {
-        chunks.push(text);
-      }
+      const chunks = resolveTextChunksWithFallback(
+        text,
+        chunkDiscordTextWithMode(text, {
+          maxChars: chunkLimit,
+          maxLines: params.maxLinesPerMessage,
+          chunkMode: mode,
+        }),
+      );
       for (const chunk of chunks) {
         if (!chunk.trim()) {
           continue;
@@ -340,19 +316,6 @@ export async function deliverDiscordReply(params: {
     if (!firstMedia) {
       continue;
     }
-    const sendRemainingMedia = () =>
-      sendAdditionalDiscordMedia({
-        cfg: params.cfg,
-        target: params.target,
-        token: params.token,
-        rest: params.rest,
-        accountId: params.accountId,
-        mediaUrls: mediaList.slice(1),
-        mediaLocalRoots: params.mediaLocalRoots,
-        resolveReplyTo,
-        retryConfig,
-      });
-
     // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord.
     if (payload.audioAsVoice) {
       const replyTo = resolveReplyTo();
@@ -383,22 +346,50 @@ export async function deliverDiscordReply(params: {
         retryConfig,
       });
       // Additional media items are sent as regular attachments (voice is single-file only).
-      await sendRemainingMedia();
+      await sendMediaWithLeadingCaption({
+        mediaUrls: mediaList.slice(1),
+        caption: "",
+        send: async ({ mediaUrl }) => {
+          const replyTo = resolveReplyTo();
+          await sendWithRetry(
+            () =>
+              sendMessageDiscord(params.target, "", {
+                cfg: params.cfg,
+                token: params.token,
+                rest: params.rest,
+                mediaUrl,
+                accountId: params.accountId,
+                mediaLocalRoots: params.mediaLocalRoots,
+                replyTo,
+              }),
+            retryConfig,
+          );
+        },
+      });
       continue;
     }
 
-    const replyTo = resolveReplyTo();
-    await sendMessageDiscord(params.target, text, {
-      cfg: params.cfg,
-      token: params.token,
-      rest: params.rest,
-      mediaUrl: firstMedia,
-      accountId: params.accountId,
-      mediaLocalRoots: params.mediaLocalRoots,
-      replyTo,
+    await sendMediaWithLeadingCaption({
+      mediaUrls: mediaList,
+      caption: text,
+      send: async ({ mediaUrl, caption }) => {
+        const replyTo = resolveReplyTo();
+        await sendWithRetry(
+          () =>
+            sendMessageDiscord(params.target, caption ?? "", {
+              cfg: params.cfg,
+              token: params.token,
+              rest: params.rest,
+              mediaUrl,
+              accountId: params.accountId,
+              mediaLocalRoots: params.mediaLocalRoots,
+              replyTo,
+            }),
+          retryConfig,
+        );
+      },
     });
     deliveredAny = true;
-    await sendRemainingMedia();
   }
 
   if (binding && deliveredAny) {

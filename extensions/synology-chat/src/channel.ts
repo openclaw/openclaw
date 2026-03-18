@@ -13,6 +13,7 @@ import {
   projectWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
+  attachChannelToResult,
   createEmptyChannelDirectoryAdapter,
   createTextPairingAdapter,
 } from "openclaw/plugin-sdk/channel-runtime";
@@ -188,7 +189,7 @@ export function createSynologyChatPlugin() {
         if (!ok) {
           throw new Error("Failed to send message to Synology Chat");
         }
-        return { channel: CHANNEL_ID, messageId: `sc-${Date.now()}`, chatId: to };
+        return attachChannelToResult(CHANNEL_ID, { messageId: `sc-${Date.now()}`, chatId: to });
       },
 
       sendMedia: async ({ to, mediaUrl, accountId, cfg }: any) => {
@@ -205,7 +206,7 @@ export function createSynologyChatPlugin() {
         if (!ok) {
           throw new Error("Failed to send media to Synology Chat");
         }
-        return { channel: CHANNEL_ID, messageId: `sc-${Date.now()}`, chatId: to };
+        return attachChannelToResult(CHANNEL_ID, { messageId: `sc-${Date.now()}`, chatId: to });
       },
     },
 
