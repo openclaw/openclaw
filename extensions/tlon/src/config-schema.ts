@@ -1,5 +1,5 @@
-import { buildChannelConfigSchema } from "../api.js";
 import { z } from "zod";
+import { buildChannelConfigSchema } from "../api.js";
 
 const ShipSchema = z.string().min(1);
 const ChannelNestSchema = z.string().min(1);

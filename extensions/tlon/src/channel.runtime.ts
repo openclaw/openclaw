@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import { configureClient } from "@tloncorp/api";
-import type { ChannelOutboundAdapter, ChannelPlugin, OpenClawConfig } from "../api.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelOutboundAdapter,
+  ChannelPlugin,
+  OpenClawConfig,
+} from "../api.js";
 import { createLoggerBackedRuntime, createReplyPrefixOptions } from "../api.js";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
