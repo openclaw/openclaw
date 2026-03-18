@@ -44,6 +44,21 @@ cd /home/deepnoa/openclaw
 pnpm sense:heavy -- --input "Review this long note and prepare the next stage for deeper processing."
 ```
 
+Mode-specific heavy-task commands:
+
+```bash
+pnpm sense:heavy:review -- --input "Review this long note and prepare the next stage for deeper processing."
+pnpm sense:heavy:ollama -- --input "Run lightweight ollama analysis for this note."
+pnpm sense:heavy:nemo -- --input "Submit a NemoClaw async job for this note."
+```
+
+Check async job status:
+
+```bash
+pnpm sense:job-status -- --job-id <job_id>
+pnpm sense:job-poll -- --job-id <job_id>
+```
+
 You can also pass a file:
 
 ```bash
@@ -115,6 +130,43 @@ For `task=heavy_task`, success and fallback both use a structured result shape:
 }
 ```
 
+For `mode=nemoclaw_job`, the worker returns an async job envelope:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "accepted": true,
+    "job_id": "...",
+    "status": "queued",
+    "target": "nemoclaw"
+  },
+  "meta": {
+    "node": "sense",
+    "task": "heavy_task"
+  }
+}
+```
+
+OpenClaw's `sense-task.js` also surfaces a top-level `job` helper object when possible:
+
+```json
+{
+  "job": {
+    "job_id": "...",
+    "status": "queued",
+    "target": "nemoclaw"
+  }
+}
+```
+
+`GET /jobs/{job_id}` returns one of:
+
+- `queued`
+- `running`
+- `done`
+- `job_not_found`
+
 ## Logging
 
 The workflow writes a short request log to stderr:
@@ -155,6 +207,8 @@ For operator workflows, a normalized top-level view is added when available:
   - `pnpm sense:draft -- --input "..."`
   - `pnpm sense:analyze -- --input "..."`
   - `pnpm sense:heavy -- --input "..."`
+  - `pnpm sense:heavy:nemo -- --input "..."`
+  - `pnpm sense:job-status -- --job-id <job_id>`
 - Fallback:
   - `pnpm sense:summarize -- --base-url http://192.168.11.11:9999 --input "..."`
   - `pnpm sense:draft -- --base-url http://192.168.11.11:9999 --input "..."`
@@ -193,8 +247,22 @@ When plugin tools are consistently exposed inside the target agent runtime, repl
 - OpenClaw forwards:
   - `task: "heavy_task"`
   - `params.mode: "long_text_review"`
-- Current worker behavior is still placeholder-safe.
+- Current known modes:
+  - `long_text_review`
+  - `ollama_analysis`
+  - `nemoclaw_job`
 - Future direction:
   - richer queueing metadata
   - GPU/NemoClaw/Ollama branching inside the worker
   - job status polling instead of immediate inline results
+
+## Async NemoClaw job handling
+
+- Submit:
+  - `pnpm sense:heavy:nemo -- --input "..."`
+- Status:
+  - `pnpm sense:job-status -- --job-id <job_id>`
+- Poll:
+  - `pnpm sense:job-poll -- --job-id <job_id>`
+
+OpenClaw treats the initial submit as an accepted async job, then uses `/jobs/{job_id}` to follow `queued / running / done / job_not_found`.
