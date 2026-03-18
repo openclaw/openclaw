@@ -2,7 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
-const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_-]+$/;
+const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
 
 type RawToolCallBlock = {
   type?: unknown;
