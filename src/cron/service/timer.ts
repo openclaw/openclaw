@@ -1,10 +1,6 @@
-import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+import { dirname } from "node:path";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
-import { resolveCronDeliveryPlan } from "../delivery.js";
-import { runPreCheck, applyPreCheckOutput } from "../pre-check.js";
-import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
   CronJob,
@@ -13,6 +9,12 @@ import type {
   CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
+import type { CronEvent, CronServiceState } from "./state.js";
+import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { resolveCronDeliveryPlan } from "../delivery.js";
+import { runPreCheck, applyPreCheckOutput } from "../pre-check.js";
+import { sweepCronRunSessions } from "../session-reaper.js";
 import {
   computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
@@ -22,7 +24,6 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
-import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
 
@@ -1006,11 +1007,33 @@ export async function runDueJobs(state: CronServiceState) {
 export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
-<<<<<<< HEAD
   abortSignal?: AbortSignal,
 ): Promise<
   CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
 > {
+  // ── Pre-check gate ─────────────────────────────────────────────────
+  // If the job has a preCheck, run the lightweight shell command first.
+  // Skip the entire agent turn (no tokens spent) if the gate fails.
+  let preCheckOutput: string | undefined;
+  if (job.preCheck?.command) {
+    // Run pre-check from the session store directory (near the agent workspace)
+    // or fall back to the gateway's working directory.
+    const cwd = state.deps.storePath ? dirname(state.deps.storePath) : undefined;
+    const result = await runPreCheck(job.preCheck, { cwd });
+    if (!result.passed) {
+      state.deps.log.debug(
+        { jobId: job.id, jobName: job.name, reason: result.reason },
+        "cron: preCheck gate failed, skipping job",
+      );
+      return { status: "skipped", error: result.reason };
+    }
+    preCheckOutput = result.output;
+    state.deps.log.debug(
+      { jobId: job.id, jobName: job.name, outputLen: preCheckOutput.length },
+      "cron: preCheck gate passed",
+    );
+  }
+
   const resolveAbortError = () => ({
     status: "error" as const,
     error: timeoutErrorMessage(),
@@ -1040,40 +1063,6 @@ export async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
-=======
-): Promise<{
-  status: "ok" | "error" | "skipped";
-  error?: string;
-  summary?: string;
-  sessionId?: string;
-  sessionKey?: string;
-}> {
-  // ── Pre-check gate ─────────────────────────────────────────────────
-  // If the job has a preCheck, run the lightweight shell command first.
-  // Skip the entire agent turn (no tokens spent) if the gate fails.
-  let preCheckOutput: string | undefined;
-  if (job.preCheck?.command) {
-    // Run pre-check from the session store directory (near the agent workspace)
-    // or fall back to the gateway's working directory.
-    const cwd = state.deps.storePath
-      ? (await import("node:path")).dirname(state.deps.storePath)
-      : undefined;
-    const result = await runPreCheck(job.preCheck, { cwd });
-    if (!result.passed) {
-      state.deps.log.debug(
-        { jobId: job.id, jobName: job.name, reason: result.reason },
-        "cron: preCheck gate failed, skipping job",
-      );
-      return { status: "skipped", error: result.reason };
-    }
-    preCheckOutput = result.output;
-    state.deps.log.debug(
-      { jobId: job.id, jobName: job.name, outputLen: preCheckOutput.length },
-      "cron: preCheck gate passed",
-    );
-  }
-
->>>>>>> 063e2bec7b (feat(cron): add preCheck gate to skip jobs when nothing changed)
   if (job.sessionTarget === "main") {
     let text = resolveJobPayloadTextForMain(job);
     if (!text) {

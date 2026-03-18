@@ -27,6 +27,7 @@ export function runPreCheck(
   const timeoutMs = (preCheck.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS) * 1_000;
 
   return new Promise((resolve) => {
+    let settled = false;
     const child = exec(preCheck.command, {
       timeout: timeoutMs,
       maxBuffer: MAX_OUTPUT_BYTES,
@@ -46,10 +47,18 @@ export function runPreCheck(
     });
 
     child.on("error", (err) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       resolve({ passed: false, reason: `preCheck error: ${err.message}` });
     });
 
     child.on("close", (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       if (signal === "SIGTERM") {
         resolve({
           passed: false,
