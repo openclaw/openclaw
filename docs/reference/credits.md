@@ -5,7 +5,7 @@ read_when:
 title: "Credits"
 ---
 
-# Credits
+# Credits and Acknowledgments
 
 ## The name
 
