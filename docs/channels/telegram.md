@@ -95,7 +95,7 @@ deliver inbound messages to an agent.
   },
   bindings: [
     { agentId: "main", match: { channel: "telegram", accountId: "default" } },
-    { agentId: "main", match: { channel: "telegram", accountId: "parallel" } },
+    { agentId: "support", match: { channel: "telegram", accountId: "parallel" } },
   ],
 }
 ```
