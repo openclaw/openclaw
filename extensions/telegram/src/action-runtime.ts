@@ -43,6 +43,7 @@ export const telegramActionRuntime = {
   reactMessageTelegram,
   searchStickers,
   sendMessageTelegram,
+  sendPhotoTelegram,
   sendPollTelegram,
   sendStickerTelegram,
 };
@@ -60,6 +61,7 @@ const TELEGRAM_ACTION_ALIASES = {
   searchSticker: "searchSticker",
   send: "sendMessage",
   sendMessage: "sendMessage",
+  sendPhoto: "sendPhoto",
   sendSticker: "sendSticker",
   sticker: "sendSticker",
   stickerCacheStats: "stickerCacheStats",
@@ -340,6 +342,42 @@ export async function handleTelegramAction(
       asVoice: readBooleanParam(params, "asVoice"),
       silent: readBooleanParam(params, "silent"),
       forceDocument: readBooleanParam(params, "forceDocument") ?? false,
+    });
+    return jsonResult({
+      ok: true,
+      messageId: result.messageId,
+      chatId: result.chatId,
+    });
+  }
+
+  if (action === "sendPhoto") {
+    if (!isActionEnabled("sendMessage")) {
+      throw new Error("Telegram sendPhoto is disabled (requires sendMessage permission).");
+    }
+    const to = readStringParam(params, "to", { required: true });
+    const photoUrl =
+      readStringParam(params, "photoUrl") ??
+      readStringParam(params, "mediaUrl") ??
+      readStringParam(params, "photo", { required: true });
+    const caption =
+      readStringParam(params, "caption") ??
+      readStringParam(params, "message", { allowEmpty: true });
+    const replyToMessageId = readTelegramReplyToMessageId(params);
+    const messageThreadId = readTelegramThreadId(params);
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await telegramActionRuntime.sendPhotoTelegram(to, photoUrl, caption ?? undefined, {
+      cfg,
+      token,
+      accountId: accountId ?? undefined,
+      mediaLocalRoots: options?.mediaLocalRoots,
+      replyToMessageId: replyToMessageId ?? undefined,
+      messageThreadId: messageThreadId ?? undefined,
+      silent: readBooleanParam(params, "silent"),
     });
     return jsonResult({
       ok: true,

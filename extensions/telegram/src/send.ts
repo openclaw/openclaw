@@ -1676,3 +1676,126 @@ export async function createForumTopicTelegram(
     chatId: normalizedChatId,
   };
 }
+
+/**
+ * Send a photo to a Telegram chat.
+ * This is a specialized wrapper for sendPhoto API endpoint.
+ *
+ * @param to - Chat ID or username
+ * @param photoUrl - URL of the photo to send
+ * @param caption - Optional caption for the photo
+ * @param opts - Optional configuration
+ */
+export async function sendPhotoTelegram(
+  to: string,
+  photoUrl: string,
+  caption?: string,
+  opts: TelegramSendOpts = {},
+): Promise<TelegramSendResult> {
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const target = parseTelegramTarget(to);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: to,
+    verbose: opts.verbose,
+  });
+
+  const threadParams = buildTelegramThreadReplyParams({
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
+    replyToMessageId: opts.replyToMessageId,
+    quoteText: opts.quoteText,
+  });
+
+  const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+  });
+  const requestWithChatNotFound = createRequestWithChatNotFound({
+    requestWithDiag,
+    chatId,
+    input: to,
+  });
+
+  // Load the photo from URL
+  const photoMaxBytes =
+    opts.maxBytes ??
+    (typeof account.config.mediaMaxMb === "number" ? account.config.mediaMaxMb : 100) * 1024 * 1024;
+  const photo = await loadWebMedia(
+    photoUrl,
+    buildOutboundMediaLoadOptions({
+      maxBytes: photoMaxBytes,
+      mediaLocalRoots: opts.mediaLocalRoots,
+    }),
+  );
+
+  const fileName = photo.fileName ?? "photo.jpg";
+  const file = new InputFile(photo.buffer, fileName);
+
+  // Process caption with HTML rendering
+  let htmlCaption: string | undefined;
+  let followUpText: string | undefined;
+  if (caption) {
+    const split = splitTelegramCaption(caption);
+    const renderedCaption = renderTelegramHtmlText(split.caption, {
+      textMode: opts.textMode ?? "markdown",
+      tableMode: resolveMarkdownTableMode({
+        cfg,
+        channel: "telegram",
+        accountId: account.accountId,
+      }),
+    });
+    htmlCaption = renderedCaption;
+    followUpText = split.followUpText;
+  }
+
+  const baseParams = {
+    ...(Object.keys(threadParams).length > 0 ? threadParams : {}),
+    ...(opts.silent === true ? { disable_notification: true } : {}),
+  };
+
+  const sendPhotoParams = {
+    ...baseParams,
+    ...(htmlCaption ? { caption: htmlCaption, parse_mode: "HTML" as const } : {}),
+  };
+
+  const result = await withTelegramThreadFallback(
+    sendPhotoParams,
+    "photo",
+    opts.verbose,
+    async (effectiveParams, label) =>
+      requestWithChatNotFound(
+        () =>
+          api.sendPhoto(
+            chatId,
+            file,
+            effectiveParams as Parameters<typeof api.sendPhoto>[2],
+          ) as Promise<TelegramMessageLike>,
+        label,
+      ),
+  );
+
+  const messageId = resolveTelegramMessageIdOrThrow(result, "photo send");
+  const resolvedChatId = String(result?.chat?.id ?? chatId);
+  recordSentMessage(chatId, messageId);
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+
+  // If caption was too long, send follow-up text
+  if (followUpText) {
+    await sendMessageTelegram(to, followUpText, {
+      ...opts,
+      replyToMessageId: messageId,
+    });
+  }
+
+  return { messageId: String(messageId), chatId: resolvedChatId };
+}
