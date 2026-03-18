@@ -1,12 +1,10 @@
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import {
   createMessageActionDiscoveryContext,
-  resolveMessageActionDiscoveryChannelId,
-} from "../channels/plugins/message-action-discovery.js";
-import {
-  __testing as messageActionTesting,
   resolveMessageActionDiscoveryForPlugin,
-} from "../channels/plugins/message-actions.js";
+  resolveMessageActionDiscoveryChannelId,
+  __testing as messageActionTesting,
+} from "../channels/plugins/message-action-discovery.js";
 import type { ChannelAgentTool, ChannelMessageActionName } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -32,7 +30,7 @@ export function listChannelSupportedActions(params: {
     return [];
   }
   const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
-  if (!plugin?.actions?.listActions) {
+  if (!plugin?.actions) {
     return [];
   }
   return resolveMessageActionDiscoveryForPlugin({

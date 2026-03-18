@@ -5,7 +5,7 @@ import {
   channelSupportsMessageCapabilityForChannel,
   listChannelMessageActions,
   resolveChannelMessageToolSchemaProperties,
-} from "../../channels/plugins/message-actions.js";
+} from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import {
   CHANNEL_MESSAGE_ACTION_NAMES,
