@@ -38,8 +38,6 @@ const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
 const BATCH_FAILURE_LIMIT = 2;
 const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
-const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
-const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 
 const vectorToBlob = (embedding: number[]): Buffer =>
   Buffer.from(new Float32Array(embedding).buffer);
@@ -606,10 +604,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   private resolveEmbeddingTimeout(kind: "query" | "batch"): number {
     const isLocal = this.provider?.id === "local";
+    
     if (kind === "query") {
       return isLocal ? EMBEDDING_QUERY_TIMEOUT_LOCAL_MS : EMBEDDING_QUERY_TIMEOUT_REMOTE_MS;
     }
-    return isLocal ? EMBEDDING_BATCH_TIMEOUT_LOCAL_MS : EMBEDDING_BATCH_TIMEOUT_REMOTE_MS;
+    
+    // For batch embeddings, use configured timeout if available
+    if (this.batch.timeoutMs > 0) {
+      return this.batch.timeoutMs;
+    }
+    
+    // Fallback to conservative defaults when not configured
+    return isLocal ? 10 * 60_000 : 2 * 60_000;
   }
 
   protected async embedQueryWithTimeout(text: string): Promise<number[]> {
