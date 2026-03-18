@@ -28,6 +28,7 @@ import {
   mergeAllowlist,
   resolveMentionGatingWithBypass,
   resolveOpenProviderRuntimeGroupPolicy,
+  resolveSendableOutboundReplyParts,
   resolveDefaultGroupPolicy,
   resolveSenderCommandAuthorization,
   resolveSenderScopedGroupPolicy,
@@ -706,14 +707,16 @@ async function deliverZalouserReply(params: {
   const { payload, profile, chatId, isGroup, runtime, core, config, accountId, statusSink } =
     params;
   const tableMode = params.tableMode ?? "code";
-  const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+  const reply = resolveSendableOutboundReplyParts(payload, {
+    text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+  });
   const chunkMode = core.channel.text.resolveChunkMode(config, "zalouser", accountId);
   const textChunkLimit = core.channel.text.resolveTextChunkLimit(config, "zalouser", accountId, {
     fallbackLimit: ZALOUSER_TEXT_LIMIT,
   });
   await deliverTextOrMediaReply({
     payload,
-    text,
+    text: reply.text,
     sendText: async (chunk) => {
       try {
         await sendMessageZalouser(chatId, chunk, {

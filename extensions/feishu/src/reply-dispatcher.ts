@@ -1,4 +1,9 @@
 import {
+  resolveSendableOutboundReplyParts,
+  resolveTextChunksWithFallback,
+  sendMediaWithLeadingCaption,
+} from "openclaw/plugin-sdk/reply-payload";
+import {
   createReplyPrefixContext,
   createTypingCallbacks,
   logTypingFailure,
@@ -13,12 +18,7 @@ import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
-import {
-  sendMarkdownCardFeishu,
-  sendMessageFeishu,
-  sendStructuredCardFeishu,
-  type CardHeaderConfig,
-} from "./send.js";
+import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
@@ -300,35 +300,41 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     text: string;
     useCard: boolean;
     infoKind?: string;
+    sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
   }) => {
-    let first = true;
     const chunkSource = params.useCard
       ? params.text
       : core.channel.text.convertMarkdownTables(params.text, tableMode);
-    for (const chunk of core.channel.text.chunkTextWithMode(
+    const chunks = resolveTextChunksWithFallback(
       chunkSource,
-      textChunkLimit,
-      chunkMode,
-    )) {
-      const message = {
-        cfg,
-        to: chatId,
-        text: chunk,
-        replyToMessageId: sendReplyToMessageId,
-        replyInThread: effectiveReplyInThread,
-        mentions: first ? mentionTargets : undefined,
-        accountId,
-      };
-      if (params.useCard) {
-        await sendMarkdownCardFeishu(message);
-      } else {
-        await sendMessageFeishu(message);
-      }
-      first = false;
+      core.channel.text.chunkTextWithMode(chunkSource, textChunkLimit, chunkMode),
+    );
+    for (const [index, chunk] of chunks.entries()) {
+      await params.sendChunk({
+        chunk,
+        isFirst: index === 0,
+      });
     }
     if (params.infoKind === "final") {
       deliveredFinalTexts.add(params.text);
     }
+  };
+
+  const sendMediaReplies = async (payload: ReplyPayload) => {
+    await sendMediaWithLeadingCaption({
+      mediaUrls: resolveSendableOutboundReplyParts(payload).mediaUrls,
+      caption: "",
+      send: async ({ mediaUrl }) => {
+        await sendMediaFeishu({
+          cfg,
+          to: chatId,
+          mediaUrl,
+          replyToMessageId: sendReplyToMessageId,
+          replyInThread: effectiveReplyInThread,
+          accountId,
+        });
+      },
+    });
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -344,15 +350,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         void typingCallbacks.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
-        const text = payload.text ?? "";
-        const mediaList =
-          payload.mediaUrls && payload.mediaUrls.length > 0
-            ? payload.mediaUrls
-            : payload.mediaUrl
-              ? [payload.mediaUrl]
-              : [];
-        const hasText = Boolean(text.trim());
-        const hasMedia = mediaList.length > 0;
+        const reply = resolveSendableOutboundReplyParts(payload);
+        const text = reply.text;
+        const hasText = reply.hasText;
+        const hasMedia = reply.hasMedia;
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
         const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
@@ -363,7 +364,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
         if (shouldDeliverText) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
-          let first = true;
 
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
@@ -397,16 +397,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
-              for (const mediaUrl of mediaList) {
-                await sendMediaFeishu({
-                  cfg,
-                  to: chatId,
-                  mediaUrl,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  accountId,
-                });
-              }
+              await sendMediaReplies(payload);
             }
             return;
           }
@@ -414,43 +405,46 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           if (useCard) {
             const cardHeader = resolveCardHeader(agentId, identity);
             const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-            for (const chunk of core.channel.text.chunkTextWithMode(
+            await sendChunkedTextReply({
               text,
-              textChunkLimit,
-              chunkMode,
-            )) {
-              await sendStructuredCardFeishu({
-                cfg,
-                to: chatId,
-                text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
-                accountId,
-                header: cardHeader,
-                note: cardNote,
-              });
-              first = false;
-            }
-            if (info?.kind === "final") {
-              deliveredFinalTexts.add(text);
-            }
+              useCard: true,
+              infoKind: info?.kind,
+              sendChunk: async ({ chunk, isFirst }) => {
+                await sendStructuredCardFeishu({
+                  cfg,
+                  to: chatId,
+                  text: chunk,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread: effectiveReplyInThread,
+                  mentions: isFirst ? mentionTargets : undefined,
+                  accountId,
+                  header: cardHeader,
+                  note: cardNote,
+                });
+              },
+            });
           } else {
-            await sendChunkedTextReply({ text, useCard: false, infoKind: info?.kind });
+            await sendChunkedTextReply({
+              text,
+              useCard: false,
+              infoKind: info?.kind,
+              sendChunk: async ({ chunk, isFirst }) => {
+                await sendMessageFeishu({
+                  cfg,
+                  to: chatId,
+                  text: chunk,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread: effectiveReplyInThread,
+                  mentions: isFirst ? mentionTargets : undefined,
+                  accountId,
+                });
+              },
+            });
           }
         }
 
         if (hasMedia) {
-          for (const mediaUrl of mediaList) {
-            await sendMediaFeishu({
-              cfg,
-              to: chatId,
-              mediaUrl,
-              replyToMessageId: sendReplyToMessageId,
-              replyInThread: effectiveReplyInThread,
-              accountId,
-            });
-          }
+          await sendMediaReplies(payload);
         }
       },
       onError: async (error, info) => {
