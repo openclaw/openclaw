@@ -1445,7 +1445,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     let patchSending = false; // prevents concurrent network calls
     const STREAM_PATCH_INTERVAL_MS = 200;
 
-    const streamingEnabled = account.blockStreaming !== false;
+    // Edit-in-place streaming is opt-in: only activate when blockStreaming is
+    // explicitly true. When the config key is absent (undefined) we leave the
+    // agent's blockStreamingDefault in place and do not inject onPartialReply.
+    const streamingEnabled = account.blockStreaming === true;
     const blockStreamingClient =
       streamingEnabled && baseUrl && botToken
         ? createMattermostClient({ baseUrl, botToken })
@@ -1470,8 +1473,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       while (patchSending && Date.now() < deadline) {
         await new Promise<void>((r) => setTimeout(r, 20));
       }
-      const text = pendingPatchText;
-      if (!text || text === lastSentText) return;
+      const rawText = pendingPatchText;
+      if (!rawText || rawText === lastSentText) return;
+      // Truncate to textLimit so intermediate patches never exceed the server limit.
+      // Final delivery applies full chunking; streaming posts only need the first chunk.
+      const text = rawText.length > textLimit ? rawText.slice(0, textLimit) : rawText;
       if (!streamMessageId) {
         try {
           const result = await sendMessageMattermost(to, text, {
@@ -1479,7 +1485,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             replyToId: effectiveReplyToId,
           });
           streamMessageId = result.messageId;
-          lastSentText = text;
+          lastSentText = rawText;
           runtime.log?.(`stream-patch started ${streamMessageId}`);
         } catch (err) {
           logVerboseMessage(`mattermost stream-patch flush send failed: ${String(err)}`);
@@ -1490,7 +1496,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             postId: streamMessageId,
             message: text,
           });
-          lastSentText = text;
+          lastSentText = rawText;
           runtime.log?.(`stream-patch flushed ${streamMessageId}`);
         } catch (err) {
           logVerboseMessage(`mattermost stream-patch flush failed: ${String(err)}`);
@@ -1503,8 +1509,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       pendingPatchText = fullText;
       if (patchInterval) return;
       patchInterval = setInterval(() => {
-        const text = pendingPatchText;
-        if (!text || text === lastSentText || patchSending) return;
+        const rawText = pendingPatchText;
+        if (!rawText || rawText === lastSentText || patchSending) return;
+        // Truncate to textLimit so intermediate patches never exceed the server limit.
+        const text = rawText.length > textLimit ? rawText.slice(0, textLimit) : rawText;
         patchSending = true;
         void (async () => {
           try {
@@ -1515,7 +1523,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   replyToId: effectiveReplyToId,
                 });
                 streamMessageId = result.messageId;
-                lastSentText = text;
+                lastSentText = rawText;
                 runtime.log?.(`stream-patch started ${streamMessageId}`);
               } catch (err) {
                 logVerboseMessage(`mattermost stream-patch send failed: ${String(err)}`);
@@ -1526,7 +1534,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   postId: streamMessageId,
                   message: text,
                 });
-                lastSentText = text;
+                lastSentText = rawText;
                 runtime.log?.(`stream-patch edited ${streamMessageId}`);
               } catch (err) {
                 logVerboseMessage(`mattermost stream-patch edit failed: ${String(err)}`);
@@ -1555,7 +1563,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
           // Final + streaming active: patch the streamed message with authoritative
           // complete text, or fall back to a new message (with orphan cleanup).
-          if (isFinal && streamMessageId && payload.text) {
+          // If the final payload carries an explicit replyToId that differs from
+          // the one the streaming post was created under, skip the in-place patch
+          // and fall through to normal delivery so the reply lands in the right thread.
+          const finalReplyToId = resolveMattermostReplyRootId({
+            threadRootId: effectiveReplyToId,
+            replyToId: payload.replyToId,
+          });
+          const streamReplyToId = effectiveReplyToId;
+          const replyTargetDiverged =
+            finalReplyToId !== streamReplyToId && payload.replyToId != null;
+          if (isFinal && streamMessageId && payload.text && !replyTargetDiverged) {
             const text = core.channel.text.convertMarkdownTables(payload.text, tableMode);
             try {
               await patchMattermostPost(blockStreamingClient!, {
@@ -1601,7 +1619,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
           if (isFinal) {
             stopPatchInterval();
-            streamMessageId = null;
+            // If the reply target diverged and we have an orphaned stream post,
+            // attempt to delete it before normal delivery creates the correct post.
+            if (replyTargetDiverged && streamMessageId) {
+              const orphanId = streamMessageId;
+              streamMessageId = null;
+              try {
+                await deleteMattermostPost(blockStreamingClient!, orphanId);
+              } catch {
+                // Ignore — delivering to the correct thread takes priority.
+              }
+            } else {
+              streamMessageId = null;
+            }
             pendingPatchText = "";
             lastSentText = "";
             patchSending = false;
