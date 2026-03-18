@@ -186,12 +186,10 @@ export type GatewayTailscaleConfig = {
 };
 
 export type GatewayRemoteConfig = {
-  /** Whether remote gateway surfaces are enabled. Default: true when absent. */
+  /** Whether remote Gateway is enabled. Default: true. */
   enabled?: boolean;
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
-  /** Whether remote Gateway is enabled. Default: true. */
-  enabled?: boolean;
   /** Transport for macOS remote connections (ssh tunnel or direct WS). */
   transport?: "ssh" | "direct";
   /** Token for remote auth (when the gateway requires token auth). */
