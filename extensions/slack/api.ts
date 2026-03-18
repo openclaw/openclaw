@@ -6,6 +6,7 @@ export * from "./src/blocks-render.js";
 export * from "./src/http/index.js";
 export * from "./src/interactive-replies.js";
 export * from "./src/message-actions.js";
+export * from "./src/group-policy.js";
 export * from "./src/sent-thread-cache.js";
 export * from "./src/targets.js";
 export * from "./src/threading-tool-context.js";
