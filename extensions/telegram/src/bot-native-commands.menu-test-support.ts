@@ -1,5 +1,6 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { expect, vi } from "vitest";
+import type { SkillCommandSpec } from "../../../src/agents/skills.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
@@ -27,7 +28,9 @@ type CreateCommandBotResult = {
 };
 
 const skillCommandMocks = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn(() => []),
+  listSkillCommandsForAgents: vi.fn<
+    (params: { cfg: OpenClawConfig; agentIds?: string[] }) => SkillCommandSpec[]
+  >(() => []),
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
