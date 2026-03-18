@@ -466,6 +466,7 @@ async function collectUnresolvedRefFindings(params: {
 }): Promise<{ refsChecked: number; skippedExecRefs: number }> {
   const cache: SecretRefResolveCache = {};
   const refsByProvider = new Map<string, Map<string, SecretRef>>();
+  const skippedRefKeys = new Set<string>();
   let refsChecked = 0;
   let skippedExecRefs = 0;
   for (const assignment of params.collector.refAssignments) {
@@ -490,6 +491,7 @@ async function collectUnresolvedRefFindings(params: {
     if (selectedRefs.skippedExecRefs.length > 0) {
       skippedExecRefs += selectedRefs.skippedExecRefs.length;
       for (const ref of selectedRefs.skippedExecRefs) {
+        skippedRefKeys.add(secretRefKey(ref));
         const staticError = getSkippedExecRefStaticError({
           ref,
           config: params.config,
@@ -516,7 +518,7 @@ async function collectUnresolvedRefFindings(params: {
       continue;
     } catch (err) {
       if (provider && isProviderScopedSecretResolutionError(err)) {
-        for (const ref of refs) {
+        for (const ref of selectedRefs.refsToResolve) {
           errorsByRefKey.set(secretRefKey(ref), err);
         }
         continue;
@@ -556,6 +558,9 @@ async function collectUnresolvedRefFindings(params: {
 
   for (const assignment of params.collector.refAssignments) {
     const key = secretRefKey(assignment.ref);
+    if (skippedRefKeys.has(key) && !errorsByRefKey.has(key)) {
+      continue;
+    }
     const resolveErr = errorsByRefKey.get(key);
     if (resolveErr) {
       addFinding(params.collector, {

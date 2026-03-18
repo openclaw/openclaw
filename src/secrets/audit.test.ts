@@ -236,6 +236,7 @@ describe("secrets audit", () => {
     const report = await runSecretsAudit({ env: fixture.env });
     expect(report.resolution.resolvabilityComplete).toBe(false);
     expect(report.resolution.skippedExecRefs).toBe(1);
+    expect(report.summary.unresolvedRefCount).toBe(0);
     await expect(fs.stat(execLogPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 

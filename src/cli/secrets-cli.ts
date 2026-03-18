@@ -181,13 +181,12 @@ export function registerSecretsCli(program: Command) {
               defaultRuntime.log(`- warning: ${warning}`);
             }
           }
-          if (!configured.preflight.checks.resolvabilityComplete) {
-            const skippedCount =
-              configured.preflight.skippedExecRefs > 0
-                ? `${configured.preflight.skippedExecRefs} `
-                : "";
+          if (
+            !configured.preflight.checks.resolvabilityComplete &&
+            configured.preflight.skippedExecRefs > 0
+          ) {
             defaultRuntime.log(
-              `Preflight note: skipped ${skippedCount}exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during preflight.`,
+              `Preflight note: skipped ${configured.preflight.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during preflight.`,
             );
           }
           const providerUpserts = Object.keys(configured.plan.providerUpserts ?? {}).length;
@@ -275,10 +274,9 @@ export function registerSecretsCli(program: Command) {
               ? `Secrets apply dry run: ${result.changedFiles.length} file(s) would change.`
               : "Secrets apply dry run: no changes.",
           );
-          if (!result.checks.resolvabilityComplete) {
-            const skippedCount = result.skippedExecRefs > 0 ? `${result.skippedExecRefs} ` : "";
+          if (!result.checks.resolvabilityComplete && result.skippedExecRefs > 0) {
             defaultRuntime.log(
-              `Secrets apply dry-run note: skipped ${skippedCount}exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
+              `Secrets apply dry-run note: skipped ${result.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
             );
           }
           return;

@@ -704,7 +704,7 @@ async function validateProjectedSecretsState(params: {
     refsChecked,
     skippedExecRefs,
     // Dry-run without exec consent intentionally skips full runtime preflight.
-    resolvabilityComplete: params.write || params.allowExecInDryRun,
+    resolvabilityComplete: params.write || params.allowExecInDryRun || skippedExecRefs === 0,
   };
 }
 

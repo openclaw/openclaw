@@ -193,6 +193,8 @@ describe("secrets apply", () => {
     const dryRun = await runSecretsApply({ plan, env: fixture.env, write: false });
     expect(dryRun.mode).toBe("dry-run");
     expect(dryRun.changed).toBe(true);
+    expect(dryRun.skippedExecRefs).toBe(0);
+    expect(dryRun.checks.resolvabilityComplete).toBe(true);
 
     const applied = await runSecretsApply({ plan, env: fixture.env, write: true });
     expect(applied.mode).toBe("write");
@@ -275,6 +277,7 @@ describe("secrets apply", () => {
     const dryRunSkipped = await runSecretsApply({ plan, env: fixture.env, write: false });
     expect(dryRunSkipped.mode).toBe("dry-run");
     expect(dryRunSkipped.skippedExecRefs).toBe(1);
+    expect(dryRunSkipped.checks.resolvabilityComplete).toBe(false);
     await expect(fs.stat(execLogPath)).rejects.toMatchObject({ code: "ENOENT" });
 
     const dryRunAllowed = await runSecretsApply({

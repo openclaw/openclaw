@@ -287,6 +287,74 @@ describe("secrets CLI", () => {
     await fs.rm(planPath, { force: true });
   });
 
+  it("does not print skipped-exec note when apply dry-run skippedExecRefs is zero", async () => {
+    const planPath = path.join(
+      os.tmpdir(),
+      `openclaw-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    await fs.writeFile(
+      planPath,
+      `${JSON.stringify({
+        version: 1,
+        protocolVersion: 1,
+        generatedAt: new Date().toISOString(),
+        generatedBy: "manual",
+        targets: [],
+      })}\n`,
+      "utf8",
+    );
+    runSecretsApply.mockResolvedValue({
+      mode: "dry-run",
+      changed: false,
+      changedFiles: [],
+      checks: {
+        resolvability: true,
+        resolvabilityComplete: false,
+      },
+      refsChecked: 0,
+      skippedExecRefs: 0,
+      warningCount: 0,
+      warnings: [],
+    });
+
+    await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
+      from: "user",
+    });
+    expect(runtimeLogs.some((line) => line.includes("Secrets apply dry-run note: skipped"))).toBe(
+      false,
+    );
+    await fs.rm(planPath, { force: true });
+  });
+
+  it("does not print skipped-exec note when configure preflight skippedExecRefs is zero", async () => {
+    runSecretsConfigureInteractive.mockResolvedValue({
+      plan: {
+        version: 1,
+        protocolVersion: 1,
+        generatedAt: "2026-02-26T00:00:00.000Z",
+        generatedBy: "openclaw secrets configure",
+        targets: [],
+      },
+      preflight: {
+        mode: "dry-run",
+        changed: false,
+        changedFiles: [],
+        checks: {
+          resolvability: true,
+          resolvabilityComplete: false,
+        },
+        refsChecked: 0,
+        skippedExecRefs: 0,
+        warningCount: 0,
+        warnings: [],
+      },
+    });
+    confirm.mockResolvedValue(false);
+
+    await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
+    expect(runtimeLogs.some((line) => line.includes("Preflight note: skipped"))).toBe(false);
+  });
+
   it("rejects --allow-exec without --dry-run for secrets apply", async () => {
     await expect(
       createProgram().parseAsync(["secrets", "apply", "--from", "/tmp/plan.json", "--allow-exec"], {
