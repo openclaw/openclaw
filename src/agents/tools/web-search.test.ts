@@ -27,7 +27,6 @@ const { resolveKimiApiKey, resolveKimiModel, resolveKimiBaseUrl, extractKimiCita
   moonshotTesting;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
-const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
 const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
 const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
 const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
