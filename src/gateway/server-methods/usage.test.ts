@@ -147,15 +147,38 @@ describe("gateway usage helpers", () => {
       startMs: 1,
       endMs: 2,
       config,
+      dayKeyInterpretation: { mode: "utc" },
     });
     const b = await __test.loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       config,
+      dayKeyInterpretation: { mode: "utc" },
     });
 
     expect(a.totals.totalTokens).toBe(1);
     expect(b.totals.totalTokens).toBe(1);
     expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(1);
+  });
+
+  it("loadCostUsageSummaryCached keys cache entries by day-key interpretation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+
+    const config = {} as OpenClawConfig;
+    await __test.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+      dayKeyInterpretation: { mode: "utc" },
+    });
+    await __test.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+      dayKeyInterpretation: { mode: "specific", utcOffsetMinutes: 120 },
+    });
+
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(2);
   });
 });

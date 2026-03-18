@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  __test,
   discoverAllSessions,
   loadCostUsageSummary,
   loadSessionCostSummary,
@@ -143,6 +144,17 @@ describe("session cost usage", () => {
     expect(summary?.lastActivity).toBeGreaterThan(0);
   });
 
+  it("formats day keys with explicit UTC offsets for summaries", async () => {
+    const ts = new Date("2026-02-01T23:30:00.000Z");
+    expect(__test.formatDayKey(ts, { mode: "utc" })).toBe("2026-02-01");
+    expect(__test.formatDayKey(ts, { mode: "specific", utcOffsetMinutes: 120 })).toBe(
+      "2026-02-02",
+    );
+    expect(__test.formatDayKey(ts, { mode: "specific", utcOffsetMinutes: -300 })).toBe(
+      "2026-02-01",
+    );
+  });
+
   it("captures message counts, tool usage, and model usage", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-session-meta-"));
     const sessionFile = path.join(root, "session.jsonl");
@@ -209,6 +221,63 @@ describe("session cost usage", () => {
     expect(summary?.dailyLatency?.[0]?.count).toBe(1);
     expect(summary?.dailyModelUsage?.[0]?.date).toBe("2026-02-01");
     expect(summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.2");
+  });
+
+  it("uses the requested day-key interpretation for daily summaries and activity dates", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daykey-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-daykey.jsonl");
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-01T23:30:00.000Z",
+          message: {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-5.2",
+            usage: {
+              input: 3,
+              output: 7,
+              totalTokens: 10,
+              cost: { total: 0.01 },
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summaryUtc = await loadSessionCostSummary({
+        sessionFile,
+        dayKeyInterpretation: { mode: "utc" },
+      });
+      const summarySpecific = await loadSessionCostSummary({
+        sessionFile,
+        dayKeyInterpretation: { mode: "specific", utcOffsetMinutes: 120 },
+      });
+      const costUtc = await loadCostUsageSummary({
+        startMs: Date.UTC(2026, 1, 1, 0, 0, 0, 0),
+        endMs: Date.UTC(2026, 1, 2, 23, 59, 59, 999),
+        dayKeyInterpretation: { mode: "utc" },
+      });
+      const costSpecific = await loadCostUsageSummary({
+        startMs: Date.UTC(2026, 1, 1, 0, 0, 0, 0),
+        endMs: Date.UTC(2026, 1, 2, 23, 59, 59, 999),
+        dayKeyInterpretation: { mode: "specific", utcOffsetMinutes: 120 },
+      });
+
+      expect(summaryUtc?.activityDates).toEqual(["2026-02-01"]);
+      expect(summaryUtc?.dailyBreakdown?.[0]?.date).toBe("2026-02-01");
+      expect(summarySpecific?.activityDates).toEqual(["2026-02-02"]);
+      expect(summarySpecific?.dailyBreakdown?.[0]?.date).toBe("2026-02-02");
+      expect(costUtc.daily.map((entry) => entry.date)).toEqual(["2026-02-01"]);
+      expect(costSpecific.daily.map((entry) => entry.date)).toEqual(["2026-02-02"]);
+    });
   });
 
   it("does not exclude sessions with mtime after endMs during discovery", async () => {

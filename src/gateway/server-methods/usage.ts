@@ -283,8 +283,13 @@ async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
   config: ReturnType<typeof loadConfig>;
+  dayKeyInterpretation: DateInterpretation;
 }): Promise<CostUsageSummary> {
-  const cacheKey = `${params.startMs}-${params.endMs}`;
+  const interpretationKey =
+    params.dayKeyInterpretation.mode === "specific"
+      ? `specific:${params.dayKeyInterpretation.utcOffsetMinutes}`
+      : params.dayKeyInterpretation.mode;
+  const cacheKey = `${params.startMs}-${params.endMs}-${interpretationKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
@@ -303,6 +308,7 @@ async function loadCostUsageSummaryCached(params: {
     startMs: params.startMs,
     endMs: params.endMs,
     config: params.config,
+    dayKeyInterpretation: params.dayKeyInterpretation,
   })
     .then((summary) => {
       costUsageCache.set(cacheKey, { summary, updatedAt: Date.now() });
@@ -354,6 +360,10 @@ export const usageHandlers: GatewayRequestHandlers = {
   },
   "usage.cost": async ({ respond, params }) => {
     const config = loadConfig();
+    const dayKeyInterpretation = resolveDateInterpretation({
+      mode: params?.mode,
+      utcOffset: params?.utcOffset,
+    });
     const { startMs, endMs } = parseDateRange({
       startDate: params?.startDate,
       endDate: params?.endDate,
@@ -361,7 +371,12 @@ export const usageHandlers: GatewayRequestHandlers = {
       mode: params?.mode,
       utcOffset: params?.utcOffset,
     });
-    const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
+    const summary = await loadCostUsageSummaryCached({
+      startMs,
+      endMs,
+      config,
+      dayKeyInterpretation,
+    });
     respond(true, summary, undefined);
   },
   "sessions.usage": async ({ respond, params }) => {
@@ -379,6 +394,10 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     const p = params;
     const config = loadConfig();
+    const dayKeyInterpretation = resolveDateInterpretation({
+      mode: p.mode,
+      utcOffset: p.utcOffset,
+    });
     const { startMs, endMs } = parseDateRange({
       startDate: p.startDate,
       endDate: p.endDate,
@@ -591,6 +610,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         agentId,
         startMs,
         endMs,
+        dayKeyInterpretation,
       });
 
       if (usage) {
