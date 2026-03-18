@@ -49,7 +49,31 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
     });
   }
 
-  it("returns status ok when agent task succeeded but delivery threw", async () => {
+  it("returns status ok when agent task succeeded but best-effort delivery threw", async () => {
+    mockRunCronFallbackPassthrough();
+    setupDeliveryRequested();
+    deliverOutboundPayloads.mockRejectedValueOnce(new Error("network timeout"));
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        job: makeIsolatedAgentTurnJob({
+          delivery: {
+            mode: "announce",
+            channel: "feishu",
+            to: "group-123",
+            bestEffort: true,
+          },
+        }),
+      }),
+    );
+
+    // The agent task itself succeeded and delivery is best-effort — status
+    // must reflect the task outcome, not the transient delivery failure.
+    // Fixes #49826.
+    expect(result.status).toBe("ok");
+  });
+
+  it("returns status error when agent task succeeded but strict delivery threw", async () => {
     mockRunCronFallbackPassthrough();
     setupDeliveryRequested();
     deliverOutboundPayloads.mockRejectedValueOnce(new Error("network timeout"));
@@ -62,9 +86,8 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
       }),
     );
 
-    // The agent task itself succeeded — status must reflect that, not the
-    // transient delivery failure.
-    expect(result.status).toBe("ok");
+    // Delivery is NOT best-effort — strict delivery failure must surface.
+    expect(result.status).toBe("error");
   });
 
   it("returns status error when agent task itself had a fatal error payload", async () => {
@@ -130,12 +153,17 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
   });
 
   it("returns status error when delivery was aborted even with best-effort", async () => {
+    // Abort the signal *during delivery* (not before the agent run) so the
+    // run reaches the delivery-phase isAborted() guard in run.ts rather than
+    // exiting early from the runPrompt abort check.  Fixes P2 review thread.
+    const ac = new AbortController();
+
     mockRunCronFallbackPassthrough();
     setupDeliveryRequested();
-    deliverOutboundPayloads.mockRejectedValueOnce(new Error("aborted: timeout"));
-
-    const ac = new AbortController();
-    ac.abort("timeout");
+    deliverOutboundPayloads.mockImplementationOnce(async () => {
+      ac.abort("timeout");
+      throw new Error("aborted: timeout");
+    });
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentTurnParams({

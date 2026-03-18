@@ -819,5 +819,21 @@ export async function runCronIsolatedAgentTurn(params: {
   summary = deliveryResult.summary;
   outputText = deliveryResult.outputText;
 
+  // When the run was aborted/timed-out but dispatchCronDelivery() swallowed
+  // the error (e.g. best-effort delivery catch block returns null), the run
+  // must still surface the abort — otherwise one-shot jobs are deleted and
+  // recurring jobs skip back-off.  Fixes P1 review on #49880.
+  if (isAborted() && !hasFatalErrorPayload) {
+    return withRunSession({
+      status: "error",
+      error: abortReason() ?? "cron run aborted",
+      summary,
+      outputText,
+      delivered,
+      deliveryAttempted,
+      ...telemetry,
+    });
+  }
+
   return resolveRunOutcome({ delivered, deliveryAttempted });
 }
