@@ -35,7 +35,7 @@ MiniMax highlights these improvements in M2.5:
 
 ## Choose a setup
 
-### MiniMax OAuth (Coding Plan) — recommended
+### MiniMax OAuth (Coding Plan) - recommended
 
 **Best for:** quick setup with MiniMax Coding Plan via OAuth, no API key required.
 
