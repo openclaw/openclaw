@@ -2,10 +2,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  isCopilotSdkAvailable,
-  getCopilotSdkAuthStatus,
-} from "../providers/github-copilot-sdk.js";
-import {
   buildAnthropicVertexProvider,
   buildKimiCodingProvider,
   buildKilocodeProvider,
@@ -19,6 +15,7 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
   buildXiaomiProvider,
 } from "../plugin-sdk/provider-catalog.js";
+import { isCopilotSdkAvailable, getCopilotSdkAuthStatus } from "../providers/github-copilot-sdk.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";

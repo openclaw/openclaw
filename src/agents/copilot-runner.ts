@@ -84,6 +84,7 @@ export async function runCopilotCliAgent(params: {
   });
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     config: params.config,
   });
   const heartbeatPrompt =

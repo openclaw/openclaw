@@ -66,13 +66,27 @@ export async function ensureCopilotSdkClient(): Promise<SdkClient> {
 
 /**
  * Shut down the shared CopilotClient if one is running.
+ * Safely awaits any in-flight start before stopping to prevent leaked
+ * Copilot CLI subprocesses.
  */
 export async function stopCopilotSdkClient(): Promise<void> {
-  const client = sharedClient;
+  const inflightPromise = clientStartPromise;
+  const existingClient = sharedClient;
   sharedClient = undefined;
   clientStartPromise = undefined;
-  if (client) {
-    await client.stop();
+
+  // Wait for any in-flight start to settle, then stop whatever it produced.
+  if (inflightPromise) {
+    try {
+      const startedClient = await inflightPromise;
+      await startedClient.stop();
+    } catch {
+      // start failed; nothing to stop
+    }
+    return;
+  }
+  if (existingClient) {
+    await existingClient.stop();
   }
 }
 
@@ -117,6 +131,7 @@ export async function getCopilotSdkAuthStatus(): Promise<CopilotAuthStatus> {
 /**
  * Check if the SDK is available (copilot CLI is installed and can be spawned).
  * This is a lightweight check — it attempts to start the client and ping it.
+ * Cleans up the client on failure to prevent zombie processes.
  */
 export async function isCopilotSdkAvailable(): Promise<boolean> {
   try {
@@ -124,6 +139,7 @@ export async function isCopilotSdkAvailable(): Promise<boolean> {
     await client.ping();
     return true;
   } catch {
+    await stopCopilotSdkClient();
     return false;
   }
 }
@@ -155,7 +171,7 @@ export function buildCopilotModelDefinitionFromSdk(model: SdkModelInfo): ModelDe
     input: supportsVision ? ["text", "image"] : ["text"],
     cost: copilotModelCost(model.id),
     contextWindow: model.capabilities?.limits?.max_context_window_tokens ?? 128_000,
-    maxTokens: model.capabilities?.limits?.max_prompt_tokens ?? 8192,
+    maxTokens: model.capabilities?.limits?.max_output_tokens ?? model.capabilities?.limits?.max_completion_tokens ?? 8192,
   };
 }
 

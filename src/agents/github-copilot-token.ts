@@ -99,6 +99,16 @@ export async function resolveCopilotApiToken(params: {
   source: string;
   baseUrl: string;
 }> {
+  // SDK-managed profiles cannot be exchanged for API tokens — they must be
+  // routed through the Copilot SDK runner (copilot-cli backend) instead.
+  if (params.githubToken === SDK_MANAGED_TOKEN) {
+    throw new Error(
+      "SDK-managed auth profile cannot be exchanged for a Copilot API token. " +
+        "Use the copilot-cli backend or re-authenticate with `openclaw login github-copilot` " +
+        "to obtain a device-flow token.",
+    );
+  }
+
   const env = params.env ?? process.env;
   const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
   const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
