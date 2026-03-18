@@ -19,7 +19,7 @@
 </p>
 
 **OpenClaw** is a _personal AI assistant_ you run on your own devices.
-It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant. OpenClaw can also plug into Cortex for local, inspectable memory, previewable context, conflict handling, and coding sync.
+It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is the control plane, not the product. OpenClaw can also plug into Cortex, giving you local, inspectable memory, previewable context, conflict handling, and coding sync.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
@@ -137,11 +137,11 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 
 ## Cortex Memory
 
-OpenClaw can use Cortex as a local memory graph, which makes the assistant feel less like a blank chat and more like a teammate with a notebook it can inspect.
+OpenClaw can use Cortex as a local memory graph. In plain terms, that means the assistant has a notebook it can inspect instead of starting from zero every time.
 
 That means you can:
 
-- preview the memory before it changes the answer
+- preview memory before it changes the answer
 - inspect conflicts when two memories disagree
 - ask why the assistant answered a certain way
 - sync coding context into the tools you already use
@@ -163,6 +163,8 @@ flowchart LR
   Cortex -->|preview / why / conflicts / sync| OpenClaw
   OpenClaw -->|answers with memory| Assistant[Assistant]
 ```
+
+That makes the memory flow visible instead of hidden, which is the big difference from a normal chat bot.
 
 ## Star History
 
