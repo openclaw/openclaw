@@ -1866,34 +1866,20 @@ Then enable it in config:
 
 ## Plugin hooks
 
-Plugins can register hooks at runtime. This lets a plugin bundle event-driven
-automation without a separate hook pack install.
+Plugins can register hooks at runtime, but there are two different APIs with
+different jobs.
 
-### Example
+### Choose The Right Hook API
 
-```ts
-export default function register(api) {
-  api.registerHook(
-    "command:new",
-    async () => {
-      // Hook logic here.
-    },
-    {
-      name: "my-plugin.command-new",
-      description: "Runs when /new is invoked",
-    },
-  );
-}
-```
+- Use `api.on(...)` for typed runtime lifecycle hooks. This is the preferred surface for middleware, policy, message rewriting, prompt shaping, and tool control.
+- Use `api.registerHook(...)` only when you want to participate in the legacy internal hook system described in [Hooks](/automation/hooks). This is mainly for coarse command/lifecycle side effects and compatibility with existing HOOK-style automation.
 
-Notes:
+Quick rule:
 
-- Register hooks explicitly via `api.registerHook(...)`.
-- Hook eligibility rules still apply (OS/bins/env/config requirements).
-- Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
-- You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
+- If the handler needs priority, merge semantics, or block/cancel behavior, use `api.on(...)`.
+- If the handler just wants to react to `command:new`, `command:reset`, `message:sent`, or similar coarse events, `api.registerHook(...)` is fine.
 
-### Agent lifecycle hooks (`api.on`)
+### Typed runtime hooks (`api.on`)
 
 For typed runtime lifecycle hooks, use `api.on(...)`:
 
@@ -1901,7 +1887,7 @@ For typed runtime lifecycle hooks, use `api.on(...)`:
 export default function register(api) {
   api.on(
     "before_prompt_build",
-    (event, ctx) => {
+    (_event, _ctx) => {
       return {
         prependSystemContext: "Follow company style guide.",
       };
@@ -1911,10 +1897,13 @@ export default function register(api) {
 }
 ```
 
-Important hooks for prompt construction:
+Important hooks for runtime mutation and policy:
 
 - `before_model_resolve`: runs before session load (`messages` are not available). Use this to deterministically override `modelOverride` or `providerOverride`.
 - `before_prompt_build`: runs after session load (`messages` are available). Use this to shape prompt input.
+- `message_sending`: rewrite or cancel outbound content before delivery.
+- `before_tool_call`: modify or block tool params before the tool runs.
+- `tool_result_persist`: synchronously transform tool results before they are written to the session transcript.
 - `before_agent_start`: legacy compatibility hook. Prefer the two explicit hooks above.
 
 Core-enforced hook policy:
@@ -1945,6 +1934,52 @@ Migration guidance:
 
 - Move static guidance from `prependContext` to `prependSystemContext` (or `appendSystemContext`) so providers can cache stable system-prefix content.
 - Keep `prependContext` for per-turn dynamic context that should stay tied to the user message.
+
+### Internal hook bridge (`api.registerHook`)
+
+`api.registerHook(...)` lets a plugin bundle the same internal hook system that
+HOOK packs use, without requiring a separate hook install.
+
+```ts
+export default function register(api) {
+  api.registerHook(
+    "command:new",
+    async () => {
+      // Hook logic here.
+    },
+    {
+      name: "my-plugin.command-new",
+      description: "Runs when /new is invoked",
+    },
+  );
+}
+```
+
+Notes:
+
+- `api.registerHook(...)` registers legacy internal hooks, not typed plugin lifecycle hooks.
+- Hook eligibility rules still apply (OS/bins/env/config requirements).
+- Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
+- You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
+
+This bridge remains supported for compatibility, but new middleware-style
+features should target `api.on(...)` instead of extending the internal hook
+contract. The internal hook system does not offer typed payloads, ordered merge
+semantics, or veto/block behavior.
+
+Use `api.registerHook(...)` for:
+
+- session snapshots on `command:new` or `command:reset`
+- audit logging on command or message lifecycle events
+- coarse side effects such as file writes, webhooks, or notifications
+- plugin-packaged equivalents of installed HOOK packs
+
+Do not use `api.registerHook(...)` for:
+
+- prompt mutation or prompt injection policy
+- tool allow/deny gates
+- outbound content rewriting or cancellation
+- other security or middleware proposals that depend on order or blocking
 
 ## Provider plugins (model auth)
 

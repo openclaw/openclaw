@@ -8,16 +8,28 @@ title: "Hooks"
 
 # Hooks
 
-Hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be managed via CLI commands, similar to how skills work in OpenClaw.
+Hooks provide an event-driven automation surface for operator-managed actions in response to agent commands and coarse lifecycle events. Hooks are automatically discovered from directories and can be managed via CLI commands, similar to how skills work in OpenClaw.
 
 ## Getting Oriented
 
 Hooks are small scripts that run when something happens. There are two kinds:
 
-- **Hooks** (this page): run inside the Gateway when agent events fire, like `/new`, `/reset`, `/stop`, or lifecycle events.
+- **Hooks** (this page): run inside the Gateway when command, message, session, agent, or gateway events fire.
 - **Webhooks**: external HTTP webhooks that let other systems trigger work in OpenClaw. See [Webhook Hooks](/automation/webhook) or use `openclaw webhooks` for Gmail helper commands.
 
-Hooks can also be bundled inside plugins; see [Plugins](/tools/plugin#plugin-hooks).
+Plugins can also register this same internal hook system with `api.registerHook(...)`; see [Plugins](/tools/plugin#plugin-hooks).
+
+## Choose The Right Surface
+
+OpenClaw has a few extension surfaces that look similar but solve different problems:
+
+| If you want to...                                                                                                     | Use...                               | Why                                                                                           |
+| --------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------- |
+| Save a snapshot on `/new`, log `/reset`, call an external API after `message:sent`, or add coarse operator automation | Hooks (`HOOK.md`, this page)         | File-based hooks are meant for operator-managed side effects and command/lifecycle automation |
+| Rewrite prompts, block tools, cancel outbound messages, or add ordered middleware/policy                              | Typed plugin hooks via `api.on(...)` | Typed hooks have explicit contracts, priorities, merge rules, and block/cancel semantics      |
+| Add telemetry-only export or observability                                                                            | Diagnostic events                    | Observability is a separate event bus, not a policy hook surface                              |
+
+Use hooks when you want automation that behaves like a small installed integration. Use typed plugin hooks when you need runtime lifecycle control.
 
 Common uses:
 
@@ -36,6 +48,14 @@ The hooks system allows you to:
 - Log all commands for auditing
 - Trigger custom automations on agent lifecycle events
 - Extend OpenClaw's behavior without modifying core code
+
+What hooks are not for:
+
+- Ordered middleware that must run by priority
+- Blocking or rewriting runtime decisions inside the agent loop
+- Fine-grained policy enforcement on prompt/tool/message mutation
+
+For those cases, use typed plugin hooks via `api.on(...)`.
 
 ## Getting Started
 
@@ -199,7 +219,7 @@ const myHandler = async (event) => {
 
   // Your custom logic here
 
-  // Optionally send message to user
+  // Optionally send a reply on replyable surfaces
   event.messages.push("✨ My hook executed!");
 };
 
@@ -216,7 +236,7 @@ Each event includes:
   action: string,              // e.g., 'new', 'reset', 'stop', 'received', 'sent'
   sessionKey: string,          // Session identifier
   timestamp: Date,             // When the event occurred
-  messages: string[],          // Push messages here to send to user
+  messages: string[],          // Push replies here on replyable surfaces only
   context: {
     // Command events:
     sessionEntry?: SessionEntry,
@@ -236,6 +256,11 @@ Each event includes:
   }
 }
 ```
+
+`event.messages` is only delivered automatically on replyable surfaces such as
+`command:*` and `message:received`. Lifecycle-only events such as
+`agent:bootstrap`, `session:*`, `gateway:*`, or `message:sent` do not have a
+reply channel and will ignore pushed messages.
 
 ## Event Types
 
