@@ -962,6 +962,13 @@
   font-size: 12px;
 }
 
+/* Redacted (click-to-reveal) */
+.cfg-input--redacted,
+.cfg-textarea--redacted {
+  cursor: pointer;
+  opacity: 0.7;
+}
+
 /* Number Input */
 .cfg-number {
   display: inline-flex;
