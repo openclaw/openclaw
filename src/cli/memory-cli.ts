@@ -346,7 +346,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   }> = [];
 
   for (const agentId of agentIds) {
-    const managerPurpose = opts.index ? "default" : "status";
+    const managerPurpose = opts.index ? "cli" : "status";
     await withMemoryManagerForAgent({
       cfg,
       agentId,
@@ -620,6 +620,7 @@ export function registerMemoryCli(program: Command) {
         await withMemoryManagerForAgent({
           cfg,
           agentId,
+          purpose: "cli",
           run: async (manager) => {
             try {
               const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;

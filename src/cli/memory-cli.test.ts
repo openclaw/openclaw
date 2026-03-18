@@ -338,6 +338,9 @@ describe("memory cli", () => {
     await runMemoryCli(["status", "--index"]);
 
     expectCliSync(sync);
+    expect(getMemorySearchManager).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", purpose: "cli" }),
+    );
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
   });
@@ -351,6 +354,9 @@ describe("memory cli", () => {
     await runMemoryCli(["index"]);
 
     expectCliSync(sync);
+    expect(getMemorySearchManager).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", purpose: "cli" }),
+    );
     expect(close).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Memory index updated (main).");
   });

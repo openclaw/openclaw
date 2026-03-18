@@ -153,4 +153,26 @@ describe("memory watcher config", () => {
       ]),
     );
   });
+
+  it("skips chokidar watcher for status-only managers", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" });
+    expect(result.manager).not.toBeNull();
+    manager = result.manager as unknown as MemoryIndexManager;
+
+    expect(watchMock).not.toHaveBeenCalled();
+  });
+
+  it("skips chokidar watcher for one-shot cli managers", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: "cli" });
+    expect(result.manager).not.toBeNull();
+    manager = result.manager as unknown as MemoryIndexManager;
+
+    expect(watchMock).not.toHaveBeenCalled();
+  });
 });
