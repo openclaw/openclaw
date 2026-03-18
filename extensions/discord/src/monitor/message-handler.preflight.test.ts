@@ -884,6 +884,50 @@ describe("preflightDiscordMessage", () => {
       // double-backtick code span should be stripped, so no mention detected → drop
       expect(result).toBeNull();
     });
+    it("strips 4-backtick and 5-backtick code spans from mention check text", async () => {
+      // ````<@botId>```` and `````<@botId>````` should not trigger mention detection
+      const botUserId = "bot-456";
+      const channelId = "ch-tf-6";
+      const message4 = createDiscordMessage({
+        id: "m-tf-6a",
+        content: `check this \`\`\`\`<@${botUserId}>\`\`\`\` code`,
+        channelId,
+        mentionedUsers: [],
+        author: { id: "u6", bot: false, username: "FourTick" },
+      });
+      const result4 = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: DEFAULT_PREFLIGHT_CFG,
+          discordConfig: {} as DiscordConfig,
+          data: createGuildEvent({ channelId, guildId, author: message4.author, message: message4 }),
+          client: createGuildTextClient(channelId),
+        }),
+        botUserId,
+        guildEntries: { [guildId]: { requireMention: true } },
+      });
+      // 4-backtick code span should be stripped, so no mention detected → drop
+      expect(result4).toBeNull();
+
+      const message5 = createDiscordMessage({
+        id: "m-tf-6b",
+        content: `check this \`\`\`\`\`<@${botUserId}>\`\`\`\`\` code`,
+        channelId,
+        mentionedUsers: [],
+        author: { id: "u6", bot: false, username: "FiveTick" },
+      });
+      const result5 = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: DEFAULT_PREFLIGHT_CFG,
+          discordConfig: {} as DiscordConfig,
+          data: createGuildEvent({ channelId, guildId, author: message5.author, message: message5 }),
+          client: createGuildTextClient(channelId),
+        }),
+        botUserId,
+        guildEntries: { [guildId]: { requireMention: true } },
+      });
+      // 5-backtick code span should be stripped, so no mention detected → drop
+      expect(result5).toBeNull();
+    });
   });
 
 });
