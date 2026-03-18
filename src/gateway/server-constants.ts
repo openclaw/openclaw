@@ -22,7 +22,7 @@ export const __setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
   }
 };
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
-export const getHandshakeTimeoutMs = () => {
+export const getHandshakeTimeoutMs = () => 
   if (process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS) {
     const parsed = Number(process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS);
     if (Number.isFinite(parsed) && parsed > 0) {
