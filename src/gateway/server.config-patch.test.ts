@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import {
   getGlobalPluginRegistry,
   initializeGlobalHookRunner,
@@ -17,6 +18,8 @@ import {
   connectOk,
   installGatewayTestHooks,
   rpcReq,
+  resetTestPluginRegistry,
+  setTestPluginRegistry,
   startServerWithClient,
   testState,
   writeSessionStore,
@@ -72,6 +75,35 @@ async function expectSchemaLookupInvalid(path: unknown) {
   expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
 }
 
+function createConfigSchemaTestChannelPlugin(): ChannelPlugin {
+  return {
+    id: "discord",
+    meta: {
+      id: "discord",
+      label: "Discord",
+      selectionLabel: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "test stub",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({}),
+    },
+    configSchema: {
+      schema: {
+        type: "object",
+        properties: {
+          token: { type: "string" },
+        },
+      },
+      uiHints: {
+        token: { label: "Discord token" },
+      },
+    },
+  };
+}
+
 describe("gateway config methods", () => {
   it("round-trips config.set and returns the live config path", async () => {
     const { createConfigIO } = await import("../config/config.js");
@@ -122,6 +154,50 @@ describe("gateway config methods", () => {
       expect(getActivePluginRegistryKey()).toBe("live-registry");
       expect(getGlobalPluginRegistry()).toBe(liveRegistry);
     } finally {
+      setActivePluginRegistry(
+        previousRegistry ?? createEmptyPluginRegistry(),
+        previousRegistryKey ?? undefined,
+      );
+      if (previousHookRegistry) {
+        initializeGlobalHookRunner(previousHookRegistry);
+      } else {
+        resetGlobalHookRunner();
+      }
+    }
+  });
+
+  it("builds channels.* schema from the snapshot registry instead of the live registry", async () => {
+    const previousRegistry = getActivePluginRegistry();
+    const previousRegistryKey = getActivePluginRegistryKey();
+    const previousHookRegistry = getGlobalPluginRegistry();
+    const liveRegistry = createEmptyPluginRegistry();
+    const snapshotRegistry = createEmptyPluginRegistry();
+    snapshotRegistry.channels.push({
+      pluginId: "discord",
+      source: "test",
+      plugin: createConfigSchemaTestChannelPlugin(),
+    });
+
+    setTestPluginRegistry(snapshotRegistry);
+    setActivePluginRegistry(liveRegistry, "live-registry");
+    initializeGlobalHookRunner(liveRegistry);
+
+    try {
+      const lookup = await rpcReq<{
+        path?: string;
+        hintPath?: string;
+      }>(requireWs(), "config.schema.lookup", {
+        path: "channels.discord.token",
+      });
+
+      expect(lookup.ok).toBe(true);
+      expect(lookup.payload?.path).toBe("channels.discord.token");
+      expect(lookup.payload?.hintPath).toBe("channels.discord.token");
+      expect(getActivePluginRegistry()).toBe(liveRegistry);
+      expect(getActivePluginRegistryKey()).toBe("live-registry");
+      expect(getGlobalPluginRegistry()).toBe(liveRegistry);
+    } finally {
+      resetTestPluginRegistry();
       setActivePluginRegistry(
         previousRegistry ?? createEmptyPluginRegistry(),
         previousRegistryKey ?? undefined,

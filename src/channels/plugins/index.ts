@@ -1,4 +1,9 @@
-export { getChannelPlugin, listChannelPlugins, normalizeChannelId } from "./registry.js";
+export {
+  getChannelPlugin,
+  listChannelPlugins,
+  listChannelPluginsFromRegistry,
+  normalizeChannelId,
+} from "./registry.js";
 export {
   applyChannelMatchMeta,
   buildChannelKeyCandidates,

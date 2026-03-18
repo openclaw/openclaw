@@ -100,6 +100,7 @@ import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
+import { resolveChannelLifecyclePluginRuntimeState } from "./server-plugin-runtime-state.js";
 import { loadGatewayPlugins, setFallbackGatewayContext } from "./server-plugins.js";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
@@ -535,6 +536,24 @@ export async function startGatewayServer(
   const emptyPluginRegistry = createEmptyPluginRegistry();
   let pluginRegistry = emptyPluginRegistry;
   let pluginRegistryCacheKey: string | null = null;
+  let channelLifecyclePluginRuntimeState = {
+    registry: pluginRegistry,
+    cacheKey: pluginRegistryCacheKey,
+  };
+  const updateChannelLifecyclePluginRuntimeState = () => {
+    channelLifecyclePluginRuntimeState = {
+      registry: pluginRegistry,
+      cacheKey: pluginRegistryCacheKey,
+    };
+  };
+  const resolvePluginRuntimeStateForChannels = () => {
+    channelLifecyclePluginRuntimeState = resolveChannelLifecyclePluginRuntimeState(
+      channelLifecyclePluginRuntimeState,
+    );
+    pluginRegistry = channelLifecyclePluginRuntimeState.registry;
+    pluginRegistryCacheKey = channelLifecyclePluginRuntimeState.cacheKey;
+    return channelLifecyclePluginRuntimeState;
+  };
   let baseGatewayMethods = baseMethods;
   if (!minimalTestGateway) {
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayPlugins({
@@ -546,6 +565,7 @@ export async function startGatewayServer(
       preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
     }));
     pluginRegistryCacheKey = getActivePluginRegistryKey();
+    updateChannelLifecyclePluginRuntimeState();
   }
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
@@ -646,10 +666,7 @@ export async function startGatewayServer(
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
-    resolvePluginRuntimeState: () => ({
-      registry: pluginRegistry,
-      cacheKey: pluginRegistryCacheKey,
-    }),
+    resolvePluginRuntimeState: resolvePluginRuntimeStateForChannels,
   });
   const getReadiness = createReadinessChecker({
     channelManager,
@@ -1174,6 +1191,7 @@ export async function startGatewayServer(
         logDiagnostics: false,
       }));
       pluginRegistryCacheKey = getActivePluginRegistryKey();
+      updateChannelLifecyclePluginRuntimeState();
     }
     ({ browserControl, pluginServices } = await startGatewaySidecars({
       cfg: cfgAtStart,

@@ -1,6 +1,6 @@
 import { exec } from "node:child_process";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listChannelPluginsFromRegistry } from "../../channels/plugins/index.js";
 import {
   createConfigIO,
   loadConfig,
@@ -273,7 +273,7 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
       configUiHints: plugin.configUiHints,
       configSchema: plugin.configJsonSchema,
     })),
-    channels: listChannelPlugins().map((entry) => ({
+    channels: listChannelPluginsFromRegistry(pluginRegistry).map((entry) => ({
       id: entry.id,
       label: entry.meta.label,
       description: entry.meta.blurb,

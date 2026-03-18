@@ -21,6 +21,10 @@ import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createChannelManager } from "./server-channels.js";
+import {
+  ChannelLifecyclePluginRuntimeState,
+  resolveChannelLifecyclePluginRuntimeState,
+} from "./server-plugin-runtime-state.js";
 
 const hoisted = vi.hoisted(() => {
   const computeBackoff = vi.fn(() => 10);
@@ -51,12 +55,14 @@ type TestAccount = {
 };
 
 function createTestPlugin(params?: {
+  id?: ChannelId;
   account?: TestAccount;
   startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
   includeDescribeAccount?: boolean;
   resolveAccount?: ChannelPlugin<TestAccount>["config"]["resolveAccount"];
   isConfigured?: ChannelPlugin<TestAccount>["config"]["isConfigured"];
 }): ChannelPlugin<TestAccount> {
+  const id = params?.id ?? "discord";
   const account = params?.account ?? { enabled: true, configured: true };
   const includeDescribeAccount = params?.includeDescribeAccount !== false;
   const config: ChannelPlugin<TestAccount>["config"] = {
@@ -77,12 +83,12 @@ function createTestPlugin(params?: {
     gateway.startAccount = params.startAccount;
   }
   return {
-    id: "discord",
+    id,
     meta: {
-      id: "discord",
-      label: "Discord",
-      selectionLabel: "Discord",
-      docsPath: "/channels/discord",
+      id,
+      label: id,
+      selectionLabel: id,
+      docsPath: `/channels/${id}`,
       blurb: "test stub",
     },
     capabilities: { chatTypes: ["direct"] },
@@ -99,13 +105,20 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve: resolvePromise };
 }
 
-function installTestRegistry(plugin: ChannelPlugin<TestAccount>) {
+function createTestRegistry(...plugins: ChannelPlugin<TestAccount>[]): PluginRegistry {
   const registry = createEmptyPluginRegistry();
-  registry.channels.push({
-    pluginId: plugin.id,
-    source: "test",
-    plugin,
-  });
+  for (const plugin of plugins) {
+    registry.channels.push({
+      pluginId: plugin.id,
+      source: "test",
+      plugin,
+    });
+  }
+  return registry;
+}
+
+function installTestRegistry(plugin: ChannelPlugin<TestAccount>) {
+  const registry = createTestRegistry(plugin);
   setActivePluginRegistry(registry);
 }
 
@@ -482,5 +495,66 @@ describe("server-channels auto restart", () => {
     expect(driftedRegistry.httpRoutes).toHaveLength(0);
     expect(getActivePluginRegistryKey()).toBe("startup-registry");
     expect(getGlobalPluginRegistry()).toBe(startupRegistry);
+  });
+
+  it("promotes live channel runtime state when the active registry gains channels", async () => {
+    const startupStartAccount = vi.fn(async () => {
+      registerPluginHttpRoute({
+        path: "/startup-webhook",
+        auth: "plugin",
+        pluginId: "discord",
+        source: "test-webhook",
+        handler: () => true,
+      });
+    });
+    const bootstrappedStartAccount = vi.fn(async () => {
+      registerPluginHttpRoute({
+        path: "/bootstrapped-webhook",
+        auth: "plugin",
+        pluginId: "discord",
+        source: "test-webhook",
+        handler: () => true,
+      });
+    });
+    const startupRegistry = createTestRegistry(
+      createTestPlugin({
+        startAccount: startupStartAccount,
+      }),
+    );
+    const bootstrappedRegistry = createTestRegistry(
+      createTestPlugin({
+        startAccount: bootstrappedStartAccount,
+      }),
+      createTestPlugin({
+        id: "telegram",
+      }),
+    );
+
+    setActivePluginRegistry(startupRegistry, "startup-registry");
+    initializeGlobalHookRunner(startupRegistry);
+    let runtimeState: ChannelLifecyclePluginRuntimeState = {
+      registry: startupRegistry,
+      cacheKey: "startup-registry",
+    };
+    const manager = createManager({
+      resolvePluginRuntimeState: () => {
+        runtimeState = resolveChannelLifecyclePluginRuntimeState(runtimeState);
+        return runtimeState;
+      },
+    });
+
+    setActivePluginRegistry(bootstrappedRegistry, "bootstrapped-registry");
+    initializeGlobalHookRunner(bootstrappedRegistry);
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    expect(bootstrappedStartAccount).toHaveBeenCalledTimes(1);
+    expect(startupStartAccount).not.toHaveBeenCalled();
+    expect(bootstrappedRegistry.httpRoutes).toHaveLength(1);
+    expect(bootstrappedRegistry.httpRoutes[0]?.path).toBe("/bootstrapped-webhook");
+    expect(startupRegistry.httpRoutes).toHaveLength(0);
+    expect(getActivePluginRegistry()).toBe(bootstrappedRegistry);
+    expect(getActivePluginRegistryKey()).toBe("bootstrapped-registry");
+    expect(getGlobalPluginRegistry()).toBe(bootstrappedRegistry);
   });
 });
