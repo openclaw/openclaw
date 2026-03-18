@@ -10,6 +10,8 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     return resolveUserPath(override, env);
   }
 
+  const preferSourceCheckout = Boolean(env.VITEST);
+
   try {
     const packageRoots = [
       resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
@@ -18,6 +20,10 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
       (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
     );
     for (const packageRoot of packageRoots) {
+      const sourceExtensionsDir = path.join(packageRoot, "extensions");
+      if (preferSourceCheckout && fs.existsSync(sourceExtensionsDir)) {
+        return sourceExtensionsDir;
+      }
       // Local source checkouts stage a runtime-complete bundled plugin tree under
       // dist-runtime/. Prefer that over source extensions only when the paired
       // dist/ tree exists; otherwise wrappers can drift ahead of the last build.
