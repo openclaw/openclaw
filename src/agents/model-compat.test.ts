@@ -1,14 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const providerRuntimeMocks = vi.hoisted(() => ({
-  resolveProviderModernModelRef: vi.fn(),
-}));
-
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
-}));
-
+import { describe, expect, it } from "vitest";
 import { isModernModelRef } from "./live-model-filter.js";
 import { normalizeModelCompat } from "./model-compat.js";
 
@@ -59,11 +50,6 @@ function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): voi
   const normalized = normalizeModelCompat(model as Model<Api>);
   expect(supportsStrictMode(normalized)).toBe(false);
 }
-
-beforeEach(() => {
-  providerRuntimeMocks.resolveProviderModernModelRef.mockReset();
-  providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(undefined);
-});
 
 describe("normalizeModelCompat — Anthropic baseUrl", () => {
   const anthropicBase = (): Model<Api> =>
@@ -340,43 +326,25 @@ describe("normalizeModelCompat", () => {
 });
 
 describe("isModernModelRef", () => {
-  it("uses provider runtime hooks before fallback heuristics", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(false);
-
-    expect(isModernModelRef({ provider: "openrouter", id: "claude-opus-4-6" })).toBe(false);
-  });
-
-  it("includes plugin-advertised modern models", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
-      provider === "openai" &&
-      ["gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano"].includes(context.modelId)
-        ? true
-        : provider === "openai-codex" && context.modelId === "gpt-5.4"
-          ? true
-          : provider === "opencode" && ["claude-opus-4-6", "gemini-3-pro"].includes(context.modelId)
-            ? true
-            : provider === "opencode-go"
-              ? true
-              : undefined,
-    );
-
+  it("includes OpenAI gpt-5.4 variants in modern selection", () => {
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(true);
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-pro" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-mini" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-nano" })).toBe(true);
     expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4" })).toBe(true);
+  });
+
+  it("excludes opencode minimax variants from modern selection", () => {
+    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
+    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
+  });
+
+  it("keeps non-minimax opencode modern models", () => {
     expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
+  });
+
+  it("accepts all opencode-go models without zen exclusions", () => {
     expect(isModernModelRef({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode-go", id: "glm-5" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.5" })).toBe(true);
-  });
-
-  it("excludes provider-declined modern models", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
-      provider === "opencode" && context.modelId === "minimax-m2.5" ? false : undefined,
-    );
-
-    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
   });
 });
