@@ -31,7 +31,7 @@ describe("requireValidConfigSnapshot", () => {
         code: "legacy-before-agent-start",
         severity: "warn",
         message:
-          "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
       },
     ]);
     const runtime = {
@@ -48,7 +48,7 @@ describe("requireValidConfigSnapshot", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(String(runtime.log.mock.calls[0]?.[0])).toContain("Plugin compatibility: 1 notice.");
     expect(String(runtime.log.mock.calls[0]?.[0])).toContain(
-      "legacy-plugin still relies on legacy before_agent_start",
+      "legacy-plugin still uses legacy before_agent_start",
     );
   });
 
