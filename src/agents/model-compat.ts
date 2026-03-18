@@ -17,16 +17,18 @@ function extractModelCompat(
   return modelOrCompat as ModelCompatConfig;
 }
 
-export function applyModelCompatPatch<T extends { compat?: ModelCompatConfig }>(
+export function applyModelCompatPatch<T extends { compat?: unknown }>(
   model: T,
   patch: ModelCompatConfig,
 ): T {
-  const nextCompat = { ...model.compat, ...patch };
+  const currentCompat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as Record<string, unknown>)
+      : undefined;
+  const nextCompat = { ...currentCompat, ...patch };
   if (
-    model.compat &&
-    Object.entries(patch).every(
-      ([key, value]) => model.compat?.[key as keyof ModelCompatConfig] === value,
-    )
+    currentCompat &&
+    Object.entries(patch).every(([key, value]) => currentCompat[key] === value)
   ) {
     return model;
   }
@@ -36,7 +38,7 @@ export function applyModelCompatPatch<T extends { compat?: ModelCompatConfig }>(
   };
 }
 
-export function applyXaiModelCompat<T extends { compat?: ModelCompatConfig }>(model: T): T {
+export function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
   return applyModelCompatPatch(model, {
     toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
     nativeWebSearchTool: true,
@@ -44,20 +46,16 @@ export function applyXaiModelCompat<T extends { compat?: ModelCompatConfig }>(mo
   });
 }
 
-export function usesXaiToolSchemaProfile(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): boolean {
+export function usesXaiToolSchemaProfile(modelOrCompat: unknown): boolean {
   return extractModelCompat(modelOrCompat)?.toolSchemaProfile === XAI_TOOL_SCHEMA_PROFILE;
 }
 
-export function hasNativeWebSearchTool(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): boolean {
+export function hasNativeWebSearchTool(modelOrCompat: unknown): boolean {
   return extractModelCompat(modelOrCompat)?.nativeWebSearchTool === true;
 }
 
 export function resolveToolCallArgumentsEncoding(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
+  modelOrCompat: unknown,
 ): ModelCompatConfig["toolCallArgumentsEncoding"] | undefined {
   return extractModelCompat(modelOrCompat)?.toolCallArgumentsEncoding;
 }

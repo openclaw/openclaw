@@ -1,4 +1,3 @@
-import type { ModelCompatConfig } from "../config/types.models.js";
 import { usesXaiToolSchemaProfile } from "./model-compat.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
@@ -67,7 +66,7 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
 
 export function normalizeToolParameters(
   tool: AnyAgentTool,
-  options?: { modelProvider?: string; modelId?: string; modelCompat?: ModelCompatConfig },
+  options?: { modelProvider?: string; modelId?: string; modelCompat?: unknown },
 ): AnyAgentTool {
   const schema =
     tool.parameters && typeof tool.parameters === "object"
