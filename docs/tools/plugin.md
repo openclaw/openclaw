@@ -188,6 +188,46 @@ The important design boundary:
 That split lets OpenClaw validate config, explain missing/disabled plugins, and
 build UI/schema hints before the full runtime is active.
 
+### Channel plugins and the shared message tool
+
+Channel plugins do not need to register a separate send/edit/react tool for
+normal chat actions. OpenClaw keeps one shared `message` tool in core, and
+channel plugins own the channel-specific discovery and execution behind it.
+
+The current boundary is:
+
+- core owns the shared `message` tool host, prompt wiring, session/thread
+  bookkeeping, and execution dispatch
+- channel plugins own scoped action discovery, capability discovery, and any
+  channel-specific schema fragments
+- channel plugins execute the final action through their action adapter
+
+For channel plugins, the preferred SDK surface is
+`ChannelMessageActionAdapter.describeMessageTool(...)`. That unified discovery
+call lets a plugin return its visible actions, capabilities, and schema
+contributions together so those pieces do not drift apart.
+
+Core passes runtime scope into that discovery step. Important fields include:
+
+- `accountId`
+- `currentChannelId`
+- `currentThreadTs`
+- `currentMessageId`
+- `sessionKey`
+- `sessionId`
+- `agentId`
+- trusted inbound `requesterSenderId`
+
+That matters for context-sensitive plugins. A channel can hide or expose
+message actions based on the active account, current room/thread/message, or
+trusted requester identity without hardcoding channel-specific branches in the
+core `message` tool.
+
+This is why embedded-runner routing changes are still plugin work: the runner is
+responsible for forwarding the current chat/session identity into the plugin
+discovery boundary so the shared `message` tool exposes the right channel-owned
+surface for the current turn.
+
 ## Capability ownership model
 
 OpenClaw treats a native plugin as the ownership boundary for a **company** or a
