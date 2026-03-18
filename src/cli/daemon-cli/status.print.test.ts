@@ -9,9 +9,13 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
-vi.mock("../../terminal/theme.js", () => ({
-  colorize: (_rich: boolean, _theme: unknown, text: string) => text,
-}));
+vi.mock("../../terminal/theme.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../terminal/theme.js")>();
+  return {
+    ...actual,
+    colorize: (_rich: boolean, _theme: unknown, text: string) => text,
+  };
+});
 
 vi.mock("../../commands/onboard-helpers.js", () => ({
   resolveControlUiLinks: () => ({ httpUrl: "http://127.0.0.1:18789" }),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import { resolvePluginWebSearchProviders } from "../web-search-providers.js";
 import {
   capabilityContractLoadError,
   imageGenerationProviderContractRegistry,
@@ -121,9 +121,7 @@ describe("plugin contract registry", () => {
   });
 
   it("covers every bundled web search plugin from the shared resolver", () => {
-    const bundledWebSearchPluginIds = resolvePluginWebSearchProviders({})
-      .map((provider) => provider.pluginId)
-      .toSorted((left, right) => left.localeCompare(right));
+    const bundledWebSearchPluginIds = resolveBundledWebSearchPluginIds({});
 
     expect(
       [...new Set(webSearchProviderContractRegistry.map((entry) => entry.pluginId))].toSorted(
