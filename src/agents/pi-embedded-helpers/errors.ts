@@ -846,6 +846,19 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
 
+function isGenericProviderError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("an unknown error occurred") ||
+    lower.includes("an error occurred") ||
+    lower.includes("internal server error") ||
+    lower.includes("service unavailable")
+  );
+}
+
 function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {
     return false;
@@ -1023,6 +1036,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isAuthErrorMessage(raw)) {
     return "auth";
+  }
+  if (isGenericProviderError(raw)) {
+    return "timeout";
   }
   return null;
 }
