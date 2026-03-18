@@ -86,6 +86,11 @@ export async function loadChatHistory(state: ChatState) {
     maybeResetToolStream(state);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    // Clear processed runIds when loading fresh history
+    const stateWithProcessed = state as ChatState & { processedChatRunIds?: Set<string> };
+    if (stateWithProcessed.processedChatRunIds) {
+      stateWithProcessed.processedChatRunIds.clear();
+    }
   } catch (err) {
     state.lastError = String(err);
   } finally {
@@ -268,6 +273,16 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     return null;
   }
 
+  // Prevent duplicate final events from adding the same message twice.
+  // Track processed runIds in a Set to handle network jitter/retransmission.
+  // See https://github.com/openclaw/openclaw/issues/49328
+  if (payload.runId) {
+    const stateWithProcessed = state as ChatState & { processedChatRunIds?: Set<string> };
+    if (stateWithProcessed.processedChatRunIds?.has(payload.runId)) {
+      return null; // Already processed this runId
+    }
+  }
+
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.
   // See https://github.com/openclaw/openclaw/issues/1909
   if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
@@ -304,6 +319,18 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         },
       ];
     }
+    // Mark this runId as processed to prevent duplicate final events
+    if (payload.runId) {
+      const stateWithProcessed = state as ChatState & { processedChatRunIds?: Set<string> };
+      if (stateWithProcessed.processedChatRunIds) {
+        stateWithProcessed.processedChatRunIds.add(payload.runId);
+        // Prune to avoid unbounded growth (keep last 100)
+        if (stateWithProcessed.processedChatRunIds.size > 100) {
+          const arr = Array.from(stateWithProcessed.processedChatRunIds);
+          stateWithProcessed.processedChatRunIds = new Set(arr.slice(-100));
+        }
+      }
+    }
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
@@ -322,6 +349,18 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
             timestamp: Date.now(),
           },
         ];
+      }
+    }
+    // Mark this runId as processed to prevent duplicate aborted events
+    if (payload.runId) {
+      const stateWithProcessed = state as ChatState & { processedChatRunIds?: Set<string> };
+      if (stateWithProcessed.processedChatRunIds) {
+        stateWithProcessed.processedChatRunIds.add(payload.runId);
+        // Prune to avoid unbounded growth (keep last 100)
+        if (stateWithProcessed.processedChatRunIds.size > 100) {
+          const arr = Array.from(stateWithProcessed.processedChatRunIds);
+          stateWithProcessed.processedChatRunIds = new Set(arr.slice(-100));
+        }
       }
     }
     state.chatStream = null;

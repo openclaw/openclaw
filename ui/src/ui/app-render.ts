@@ -21,7 +21,7 @@ import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-iden
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents, loadToolsCatalog, saveAgentsConfig } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
-import { loadChatHistory } from "./controllers/chat.ts";
+import { loadChatHistory, type ChatState } from "./controllers/chat.ts";
 import {
   applyConfig,
   ensureAgentConfigEntry,
@@ -1338,6 +1338,11 @@ export function renderApp(state: AppViewState) {
                   state.chatStream = null;
                   state.chatStreamStartedAt = null;
                   state.chatRunId = null;
+                  // Clear processed runIds when switching sessions
+                  const stateWithProcessed = state as ChatState & { processedChatRunIds?: Set<string> };
+                  if (stateWithProcessed.processedChatRunIds) {
+                    stateWithProcessed.processedChatRunIds.clear();
+                  }
                   state.chatQueue = [];
                   state.resetToolStream();
                   state.resetChatScroll();
@@ -1404,6 +1409,11 @@ export function renderApp(state: AppViewState) {
                     state.chatMessages = [];
                     state.chatStream = null;
                     state.chatRunId = null;
+                    // Clear processed runIds when clearing history
+                    const stateWithProcessed = state as ChatState & { processedChatRunIds?: Set<string> };
+                    if (stateWithProcessed.processedChatRunIds) {
+                      stateWithProcessed.processedChatRunIds.clear();
+                    }
                     await loadChatHistory(state);
                   } catch (err) {
                     state.lastError = String(err);
@@ -1416,6 +1426,11 @@ export function renderApp(state: AppViewState) {
                   state.chatMessages = [];
                   state.chatStream = null;
                   state.chatRunId = null;
+                  // Clear processed runIds when switching agents
+                  const stateWithProcessed = state as ChatState & { processedChatRunIds?: Set<string> };
+                  if (stateWithProcessed.processedChatRunIds) {
+                    stateWithProcessed.processedChatRunIds.clear();
+                  }
                   state.applySettings({
                     ...state.settings,
                     sessionKey: state.sessionKey,

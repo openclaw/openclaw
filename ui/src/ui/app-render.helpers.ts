@@ -47,6 +47,11 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStream = null;
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
   state.chatRunId = null;
+  // Clear processed runIds when switching sessions
+  const stateWithProcessed = state as ChatState & { processedChatRunIds?: Set<string> };
+  if (stateWithProcessed.processedChatRunIds) {
+    stateWithProcessed.processedChatRunIds.clear();
+  }
   (state as unknown as OpenClawApp).resetToolStream();
   (state as unknown as OpenClawApp).resetChatScroll();
   state.applySettings({
@@ -495,6 +500,11 @@ function switchChatSession(state: AppViewState, nextSessionKey: string) {
   (state as unknown as { chatQueue: unknown[] }).chatQueue = [];
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
   state.chatRunId = null;
+  // Clear processed runIds when switching sessions
+  const stateWithProcessed = state as ChatState & { processedChatRunIds?: Set<string> };
+  if (stateWithProcessed.processedChatRunIds) {
+    stateWithProcessed.processedChatRunIds.clear();
+  }
   (state as unknown as OpenClawApp).resetToolStream();
   (state as unknown as OpenClawApp).resetChatScroll();
   state.applySettings({
