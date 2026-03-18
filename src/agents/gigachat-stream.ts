@@ -40,7 +40,7 @@ export type GigachatStreamOptions = {
 };
 
 function stripLeakedFunctionCallPrelude(text: string): string {
-  return text.replace(/^\s*assistant\s+function\s+call(?:recipient)?\{\s*/i, "");
+  return text.replace(/^\s*assistant\s+function\s+call(?:\s*([A-Za-z0-9_.:/-]+))?\s*\{\s*/i, "");
 }
 
 // ── Function name sanitization ──────────────────────────────────────────────

@@ -22,11 +22,15 @@ function createSseStream(lines: string[]): Readable {
 }
 
 describe("GigaChat leaked function-call prelude cleanup", () => {
-  it("drops leaked assistant text preludes when a function call is present", async () => {
+  it.each([
+    "assistant function callrecipient{",
+    "assistant function callweather{",
+    "assistant function call recipient {",
+  ])("drops leaked assistant text prelude %p when a function call is present", async (prelude) => {
     request.mockResolvedValueOnce({
       status: 200,
       data: createSseStream([
-        'data: {"choices":[{"delta":{"content":"assistant function callrecipient{","role":"assistant"},"index":0}]}',
+        `data: {"choices":[{"delta":{"content":"${prelude}","role":"assistant"},"index":0}]}`,
         'data: {"choices":[{"delta":{"content":"","role":"assistant","function_call":{"name":"message","arguments":"{\\"action\\":\\"send\\",\\"message\\":\\"hello\\"}"}},"index":0}]}',
         "data: [DONE]",
       ]),
