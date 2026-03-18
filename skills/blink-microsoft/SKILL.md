@@ -14,24 +14,24 @@ Access Microsoft 365 (Outlook, Teams, OneDrive, Calendar). Provider key: `micros
 
 ## Get user profile
 ```bash
-bash scripts/call.sh microsoft /me GET
+bash scripts/call.sh /me GET
 ```
 
 ## List Outlook emails (inbox)
 ```bash
-bash scripts/call.sh microsoft /me/messages GET \
+bash scripts/call.sh /me/messages GET \
   '{"$top": 20, "$filter": "isRead eq false", "$orderby": "receivedDateTime desc"}'
 ```
 
 ## Search emails
 ```bash
-bash scripts/call.sh microsoft /me/messages GET \
+bash scripts/call.sh /me/messages GET \
   '{"$search": "\"project deadline\"", "$top": 10}'
 ```
 
 ## Send an email
 ```bash
-bash scripts/call.sh microsoft /me/sendMail POST '{
+bash scripts/call.sh /me/sendMail POST '{
   "message": {
     "subject": "Hello from your agent",
     "body": {"contentType": "Text", "content": "Message body here"},
@@ -42,13 +42,13 @@ bash scripts/call.sh microsoft /me/sendMail POST '{
 
 ## List calendar events
 ```bash
-bash scripts/call.sh microsoft /me/events GET \
+bash scripts/call.sh /me/events GET \
   '{"$top": 20, "$orderby": "start/dateTime", "$filter": "start/dateTime ge '"'"'2026-03-15T00:00:00'"'"'"}'
 ```
 
 ## Create a calendar event
 ```bash
-bash scripts/call.sh microsoft /me/events POST '{
+bash scripts/call.sh /me/events POST '{
   "subject": "Team Standup",
   "start": {"dateTime": "2026-03-20T10:00:00", "timeZone": "UTC"},
   "end": {"dateTime": "2026-03-20T10:30:00", "timeZone": "UTC"},
@@ -58,23 +58,23 @@ bash scripts/call.sh microsoft /me/events POST '{
 
 ## List OneDrive files
 ```bash
-bash scripts/call.sh microsoft /me/drive/root/children GET \
+bash scripts/call.sh /me/drive/root/children GET \
   '{"$top": 30, "$select": "name,id,size,lastModifiedDateTime,webUrl"}'
 ```
 
 ## Search OneDrive
 ```bash
-bash scripts/call.sh microsoft /me/drive/root/search(q='report') GET
+bash scripts/call.sh /me/drive/root/search(q='report') GET
 ```
 
 ## List Teams
 ```bash
-bash scripts/call.sh microsoft /me/joinedTeams GET
+bash scripts/call.sh /me/joinedTeams GET
 ```
 
 ## Send Teams message
 ```bash
-bash scripts/call.sh microsoft /teams/TEAM_ID/channels/CHANNEL_ID/messages POST '{
+bash scripts/call.sh /teams/TEAM_ID/channels/CHANNEL_ID/messages POST '{
   "body": {"content": "Hello from your agent!"}
 }'
 ```

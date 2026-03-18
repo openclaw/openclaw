@@ -14,29 +14,29 @@ Access the user's Google Calendar. Provider key: `google_calendar`.
 
 ## List calendars
 ```bash
-bash scripts/call.sh google_calendar /users/me/calendarList GET
+bash scripts/call.sh /users/me/calendarList GET
 ```
 
 ## Get upcoming events (primary calendar)
 ```bash
-bash scripts/call.sh google_calendar /calendars/primary/events GET \
+bash scripts/call.sh /calendars/primary/events GET \
   '{"timeMin": "2026-03-14T00:00:00Z", "timeMax": "2026-03-21T00:00:00Z", "singleEvents": true, "orderBy": "startTime", "maxResults": 20}'
 ```
 
 ## Search for events
 ```bash
-bash scripts/call.sh google_calendar /calendars/primary/events GET \
+bash scripts/call.sh /calendars/primary/events GET \
   '{"q": "standup", "timeMin": "2026-03-14T00:00:00Z", "maxResults": 10}'
 ```
 
 ## Get a specific event
 ```bash
-bash scripts/call.sh google_calendar /calendars/primary/events/EVENT_ID GET
+bash scripts/call.sh /calendars/primary/events/EVENT_ID GET
 ```
 
 ## Create an event
 ```bash
-bash scripts/call.sh google_calendar /calendars/primary/events POST '{
+bash scripts/call.sh /calendars/primary/events POST '{
   "summary": "Team Standup",
   "start": {"dateTime": "2026-03-15T10:00:00", "timeZone": "America/New_York"},
   "end": {"dateTime": "2026-03-15T10:30:00", "timeZone": "America/New_York"},
@@ -47,7 +47,7 @@ bash scripts/call.sh google_calendar /calendars/primary/events POST '{
 
 ## Update an event
 ```bash
-bash scripts/call.sh google_calendar /calendars/primary/events/EVENT_ID PATCH '{
+bash scripts/call.sh /calendars/primary/events/EVENT_ID PATCH '{
   "summary": "Updated Meeting Title",
   "description": "Updated description"
 }'
@@ -55,12 +55,12 @@ bash scripts/call.sh google_calendar /calendars/primary/events/EVENT_ID PATCH '{
 
 ## Delete an event
 ```bash
-bash scripts/call.sh google_calendar /calendars/primary/events/EVENT_ID DELETE '{}'
+bash scripts/call.sh /calendars/primary/events/EVENT_ID DELETE '{}'
 ```
 
 ## Find free/busy time
 ```bash
-bash scripts/call.sh google_calendar /freeBusy POST '{
+bash scripts/call.sh /freeBusy POST '{
   "timeMin": "2026-03-15T09:00:00Z",
   "timeMax": "2026-03-15T17:00:00Z",
   "items": [{"id": "primary"}]

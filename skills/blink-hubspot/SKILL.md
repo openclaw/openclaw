@@ -14,7 +14,7 @@ Read and manage HubSpot CRM data. Provider key: `hubspot`.
 
 ## Search contacts
 ```bash
-bash scripts/call.sh hubspot /crm/v3/objects/contacts/search POST '{
+bash scripts/call.sh /crm/v3/objects/contacts/search POST '{
   "filterGroups": [{"filters": [{"propertyName": "email", "operator": "CONTAINS_TOKEN", "value": "example.com"}]}],
   "properties": ["email", "firstname", "lastname", "phone", "company"],
   "limit": 20
@@ -23,13 +23,13 @@ bash scripts/call.sh hubspot /crm/v3/objects/contacts/search POST '{
 
 ## Get a contact by ID
 ```bash
-bash scripts/call.sh hubspot /crm/v3/objects/contacts/CONTACT_ID GET \
+bash scripts/call.sh /crm/v3/objects/contacts/CONTACT_ID GET \
   '{"properties": "email,firstname,lastname,phone,company,lifecyclestage,hs_lead_status"}'
 ```
 
 ## Create a contact
 ```bash
-bash scripts/call.sh hubspot /crm/v3/objects/contacts POST '{
+bash scripts/call.sh /crm/v3/objects/contacts POST '{
   "properties": {
     "email": "new@example.com",
     "firstname": "John",
@@ -42,20 +42,20 @@ bash scripts/call.sh hubspot /crm/v3/objects/contacts POST '{
 
 ## Update a contact
 ```bash
-bash scripts/call.sh hubspot /crm/v3/objects/contacts/CONTACT_ID PATCH '{
+bash scripts/call.sh /crm/v3/objects/contacts/CONTACT_ID PATCH '{
   "properties": {"lifecyclestage": "customer", "hs_lead_status": "CONNECTED"}
 }'
 ```
 
 ## List recent deals
 ```bash
-bash scripts/call.sh hubspot /crm/v3/objects/deals GET \
+bash scripts/call.sh /crm/v3/objects/deals GET \
   '{"limit": 20, "properties": "dealname,amount,dealstage,closedate,hubspot_owner_id"}'
 ```
 
 ## Search deals in a stage
 ```bash
-bash scripts/call.sh hubspot /crm/v3/objects/deals/search POST '{
+bash scripts/call.sh /crm/v3/objects/deals/search POST '{
   "filterGroups": [{"filters": [{"propertyName": "dealstage", "operator": "EQ", "value": "appointmentscheduled"}]}],
   "properties": ["dealname", "amount", "closedate"],
   "limit": 20
@@ -64,7 +64,7 @@ bash scripts/call.sh hubspot /crm/v3/objects/deals/search POST '{
 
 ## Create a deal
 ```bash
-bash scripts/call.sh hubspot /crm/v3/objects/deals POST '{
+bash scripts/call.sh /crm/v3/objects/deals POST '{
   "properties": {
     "dealname": "New Enterprise Deal",
     "amount": "50000",
@@ -76,19 +76,19 @@ bash scripts/call.sh hubspot /crm/v3/objects/deals POST '{
 
 ## Create a note on a contact
 ```bash
-bash scripts/call.sh hubspot /crm/v3/objects/notes POST '{
+bash scripts/call.sh /crm/v3/objects/notes POST '{
   "properties": {
     "hs_note_body": "Called contact, interested in Pro plan",
     "hs_timestamp": "2026-03-14T10:00:00Z"
   }
 }'
 # Then associate with contact:
-bash scripts/call.sh hubspot /crm/v3/objects/notes/NOTE_ID/associations/contacts/CONTACT_ID/202 PUT '{}'
+bash scripts/call.sh /crm/v3/objects/notes/NOTE_ID/associations/contacts/CONTACT_ID/202 PUT '{}'
 ```
 
 ## List companies
 ```bash
-bash scripts/call.sh hubspot /crm/v3/objects/companies GET \
+bash scripts/call.sh /crm/v3/objects/companies GET \
   '{"limit": 20, "properties": "name,domain,industry,numberofemployees,annualrevenue"}'
 ```
 

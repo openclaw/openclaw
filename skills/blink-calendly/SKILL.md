@@ -14,37 +14,37 @@ Access the user's linked Calendly account. Provider key: `calendly`.
 
 ## Get current user info
 ```bash
-bash scripts/call.sh calendly /users/me GET
+bash scripts/call.sh /users/me GET
 ```
 
 ## List scheduled events
 ```bash
-bash scripts/call.sh calendly /scheduled_events GET '{"user":"https://api.calendly.com/users/{uuid}","count":20}'
+bash scripts/call.sh /scheduled_events GET '{"user":"https://api.calendly.com/users/{uuid}","count":20}'
 ```
 
 ## Get event details
 ```bash
-bash scripts/call.sh calendly /scheduled_events/{uuid} GET
+bash scripts/call.sh /scheduled_events/{uuid} GET
 ```
 
 ## List event invitees (attendees)
 ```bash
-bash scripts/call.sh calendly /scheduled_events/{uuid}/invitees GET
+bash scripts/call.sh /scheduled_events/{uuid}/invitees GET
 ```
 
 ## List event types (booking pages)
 ```bash
-bash scripts/call.sh calendly /event_types GET '{"user":"https://api.calendly.com/users/{uuid}"}'
+bash scripts/call.sh /event_types GET '{"user":"https://api.calendly.com/users/{uuid}"}'
 ```
 
 ## Get a specific event type
 ```bash
-bash scripts/call.sh calendly /event_types/{uuid} GET
+bash scripts/call.sh /event_types/{uuid} GET
 ```
 
 ## List upcoming events (active)
 ```bash
-bash scripts/call.sh calendly /scheduled_events GET '{"user":"https://api.calendly.com/users/{uuid}","status":"active","min_start_time":"2024-03-01T00:00:00Z"}'
+bash scripts/call.sh /scheduled_events GET '{"user":"https://api.calendly.com/users/{uuid}","status":"active","min_start_time":"2024-03-01T00:00:00Z"}'
 ```
 
 ## Common use cases

@@ -14,42 +14,42 @@ Access the user's linked ClickUp workspace. Provider key: `clickup`.
 
 ## Get workspaces (teams)
 ```bash
-bash scripts/call.sh clickup /team GET
+bash scripts/call.sh /team GET
 ```
 
 ## Get spaces in a workspace
 ```bash
-bash scripts/call.sh clickup /team/{teamId}/space GET '{"archived":false}'
+bash scripts/call.sh /team/{teamId}/space GET '{"archived":false}'
 ```
 
 ## Get lists in a folder
 ```bash
-bash scripts/call.sh clickup /folder/{folderId}/list GET
+bash scripts/call.sh /folder/{folderId}/list GET
 ```
 
 ## Get tasks in a list
 ```bash
-bash scripts/call.sh clickup /list/{listId}/task GET '{"include_closed":false}'
+bash scripts/call.sh /list/{listId}/task GET '{"include_closed":false}'
 ```
 
 ## Create a task
 ```bash
-bash scripts/call.sh clickup /list/{listId}/task POST '{"name":"New task","description":"Task details","priority":2}'
+bash scripts/call.sh /list/{listId}/task POST '{"name":"New task","description":"Task details","priority":2}'
 ```
 
 ## Update a task
 ```bash
-bash scripts/call.sh clickup /task/{taskId} PUT '{"status":"in progress","priority":1}'
+bash scripts/call.sh /task/{taskId} PUT '{"status":"in progress","priority":1}'
 ```
 
 ## Get a specific task
 ```bash
-bash scripts/call.sh clickup /task/{taskId} GET
+bash scripts/call.sh /task/{taskId} GET
 ```
 
 ## Get tasks assigned to me
 ```bash
-bash scripts/call.sh clickup /team/{teamId}/task GET '{"assignees[]":"{userId}","include_closed":false}'
+bash scripts/call.sh /team/{teamId}/task GET '{"assignees[]":"{userId}","include_closed":false}'
 ```
 
 ## Common use cases

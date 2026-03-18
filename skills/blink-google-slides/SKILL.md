@@ -14,25 +14,25 @@ Access the user's Google Slides presentations. Provider key: `google_slides`.
 
 ## List presentations (via Drive)
 ```bash
-bash scripts/call.sh google_drive /files GET \
+bash scripts/call.sh /files GET \
   '{"q": "mimeType=\"application/vnd.google-apps.presentation\"", "fields": "files(id,name,createdTime,modifiedTime)", "pageSize": 20}'
 ```
 
 ## Get a presentation
 ```bash
-bash scripts/call.sh google_slides /presentations/PRESENTATION_ID GET
+bash scripts/call.sh /presentations/PRESENTATION_ID GET
 ```
 
 ## Create a presentation
 ```bash
-bash scripts/call.sh google_slides /presentations POST '{
+bash scripts/call.sh /presentations POST '{
   "title": "My New Presentation"
 }'
 ```
 
 ## Add a slide
 ```bash
-bash scripts/call.sh google_slides /presentations/PRESENTATION_ID:batchUpdate POST '{
+bash scripts/call.sh /presentations/PRESENTATION_ID:batchUpdate POST '{
   "requests": [{
     "insertSlide": {
       "insertionIndex": 1,
@@ -44,7 +44,7 @@ bash scripts/call.sh google_slides /presentations/PRESENTATION_ID:batchUpdate PO
 
 ## Add text to a slide element
 ```bash
-bash scripts/call.sh google_slides /presentations/PRESENTATION_ID:batchUpdate POST '{
+bash scripts/call.sh /presentations/PRESENTATION_ID:batchUpdate POST '{
   "requests": [{
     "insertText": {
       "objectId": "ELEMENT_ID",
@@ -57,12 +57,12 @@ bash scripts/call.sh google_slides /presentations/PRESENTATION_ID:batchUpdate PO
 
 ## Get page thumbnail
 ```bash
-bash scripts/call.sh google_slides /presentations/PRESENTATION_ID/pages/SLIDE_ID/thumbnail GET
+bash scripts/call.sh /presentations/PRESENTATION_ID/pages/SLIDE_ID/thumbnail GET
 ```
 
 ## Export as PDF
 ```bash
-bash scripts/call.sh google_drive /files/PRESENTATION_ID/export GET \
+bash scripts/call.sh /files/PRESENTATION_ID/export GET \
   '{"mimeType": "application/pdf"}'
 ```
 

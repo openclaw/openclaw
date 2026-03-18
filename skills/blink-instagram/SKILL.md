@@ -14,37 +14,37 @@ Access the user's linked Instagram Business account. Provider key: `instagram`.
 
 ## Get my account info
 ```bash
-bash scripts/call.sh instagram /me GET '{"fields":"id,name,username,biography,followers_count,media_count"}'
+bash scripts/call.sh /me GET '{"fields":"id,name,username,biography,followers_count,media_count"}'
 ```
 
 ## List my media (posts)
 ```bash
-bash scripts/call.sh instagram /me/media GET '{"fields":"id,caption,media_type,timestamp,like_count,comments_count,permalink","limit":20}'
+bash scripts/call.sh /me/media GET '{"fields":"id,caption,media_type,timestamp,like_count,comments_count,permalink","limit":20}'
 ```
 
 ## Get a specific media item
 ```bash
-bash scripts/call.sh instagram /{media_id} GET '{"fields":"id,caption,media_type,timestamp,like_count,comments_count"}'
+bash scripts/call.sh /{media_id} GET '{"fields":"id,caption,media_type,timestamp,like_count,comments_count"}'
 ```
 
 ## Get media insights
 ```bash
-bash scripts/call.sh instagram /{media_id}/insights GET '{"metric":"impressions,reach,likes,comments,shares,saved"}'
+bash scripts/call.sh /{media_id}/insights GET '{"metric":"impressions,reach,likes,comments,shares,saved"}'
 ```
 
 ## Get account insights
 ```bash
-bash scripts/call.sh instagram /me/insights GET '{"metric":"follower_count,impressions,reach","period":"day","since":1706745600,"until":1709424000}'
+bash scripts/call.sh /me/insights GET '{"metric":"follower_count,impressions,reach","period":"day","since":1706745600,"until":1709424000}'
 ```
 
 ## Create a media container (step 1 for posting)
 ```bash
-bash scripts/call.sh instagram /{user_id}/media POST '{"image_url":"https://example.com/image.jpg","caption":"My caption #hashtag"}'
+bash scripts/call.sh /{user_id}/media POST '{"image_url":"https://example.com/image.jpg","caption":"My caption #hashtag"}'
 ```
 
 ## Publish the container (step 2 for posting)
 ```bash
-bash scripts/call.sh instagram /{user_id}/media_publish POST '{"creation_id":"{container_id}"}'
+bash scripts/call.sh /{user_id}/media_publish POST '{"creation_id":"{container_id}"}'
 ```
 
 ## Common use cases

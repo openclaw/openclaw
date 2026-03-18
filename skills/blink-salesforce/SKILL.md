@@ -16,23 +16,23 @@ Note: Salesforce API paths use `/services/data/v62.0/` prefix.
 
 ## Get current user info
 ```bash
-bash scripts/call.sh salesforce /services/data/v62.0/chatter/users/me GET
+bash scripts/call.sh /services/data/v62.0/chatter/users/me GET
 ```
 
 ## Search for contacts (SOQL)
 ```bash
-bash scripts/call.sh salesforce /services/data/v62.0/query GET \
+bash scripts/call.sh /services/data/v62.0/query GET \
   '{"q": "SELECT Id,Name,Email,Phone,Account.Name FROM Contact WHERE Email LIKE '"'"'%example.com'"'"' LIMIT 20"}'
 ```
 
 ## Get a contact by ID
 ```bash
-bash scripts/call.sh salesforce /services/data/v62.0/sobjects/Contact/CONTACT_ID GET
+bash scripts/call.sh /services/data/v62.0/sobjects/Contact/CONTACT_ID GET
 ```
 
 ## Create a contact
 ```bash
-bash scripts/call.sh salesforce /services/data/v62.0/sobjects/Contact POST '{
+bash scripts/call.sh /services/data/v62.0/sobjects/Contact POST '{
   "FirstName": "John",
   "LastName": "Doe",
   "Email": "john.doe@example.com",
@@ -43,7 +43,7 @@ bash scripts/call.sh salesforce /services/data/v62.0/sobjects/Contact POST '{
 
 ## Update a record
 ```bash
-bash scripts/call.sh salesforce /services/data/v62.0/sobjects/Contact/CONTACT_ID PATCH '{
+bash scripts/call.sh /services/data/v62.0/sobjects/Contact/CONTACT_ID PATCH '{
   "Title": "VP of Engineering",
   "Phone": "+1987654321"
 }'
@@ -51,13 +51,13 @@ bash scripts/call.sh salesforce /services/data/v62.0/sobjects/Contact/CONTACT_ID
 
 ## List open opportunities
 ```bash
-bash scripts/call.sh salesforce /services/data/v62.0/query GET \
+bash scripts/call.sh /services/data/v62.0/query GET \
   '{"q": "SELECT Id,Name,Amount,StageName,CloseDate,AccountId FROM Opportunity WHERE IsClosed=false ORDER BY CloseDate ASC LIMIT 20"}'
 ```
 
 ## Create an opportunity
 ```bash
-bash scripts/call.sh salesforce /services/data/v62.0/sobjects/Opportunity POST '{
+bash scripts/call.sh /services/data/v62.0/sobjects/Opportunity POST '{
   "Name": "New Enterprise Deal",
   "AccountId": "ACCOUNT_ID",
   "StageName": "Prospecting",
@@ -68,7 +68,7 @@ bash scripts/call.sh salesforce /services/data/v62.0/sobjects/Opportunity POST '
 
 ## Log an activity (task)
 ```bash
-bash scripts/call.sh salesforce /services/data/v62.0/sobjects/Task POST '{
+bash scripts/call.sh /services/data/v62.0/sobjects/Task POST '{
   "Subject": "Follow-up call",
   "Status": "Completed",
   "ActivityDate": "2026-03-15",
@@ -79,7 +79,7 @@ bash scripts/call.sh salesforce /services/data/v62.0/sobjects/Task POST '{
 
 ## Search accounts
 ```bash
-bash scripts/call.sh salesforce /services/data/v62.0/query GET \
+bash scripts/call.sh /services/data/v62.0/query GET \
   '{"q": "SELECT Id,Name,Industry,AnnualRevenue,NumberOfEmployees FROM Account WHERE Name LIKE '"'"'%Acme%'"'"' LIMIT 10"}'
 ```
 

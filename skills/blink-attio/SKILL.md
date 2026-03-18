@@ -13,47 +13,47 @@ Access the user's linked Attio CRM workspace. Provider key: `attio`.
 
 ## Get workspace info
 ```bash
-bash scripts/call.sh attio /self GET
+bash scripts/call.sh /self GET
 ```
 
 ## List available objects
 ```bash
-bash scripts/call.sh attio /objects GET
+bash scripts/call.sh /objects GET
 ```
 
 ## Query people records
 ```bash
-bash scripts/call.sh attio /objects/people/records/query POST '{"limit":20,"sorts":[{"attribute":"created_at","field":"created_at","direction":"desc"}]}'
+bash scripts/call.sh /objects/people/records/query POST '{"limit":20,"sorts":[{"attribute":"created_at","field":"created_at","direction":"desc"}]}'
 ```
 
 ## Query company records
 ```bash
-bash scripts/call.sh attio /objects/companies/records/query POST '{"limit":20}'
+bash scripts/call.sh /objects/companies/records/query POST '{"limit":20}'
 ```
 
 ## Search records
 ```bash
-bash scripts/call.sh attio /objects/people/records/query POST '{"filter":{"email_addresses":{"$contains":"example.com"}},"limit":10}'
+bash scripts/call.sh /objects/people/records/query POST '{"filter":{"email_addresses":{"$contains":"example.com"}},"limit":10}'
 ```
 
 ## Get a specific record
 ```bash
-bash scripts/call.sh attio /objects/people/records/{record_id} GET
+bash scripts/call.sh /objects/people/records/{record_id} GET
 ```
 
 ## Create a person record
 ```bash
-bash scripts/call.sh attio /objects/people/records POST '{"data":{"values":{"name":[{"first_name":"John","last_name":"Doe"}],"email_addresses":[{"email_address":"john@example.com"}]}}}'
+bash scripts/call.sh /objects/people/records POST '{"data":{"values":{"name":[{"first_name":"John","last_name":"Doe"}],"email_addresses":[{"email_address":"john@example.com"}]}}}'
 ```
 
 ## List lists
 ```bash
-bash scripts/call.sh attio /lists GET
+bash scripts/call.sh /lists GET
 ```
 
 ## Query list entries
 ```bash
-bash scripts/call.sh attio /lists/{list_id}/entries/query POST '{"limit":20}'
+bash scripts/call.sh /lists/{list_id}/entries/query POST '{"limit":20}'
 ```
 
 ## Common use cases

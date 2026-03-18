@@ -14,22 +14,22 @@ Access the user's linked TikTok creator account. Provider key: `tiktok`.
 
 ## Get user info
 ```bash
-bash scripts/call.sh tiktok /user/info/ GET '{"fields":"open_id,display_name,avatar_url,follower_count,following_count,likes_count,video_count"}'
+bash scripts/call.sh /user/info/ GET '{"fields":"open_id,display_name,avatar_url,follower_count,following_count,likes_count,video_count"}'
 ```
 
 ## List my videos
 ```bash
-bash scripts/call.sh tiktok /video/list/ POST '{"fields":"id,title,create_time,cover_image_url,share_url,view_count,like_count,comment_count,share_count","max_count":20}'
+bash scripts/call.sh /video/list/ POST '{"fields":"id,title,create_time,cover_image_url,share_url,view_count,like_count,comment_count,share_count","max_count":20}'
 ```
 
 ## Query specific videos
 ```bash
-bash scripts/call.sh tiktok /video/query/ POST '{"filters":{"video_ids":["{video_id}"]},"fields":"id,title,view_count,like_count,comment_count,share_count,create_time"}'
+bash scripts/call.sh /video/query/ POST '{"filters":{"video_ids":["{video_id}"]},"fields":"id,title,view_count,like_count,comment_count,share_count,create_time"}'
 ```
 
 ## Get video comments
 ```bash
-bash scripts/call.sh tiktok /research/video/comment/list/ POST '{"video_id":"{video_id}","max_count":20,"fields":"id,text,like_count,reply_count,create_time"}'
+bash scripts/call.sh /research/video/comment/list/ POST '{"video_id":"{video_id}","max_count":20,"fields":"id,text,like_count,reply_count,create_time"}'
 ```
 
 ## Common use cases

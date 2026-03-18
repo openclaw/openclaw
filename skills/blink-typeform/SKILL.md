@@ -14,32 +14,32 @@ Access the user's linked Typeform account. Provider key: `typeform`.
 
 ## List all forms
 ```bash
-bash scripts/call.sh typeform /forms GET
+bash scripts/call.sh /forms GET
 ```
 
 ## Get a specific form
 ```bash
-bash scripts/call.sh typeform /forms/{form_id} GET
+bash scripts/call.sh /forms/{form_id} GET
 ```
 
 ## Get form responses
 ```bash
-bash scripts/call.sh typeform /forms/{form_id}/responses GET '{"page_size":20}'
+bash scripts/call.sh /forms/{form_id}/responses GET '{"page_size":20}'
 ```
 
 ## Get responses with filters
 ```bash
-bash scripts/call.sh typeform /forms/{form_id}/responses GET '{"page_size":20,"since":"2024-01-01T00:00:00Z","sort":"submitted_at,desc"}'
+bash scripts/call.sh /forms/{form_id}/responses GET '{"page_size":20,"since":"2024-01-01T00:00:00Z","sort":"submitted_at,desc"}'
 ```
 
 ## Get response count
 ```bash
-bash scripts/call.sh typeform /forms/{form_id}/responses GET '{"page_size":1}'
+bash scripts/call.sh /forms/{form_id}/responses GET '{"page_size":1}'
 ```
 
 ## Get form insights
 ```bash
-bash scripts/call.sh typeform /insights/{form_id}/summary GET
+bash scripts/call.sh /insights/{form_id}/summary GET
 ```
 
 ## Common use cases

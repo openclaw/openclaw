@@ -13,32 +13,32 @@ Interact with the user's linked Discord account/server. Provider key: `discord`.
 
 ## Get current user info
 ```bash
-bash scripts/call.sh discord /users/@me GET
+bash scripts/call.sh /users/@me GET
 ```
 
 ## List servers (guilds)
 ```bash
-bash scripts/call.sh discord /users/@me/guilds GET
+bash scripts/call.sh /users/@me/guilds GET
 ```
 
 ## List channels in a server
 ```bash
-bash scripts/call.sh discord /guilds/GUILD_ID/channels GET
+bash scripts/call.sh /guilds/GUILD_ID/channels GET
 ```
 
 ## Read recent messages from a channel
 ```bash
-bash scripts/call.sh discord /channels/CHANNEL_ID/messages GET '{"limit": 20}'
+bash scripts/call.sh /channels/CHANNEL_ID/messages GET '{"limit": 20}'
 ```
 
 ## Send a message to a channel
 ```bash
-bash scripts/call.sh discord /channels/CHANNEL_ID/messages POST '{"content": "Hello from your agent!"}'
+bash scripts/call.sh /channels/CHANNEL_ID/messages POST '{"content": "Hello from your agent!"}'
 ```
 
 ## Get server members
 ```bash
-bash scripts/call.sh discord /guilds/GUILD_ID/members GET '{"limit": 50}'
+bash scripts/call.sh /guilds/GUILD_ID/members GET '{"limit": 50}'
 ```
 
 ## Common use cases

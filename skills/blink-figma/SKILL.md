@@ -14,42 +14,42 @@ Access the user's linked Figma account. Provider key: `figma`.
 
 ## Get my files (recent)
 ```bash
-bash scripts/call.sh figma /v1/me GET
+bash scripts/call.sh /v1/me GET
 ```
 
 ## List team projects
 ```bash
-bash scripts/call.sh figma /v1/teams/{team_id}/projects GET
+bash scripts/call.sh /v1/teams/{team_id}/projects GET
 ```
 
 ## List files in a project
 ```bash
-bash scripts/call.sh figma /v1/projects/{project_id}/files GET
+bash scripts/call.sh /v1/projects/{project_id}/files GET
 ```
 
 ## Get a file
 ```bash
-bash scripts/call.sh figma /v1/files/{file_key} GET
+bash scripts/call.sh /v1/files/{file_key} GET
 ```
 
 ## Get file components
 ```bash
-bash scripts/call.sh figma /v1/files/{file_key}/components GET
+bash scripts/call.sh /v1/files/{file_key}/components GET
 ```
 
 ## Get file styles
 ```bash
-bash scripts/call.sh figma /v1/files/{file_key}/styles GET
+bash scripts/call.sh /v1/files/{file_key}/styles GET
 ```
 
 ## Get comments on a file
 ```bash
-bash scripts/call.sh figma /v1/files/{file_key}/comments GET
+bash scripts/call.sh /v1/files/{file_key}/comments GET
 ```
 
 ## Post a comment
 ```bash
-bash scripts/call.sh figma /v1/files/{file_key}/comments POST '{"message":"Looks great!","client_meta":{"x":0,"y":0}}'
+bash scripts/call.sh /v1/files/{file_key}/comments POST '{"message":"Looks great!","client_meta":{"x":0,"y":0}}'
 ```
 
 ## Common use cases

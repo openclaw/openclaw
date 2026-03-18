@@ -14,47 +14,47 @@ Access the user's linked ConvertKit (Kit) account. Provider key: `convertkit`.
 
 ## Get account info
 ```bash
-bash scripts/call.sh convertkit /account GET
+bash scripts/call.sh /account GET
 ```
 
 ## List subscribers
 ```bash
-bash scripts/call.sh convertkit /subscribers GET '{"page":1}'
+bash scripts/call.sh /subscribers GET '{"page":1}'
 ```
 
 ## Get subscriber by email
 ```bash
-bash scripts/call.sh convertkit /subscribers GET '{"email_address":"user@example.com"}'
+bash scripts/call.sh /subscribers GET '{"email_address":"user@example.com"}'
 ```
 
 ## List forms
 ```bash
-bash scripts/call.sh convertkit /forms GET
+bash scripts/call.sh /forms GET
 ```
 
 ## List sequences (automations)
 ```bash
-bash scripts/call.sh convertkit /sequences GET
+bash scripts/call.sh /sequences GET
 ```
 
 ## List tags
 ```bash
-bash scripts/call.sh convertkit /tags GET
+bash scripts/call.sh /tags GET
 ```
 
 ## List broadcasts
 ```bash
-bash scripts/call.sh convertkit /broadcasts GET
+bash scripts/call.sh /broadcasts GET
 ```
 
 ## Tag a subscriber
 ```bash
-bash scripts/call.sh convertkit /tags/{tag_id}/subscribe POST '{"email":"user@example.com"}'
+bash scripts/call.sh /tags/{tag_id}/subscribe POST '{"email":"user@example.com"}'
 ```
 
 ## Add subscriber to a form
 ```bash
-bash scripts/call.sh convertkit /forms/{form_id}/subscribe POST '{"email":"user@example.com","first_name":"John"}'
+bash scripts/call.sh /forms/{form_id}/subscribe POST '{"email":"user@example.com","first_name":"John"}'
 ```
 
 ## Common use cases

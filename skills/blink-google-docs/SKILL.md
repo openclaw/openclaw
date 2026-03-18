@@ -15,18 +15,18 @@ The DOCUMENT_ID is in the doc URL: `https://docs.google.com/document/d/DOCUMENT_
 
 ## Read document content
 ```bash
-bash scripts/call.sh google_docs /documents/DOCUMENT_ID GET
+bash scripts/call.sh /documents/DOCUMENT_ID GET
 ```
 
 ## Get document metadata only
 ```bash
-bash scripts/call.sh google_docs /documents/DOCUMENT_ID GET \
+bash scripts/call.sh /documents/DOCUMENT_ID GET \
   '{"fields": "title,documentId,revisionId"}'
 ```
 
 ## Append text to a document
 ```bash
-bash scripts/call.sh google_docs /documents/DOCUMENT_ID:batchUpdate POST '{
+bash scripts/call.sh /documents/DOCUMENT_ID:batchUpdate POST '{
   "requests": [{
     "insertText": {
       "location": {"index": 1},
@@ -38,7 +38,7 @@ bash scripts/call.sh google_docs /documents/DOCUMENT_ID:batchUpdate POST '{
 
 ## Replace text in a document
 ```bash
-bash scripts/call.sh google_docs /documents/DOCUMENT_ID:batchUpdate POST '{
+bash scripts/call.sh /documents/DOCUMENT_ID:batchUpdate POST '{
   "requests": [{
     "replaceAllText": {
       "containsText": {"text": "OLD TEXT", "matchCase": true},

@@ -14,55 +14,55 @@ Access the user's Gmail inbox. Provider key: `google_gmail`.
 
 ## List messages (inbox)
 ```bash
-bash scripts/call.sh google_gmail /users/me/messages GET \
+bash scripts/call.sh /users/me/messages GET \
   '{"labelIds": "INBOX", "maxResults": 20}'
 ```
 
 ## Search messages
 ```bash
-bash scripts/call.sh google_gmail /users/me/messages GET \
+bash scripts/call.sh /users/me/messages GET \
   '{"q": "from:boss@company.com is:unread", "maxResults": 10}'
 ```
 
 ## Get full message content
 ```bash
-bash scripts/call.sh google_gmail /users/me/messages/MESSAGE_ID GET \
+bash scripts/call.sh /users/me/messages/MESSAGE_ID GET \
   '{"format": "full"}'
 ```
 
 ## Send an email
 ```bash
-bash scripts/call.sh google_gmail /users/me/messages/send POST '{
+bash scripts/call.sh /users/me/messages/send POST '{
   "raw": "'$(echo -e "To: recipient@example.com\r\nSubject: Hello\r\nContent-Type: text/plain\r\n\r\nHello from your agent!" | base64 -w 0 | tr '+/' '-_' | tr -d '=')'"
 }'
 ```
 
 ## List labels
 ```bash
-bash scripts/call.sh google_gmail /users/me/labels GET
+bash scripts/call.sh /users/me/labels GET
 ```
 
 ## Modify message labels (mark as read)
 ```bash
-bash scripts/call.sh google_gmail /users/me/messages/MESSAGE_ID/modify POST '{
+bash scripts/call.sh /users/me/messages/MESSAGE_ID/modify POST '{
   "removeLabelIds": ["UNREAD"]
 }'
 ```
 
 ## Move to trash
 ```bash
-bash scripts/call.sh google_gmail /users/me/messages/MESSAGE_ID/trash POST '{}'
+bash scripts/call.sh /users/me/messages/MESSAGE_ID/trash POST '{}'
 ```
 
 ## List threads
 ```bash
-bash scripts/call.sh google_gmail /users/me/threads GET \
+bash scripts/call.sh /users/me/threads GET \
   '{"labelIds": "INBOX", "maxResults": 10}'
 ```
 
 ## Get a thread
 ```bash
-bash scripts/call.sh google_gmail /users/me/threads/THREAD_ID GET
+bash scripts/call.sh /users/me/threads/THREAD_ID GET
 ```
 
 ## Common use cases

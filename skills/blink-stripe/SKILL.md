@@ -14,42 +14,42 @@ Access the user's linked Stripe account. Provider key: `stripe`.
 
 ## Get account balance
 ```bash
-bash scripts/call.sh stripe /balance GET
+bash scripts/call.sh /balance GET
 ```
 
 ## List customers
 ```bash
-bash scripts/call.sh stripe /customers GET '{"limit":20}'
+bash scripts/call.sh /customers GET '{"limit":20}'
 ```
 
 ## Get a specific customer
 ```bash
-bash scripts/call.sh stripe /customers/{id} GET
+bash scripts/call.sh /customers/{id} GET
 ```
 
 ## List recent charges
 ```bash
-bash scripts/call.sh stripe /charges GET '{"limit":10}'
+bash scripts/call.sh /charges GET '{"limit":10}'
 ```
 
 ## List subscriptions
 ```bash
-bash scripts/call.sh stripe /subscriptions GET '{"status":"active","limit":20}'
+bash scripts/call.sh /subscriptions GET '{"status":"active","limit":20}'
 ```
 
 ## Get a subscription
 ```bash
-bash scripts/call.sh stripe /subscriptions/{id} GET
+bash scripts/call.sh /subscriptions/{id} GET
 ```
 
 ## List invoices
 ```bash
-bash scripts/call.sh stripe /invoices GET '{"limit":10}'
+bash scripts/call.sh /invoices GET '{"limit":10}'
 ```
 
 ## List payouts
 ```bash
-bash scripts/call.sh stripe /payouts GET '{"limit":10}'
+bash scripts/call.sh /payouts GET '{"limit":10}'
 ```
 
 ## Common use cases

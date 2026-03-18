@@ -13,42 +13,42 @@ Access the user's linked Etsy shop. Provider key: `etsy`.
 
 ## Get my user info
 ```bash
-bash scripts/call.sh etsy /application/users/me GET
+bash scripts/call.sh /application/users/me GET
 ```
 
 ## Get my shops
 ```bash
-bash scripts/call.sh etsy /application/users/me/shops GET
+bash scripts/call.sh /application/users/me/shops GET
 ```
 
 ## List shop listings (active)
 ```bash
-bash scripts/call.sh etsy /application/shops/{shopId}/listings GET '{"state":"active","limit":20}'
+bash scripts/call.sh /application/shops/{shopId}/listings GET '{"state":"active","limit":20}'
 ```
 
 ## Get a specific listing
 ```bash
-bash scripts/call.sh etsy /application/listings/{listingId} GET
+bash scripts/call.sh /application/listings/{listingId} GET
 ```
 
 ## Get shop receipts (orders)
 ```bash
-bash scripts/call.sh etsy /application/shops/{shopId}/receipts GET '{"limit":20}'
+bash scripts/call.sh /application/shops/{shopId}/receipts GET '{"limit":20}'
 ```
 
 ## Get a specific order
 ```bash
-bash scripts/call.sh etsy /application/shops/{shopId}/receipts/{receiptId} GET
+bash scripts/call.sh /application/shops/{shopId}/receipts/{receiptId} GET
 ```
 
 ## Get shop stats
 ```bash
-bash scripts/call.sh etsy /application/shops/{shopId}/stats GET
+bash scripts/call.sh /application/shops/{shopId}/stats GET
 ```
 
 ## List shop reviews
 ```bash
-bash scripts/call.sh etsy /application/shops/{shopId}/reviews GET '{"limit":10}'
+bash scripts/call.sh /application/shops/{shopId}/reviews GET '{"limit":10}'
 ```
 
 ## Common use cases

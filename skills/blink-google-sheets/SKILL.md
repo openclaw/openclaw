@@ -15,17 +15,17 @@ The SPREADSHEET_ID is in the sheet URL: `https://docs.google.com/spreadsheets/d/
 
 ## Read a range of cells
 ```bash
-bash scripts/call.sh google_sheets /spreadsheets/SPREADSHEET_ID/values/Sheet1!A1:E20 GET
+bash scripts/call.sh /spreadsheets/SPREADSHEET_ID/values/Sheet1!A1:E20 GET
 ```
 
 ## Read the whole sheet
 ```bash
-bash scripts/call.sh google_sheets /spreadsheets/SPREADSHEET_ID/values/Sheet1 GET
+bash scripts/call.sh /spreadsheets/SPREADSHEET_ID/values/Sheet1 GET
 ```
 
 ## Update cells
 ```bash
-bash scripts/call.sh google_sheets /spreadsheets/SPREADSHEET_ID/values/Sheet1!A1 PUT '{
+bash scripts/call.sh /spreadsheets/SPREADSHEET_ID/values/Sheet1!A1 PUT '{
   "range": "Sheet1!A1",
   "majorDimension": "ROWS",
   "values": [["Updated value"]]
@@ -41,13 +41,13 @@ bash scripts/call.sh google_sheets "/spreadsheets/SPREADSHEET_ID/values/Sheet1:a
 
 ## Get spreadsheet metadata (list sheets)
 ```bash
-bash scripts/call.sh google_sheets /spreadsheets/SPREADSHEET_ID GET \
+bash scripts/call.sh /spreadsheets/SPREADSHEET_ID GET \
   '{"fields": "sheets.properties"}'
 ```
 
 ## Batch update multiple ranges
 ```bash
-bash scripts/call.sh google_sheets /spreadsheets/SPREADSHEET_ID/values:batchUpdate POST '{
+bash scripts/call.sh /spreadsheets/SPREADSHEET_ID/values:batchUpdate POST '{
   "valueInputOption": "RAW",
   "data": [
     {"range": "Sheet1!A1", "values": [["Value 1"]]},

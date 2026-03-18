@@ -14,31 +14,31 @@ Access the user's Google Drive. Provider key: `google_drive`.
 
 ## List recent files
 ```bash
-bash scripts/call.sh google_drive /files GET \
+bash scripts/call.sh /files GET \
   '{"pageSize": 20, "orderBy": "modifiedTime desc", "fields": "files(id,name,mimeType,modifiedTime,webViewLink)"}'
 ```
 
 ## Search for files
 ```bash
-bash scripts/call.sh google_drive /files GET \
+bash scripts/call.sh /files GET \
   '{"q": "name contains '\''report'\'' and trashed = false", "fields": "files(id,name,mimeType,webViewLink)"}'
 ```
 
 ## Get file metadata
 ```bash
-bash scripts/call.sh google_drive /files/FILE_ID GET \
+bash scripts/call.sh /files/FILE_ID GET \
   '{"fields": "id,name,mimeType,description,createdTime,modifiedTime,owners,webViewLink"}'
 ```
 
 ## List files in a folder
 ```bash
-bash scripts/call.sh google_drive /files GET \
+bash scripts/call.sh /files GET \
   '{"q": "'\''FOLDER_ID'\'' in parents and trashed = false", "fields": "files(id,name,mimeType)"}'
 ```
 
 ## Create a folder
 ```bash
-bash scripts/call.sh google_drive /files POST '{
+bash scripts/call.sh /files POST '{
   "name": "New Folder",
   "mimeType": "application/vnd.google-apps.folder"
 }'
@@ -46,7 +46,7 @@ bash scripts/call.sh google_drive /files POST '{
 
 ## Move a file to a folder
 ```bash
-bash scripts/call.sh google_drive /files/FILE_ID PATCH '{"parents": ["FOLDER_ID"]}'
+bash scripts/call.sh /files/FILE_ID PATCH '{"parents": ["FOLDER_ID"]}'
 ```
 
 ## Common use cases

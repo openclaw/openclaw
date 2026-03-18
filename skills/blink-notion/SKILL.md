@@ -17,17 +17,17 @@ bash scripts/status.sh
 
 ## Search everything
 ```bash
-bash scripts/call.sh notion /search POST '{"query": "meeting notes", "filter": {"property": "object", "value": "page"}}'
+bash scripts/call.sh /search POST '{"query": "meeting notes", "filter": {"property": "object", "value": "page"}}'
 ```
 
 ## List all databases
 ```bash
-bash scripts/call.sh notion /search POST '{"filter": {"property": "object", "value": "database"}}'
+bash scripts/call.sh /search POST '{"filter": {"property": "object", "value": "database"}}'
 ```
 
 ## Query a database (with filters)
 ```bash
-bash scripts/call.sh notion /databases/DATABASE_ID/query POST '{
+bash scripts/call.sh /databases/DATABASE_ID/query POST '{
   "filter": {"property": "Status", "select": {"equals": "In Progress"}},
   "sorts": [{"property": "Due Date", "direction": "ascending"}]
 }'
@@ -35,13 +35,13 @@ bash scripts/call.sh notion /databases/DATABASE_ID/query POST '{
 
 ## Get a page's content
 ```bash
-bash scripts/call.sh notion /pages/PAGE_ID GET
-bash scripts/call.sh notion /blocks/PAGE_ID/children GET
+bash scripts/call.sh /pages/PAGE_ID GET
+bash scripts/call.sh /blocks/PAGE_ID/children GET
 ```
 
 ## Create a new page
 ```bash
-bash scripts/call.sh notion /pages POST '{
+bash scripts/call.sh /pages POST '{
   "parent": {"database_id": "DATABASE_ID"},
   "properties": {
     "Name": {"title": [{"text": {"content": "New Task"}}]},
@@ -52,7 +52,7 @@ bash scripts/call.sh notion /pages POST '{
 
 ## Update a page property
 ```bash
-bash scripts/call.sh notion /pages/PAGE_ID PATCH '{
+bash scripts/call.sh /pages/PAGE_ID PATCH '{
   "properties": {
     "Status": {"select": {"name": "Done"}}
   }
@@ -61,7 +61,7 @@ bash scripts/call.sh notion /pages/PAGE_ID PATCH '{
 
 ## Add content to a page
 ```bash
-bash scripts/call.sh notion /blocks/PAGE_ID/children PATCH '{
+bash scripts/call.sh /blocks/PAGE_ID/children PATCH '{
   "children": [{"object": "block", "type": "paragraph",
     "paragraph": {"rich_text": [{"type": "text", "text": {"content": "Added by agent"}}]}}]
 }'

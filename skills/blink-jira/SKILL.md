@@ -14,17 +14,17 @@ Access the user's linked Jira workspace. Provider key: `jira`.
 
 ## Search issues with JQL
 ```bash
-bash scripts/call.sh jira /search GET '{"jql":"assignee=currentUser() AND status!=Done","maxResults":20}'
+bash scripts/call.sh /search GET '{"jql":"assignee=currentUser() AND status!=Done","maxResults":20}'
 ```
 
 ## Get a specific issue
 ```bash
-bash scripts/call.sh jira /issue/{issueKey} GET
+bash scripts/call.sh /issue/{issueKey} GET
 ```
 
 ## Create an issue
 ```bash
-bash scripts/call.sh jira /issue POST '{
+bash scripts/call.sh /issue POST '{
   "fields": {
     "project": {"key": "PROJ"},
     "summary": "Fix login bug",
@@ -36,27 +36,27 @@ bash scripts/call.sh jira /issue POST '{
 
 ## Update issue status (transition)
 ```bash
-bash scripts/call.sh jira /issue/{issueKey}/transitions POST '{"transition":{"id":"{transitionId}"}}'
+bash scripts/call.sh /issue/{issueKey}/transitions POST '{"transition":{"id":"{transitionId}"}}'
 ```
 
 ## Get available transitions for an issue
 ```bash
-bash scripts/call.sh jira /issue/{issueKey}/transitions GET
+bash scripts/call.sh /issue/{issueKey}/transitions GET
 ```
 
 ## Add a comment
 ```bash
-bash scripts/call.sh jira /issue/{issueKey}/comment POST '{"body":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Comment text here"}]}]}}'
+bash scripts/call.sh /issue/{issueKey}/comment POST '{"body":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Comment text here"}]}]}}'
 ```
 
 ## List projects
 ```bash
-bash scripts/call.sh jira /project GET
+bash scripts/call.sh /project GET
 ```
 
 ## Get sprint issues
 ```bash
-bash scripts/call.sh jira /search GET '{"jql":"sprint in openSprints()","maxResults":50}'
+bash scripts/call.sh /search GET '{"jql":"sprint in openSprints()","maxResults":50}'
 ```
 
 ## Common use cases
