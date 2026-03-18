@@ -9,9 +9,9 @@ import {
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   listProfilesForProvider,
-  loginOpenAICodexOAuth,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/provider-auth";
+import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
 import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
