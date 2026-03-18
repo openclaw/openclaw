@@ -39,7 +39,7 @@ vi.mock("openclaw/plugin-sdk/whatsapp", async () => {
 
       if (mode === "implicit" && !normalized.endsWith("@g.us")) {
         // Use allowTo for outbound gating when defined; otherwise fall back to allowFrom.
-        const outboundList = allowTo !== undefined ? allowTo : allowFrom;
+        const outboundList = allowTo != null ? allowTo : allowFrom;
         const allowAll = outboundList.includes("*");
         const allowExact = outboundList.some((entry) => {
           if (!entry) {

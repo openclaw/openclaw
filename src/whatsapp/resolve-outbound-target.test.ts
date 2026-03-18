@@ -248,15 +248,16 @@ describe("resolveWhatsAppOutboundTarget", () => {
       expect(result).toEqual({ ok: true, to: PRIMARY_TARGET });
     });
 
-    it("falls back to allowFrom when allowTo is null", () => {
-      mockNormalizedDirectMessage(PRIMARY_TARGET, PRIMARY_TARGET);
+    it("falls back to allowFrom when allowTo is null, blocking unlisted target", () => {
+      // Target is NOT in allowFrom — if null incorrectly resolved to "allow all" this would pass.
+      mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
       const result = resolveWhatsAppOutboundTarget({
         to: PRIMARY_TARGET,
-        allowFrom: [PRIMARY_TARGET],
+        allowFrom: [SECONDARY_TARGET],
         allowTo: null,
         mode: "implicit",
       });
-      expect(result).toEqual({ ok: true, to: PRIMARY_TARGET });
+      expect(result.ok).toBe(false);
     });
 
     it("treats empty allowTo as unrestricted outbound (allow all)", () => {

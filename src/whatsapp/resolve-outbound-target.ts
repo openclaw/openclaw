@@ -15,7 +15,8 @@ export function resolveWhatsAppOutboundTarget(params: {
 }): WhatsAppOutboundTargetResolution {
   const trimmed = params.to?.trim() ?? "";
   // Use allowTo for outbound gating when explicitly configured; otherwise fall back to allowFrom.
-  const outboundListSource = params.allowTo !== undefined ? params.allowTo : params.allowFrom;
+  // Use != null (not !== undefined) to treat both null and undefined as "not set".
+  const outboundListSource = params.allowTo != null ? params.allowTo : params.allowFrom;
   const outboundListRaw = (outboundListSource ?? [])
     .map((entry) => String(entry).trim())
     .filter(Boolean);
