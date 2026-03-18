@@ -1,2 +1,2 @@
-export * from "openclaw/plugin-sdk/synology-chat";
+export * from "../../src/plugin-sdk/synology-chat.js";
 export * from "./setup-api.js";

@@ -1,4 +1,3 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/irc";
 import { describe, expect, it, vi } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
@@ -7,6 +6,7 @@ import {
   type WizardPrompter,
 } from "../../../test/helpers/extensions/setup-wizard.js";
 import { ircPlugin } from "./channel.js";
+import type { RuntimeEnv } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const ircConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({

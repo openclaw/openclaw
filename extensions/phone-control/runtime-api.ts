@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/phone-control";
+export * from "../../src/plugin-sdk/phone-control.js";

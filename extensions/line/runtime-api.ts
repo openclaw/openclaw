@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/line-core";
+export * from "../../src/plugin-sdk/line-core.js";

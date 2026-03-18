@@ -89,7 +89,7 @@ For provider plugins, use `definePluginEntry` instead.
 
 ## Step 3: Import from focused subpaths
 
-The plugin SDK exposes 70+ focused subpaths. Always import from specific
+The plugin SDK exposes many focused subpaths. Always import from specific
 subpaths rather than the monolithic root:
 
 ```typescript

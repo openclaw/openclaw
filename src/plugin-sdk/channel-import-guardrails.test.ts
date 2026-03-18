@@ -158,7 +158,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
 
 const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
   // Direct import avoids a circular init path:
-  // accounts.ts -> runtime-api.ts -> openclaw/plugin-sdk/matrix -> extensions/matrix/api.ts -> accounts.ts
+  // accounts.ts -> runtime-api.ts -> src/plugin-sdk/matrix -> extensions/matrix/api.ts -> accounts.ts
   "extensions/matrix/src/matrix/accounts.ts",
 ] as const;
 

@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/nextcloud-talk";
+export * from "../../src/plugin-sdk/nextcloud-talk.js";

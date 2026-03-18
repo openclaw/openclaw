@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/zalo";
+export * from "../../src/plugin-sdk/zalo.js";
