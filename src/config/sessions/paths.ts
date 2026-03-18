@@ -8,6 +8,7 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js
 import { resolveStateDir } from "../paths.js";
 
 const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fs.constants;
+const MANAGED_PATH_CASE_INSENSITIVE = process.platform === "win32" || process.platform === "darwin";
 const OPEN_DIRECTORY_FLAGS =
   fs.constants.O_RDONLY |
   (typeof fs.constants.O_DIRECTORY === "number" ? fs.constants.O_DIRECTORY : 0) |
@@ -32,7 +33,10 @@ function resolveManagedSessionsSafetyChain(sessionsDir: string): string[] {
   const resolved = path.resolve(sessionsDir);
   const agentDir = path.dirname(resolved);
   const agentsDir = path.dirname(agentDir);
-  if (path.basename(resolved) === "sessions" && path.basename(agentsDir) === "agents") {
+  if (
+    path.basename(resolved).toLowerCase() === "sessions" &&
+    path.basename(agentsDir).toLowerCase() === "agents"
+  ) {
     // The configured state root itself may be a user-chosen symlink alias.
     // We only reject symlinks inside the managed agents/<id>/sessions chain.
     return [agentsDir, agentDir, resolved];
@@ -44,7 +48,10 @@ async function ensureManagedSessionsParentChain(sessionsDir: string): Promise<vo
   const resolved = path.resolve(sessionsDir);
   const agentDir = path.dirname(resolved);
   const agentsDir = path.dirname(agentDir);
-  if (path.basename(resolved) !== "sessions" || path.basename(agentsDir) !== "agents") {
+  if (
+    path.basename(resolved).toLowerCase() !== "sessions" ||
+    path.basename(agentsDir).toLowerCase() !== "agents"
+  ) {
     return;
   }
 
@@ -225,13 +232,13 @@ export function isManagedSessionsDir(
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): boolean {
   const resolvedSessionsDir = path.resolve(sessionsDir);
-  if (path.basename(resolvedSessionsDir) !== "sessions") {
+  if (path.basename(resolvedSessionsDir).toLowerCase() !== "sessions") {
     return false;
   }
 
   const agentDir = path.dirname(resolvedSessionsDir);
   const agentsDir = path.dirname(agentDir);
-  if (path.basename(agentsDir) !== "agents") {
+  if (path.basename(agentsDir).toLowerCase() !== "agents") {
     return false;
   }
 
@@ -242,8 +249,8 @@ export function isManagedSessionsDir(
 
   const expectedSessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
   return (
-    resolveComparableManagedPath(resolvedSessionsDir) ===
-    resolveComparableManagedPath(expectedSessionsDir)
+    normalizeManagedPathForComparison(resolveComparableManagedPath(resolvedSessionsDir)) ===
+    normalizeManagedPathForComparison(resolveComparableManagedPath(expectedSessionsDir))
   );
 }
 
@@ -442,6 +449,10 @@ function resolveComparableManagedPath(filePath: string): string {
     pendingSegments.push(path.basename(cursor));
     cursor = parent;
   }
+}
+
+function normalizeManagedPathForComparison(filePath: string): string {
+  return MANAGED_PATH_CASE_INSENSITIVE ? filePath.toLowerCase() : filePath;
 }
 
 function resolvePathWithinSessionsDir(
