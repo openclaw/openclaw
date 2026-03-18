@@ -15,6 +15,15 @@ export type NaverWorksFlexComponent =
       flex?: number;
     }
   | {
+      type: "image";
+      url: string;
+      size?: "full";
+      aspectRatio?: string;
+      aspectMode?: "fit" | "cover";
+      margin?: "none" | "sm" | "md";
+      flex?: number;
+    }
+  | {
       type: "separator";
       margin?: "none" | "sm" | "md";
     }

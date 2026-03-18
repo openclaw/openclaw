@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   markdownToNaverWorksFlexTemplate,
   type NaverWorksFlexContainer,
+  type NaverWorksFlexComponent,
 } from "./markdown-to-flex.js";
 import type { NaverWorksAccount, NaverWorksStickerRef } from "./types.js";
 
@@ -20,7 +23,8 @@ type NaverWorksOutboundContent =
       contents: NaverWorksFlexContainer;
       i18nAltTexts?: Array<{ language: string; altText: string }>;
     }
-  | { type: "image" | "audio" | "file"; resourceUrl: string }
+  | { type: "image"; previewImageUrl?: string; originalContentUrl?: string; fileId?: string }
+  | { type: "audio" | "file"; resourceUrl: string }
   | { type: "sticker"; packageId: string; stickerId: string };
 
 type NaverWorksAuthTokenResult =
@@ -90,6 +94,18 @@ function buildJwtAssertion(params: {
   signer.end();
   const signature = signer.sign(params.privateKey);
   return `${unsignedToken}.${base64UrlEncode(signature)}`;
+}
+
+function isRemoteHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function buildAltText(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "OpenClaw message";
+  }
+  return normalized.slice(0, 400);
 }
 
 async function issueAccessTokenWithJwt(account: NaverWorksAccount): Promise<{
@@ -221,6 +237,12 @@ async function postUserMessage(params: {
   });
 }
 
+function buildAttachmentCreateUrl(account: NaverWorksAccount): string {
+  const base = trimTrailingSlash(account.apiBaseUrl);
+  const encodedBotId = encodeURIComponent(account.botId ?? "");
+  return `${base}/bots/${encodedBotId}/attachments`;
+}
+
 function inferMediaKindFromUrl(mediaUrl: string): "image" | "audio" | "file" {
   const path = mediaUrl.split("?")[0]?.toLowerCase() ?? "";
   if (path.match(/\.(png|jpe?g|gif|webp|bmp|heic|svg)$/)) {
@@ -232,14 +254,248 @@ function inferMediaKindFromUrl(mediaUrl: string): "image" | "audio" | "file" {
   return "file";
 }
 
+function createImageComponent(url: string, options?: { margin?: "none" | "sm" | "md" }) {
+  return {
+    type: "image" as const,
+    url,
+    size: "full" as const,
+    aspectRatio: "4:3",
+    aspectMode: "fit" as const,
+    margin: options?.margin,
+  };
+}
+
+function createTextComponents(text: string, theme: NaverWorksAccount["markdownTheme"]) {
+  const resolvedTheme = theme ?? "auto";
+  const sectionTitleColor = resolvedTheme === "dark" ? "#ffffff" : "#000000";
+  const textColor = resolvedTheme === "dark" ? "#f5f5f5" : "#111111";
+  const lines = text
+    .trim()
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (lines.length === 0) {
+    return [
+      {
+        type: "text" as const,
+        text: text.trim() || "OpenClaw message",
+        wrap: true,
+        size: "md" as const,
+        color: textColor,
+      },
+    ];
+  }
+
+  const [first, ...rest] = lines;
+  const components: NaverWorksFlexComponent[] = [
+    {
+      type: "text",
+      text: first,
+      wrap: true,
+      size: "md",
+      weight: "bold",
+      color: sectionTitleColor,
+    },
+  ];
+  for (const line of rest) {
+    components.push({
+      type: "text",
+      text: line,
+      wrap: true,
+      size: "md",
+      color: textColor,
+      margin: "sm",
+    });
+  }
+  return components;
+}
+
+function buildTextImageFlexPayload(params: {
+  text: string;
+  imageUrl: string;
+  markdownTheme: NaverWorksAccount["markdownTheme"];
+}): { altText: string; contents: NaverWorksFlexContainer } {
+  const markdownPayload = markdownToNaverWorksFlexTemplate(params.text, {
+    theme: params.markdownTheme,
+  });
+  return {
+    altText: markdownPayload?.altText ?? buildAltText(params.text),
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          createImageComponent(params.imageUrl),
+          ...(markdownPayload
+            ? [
+                { type: "separator" as const, margin: "md" as const },
+                ...markdownPayload.contents.body.contents,
+              ]
+            : createTextComponents(params.text, params.markdownTheme)),
+        ],
+      },
+    },
+  };
+}
+
+function toLocalFilePath(mediaUrl: string): string | null {
+  if (isRemoteHttpUrl(mediaUrl)) {
+    return null;
+  }
+  if (mediaUrl.startsWith("file://")) {
+    try {
+      return decodeURIComponent(new URL(mediaUrl).pathname);
+    } catch {
+      return null;
+    }
+  }
+  return mediaUrl;
+}
+
+async function createAttachment(params: {
+  account: NaverWorksAccount;
+  fileName: string;
+  fileSize: number;
+  accessToken: string;
+}): Promise<
+  { ok: true; fileId: string; uploadUrl: string } | { ok: false; status?: number; body?: string }
+> {
+  const response = await fetch(buildAttachmentCreateUrl(params.account), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      fileName: params.fileName,
+      fileSize: params.fileSize,
+    }),
+  });
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      body: await response.text().catch(() => ""),
+    };
+  }
+  const payload = (await response.json().catch(() => null)) as {
+    fileId?: unknown;
+    uploadUrl?: unknown;
+  } | null;
+  const fileId = typeof payload?.fileId === "string" ? payload.fileId.trim() : "";
+  const uploadUrl = typeof payload?.uploadUrl === "string" ? payload.uploadUrl.trim() : "";
+  if (!fileId || !uploadUrl) {
+    return { ok: false, body: "missing fileId or uploadUrl in attachment response" };
+  }
+  return { ok: true, fileId, uploadUrl };
+}
+
+async function uploadAttachmentBinary(params: {
+  uploadUrl: string;
+  fileName: string;
+  accessToken: string;
+  fileBuffer: Buffer;
+  contentType: string;
+}): Promise<{ ok: true; fileId?: string } | { ok: false; status?: number; body?: string }> {
+  const form = new FormData();
+  form.set("resourceName", params.fileName);
+  form.set(
+    "FileData",
+    new Blob([params.fileBuffer], { type: params.contentType }),
+    params.fileName,
+  );
+  const response = await fetch(params.uploadUrl, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${params.accessToken}` },
+    body: form,
+  });
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      body: await response.text().catch(() => ""),
+    };
+  }
+  const payload = (await response.json().catch(() => null)) as { fileId?: unknown } | null;
+  return {
+    ok: true,
+    fileId: typeof payload?.fileId === "string" ? payload.fileId.trim() : undefined,
+  };
+}
+
+async function uploadLocalMediaAsAttachment(params: {
+  account: NaverWorksAccount;
+  mediaPath: string;
+  accessToken: string;
+}): Promise<
+  | { ok: true; fileId: string; mediaKind: "image" | "audio" | "file" }
+  | { ok: false; status?: number; body?: string }
+> {
+  const stat = await fs.stat(params.mediaPath);
+  const fileBuffer = await fs.readFile(params.mediaPath);
+  const fileName = path.basename(params.mediaPath) || "attachment";
+  const created = await createAttachment({
+    account: params.account,
+    fileName,
+    fileSize: stat.size,
+    accessToken: params.accessToken,
+  });
+  if (!created.ok) {
+    return created;
+  }
+  const mediaKind = inferMediaKindFromUrl(fileName);
+  const contentType =
+    mediaKind === "image"
+      ? "image/png"
+      : mediaKind === "audio"
+        ? "audio/mpeg"
+        : "application/octet-stream";
+  const uploaded = await uploadAttachmentBinary({
+    uploadUrl: created.uploadUrl,
+    fileName,
+    accessToken: params.accessToken,
+    fileBuffer,
+    contentType,
+  });
+  if (!uploaded.ok) {
+    return uploaded;
+  }
+  return {
+    ok: true,
+    fileId: uploaded.fileId || created.fileId,
+    mediaKind,
+  };
+}
+
 function buildOutboundContent(params: {
   markdownMode: NaverWorksAccount["markdownMode"];
   markdownTheme: NaverWorksAccount["markdownTheme"];
   text?: string;
   mediaUrl?: string;
+  uploadedFileId?: string;
   sticker?: NaverWorksStickerRef;
 }): NaverWorksOutboundContent | null {
   const text = params.text?.trim();
+  const mediaUrl = params.mediaUrl?.trim();
+  if (
+    text &&
+    mediaUrl &&
+    isRemoteHttpUrl(mediaUrl) &&
+    inferMediaKindFromUrl(mediaUrl) === "image"
+  ) {
+    const flexPayload = buildTextImageFlexPayload({
+      text,
+      imageUrl: mediaUrl,
+      markdownTheme: params.markdownTheme,
+    });
+    return {
+      type: "flex",
+      altText: flexPayload.altText,
+      contents: flexPayload.contents,
+    };
+  }
   if (text) {
     if (params.markdownMode === "auto-flex") {
       const flexPayload = markdownToNaverWorksFlexTemplate(text, { theme: params.markdownTheme });
@@ -261,9 +517,21 @@ function buildOutboundContent(params: {
       stickerId: sticker.stickerId,
     };
   }
-  const mediaUrl = params.mediaUrl?.trim();
+  if (params.uploadedFileId) {
+    return {
+      type: "image",
+      fileId: params.uploadedFileId,
+    };
+  }
   if (!mediaUrl) {
     return null;
+  }
+  if (inferMediaKindFromUrl(mediaUrl) === "image") {
+    return {
+      type: "image",
+      previewImageUrl: mediaUrl,
+      originalContentUrl: mediaUrl,
+    };
   }
   return { type: inferMediaKindFromUrl(mediaUrl), resourceUrl: mediaUrl };
 }
@@ -284,14 +552,10 @@ export async function sendMessageNaverWorks(params: {
     }
 > {
   const { account, toUserId } = params;
-  const content = buildOutboundContent({
-    markdownMode: account.markdownMode,
-    markdownTheme: account.markdownTheme,
-    text: params.text,
-    mediaUrl: params.mediaUrl,
-    sticker: params.sticker,
-  });
-  if (!account.botId || !content) {
+  const localMediaPath = params.mediaUrl ? toLocalFilePath(params.mediaUrl) : null;
+  let uploadedFileId: string | undefined;
+
+  if (!account.botId) {
     return { ok: false, reason: "not-configured" };
   }
 
@@ -306,7 +570,57 @@ export async function sendMessageNaverWorks(params: {
   }
 
   let accessToken = accessTokenResult.token;
-  let response = await postUserMessage({ account, toUserId, content, accessToken });
+  const sendWithResolvedToken = async (token: string) => {
+    let resolvedFileId = uploadedFileId;
+    if (!resolvedFileId && localMediaPath) {
+      const uploaded = await uploadLocalMediaAsAttachment({
+        account,
+        mediaPath: localMediaPath,
+        accessToken: token,
+      });
+      if (!uploaded.ok) {
+        return {
+          ok: false as const,
+          status: uploaded.status,
+          body: uploaded.body,
+          response: null,
+        };
+      }
+      resolvedFileId = uploaded.fileId;
+      uploadedFileId = uploaded.fileId;
+    }
+
+    const content = buildOutboundContent({
+      markdownMode: account.markdownMode,
+      markdownTheme: account.markdownTheme,
+      text: params.text,
+      mediaUrl: isRemoteHttpUrl(params.mediaUrl?.trim() ?? "") ? params.mediaUrl : undefined,
+      uploadedFileId: resolvedFileId,
+      sticker: params.sticker,
+    });
+    if (!content) {
+      return { ok: false as const, status: undefined, body: undefined, response: null };
+    }
+
+    return {
+      ok: true as const,
+      status: undefined,
+      body: undefined,
+      response: await postUserMessage({ account, toUserId, content, accessToken: token }),
+    };
+  };
+
+  let sendAttempt = await sendWithResolvedToken(accessToken);
+  if (!sendAttempt.ok) {
+    return {
+      ok: false,
+      reason:
+        sendAttempt.status === 401 || sendAttempt.status === 403 ? "auth-error" : "http-error",
+      status: sendAttempt.status,
+      body: sendAttempt.body,
+    };
+  }
+  let response = sendAttempt.response;
 
   if (
     !accessTokenResult.usesStaticAccessToken &&
@@ -324,7 +638,18 @@ export async function sendMessageNaverWorks(params: {
       };
     }
     accessToken = refreshedTokenResult.token;
-    response = await postUserMessage({ account, toUserId, content, accessToken });
+    uploadedFileId = undefined;
+    sendAttempt = await sendWithResolvedToken(accessToken);
+    if (!sendAttempt.ok) {
+      return {
+        ok: false,
+        reason:
+          sendAttempt.status === 401 || sendAttempt.status === 403 ? "auth-error" : "http-error",
+        status: sendAttempt.status,
+        body: sendAttempt.body,
+      };
+    }
+    response = sendAttempt.response;
   }
 
   if (response.ok) {
