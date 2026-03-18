@@ -424,14 +424,6 @@
     "reason": "imports extension-owned file from src/plugins"
   },
   {
-    "file": "src/plugins/runtime/runtime-media.ts",
-    "line": 1,
-    "kind": "import",
-    "specifier": "../../../extensions/whatsapp/runtime-api.js",
-    "resolvedPath": "extensions/whatsapp/runtime-api.js",
-    "reason": "imports extension-owned file from src/plugins"
-  },
-  {
     "file": "src/plugins/runtime/runtime-signal.ts",
     "line": 6,
     "kind": "import",
@@ -611,8 +603,8 @@
     "file": "src/plugins/runtime/runtime-whatsapp.ts",
     "line": 85,
     "kind": "dynamic-import",
-    "specifier": "../../../extensions/whatsapp/action-runtime.runtime.js",
-    "resolvedPath": "extensions/whatsapp/action-runtime.runtime.js",
+    "specifier": "../../../extensions/whatsapp/action-runtime-api.js",
+    "resolvedPath": "extensions/whatsapp/action-runtime-api.js",
     "reason": "dynamically imports extension-owned file from src/plugins"
   }
 ]

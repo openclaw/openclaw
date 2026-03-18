@@ -12,7 +12,11 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = string;
+export type SearchProvider = NonNullable<
+  NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
+>;
+type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
+type MutableSearchConfig = SearchConfig & Record<string, unknown>;
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -44,14 +48,12 @@ export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
 }
 
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
+  const search = config.tools?.web?.search;
   const entry = resolvePluginWebSearchProviders({
     config,
     bundledAllowlistCompat: true,
   }).find((candidate) => candidate.id === provider);
-  return (
-    entry?.getConfiguredCredentialValue?.(config) ??
-    entry?.getCredentialValue(config.tools?.web?.search as Record<string, unknown> | undefined)
-  );
+  return entry?.getCredentialValue(search as Record<string, unknown> | undefined);
 }
 
 /** Returns the plaintext key string, or undefined for SecretRefs/missing. */
@@ -101,24 +103,17 @@ export function applySearchKey(
     config,
     bundledAllowlistCompat: true,
   }).find((candidate) => candidate.id === provider);
-  const nextBase = {
+  const search: MutableSearchConfig = { ...config.tools?.web?.search, provider, enabled: true };
+  if (providerEntry) {
+    providerEntry.setCredentialValue(search, key);
+  }
+  const nextBase: OpenClawConfig = {
     ...config,
     tools: {
       ...config.tools,
-      web: {
-        ...config.tools?.web,
-        search: { ...config.tools?.web?.search, provider, enabled: true },
-      },
+      web: { ...config.tools?.web, search },
     },
   };
-  if (providerEntry?.setConfiguredCredentialValue) {
-    providerEntry.setConfiguredCredentialValue(nextBase, key);
-  } else {
-    const search = nextBase.tools?.web?.search as Record<string, unknown> | undefined;
-    if (providerEntry && search) {
-      providerEntry.setCredentialValue(search, key);
-    }
-  }
   return providerEntry?.applySelectionConfig?.(nextBase) ?? nextBase;
 }
 
@@ -127,17 +122,18 @@ function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): Op
     config,
     bundledAllowlistCompat: true,
   }).find((candidate) => candidate.id === provider);
-  const nextBase = {
+  const search: MutableSearchConfig = {
+    ...config.tools?.web?.search,
+    provider,
+    enabled: true,
+  };
+  const nextBase: OpenClawConfig = {
     ...config,
     tools: {
       ...config.tools,
       web: {
         ...config.tools?.web,
-        search: {
-          ...config.tools?.web?.search,
-          provider,
-          enabled: true,
-        },
+        search,
       },
     },
   };
@@ -198,8 +194,7 @@ export async function setupSearch(
     return SEARCH_PROVIDER_OPTIONS[0].value;
   })();
 
-  type PickerValue = string;
-  const choice = await prompter.select<PickerValue>({
+  const choice = await prompter.select({
     message: "Search provider",
     options: [
       ...options,
@@ -278,16 +273,17 @@ export async function setupSearch(
     "Web search",
   );
 
+  const search: SearchConfig = {
+    ...config.tools?.web?.search,
+    provider: choice,
+  };
   return {
     ...config,
     tools: {
       ...config.tools,
       web: {
         ...config.tools?.web,
-        search: {
-          ...config.tools?.web?.search,
-          provider: choice,
-        },
+        search,
       },
     },
   };
