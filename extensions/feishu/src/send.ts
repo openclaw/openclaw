@@ -419,16 +419,6 @@ export type SendFeishuMessageParams = {
 };
 
 /**
- * Regex to match `<at user_id="...">...</at>` patterns produced by
- * `formatMentionForText()` in mention.ts.
- *
- * Capture groups:
- *   1 – user_id value (e.g. "ou_xxx" or "all")
- *   2 – display name between tags
- */
-const AT_MENTION_RE = /<at\s+user_id="([^"]+)">(.*?)<\/at>/g;
-
-/**
  * Parse a message text string and split `<at user_id="...">name</at>` patterns
  * into native Feishu post `at` elements, leaving the surrounding text as `md`
  * elements. This ensures mentions render with the correct blue color in Feishu
@@ -440,14 +430,11 @@ const AT_MENTION_RE = /<at\s+user_id="([^"]+)">(.*?)<\/at>/g;
 export function parseTextWithMentions(
   text: string,
 ): Array<Record<string, string>> {
+  const AT_MENTION_RE = /<at\s+user_id="([^"]+)">(.*?)<\/at>/g;
   const elements: Array<Record<string, string>> = [];
   let lastIndex = 0;
 
-  // Reset the regex state for safety (global flag).
-  AT_MENTION_RE.lastIndex = 0;
-
-  let match: RegExpExecArray | null;
-  while ((match = AT_MENTION_RE.exec(text)) !== null) {
+  for (const match of text.matchAll(AT_MENTION_RE)) {
     // Push any text before this match as an md element.
     const before = text.slice(lastIndex, match.index);
     if (before) {
@@ -462,7 +449,7 @@ export function parseTextWithMentions(
     }
     elements.push(atElement);
 
-    lastIndex = match.index + match[0].length;
+    lastIndex = match.index! + match[0].length;
   }
 
   // Push any remaining text after the last match.
@@ -479,12 +466,20 @@ export function parseTextWithMentions(
   return elements;
 }
 
-export function buildFeishuPostMessagePayload(params: { messageText: string }): {
+export function buildFeishuPostMessagePayload(params: {
+  messageText: string;
+  hasMentions?: boolean;
+}): {
   content: string;
   msgType: string;
 } {
-  const { messageText } = params;
-  const elements = parseTextWithMentions(messageText);
+  const { messageText, hasMentions } = params;
+  // Only parse <at> tags when the caller explicitly indicates mentions are
+  // present.  This avoids accidentally converting quoted or example <at> markup
+  // in normal bot replies into live mention elements (see #49833 discussion).
+  const elements = hasMentions
+    ? parseTextWithMentions(messageText)
+    : [{ tag: "md", text: messageText }];
   return {
     content: JSON.stringify({
       zh_cn: {
@@ -507,13 +502,14 @@ export async function sendMessageFeishu(
 
   // Build message content (with @mention support)
   let rawText = text ?? "";
-  if (mentions && mentions.length > 0) {
+  const hasMentions = mentions != null && mentions.length > 0;
+  if (hasMentions) {
     rawText = buildMentionedMessage(mentions, rawText);
   }
 
   const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode);
 
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
+  const { content, msgType } = buildFeishuPostMessagePayload({ messageText, hasMentions });
 
   const directParams = { receiveId, receiveIdType, content, msgType };
   return sendReplyOrFallbackDirect(client, {

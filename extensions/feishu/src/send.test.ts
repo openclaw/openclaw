@@ -106,6 +106,19 @@ describe("parseTextWithMentions", () => {
     const result = parseTextWithMentions("");
     expect(result).toEqual([{ tag: "md", text: "" }]);
   });
+
+  it("is safe to call multiple times in sequence", () => {
+    const first = parseTextWithMentions('<at user_id="ou_1">A</at> x');
+    const second = parseTextWithMentions('<at user_id="ou_2">B</at> y');
+    expect(first).toEqual([
+      { tag: "at", user_id: "ou_1", user_name: "A" },
+      { tag: "md", text: " x" },
+    ]);
+    expect(second).toEqual([
+      { tag: "at", user_id: "ou_2", user_name: "B" },
+      { tag: "md", text: " y" },
+    ]);
+  });
 });
 
 describe("buildFeishuPostMessagePayload", () => {
@@ -118,9 +131,21 @@ describe("buildFeishuPostMessagePayload", () => {
     ]);
   });
 
-  it("splits mentions into native at elements", () => {
+  it("does not parse at tags when hasMentions is not set", () => {
     const result = buildFeishuPostMessagePayload({
       messageText: '<at user_id="ou_123">Alice</at> Hello!',
+    });
+    const parsed = JSON.parse(result.content);
+    // Without hasMentions, the <at> markup is kept as literal text in a single md element
+    expect(parsed.zh_cn.content).toEqual([
+      [{ tag: "md", text: '<at user_id="ou_123">Alice</at> Hello!' }],
+    ]);
+  });
+
+  it("splits mentions into native at elements when hasMentions is true", () => {
+    const result = buildFeishuPostMessagePayload({
+      messageText: '<at user_id="ou_123">Alice</at> Hello!',
+      hasMentions: true,
     });
     const parsed = JSON.parse(result.content);
     expect(parsed.zh_cn.content).toEqual([
@@ -131,10 +156,11 @@ describe("buildFeishuPostMessagePayload", () => {
     ]);
   });
 
-  it("handles multiple mentions interleaved with text", () => {
+  it("handles multiple mentions interleaved with text when hasMentions is true", () => {
     const result = buildFeishuPostMessagePayload({
       messageText:
         '<at user_id="ou_1">Alice</at> <at user_id="ou_2">Bob</at> check this',
+      hasMentions: true,
     });
     const parsed = JSON.parse(result.content);
     expect(parsed.zh_cn.content).toEqual([
