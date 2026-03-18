@@ -98,7 +98,7 @@ describe("models-config", () => {
         providerKey: "minimax",
         expectedBaseUrl: "https://api.minimax.io/anthropic",
         expectedApiKeyRef: "MINIMAX_API_KEY", // pragma: allowlist secret
-        expectedModelIds: ["MiniMax-M2.5", "MiniMax-VL-01"],
+        expectedModelIds: ["MiniMax-M2.7", "MiniMax-VL-01"],
       });
     });
   });

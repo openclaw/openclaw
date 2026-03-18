@@ -119,9 +119,10 @@ describe("directive behavior", () => {
           config: {
             agents: {
               defaults: {
-                model: { primary: "minimax/MiniMax-M2.5" },
+                model: { primary: "minimax/MiniMax-M2.7" },
                 workspace: path.join(home, "openclaw"),
                 models: {
+                  "minimax/MiniMax-M2.7": {},
                   "minimax/MiniMax-M2.5": {},
                   "minimax/MiniMax-M2.5-highspeed": {},
                   "lmstudio/minimax-m2.5-gs32": {},
@@ -135,7 +136,10 @@ describe("directive behavior", () => {
                   baseUrl: "https://api.minimax.io/anthropic",
                   apiKey: "sk-test", // pragma: allowlist secret
                   api: "anthropic-messages",
-                  models: [makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5")],
+                  models: [
+                    makeModelDefinition("MiniMax-M2.7", "MiniMax M2.7"),
+                    makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5"),
+                  ],
                 },
                 lmstudio: {
                   baseUrl: "http://127.0.0.1:1234/v1",
@@ -153,9 +157,10 @@ describe("directive behavior", () => {
           config: {
             agents: {
               defaults: {
-                model: { primary: "minimax/MiniMax-M2.5" },
+                model: { primary: "minimax/MiniMax-M2.7" },
                 workspace: path.join(home, "openclaw"),
                 models: {
+                  "minimax/MiniMax-M2.7": {},
                   "minimax/MiniMax-M2.5": {},
                   "minimax/MiniMax-M2.5-highspeed": {},
                 },
@@ -169,6 +174,7 @@ describe("directive behavior", () => {
                   apiKey: "sk-test", // pragma: allowlist secret
                   api: "anthropic-messages",
                   models: [
+                    makeModelDefinition("MiniMax-M2.7", "MiniMax M2.7"),
                     makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5"),
                     makeModelDefinition("MiniMax-M2.5-highspeed", "MiniMax M2.5 Highspeed"),
                   ],

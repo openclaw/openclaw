@@ -458,7 +458,7 @@ describe("provider discovery contract", () => {
         authHeader: true,
         apiKey: "minimax-key",
         models: expect.arrayContaining([
-          expect.objectContaining({ id: "MiniMax-M2.5" }),
+          expect.objectContaining({ id: "MiniMax-M2.7" }),
           expect.objectContaining({ id: "MiniMax-VL-01" }),
         ]),
       },
@@ -499,7 +499,7 @@ describe("provider discovery contract", () => {
         api: "anthropic-messages",
         authHeader: true,
         apiKey: "minimax-oauth",
-        models: expect.arrayContaining([expect.objectContaining({ id: "MiniMax-M2.5" })]),
+        models: expect.arrayContaining([expect.objectContaining({ id: "MiniMax-M2.7" })]),
       },
     });
   });
