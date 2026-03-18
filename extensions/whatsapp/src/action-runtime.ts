@@ -1,8 +1,18 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../../config/config.js";
-import { sendReactionWhatsApp } from "../../plugin-sdk/whatsapp.js";
-import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
-import { resolveAuthorizedWhatsAppOutboundTarget } from "./whatsapp-target-auth.js";
+import {
+  createActionGate,
+  jsonResult,
+  readReactionParams,
+  readStringParam,
+} from "../../../src/agents/tools/common.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { resolveAuthorizedWhatsAppOutboundTarget } from "./action-runtime-target-auth.js";
+import { sendReactionWhatsApp } from "./send.js";
+
+export const whatsAppActionRuntime = {
+  resolveAuthorizedWhatsAppOutboundTarget,
+  sendReactionWhatsApp,
+};
 
 export async function handleWhatsAppAction(
   params: Record<string, unknown>,
@@ -26,7 +36,7 @@ export async function handleWhatsAppAction(
     const fromMe = typeof fromMeRaw === "boolean" ? fromMeRaw : undefined;
 
     // Resolve account + allowFrom via shared account logic so auth and routing stay aligned.
-    const resolved = resolveAuthorizedWhatsAppOutboundTarget({
+    const resolved = whatsAppActionRuntime.resolveAuthorizedWhatsAppOutboundTarget({
       cfg,
       chatJid,
       accountId,
@@ -34,7 +44,7 @@ export async function handleWhatsAppAction(
     });
 
     const resolvedEmoji = remove ? "" : emoji;
-    await sendReactionWhatsApp(resolved.to, messageId, resolvedEmoji, {
+    await whatsAppActionRuntime.sendReactionWhatsApp(resolved.to, messageId, resolvedEmoji, {
       verbose: false,
       fromMe,
       participant: participant ?? undefined,
