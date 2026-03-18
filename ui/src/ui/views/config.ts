@@ -61,8 +61,8 @@ export type ConfigProps = {
   themeMode: ThemeMode;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
-  borderRadius: number;
-  setBorderRadius: (value: number) => void;
+  borderRadius?: number;
+  setBorderRadius?: (value: number) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -571,6 +571,8 @@ const THEME_OPTIONS: ThemeOption[] = [
 ];
 
 function renderAppearanceSection(props: ConfigProps) {
+  const borderRadius = props.borderRadius ?? 8;
+  const setBorderRadius = props.setBorderRadius ?? (() => {});
   return html`
     <div class="settings-appearance">
       <div class="settings-appearance__section">
@@ -615,8 +617,8 @@ function renderAppearanceSection(props: ConfigProps) {
               (stop) => html`
                 <button
                   type="button"
-                  class="settings-roundness__btn ${stop === props.borderRadius ? "active" : ""}"
-                  @click=${() => props.setBorderRadius(stop)}
+                  class="settings-roundness__btn ${stop === borderRadius ? "active" : ""}"
+                  @click=${() => setBorderRadius(stop)}
                 >
                   <span
                     class="settings-roundness__swatch"
