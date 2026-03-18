@@ -713,6 +713,31 @@ export async function runHeartbeatOnce(opts: {
           bootstrapContextMode,
         }
       : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+
+    // Pre-call cost cap: estimate the cost of this run and skip if it
+    // exceeds maxCostPerRun.  Estimation is approximate (chars / 4 for
+    // token count, hardcoded pricing table with conservative fallback).
+    const maxCostPerRun = heartbeat?.maxCostPerRun;
+    if (typeof maxCostPerRun === "number" && Number.isFinite(maxCostPerRun) && maxCostPerRun >= 0) {
+      const estimatedCost = estimateRunCost(
+        ctx.Body,
+        heartbeatModelOverride ?? resolveDefaultModelId(cfg),
+      );
+      if (estimatedCost > maxCostPerRun) {
+        log.warn("heartbeat: skipping run, estimated cost exceeds maxCostPerRun", {
+          estimatedCost: estimatedCost.toFixed(4),
+          maxCostPerRun,
+          model: heartbeatModelOverride ?? "default",
+        });
+        emitHeartbeatEvent({
+          status: "skipped",
+          reason: "cost-cap-exceeded",
+          durationMs: Date.now() - startedAt,
+        });
+        return { status: "skipped", reason: "cost-cap-exceeded" };
+      }
+    }
+
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
@@ -1179,4 +1204,78 @@ export function startHeartbeatRunner(opts: {
   opts.abortSignal?.addEventListener("abort", cleanup, { once: true });
 
   return { stop: cleanup, updateConfig };
+}
+
+// ---------------------------------------------------------------------------
+// Cost estimation for maxCostPerRun
+// ---------------------------------------------------------------------------
+
+/** Per-input-token pricing (USD) for known model families. Conservative. */
+const MODEL_INPUT_PRICING: Record<string, number> = {
+  // Anthropic
+  "claude-opus-4": 15 / 1_000_000,
+  "claude-sonnet-4": 3 / 1_000_000,
+  "claude-haiku": 0.25 / 1_000_000,
+  // OpenAI
+  "gpt-4o": 2.5 / 1_000_000,
+  "gpt-4-turbo": 10 / 1_000_000,
+  "gpt-4": 30 / 1_000_000,
+  "gpt-3.5": 0.5 / 1_000_000,
+  "o1-mini": 3 / 1_000_000,
+  "o1": 15 / 1_000_000,
+  "o3-mini": 1.1 / 1_000_000,
+  "o3": 10 / 1_000_000,
+  // Google
+  "gemini-1.5-pro": 3.5 / 1_000_000,
+  "gemini-2.0-flash": 0.1 / 1_000_000,
+};
+
+/** Conservative fallback: assumes expensive model if unknown. */
+const FALLBACK_PRICE_PER_TOKEN = 15 / 1_000_000;
+
+/**
+ * Sorted prefixes (longest first) to guarantee that "gpt-4o" matches
+ * before "gpt-4" and "gpt-4-turbo" matches before "gpt-4".
+ */
+const SORTED_PRICING_ENTRIES = Object.entries(MODEL_INPUT_PRICING).sort(
+  ([a], [b]) => b.length - a.length,
+);
+
+/**
+ * Match a model id against the pricing table. Tries longest-prefix-first
+ * matching so "claude-opus-4-20260901" matches "claude-opus-4".
+ */
+function resolveInputPricePerToken(modelId: string): number {
+  const lower = modelId.toLowerCase();
+  for (const [prefix, price] of SORTED_PRICING_ENTRIES) {
+    if (lower.startsWith(prefix)) {
+      return price;
+    }
+  }
+  return FALLBACK_PRICE_PER_TOKEN;
+}
+
+/** Approximate token count from character length (chars / 4). */
+function estimateTokenCount(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/** Estimate input cost (USD) for a single run. */
+export function estimateRunCost(promptBody: string, modelId: string): number {
+  return estimateTokenCount(promptBody) * resolveInputPricePerToken(modelId);
+}
+
+/** Resolve the default model id from config. */
+function resolveDefaultModelId(cfg: OpenClawConfig): string {
+  const primary = cfg.agents?.defaults?.model;
+  if (typeof primary === "string") {
+    return primary;
+  }
+  if (primary && typeof primary === "object" && "primary" in primary) {
+    const p = (primary as Record<string, unknown>).primary;
+    if (typeof p === "string") {
+      return p;
+    }
+  }
+  return "unknown";
 }
