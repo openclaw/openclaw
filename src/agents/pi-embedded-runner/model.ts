@@ -96,9 +96,9 @@ function resolveConfiguredProviderConfig(
 function applyConfiguredProviderOverrides(params: {
   discoveredModel: Model<Api>;
   providerConfig?: InlineProviderConfig;
-  modelId: string;
+  modelIds: string[];
 }): Model<Api> {
-  const { discoveredModel, providerConfig, modelId } = params;
+  const { discoveredModel, providerConfig, modelIds } = params;
   if (!providerConfig) {
     return {
       ...discoveredModel,
@@ -106,7 +106,9 @@ function applyConfiguredProviderOverrides(params: {
       headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
     };
   }
-  const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
+  const configuredModel = modelIds
+    .map((modelId) => providerConfig.models?.find((candidate) => candidate.id === modelId))
+    .find((candidate) => candidate !== undefined);
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
     stripSecretRefMarkers: true,
   });
@@ -187,8 +189,10 @@ function resolveExplicitModelWithRegistry(params: {
   modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  configuredModelIds?: string[];
 }): { kind: "resolved"; model: Model<Api> } | { kind: "suppressed" } | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir } = params;
+  const configuredModelIds = params.configuredModelIds ?? [modelId];
   if (shouldSuppressBuiltInModel({ provider, id: modelId })) {
     return { kind: "suppressed" };
   }
@@ -205,7 +209,7 @@ function resolveExplicitModelWithRegistry(params: {
         model: applyConfiguredProviderOverrides({
           discoveredModel: model,
           providerConfig,
-          modelId,
+          modelIds: configuredModelIds,
         }),
       }),
     };
@@ -284,6 +288,7 @@ export function resolveModelWithRegistry(params: {
     const alternateExplicitModel = resolveExplicitModelWithRegistry({
       ...params,
       modelId: alternateModelId,
+      configuredModelIds: [params.modelId, alternateModelId],
     });
     if (alternateExplicitModel?.kind === "suppressed") {
       return undefined;
@@ -318,7 +323,7 @@ export function resolveModelWithRegistry(params: {
 
   const fallbackModelId = fallbackLookupModelId;
   const configuredModelLookupIds =
-    params.modelId === fallbackModelId ? [fallbackModelId] : [fallbackModelId, params.modelId];
+    params.modelId === fallbackModelId ? [fallbackModelId] : [params.modelId, fallbackModelId];
   const configuredModel = providerConfig?.models?.find((candidate) =>
     configuredModelLookupIds.includes(candidate.id),
   );
@@ -435,6 +440,7 @@ export async function resolveModelAsync(
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
+      configuredModelIds: [modelId, alternateModelId],
     });
     if (alternateExplicitModel?.kind === "suppressed") {
       return {

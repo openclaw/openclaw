@@ -441,7 +441,6 @@ describe("resolveModel", () => {
         providers: {
           polza: {
             baseUrl: "https://proxy.example/v1",
-            api: "openai-completions",
             headers: { "X-Provider": "provider" },
             models: [
               {
@@ -481,6 +480,55 @@ describe("resolveModel", () => {
       reasoning: true,
       contextWindow: 123456,
       maxTokens: 4096,
+    });
+  });
+
+  it("preserves exact qualified overrides when alternate explicit lookup resolves a bare registry id", () => {
+    mockDiscoveredModel({
+      provider: "polza",
+      modelId: "gpt-4o-mini",
+      templateModel: {
+        ...makeModel("gpt-4o-mini"),
+        provider: "polza",
+        api: "openai-completions",
+        baseUrl: "https://proxy.example/v1",
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          polza: {
+            baseUrl: "https://proxy.example/v1",
+            api: "openai-completions",
+            headers: { "X-Provider": "provider" },
+            models: [
+              {
+                ...makeModel("polza/gpt-4o-mini"),
+                reasoning: true,
+                contextWindow: 123456,
+                maxTokens: 4096,
+                headers: { "X-Model": "special" },
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("polza", "polza/gpt-4o-mini", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "polza",
+      id: "gpt-4o-mini",
+      reasoning: true,
+      contextWindow: 123456,
+      maxTokens: 4096,
+    });
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Provider": "provider",
+      "X-Model": "special",
     });
   });
 
