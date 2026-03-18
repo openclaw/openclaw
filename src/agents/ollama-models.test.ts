@@ -5,6 +5,8 @@ import {
   enrichOllamaModelsWithContext,
   isReasoningModelHeuristic,
   isVisionModelHeuristic,
+  queryOllamaModelMetadata,
+  queryOllamaVersion,
   resolveOllamaApiBase,
   type OllamaTagModel,
 } from "./ollama-models.js";
@@ -36,10 +38,12 @@ describe("ollama-models", () => {
 
     const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
 
-    expect(enriched).toEqual([
-      { name: "llama3:8b", contextWindow: 65536, supportsVision: false },
-      { name: "deepseek-r1:14b", contextWindow: undefined, supportsVision: false },
-    ]);
+    expect(enriched[0].name).toBe("llama3:8b");
+    expect(enriched[0].contextWindow).toBe(65536);
+    expect(enriched[0].supportsVision).toBe(false);
+    expect(enriched[1].name).toBe("deepseek-r1:14b");
+    expect(enriched[1].contextWindow).toBeUndefined();
+    expect(enriched[1].supportsVision).toBe(false);
   });
 
   it("detects vision models from /api/show projectors field", async () => {
@@ -102,6 +106,110 @@ describe("ollama-models", () => {
     const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
 
     expect(enriched[0].supportsVision).toBe(false);
+  });
+});
+
+describe("queryOllamaModelMetadata", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("extracts parameterSize from details.parameter_size", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          model_info: { "qwen2.context_length": 32768 },
+          details: { family: "qwen2", parameter_size: "14.8B", quantization_level: "Q4_K_M" },
+        }),
+      ),
+    );
+
+    const meta = await queryOllamaModelMetadata("http://127.0.0.1:11434", "qwen2.5-coder:14b");
+
+    expect(meta.contextWindow).toBe(32768);
+    expect(meta.parameterSize).toBe("14.8B");
+    expect(meta.quantizationLevel).toBe("Q4_K_M");
+    expect(meta.modelFamily).toBe("qwen2");
+  });
+
+  it("computes parameterSize from model_info general.parameter_count when details missing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          model_info: {
+            "general.architecture": "llama",
+            "general.parameter_count": 8_000_000_000,
+            "llama.context_length": 4096,
+          },
+        }),
+      ),
+    );
+
+    const meta = await queryOllamaModelMetadata("http://127.0.0.1:11434", "llama3:8b");
+
+    expect(meta.parameterSize).toBe("8.0B");
+    expect(meta.modelFamily).toBe("llama");
+  });
+
+  it("formats sub-billion parameter count as millions", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          model_info: {
+            "general.parameter_count": 500_000_000,
+            "phi.context_length": 2048,
+          },
+        }),
+      ),
+    );
+
+    const meta = await queryOllamaModelMetadata("http://127.0.0.1:11434", "phi:small");
+
+    expect(meta.parameterSize).toBe("500M");
+  });
+
+  it("returns empty metadata when /api/show fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 404 })),
+    );
+
+    const meta = await queryOllamaModelMetadata("http://127.0.0.1:11434", "nonexistent");
+
+    expect(meta).toEqual({});
+  });
+});
+
+describe("queryOllamaVersion", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the server version string", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ version: "0.6.2" })),
+    );
+
+    const version = await queryOllamaVersion("http://127.0.0.1:11434");
+
+    expect(version).toBe("0.6.2");
+  });
+
+  it("returns undefined when server is unreachable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("ECONNREFUSED");
+      }),
+    );
+
+    const version = await queryOllamaVersion("http://127.0.0.1:11434");
+
+    expect(version).toBeUndefined();
   });
 });
 

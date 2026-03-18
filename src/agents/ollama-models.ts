@@ -29,6 +29,9 @@ export type OllamaTagsResponse = {
 export type OllamaModelMetadata = {
   contextWindow?: number;
   supportsVision?: boolean;
+  parameterSize?: string;
+  quantizationLevel?: string;
+  modelFamily?: string;
 };
 
 export type OllamaModelWithContext = OllamaTagModel & OllamaModelMetadata;
@@ -53,7 +56,12 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
 
 type OllamaShowResponse = {
   model_info?: Record<string, unknown>;
-  details?: { families?: string[] };
+  details?: {
+    families?: string[];
+    family?: string;
+    parameter_size?: string;
+    quantization_level?: string;
+  };
   projectors?: string[];
 };
 
@@ -106,6 +114,33 @@ export async function queryOllamaModelMetadata(
       }
     }
     result.supportsVision = detectVisionFromShowResponse(data);
+    if (data.details?.parameter_size) {
+      result.parameterSize = data.details.parameter_size;
+    } else if (data.model_info) {
+      for (const [key, value] of Object.entries(data.model_info)) {
+        if (
+          key.endsWith(".parameter_count") &&
+          typeof value === "number" &&
+          value > 0
+        ) {
+          const billions = value / 1e9;
+          result.parameterSize =
+            billions >= 1 ? `${billions.toFixed(1)}B` : `${(value / 1e6).toFixed(0)}M`;
+          break;
+        }
+      }
+    }
+    if (data.details?.quantization_level) {
+      result.quantizationLevel = data.details.quantization_level;
+    }
+    if (data.details?.family) {
+      result.modelFamily = data.details.family;
+    } else if (data.model_info) {
+      const arch = data.model_info["general.architecture"];
+      if (typeof arch === "string") {
+        result.modelFamily = arch;
+      }
+    }
     return result;
   } catch {
     return {};
@@ -170,6 +205,24 @@ export function buildOllamaModelDefinition(
     contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
   };
+}
+
+/** Fetch the Ollama server version from /api/version. */
+export async function queryOllamaVersion(
+  apiBase: string,
+): Promise<string | undefined> {
+  try {
+    const response = await fetch(`${apiBase}/api/version`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!response.ok) {
+      return undefined;
+    }
+    const data = (await response.json()) as { version?: string };
+    return typeof data.version === "string" ? data.version : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Fetch the model list from a running Ollama instance. */

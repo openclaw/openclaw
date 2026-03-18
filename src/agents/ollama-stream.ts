@@ -413,6 +413,36 @@ export async function* parseNdjsonStream(
   }
 }
 
+// ── Performance metrics ──────────────────────────────────────────────────────
+
+function logOllamaPerformanceMetrics(modelId: string, response: OllamaChatResponse): void {
+  const parts: string[] = [];
+  const promptTokens = response.prompt_eval_count ?? 0;
+  const genTokens = response.eval_count ?? 0;
+  if (promptTokens > 0 || genTokens > 0) {
+    parts.push(`tokens: ${promptTokens} in / ${genTokens} out`);
+  }
+  if (response.eval_duration && response.eval_duration > 0 && genTokens > 0) {
+    const genTokensPerSec = genTokens / (response.eval_duration / 1e9);
+    parts.push(`gen: ${genTokensPerSec.toFixed(1)} tok/s`);
+  }
+  if (
+    response.prompt_eval_duration &&
+    response.prompt_eval_duration > 0 &&
+    promptTokens > 0
+  ) {
+    const promptTokensPerSec = promptTokens / (response.prompt_eval_duration / 1e9);
+    parts.push(`prompt: ${promptTokensPerSec.toFixed(1)} tok/s`);
+  }
+  if (response.total_duration && response.total_duration > 0) {
+    const totalSec = response.total_duration / 1e9;
+    parts.push(`total: ${totalSec.toFixed(2)}s`);
+  }
+  if (parts.length > 0) {
+    log.debug(`[${modelId}] ${parts.join(" | ")}`);
+  }
+}
+
 // ── Main StreamFn factory ───────────────────────────────────────────────────
 
 function resolveOllamaChatUrl(baseUrl: string): string {
@@ -525,6 +555,8 @@ export function createOllamaStreamFn(
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }
+
+        logOllamaPerformanceMetrics(model.id, finalResponse);
 
         const assistantMessage = buildAssistantMessage(finalResponse, {
           api: model.api,
