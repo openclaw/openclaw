@@ -23,6 +23,8 @@ describe("TTS text preparation – stripMarkdown", () => {
 
   it("preserves underscores inside words while still stripping italic markers", () => {
     expect(stripMarkdown("here_is_a_message")).toBe("here_is_a_message");
+    expect(stripMarkdown("привет_мир_тест")).toBe("привет_мир_тест");
+    expect(stripMarkdown("東京_駅_前")).toBe("東京_駅_前");
     expect(stripMarkdown("use foo_bar_baz and _italic_ text")).toBe(
       "use foo_bar_baz and italic text",
     );

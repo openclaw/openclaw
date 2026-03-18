@@ -164,6 +164,12 @@ describe("stripMarkdown", () => {
     expect(stripMarkdown("foo_bar _italic_ baz_qux")).toBe("foo_bar italic baz_qux");
   });
 
+  it("preserves underscores inside non-Latin words", () => {
+    expect(stripMarkdown("привет_мир_тест")).toBe("привет_мир_тест");
+    expect(stripMarkdown("東京_駅_前")).toBe("東京_駅_前");
+    expect(stripMarkdown("var_123_end")).toBe("var_123_end");
+  });
+
   it("handles complex markdown", () => {
     const input = `# Title
 
