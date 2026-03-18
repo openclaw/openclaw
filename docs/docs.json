@@ -764,6 +764,10 @@
       "destination": "/install/render"
     },
     {
+      "source": "/agent37",
+      "destination": "/install/agent37"
+    },
+    {
       "source": "/gcp",
       "destination": "/install/gcp"
     },
@@ -794,6 +798,10 @@
     {
       "source": "/platforms/render",
       "destination": "/install/render"
+    },
+    {
+      "source": "/platforms/agent37",
+      "destination": "/install/agent37"
     },
     {
       "source": "/platforms/northflank",
@@ -874,6 +882,7 @@
                   "install/gcp",
                   "install/macos-vm",
                   "install/exe-dev",
+                  "install/agent37",
                   "install/railway",
                   "install/render",
                   "install/northflank"
