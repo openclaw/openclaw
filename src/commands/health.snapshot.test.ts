@@ -223,7 +223,7 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.error).toMatch(/network down/i);
   });
 
-  it("disables heartbeat for agents without heartbeat blocks", async () => {
+  it("inherits defaults heartbeat for agents without explicit heartbeat blocks", async () => {
     testConfig = {
       agents: {
         defaults: {
@@ -245,8 +245,8 @@ describe("getHealthSnapshot", () => {
     const main = byAgent.get("main");
     const ops = byAgent.get("ops");
 
-    expect(main?.heartbeat.everyMs).toBeNull();
-    expect(main?.heartbeat.every).toBe("disabled");
+    expect(main?.heartbeat.everyMs).toBe(30 * 60_000);
+    expect(main?.heartbeat.every).toBe("30m");
     expect(ops?.heartbeat.everyMs).toBeTruthy();
     expect(ops?.heartbeat.every).toBe("1h");
   });
