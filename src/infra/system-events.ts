@@ -2,9 +2,10 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
-export type SystemEvent = { text: string; ts: number; contextKey?: string | null };
+export type SystemEvent = { id?: string; text: string; ts: number; contextKey?: string | null };
 
 const MAX_EVENTS = 20;
+let nextSystemEventId = 0;
 
 type SessionQueue = {
   queue: SystemEvent[];
@@ -36,6 +37,11 @@ function normalizeContextKey(key?: string | null): string | null {
     return null;
   }
   return trimmed.toLowerCase();
+}
+
+function createSystemEventId(): string {
+  nextSystemEventId += 1;
+  return `evt-${nextSystemEventId}`;
 }
 
 export function isSystemEventContextChanged(
@@ -72,6 +78,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   } // skip consecutive duplicates
   entry.lastText = cleaned;
   entry.queue.push({
+    id: createSystemEventId(),
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
@@ -97,6 +104,9 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
 }
 
 function isSameSystemEventEntry(a: SystemEvent, b: SystemEvent): boolean {
+  if (a.id && b.id) {
+    return a.id === b.id;
+  }
   return a.text === b.text && a.ts === b.ts && (a.contextKey ?? null) === (b.contextKey ?? null);
 }
 
@@ -203,4 +213,5 @@ export function hasSystemEvents(sessionKey: string) {
 
 export function resetSystemEventsForTest() {
   queues.clear();
+  nextSystemEventId = 0;
 }

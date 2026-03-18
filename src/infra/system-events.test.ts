@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -132,6 +132,28 @@ describe("system events (session routing)", () => {
       "Cron: second",
     ]);
     expect(peekSystemEvents(key)).toEqual(["Cron: first", "Cron: second", "Cron: third"]);
+  });
+
+  it("restores a snapshot even when a newer event matches the same text, ts, and context", () => {
+    const key = "agent:main:test-snapshot-restore-id-collision";
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100);
+    try {
+      enqueueSystemEvent("Cron: first", { sessionKey: key, contextKey: "cron:first" });
+      const snapshot = peekSystemEventEntries(key);
+
+      expect(drainSystemEventEntries(key).map((entry) => entry.text)).toEqual(["Cron: first"]);
+
+      enqueueSystemEvent("Cron: first", { sessionKey: key, contextKey: "cron:first" });
+
+      const restored = restoreSystemEventSnapshot(key, snapshot);
+      const queued = peekSystemEventEntries(key);
+      expect(restored.map((entry) => entry.text)).toEqual(["Cron: first"]);
+      expect(queued.map((entry) => entry.text)).toEqual(["Cron: first", "Cron: first"]);
+      expect(queued).toHaveLength(2);
+      expect(queued[0]?.id).not.toEqual(queued[1]?.id);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("keeps only the newest 20 queued events", () => {
