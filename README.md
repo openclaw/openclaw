@@ -490,6 +490,17 @@ by Peter Steinberger and the community.
 - [steipete.me](https://steipete.me)
 - [@openclaw](https://x.com/openclaw)
 
+## Desktop Apps & GUI Clients
+
+Prefer a GUI over the terminal? These community-built desktop apps wrap OpenClaw in a one-click installer:
+
+| App | Platform | Description |
+|---|---|---|
+| [OpenClaw Easy](https://github.com/openclaw-easy/openclaw-easy-desktop) | macOS, Windows | Official desktop app — no terminal, no WSL2, drag-and-drop install |
+
+> **Want to list your app here?** Open a PR adding a row to this table.
+
+
 ## Community
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
