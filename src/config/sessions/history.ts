@@ -1,6 +1,7 @@
 // src/config/sessions/history.ts
 import fsPromises from "node:fs/promises";
 import { SessionManager, type SessionEntry } from "@mariozechner/pi-coding-agent";
+import { hasInterSessionUserProvenance } from "../../sessions/input-provenance.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "./paths.js";
 import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
 
@@ -26,6 +27,11 @@ function extractTextContent(content: unknown): string {
  * by `sessionKey` in the given store. Returns an empty array on any error
  * (missing session, missing file, parse error) — callers should treat an empty
  * result as "no history available" rather than an error.
+ *
+ * Note: reads entries in append order. In sessions with `/tree` branches or
+ * auto-compaction, this may include turns from inactive branches. For most
+ * channel-plugin use cases (recent context injection) this is acceptable;
+ * consumers needing branch-accurate history should use the gateway API instead.
  */
 export async function readSessionRecentMessages(params: {
   storePath: string;
@@ -62,6 +68,11 @@ export async function readSessionRecentMessages(params: {
         continue;
       }
       if (e.message.role !== "user" && e.message.role !== "assistant") {
+        continue;
+      }
+      // Skip synthetic inter-session messages (e.g., sessions_send, subagent
+      // announcements) to avoid leaking internal agent traffic into plugin context.
+      if (hasInterSessionUserProvenance(e.message)) {
         continue;
       }
       const content = extractTextContent(e.message.content);
