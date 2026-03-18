@@ -32,6 +32,15 @@ export async function drainFormattedSystemEvents(params: {
     if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
       return null;
     }
+    // Keep routine transport flaps out of normal prompt assembly; higher-signal
+    // channel-health issues (logged out, relink required, max-attempts, etc.)
+    // can still surface via their own system events.
+    if (
+      lower.startsWith("whatsapp gateway connected") ||
+      lower.startsWith("whatsapp gateway disconnected")
+    ) {
+      return null;
+    }
     if (trimmed.startsWith("Node:")) {
       return trimmed.replace(/ · last input [^·]+/i, "").trim();
     }
