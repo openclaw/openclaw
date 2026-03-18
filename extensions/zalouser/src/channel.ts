@@ -1,5 +1,6 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
@@ -8,7 +9,7 @@ import type {
   ChannelPlugin,
   OpenClawConfig,
   GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk/zalouser";
+} from "../runtime-api.js";
 import {
   buildChannelSendResult,
   buildBaseAccountStatusSnapshot,
@@ -17,8 +18,7 @@ import {
   isNumericTargetId,
   normalizeAccountId,
   sendPayloadWithChunkedTextAndMedia,
-} from "openclaw/plugin-sdk/zalouser";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+} from "../runtime-api.js";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
