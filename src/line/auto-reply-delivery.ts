@@ -1,6 +1,6 @@
 import type { messagingApi } from "@line/bot-sdk";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { resolveSendableOutboundReplyParts } from "../plugin-sdk/reply-payload.js";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import type { SendLineReplyChunksParams } from "./reply-chunks.js";
