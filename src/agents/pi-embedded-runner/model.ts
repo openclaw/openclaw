@@ -251,8 +251,7 @@ function stripSameProviderPrefix(params: { provider: string; modelId: string }):
 function resolveSameProviderModelIds(params: { provider: string; modelId: string }) {
   const alternateModelId = stripSameProviderPrefix(params);
   const preserveQualifiedModelId =
-    normalizeProviderId(params.provider) === "openrouter" &&
-    alternateModelId !== params.modelId;
+    normalizeProviderId(params.provider) === "openrouter" && alternateModelId !== params.modelId;
   return {
     alternateModelId,
     fallbackLookupModelId: alternateModelId,
@@ -318,7 +317,9 @@ export function resolveModelWithRegistry(params: {
   }
 
   const fallbackModelId = fallbackLookupModelId;
-  const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === fallbackModelId);
+  const configuredModel = providerConfig?.models?.find(
+    (candidate) => candidate.id === fallbackModelId,
+  );
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
