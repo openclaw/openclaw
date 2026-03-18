@@ -64,9 +64,20 @@ function truncateErrorReason(error: string): string {
   // Strip internal tool-context prefixes (e.g. "agent=… node=… gateway=… action=…: ")
   // to avoid leaking implementation details into user-facing warnings (#46592).
   let cleaned = firstLine.replace(/^(?:\w+=\S+\s+)*\w+=\S+:\s*/, "");
-  // Scrub absolute filesystem paths to avoid leaking sandbox/host directory
-  // structure in non-verbose mode (P2 review thread on #46592).
-  cleaned = cleaned.replace(/\/(?:home|tmp|var|root|Users)\/\S+/g, "<path>");
+  // Strip external-content security wrappers that leak internal marker IDs
+  // when tool errors include wrapped content (e.g. web_fetch failures).
+  cleaned = cleaned.replace(/<<<\s*(?:END_)?EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>/g, "");
+  // Scrub absolute filesystem paths — Unix (/home, /tmp, /var, /root, /Users,
+  // /workspace) and Windows drive-letter roots (C:\...) — to avoid leaking
+  // sandbox/host directory structure in non-verbose mode (#46592).
+  cleaned = cleaned.replace(/\/(?:home|tmp|var|root|Users|workspace)\/\S+/g, "<path>");
+  // Windows paths may contain spaces (e.g. "C:\Users\Jane Doe\...") and parens
+  // ("C:\Program Files (x86)\..."), so consume until end-of-string or a
+  // delimiter that cannot appear in a path context.
+  cleaned = cleaned.replace(/[A-Z]:\\[\w\\. ()+-]+(?:\\[\w\\. ()+-]+)*/g, "<path>");
+  // Scrub signed / tokenized URLs to avoid leaking credentials such as
+  // presigned S3/Blob Storage query-string tokens (#46592).
+  cleaned = cleaned.replace(/https?:\/\/\S+/g, "<url>");
   // Scrub session keys that may embed channel-specific PII such as phone
   // numbers or chat IDs (e.g. "agent:main:whatsapp:direct:+15555550123").
   // P2 review thread on #46592.
@@ -74,6 +85,8 @@ function truncateErrorReason(error: string): string {
     /\b(?:agent|session):[a-zA-Z0-9_-]+(?::[a-zA-Z0-9_.+@-]+){2,}/g,
     "<session>",
   );
+  // Collapse runs of whitespace left after scrubbing.
+  cleaned = cleaned.replace(/\s{2,}/g, " ").trim();
   const line = cleaned || firstLine;
   if (line.length <= FAILURE_REASON_MAX_LENGTH) {
     return line;

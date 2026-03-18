@@ -146,9 +146,90 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSingleToolErrorPayload(payloads, {
-      title: "Session_status",
+      title: "Session Status",
       detail: "<session>",
       absentDetail: "+15555550123",
+    });
+  });
+
+  it("scrubs external-content wrappers from non-verbose error reasons", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "web_fetch",
+        error: "Web fetch failed (500): <<<EXTERNAL_UNTRUSTED_CONTENT id=abc123>>> Some page text",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Web Fetch",
+      detail: "Web fetch failed (500):",
+      absentDetail: "EXTERNAL_UNTRUSTED",
+    });
+  });
+
+  it("scrubs Windows drive-letter paths from non-verbose error reasons", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "read",
+        error: "Sandbox FS error: C:\\Users\\agent\\file.txt not found",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Read",
+      detail: "<path>",
+      absentDetail: "C:\\Users",
+    });
+  });
+
+  it("scrubs /workspace paths from non-verbose error reasons", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "write",
+        error: "Failed boundary read for /workspace/project/src/index.ts",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Write",
+      detail: "<path>",
+      absentDetail: "/workspace/",
+    });
+  });
+
+  it("scrubs Windows paths with spaces from non-verbose error reasons", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "read",
+        error: "Sandbox FS error: C:\\Users\\Jane Doe\\Documents\\file.txt not accessible",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Read",
+      detail: "<path>",
+      absentDetail: "Jane Doe",
+    });
+  });
+
+  it("scrubs signed URLs from non-verbose error reasons", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "pdf",
+        error:
+          "Expected PDF but got image/png: https://s3.amazonaws.com/bucket/file.pdf?X-Amz-Credential=AKIA1234&X-Amz-Signature=abc123",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Pdf",
+      detail: "<url>",
+      absentDetail: "X-Amz-Credential",
     });
   });
 
