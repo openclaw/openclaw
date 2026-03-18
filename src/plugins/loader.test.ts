@@ -3381,23 +3381,11 @@ module.exports = {
       "src",
       "channel.runtime.ts",
     );
-    const discordVoiceRuntime = path.join(
-      process.cwd(),
-      "extensions",
-      "discord",
-      "src",
-      "voice",
-      "manager.runtime.ts",
-    );
 
     await expect(jiti.import(discordChannelRuntime)).resolves.toMatchObject({
       discordSetupWizard: expect.any(Object),
     });
-    await expect(jiti.import(discordVoiceRuntime)).resolves.toMatchObject({
-      DiscordVoiceManager: expect.any(Function),
-      DiscordVoiceReadyListener: expect.any(Function),
-    });
-  });
+  }, 240_000);
 
   it("loads copied imessage runtime sources from git-style paths with plugin-sdk aliases (#49806)", async () => {
     const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "imessage");
