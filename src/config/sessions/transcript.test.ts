@@ -35,7 +35,10 @@ vi.mock("./delivery-info.js", () => ({
 vi.mock("./paths.js", () => ({
   resolveDefaultSessionStorePath: () => "/tmp/session-store.json",
   resolveSessionFilePath: () => state.sessionFile,
-  resolveSessionFilePathOptions: () => ({ agentId: "sunke", sessionsDir: path.dirname(state.sessionFile) }),
+  resolveSessionFilePathOptions: () => ({
+    agentId: "sunke",
+    sessionsDir: path.dirname(state.sessionFile),
+  }),
   resolveSessionTranscriptPath: () => state.sessionFile,
 }));
 
@@ -60,7 +63,7 @@ vi.mock("@mariozechner/pi-coding-agent", () => ({
 }));
 
 let appendAssistantMessageToSessionTranscript: typeof import("./transcript.js").appendAssistantMessageToSessionTranscript;
-let originalCwd = process.cwd();
+const originalCwd = process.cwd();
 
 beforeEach(async () => {
   vi.resetModules();

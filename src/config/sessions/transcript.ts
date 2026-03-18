@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { loadConfig } from "../io.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { loadConfig } from "../io.js";
 import { parseSessionThreadInfo } from "./delivery-info.js";
 import {
   resolveDefaultSessionStorePath,
@@ -161,6 +161,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
+
   const cfg = loadConfig();
   const agentId =
     typeof params.agentId === "string" && params.agentId.trim()
