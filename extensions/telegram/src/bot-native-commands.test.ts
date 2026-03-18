@@ -37,6 +37,12 @@ import {
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
 
+const EMPTY_REPLY_COUNTS = {
+  block: 0,
+  final: 0,
+  tool: 0,
+} as const;
+
 function createNativeCommandTestParams(
   cfg: OpenClawConfig,
   params: Partial<Parameters<typeof registerTelegramNativeCommands>[0]> = {},
@@ -48,7 +54,7 @@ function createNativeCommandTestParams(
     enqueueSystemEvent: vi.fn(),
     dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => ({
       queuedFinal: false,
-      counts: {},
+      counts: EMPTY_REPLY_COUNTS,
     })),
     listSkillCommandsForAgents: skillCommandMocks.listSkillCommandsForAgents,
     wasSentByBot: vi.fn(() => false),

@@ -274,10 +274,6 @@
       "types": "./dist/plugin-sdk/nostr.d.ts",
       "default": "./dist/plugin-sdk/nostr.js"
     },
-    "./plugin-sdk/qwen-portal-auth": {
-      "types": "./dist/plugin-sdk/qwen-portal-auth.d.ts",
-      "default": "./dist/plugin-sdk/qwen-portal-auth.js"
-    },
     "./plugin-sdk/synology-chat": {
       "types": "./dist/plugin-sdk/synology-chat.d.ts",
       "default": "./dist/plugin-sdk/synology-chat.js"
@@ -297,6 +293,10 @@
     "./plugin-sdk/twitch": {
       "types": "./dist/plugin-sdk/twitch.d.ts",
       "default": "./dist/plugin-sdk/twitch.js"
+    },
+    "./plugin-sdk/voice-call": {
+      "types": "./dist/plugin-sdk/voice-call.d.ts",
+      "default": "./dist/plugin-sdk/voice-call.js"
     },
     "./plugin-sdk/zalo": {
       "types": "./dist/plugin-sdk/zalo.d.ts",

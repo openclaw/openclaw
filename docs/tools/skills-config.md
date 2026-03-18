@@ -42,6 +42,11 @@ For built-in image generation/editing, prefer `agents.defaults.imageGenerationMo
 plus the core `image_generate` tool. `skills.entries.*` is only for custom or
 third-party skill workflows.
 
+Examples:
+
+- Native Nano Banana-style setup: `agents.defaults.imageGenerationModel.primary: "google/gemini-3-pro-image-preview"`
+- Native fal setup: `agents.defaults.imageGenerationModel.primary: "fal/fal-ai/flux/dev"`
+
 ## Fields
 
 - `allowBundled`: optional allowlist for **bundled** skills only. When set, only
