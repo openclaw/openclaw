@@ -123,6 +123,94 @@ describe("pruneContextMessages", () => {
     expect(result).toHaveLength(2);
   });
 
+  it("preserves assistant messages with thinking blocks unmodified during pruning", () => {
+    const thinkingBlock = {
+      type: "thinking",
+      thinking: "deep reasoning",
+      thinkingSignature: "opaque-sig-data",
+    } as unknown as AssistantContentBlock;
+    const redactedBlock = {
+      type: "thinking",
+      thinking: "[Reasoning redacted]",
+      thinkingSignature: "A".repeat(2000),
+      redacted: true,
+    } as unknown as AssistantContentBlock;
+    const messages: AgentMessage[] = [
+      makeUser("hello"),
+      makeToolResult([{ type: "text", text: "X".repeat(5000) }]),
+      makeAssistant([thinkingBlock, { type: "text", text: "first answer" }]),
+      makeUser("followup"),
+      makeToolResult([{ type: "text", text: "Y".repeat(5000) }]),
+      makeAssistant([redactedBlock, { type: "text", text: "second answer" }]),
+    ];
+
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
+        hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 16,
+    });
+
+    // The assistant messages must remain identical (same reference).
+    const assistantMessages = result.filter((m) => m.role === "assistant");
+    expect(assistantMessages).toHaveLength(2);
+    expect(assistantMessages[0]).toBe(messages[2]);
+    expect(assistantMessages[1]).toBe(messages[5]);
+    // Thinking blocks must be fully intact.
+    const firstContent = (assistantMessages[0] as { content: unknown[] }).content;
+    expect(firstContent[0]).toBe(thinkingBlock);
+    const secondContent = (assistantMessages[1] as { content: unknown[] }).content;
+    expect(secondContent[0]).toBe(redactedBlock);
+  });
+
+  it("accounts for thinkingSignature in size estimates so pruning is triggered correctly", () => {
+    // A redacted thinking block with a large thinkingSignature should contribute to the
+    // estimated size, ensuring the pruner activates soft-trim when the context is tight.
+    const hugeSignature = "S".repeat(40_000);
+    const messages: AgentMessage[] = [
+      makeUser("go"),
+      makeToolResult([{ type: "text", text: "T".repeat(2000) }]),
+      makeAssistant([
+        {
+          type: "thinking",
+          thinking: "[Reasoning redacted]",
+          thinkingSignature: hugeSignature,
+          redacted: true,
+        } as unknown as AssistantContentBlock,
+        { type: "text", text: "done" },
+      ]),
+    ];
+
+    // With a tiny context window the large signature should push the ratio above softTrimRatio.
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0.5,
+        softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
+        hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+      },
+      ctx: { model: { contextWindow: 5_000 } } as unknown as ExtensionContext,
+      isToolPrunable: () => true,
+    });
+
+    // Pruning should have been triggered and toolResult soft-trimmed.
+    const toolResult = result.find((m) => m.role === "toolResult") as Extract<
+      AgentMessage,
+      { role: "toolResult" }
+    >;
+    const textBlock = toolResult.content[0] as { type: "text"; text: string };
+    expect(textBlock.text).toContain("[Tool result trimmed:");
+  });
+
   it("soft-trims image-containing tool results by replacing image blocks with placeholders", () => {
     const messages: AgentMessage[] = [
       makeUser("summarize this"),

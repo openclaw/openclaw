@@ -142,8 +142,16 @@ function estimateMessageChars(message: AgentMessage): number {
       if (b.type === "text" && typeof b.text === "string") {
         chars += b.text.length;
       }
-      if (b.type === "thinking" && typeof b.thinking === "string") {
-        chars += b.thinking.length;
+      if (b.type === "thinking") {
+        if (typeof b.thinking === "string") {
+          chars += b.thinking.length;
+        }
+        // Account for thinkingSignature (opaque payload for redacted thinking blocks)
+        // which is included in the API request payload.
+        const sig = (b as { thinkingSignature?: string }).thinkingSignature;
+        if (typeof sig === "string") {
+          chars += sig.length;
+        }
       }
       if (b.type === "toolCall") {
         try {

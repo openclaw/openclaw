@@ -621,9 +621,11 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-      const safeMessage = isTransientHttp
-        ? sanitizeUserFacingText(message, { errorContext: true })
-        : message;
+      const isThinkingBlockError = /thinking.*(?:block|content|signature)|redacted_thinking/i.test(
+        message,
+      );
+      // Always sanitize error messages to avoid leaking raw API details to chat channels.
+      const safeMessage = sanitizeUserFacingText(message, { errorContext: true });
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isBilling
         ? BILLING_ERROR_USER_MESSAGE
@@ -631,7 +633,9 @@ export async function runAgentTurnWithFallback(params: {
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
           : isRoleOrderingError
             ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+            : isThinkingBlockError
+              ? "⚠️ Session history contains stale reasoning data. Use /new to start a fresh session."
+              : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",
