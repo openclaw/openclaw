@@ -463,7 +463,7 @@ Build the workspace isolation layer. Adds `op1_workspaces` and `op1_workspace_ag
 - [x] 1.5 RPC handlers — create `src/gateway/server-methods/workspaces.ts` with 8 workspace handlers
 - [x] 1.6 Registration — add to `server-methods.ts`, `server-methods-list.ts`, `method-scopes.ts`
 - [x] 1.7 Protocol exports — add validators to `src/gateway/protocol/index.ts`
-- [ ] 1.8 UI workspace page — `/workspaces` settings page for CRUD (create/rename/archive/brand-color); workspace switching is handled by the org view selector (6.7), not a sidebar switcher
+- [x] 1.8 UI workspace page — `/workspaces` settings page for CRUD (create/rename/archive/brand-color); workspace switching is handled by the org view selector (6.7), not a sidebar switcher
 - [ ] 1.9 Tests — store + handler unit tests with in-memory DB
 
 ### Task 2: Phase 2 — Task System
@@ -479,7 +479,7 @@ Build the persistent task system with identifier generation, status workflow, ag
 - [x] 2.5 Protocol schemas — create `src/gateway/protocol/schema/tasks.ts`
 - [x] 2.6 RPC handlers — create `src/gateway/server-methods/tasks.ts` with 8 task handlers
 - [x] 2.7 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
-- [ ] 2.8 UI task board — `/tasks` page (secondary; primary task surface is org view agent side panel 6.10); kanban columns, list view, create dialog, filters
+- [x] 2.8 UI task board — `/tasks` page (secondary; primary task surface is org view agent side panel 6.10); list view with status/workspace filters, create dialog
 - [ ] 2.9 UI task detail — `/tasks/:id` with status transitions, assignee picker, comment thread (secondary)
 - [ ] 2.10 Tests — store tests (identifier gen, transitions, comments) + handler tests
 
@@ -496,7 +496,7 @@ Build goal hierarchy: vision to objective to key_result to task. Tasks reference
 - [x] 3.5 RPC handlers — create `src/gateway/server-methods/goals.ts` with 6 goal handlers
 - [x] 3.6 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
 - [x] 3.7 Task-goal linking — extend task create/update to accept goalId, show goal ancestry on task detail
-- [ ] 3.8 UI goals page — `/goals` with indented tree view, create dialog, progress bars
+- [x] 3.8 UI goals page — `/goals` with indented tree view by level, create dialog, progress bars
 - [ ] 3.9 Tests — store tests (tree operations, progress) + handler tests
 
 ### Task 4: Phase 4 — Cost Budgets and Enforcement
@@ -534,8 +534,8 @@ Organizational approval workflow + activity audit log + agent config revision tr
 - [x] 5.8 RPC handlers — create `src/gateway/server-methods/approvals-org.ts` and `activity.ts`
 - [x] 5.9 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
 - [x] 5.10 Gateway events — emit `approval.requested` and `approval.resolved` for real-time notification
-- [ ] 5.11 UI approval inbox — `/approvals` with pending list, approve/reject/revise buttons
-- [ ] 5.12 UI activity feed — `/activity` with filterable, paginated timeline
+- [x] 5.11 UI approval inbox — `/approvals` with pending list, approve/reject/revise buttons
+- [x] 5.12 UI activity feed — `/activity` with filterable, paginated timeline
 - [ ] 5.13 Tests — approval transitions, activity log, config revisions, handler tests
 
 ### Task 6: Phase 6 — Agent Lifecycle and Integration
@@ -550,13 +550,13 @@ Workspace-aware agent status, performance metrics, department budget aggregation
 - [x] 6.4 Department budget aggregation — aggregate cost events by department using Matrix tier map (`ui-next/src/lib/matrix-tier-map.ts`)
 - [x] 6.5 Workspace context injection (investigation) — identify exact prompt construction call site in Pi agent runtime; determine injection point, payload shape (goals summary, active tasks, budget status), and size budget; produce a design note before implementation
 - [x] 6.6 Workspace context injection (implementation) — implement context injection per design note from 6.5; validate prompt size stays within model context limits (`src/orchestration/workspace-context.ts`, injected in `attempt.ts` gated on `promptMode !== "minimal"`, hard cap 800 chars)
-- [ ] 6.7 UI org chart — workspace selector dropdown (parallel to Bundle selector; fetches `workspaces.list`, filters canvas by workspace membership via `workspaces.agents`)
-- [ ] 6.8 UI org chart — agent node augmentation: extend `AgentNodeData` with `agentStatus`, `taskCount`, `budgetPctUsed`, `workspaceName`; render status ring (active=green/inactive=grey/paused=amber), open task count badge, budget micro-bar on each node card; fetch `agents.metrics.list` + `workspaces.agents` in parallel with existing agents/health calls
-- [ ] 6.9 UI org chart — workspace stats bar: compact strip above the canvas showing selected workspace name, tasks in-progress, active goals, monthly spend %, pending approvals count (badge); fetches `workspaces.get` + `approvals.list{status:pending}` + `goals.list{status:in_progress}`
-- [ ] 6.10 UI org chart — agent side panel: slide-out panel when clicking a node (replaces preview-only dialog); shows assigned tasks list (`tasks.list{assigneeAgentId}`), owned goals, monthly cost from `agents.metrics.get`, recent activity from `activityLogs.list`; inline task status transitions
-- [ ] 6.11 UI org chart — department legend augmentation: add budget % bar per department in the legend using `budgets.department.summary`; color-coded to warn/exceeded thresholds
-- [ ] 6.12 UI org chart — workspace assignment actions: add assign/remove workspace buttons to node hover action bar (calling `workspaces.assignAgent` / `workspaces.removeAgent`); show agent status toggle (active/inactive/paused) via `workspaces.updateAgentStatus`
-- [ ] 6.13 UI secondary pages — task board (`/tasks`), goals tree (`/goals`), approvals inbox (`/approvals`), activity feed (`/activity`): implement after 6.7–6.12; use DataTable + Dialog patterns from projects.tsx
+- [x] 6.7 UI org chart — workspace selector dropdown (parallel to Bundle selector; fetches `workspaces.list`, filters canvas by workspace membership via `workspaces.agents`)
+- [x] 6.8 UI org chart — agent node augmentation: extend `AgentNodeData` with `agentStatus`, `taskCount`, `budgetPctUsed`, `workspaceName`; render status ring (active=green/inactive=grey/paused=amber), open task count badge, budget micro-bar on each node card; fetch `agents.metrics.list` + `workspaces.agents` in parallel with existing agents/health calls
+- [x] 6.9 UI org chart — workspace stats bar: compact strip above the canvas showing selected workspace name, tasks in-progress, active goals, monthly spend %, pending approvals count (badge); fetches `workspaces.get` + `approvals.list{status:pending}` + `goals.list{status:in_progress}`
+- [x] 6.10 UI org chart — agent side panel: slide-out panel when clicking a node (replaces preview-only dialog); shows assigned tasks list (`tasks.list{assigneeAgentId}`), owned goals, monthly cost from `agents.metrics.get`, recent activity from `activityLogs.list`; inline task status transitions
+- [x] 6.11 UI org chart — department legend augmentation: add budget % bar per department in the legend using `budgets.department.summary`; color-coded to warn/exceeded thresholds
+- [x] 6.12 UI org chart — workspace assignment actions: add assign/remove workspace buttons to node hover action bar (calling `workspaces.assignAgent` / `workspaces.removeAgent`); show agent status toggle (active/inactive/paused) via `workspaces.updateAgentStatus`
+- [x] 6.13 UI secondary pages — task board (`/tasks`), goals tree (`/goals`), approvals inbox (`/approvals`), activity feed (`/activity`), workspaces (`/workspaces`); sidebar Orchestration nav group
 - [ ] 6.14 Tests — session binding, workspace attribution, metrics computation, department aggregation tests
 
 > **Data flows for org view augmentation:**
