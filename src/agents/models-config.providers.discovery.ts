@@ -15,6 +15,7 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "./self-hosted-provider-defaults.js";
+import { PARALLAX_DEFAULT_BASE_URL, PARALLAX_PROVIDER_LABEL } from "./parallax-defaults.js";
 import { SGLANG_DEFAULT_BASE_URL, SGLANG_PROVIDER_LABEL } from "./sglang-defaults.js";
 import { VLLM_DEFAULT_BASE_URL, VLLM_PROVIDER_LABEL } from "./vllm-defaults.js";
 export { buildHuggingfaceProvider } from "../../extensions/huggingface/provider-catalog.js";
@@ -177,6 +178,23 @@ export async function buildSglangProvider(params?: {
     baseUrl,
     apiKey: params?.apiKey,
     label: SGLANG_PROVIDER_LABEL,
+  });
+  return {
+    baseUrl,
+    api: "openai-completions",
+    models,
+  };
+}
+
+export async function buildParallaxProvider(params?: {
+  baseUrl?: string;
+  apiKey?: string;
+}): Promise<ProviderConfig> {
+  const baseUrl = (params?.baseUrl?.trim() || PARALLAX_DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const models = await discoverOpenAICompatibleLocalModels({
+    baseUrl,
+    apiKey: params?.apiKey,
+    label: PARALLAX_PROVIDER_LABEL,
   });
   return {
     baseUrl,

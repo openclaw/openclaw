@@ -17,6 +17,7 @@ import OPENAI_MANIFEST from "../../extensions/openai/openclaw.plugin.json" with 
 import OPENCODE_GO_MANIFEST from "../../extensions/opencode-go/openclaw.plugin.json" with { type: "json" };
 import OPENCODE_MANIFEST from "../../extensions/opencode/openclaw.plugin.json" with { type: "json" };
 import OPENROUTER_MANIFEST from "../../extensions/openrouter/openclaw.plugin.json" with { type: "json" };
+import PARALLAX_MANIFEST from "../../extensions/parallax/openclaw.plugin.json" with { type: "json" };
 import QIANFAN_MANIFEST from "../../extensions/qianfan/openclaw.plugin.json" with { type: "json" };
 import QWEN_PORTAL_AUTH_MANIFEST from "../../extensions/qwen-portal-auth/openclaw.plugin.json" with { type: "json" };
 import SGLANG_MANIFEST from "../../extensions/sglang/openclaw.plugin.json" with { type: "json" };
@@ -78,6 +79,7 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = collectBundledProviderAu
   OPENCODE_GO_MANIFEST,
   OPENCODE_MANIFEST,
   OPENROUTER_MANIFEST,
+  PARALLAX_MANIFEST,
   QIANFAN_MANIFEST,
   QWEN_PORTAL_AUTH_MANIFEST,
   SGLANG_MANIFEST,
