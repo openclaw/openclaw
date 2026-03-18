@@ -557,6 +557,5 @@ export function applyExtraParamsToAgent(
     ...wrapperContext,
     providerWrapperHandled,
   });
-
   return { effectiveExtraParams };
 }
