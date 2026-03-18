@@ -1,5 +1,5 @@
 import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
+import type { OpenClawConfig } from "../runtime-api.js";
 
 type GoogleChatGroupContext = {
   cfg: OpenClawConfig;
