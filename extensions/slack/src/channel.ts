@@ -417,6 +417,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeSlackMessagingTarget,
+    resolveSessionTarget: ({ id }) => normalizeSlackMessagingTarget(`channel:${id}`),
     parseExplicitTarget: ({ raw }) => parseSlackExplicitTarget(raw),
     inferTargetChatType: ({ to }) => parseSlackExplicitTarget(to)?.chatType,
     resolveOutboundSessionRoute: async (params) => await resolveSlackOutboundSessionRoute(params),
