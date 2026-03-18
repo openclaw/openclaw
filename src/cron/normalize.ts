@@ -416,7 +416,7 @@ export function normalizeCronJobInput(
       preCheck.command = pc.command.trim();
     }
     if (typeof pc.timeoutSeconds === "number" && Number.isFinite(pc.timeoutSeconds)) {
-      preCheck.timeoutSeconds = Math.max(1, Math.floor(pc.timeoutSeconds));
+      preCheck.timeoutSeconds = Math.min(300, Math.max(1, Math.floor(pc.timeoutSeconds)));
     }
     if (typeof pc.outputMode === "string") {
       const mode = pc.outputMode.trim().toLowerCase();
