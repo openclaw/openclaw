@@ -992,9 +992,9 @@ export function resolveSessionModelIdentityRef(
       if (parsedRuntime) {
         return { provider: parsedRuntime.provider, model: parsedRuntime.model };
       }
+      return { model: runtimeModel };
     }
-    // Provider inference failed; fall through to resolveSessionModelRef which
-    // has override fields and defaults and always returns a provider.
+    return { model: runtimeModel };
   }
   const fallbackRef = fallbackModelRef?.trim();
   if (fallbackRef) {
