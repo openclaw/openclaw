@@ -1,14 +1,11 @@
-import type { loadConfig } from "../../../../../src/config/config.js";
-import type { resolveAgentRoute } from "../../../../../src/routing/resolve-route.js";
-import {
-  buildAgentSessionKey,
-  deriveLastRoutePolicy,
-} from "../../../../../src/routing/resolve-route.js";
+import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { buildAgentSessionKey, deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import {
   buildAgentMainSessionKey,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
-} from "../../../../../src/routing/session-key.js";
+} from "openclaw/plugin-sdk/routing";
 import { formatError } from "../../session.js";
 import { whatsappInboundLog } from "../loggers.js";
 import type { WebInboundMsg } from "../types.js";

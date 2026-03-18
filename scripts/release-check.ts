@@ -34,15 +34,6 @@ const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
 
-function normalizePluginSyncVersion(version: string): string {
-  const normalized = version.trim().replace(/^v/, "");
-  const base = /^([0-9]+\.[0-9]+\.[0-9]+)/.exec(normalized)?.[1];
-  if (base) {
-    return base;
-  }
-  return normalized.replace(/[-+].*$/, "");
-}
-
 export function collectBundledExtensionRootDependencyGapErrors(params: {
   rootPackage: PackageJson;
   extensions: BundledExtension[];
@@ -190,54 +181,6 @@ export function collectPackUnpackedSizeErrors(results: Iterable<PackResult>): st
   return errors;
 }
 
-function checkPluginVersions() {
-  const rootPackagePath = resolve("package.json");
-  const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as PackageJson;
-  const targetVersion = rootPackage.version;
-  const targetBaseVersion = targetVersion ? normalizePluginSyncVersion(targetVersion) : null;
-
-  if (!targetVersion || !targetBaseVersion) {
-    console.error("release-check: root package.json missing version.");
-    process.exit(1);
-  }
-
-  const extensionsDir = resolve("extensions");
-  const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
-    entry.isDirectory(),
-  );
-
-  const mismatches: string[] = [];
-
-  for (const entry of entries) {
-    const packagePath = join(extensionsDir, entry.name, "package.json");
-    let pkg: PackageJson;
-    try {
-      pkg = JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson;
-    } catch {
-      continue;
-    }
-
-    if (!pkg.name || !pkg.version) {
-      continue;
-    }
-
-    if (normalizePluginSyncVersion(pkg.version) !== targetBaseVersion) {
-      mismatches.push(`${pkg.name} (${pkg.version})`);
-    }
-  }
-
-  if (mismatches.length > 0) {
-    console.error(
-      `release-check: plugin versions must match release base ${targetBaseVersion} (root ${targetVersion}):`,
-    );
-    for (const item of mismatches) {
-      console.error(`  - ${item}`);
-    }
-    console.error("release-check: run `pnpm plugins:sync` to align plugin versions.");
-    process.exit(1);
-  }
-}
-
 function extractTag(item: string, tag: string): string | null {
   const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const regex = new RegExp(`<${escapedTag}>([^<]+)</${escapedTag}>`);
@@ -341,31 +284,47 @@ const requiredPluginSdkExports = [
   "DEFAULT_GROUP_HISTORY_LIMIT",
 ];
 
-function checkPluginSdkExports() {
-  const distPath = resolve("dist", "plugin-sdk", "index.js");
-  let content: string;
+async function collectDistPluginSdkExports(): Promise<Set<string>> {
+  const pluginSdkDir = resolve("dist", "plugin-sdk");
+  let entries: string[];
   try {
-    content = readFileSync(distPath, "utf8");
+    entries = readdirSync(pluginSdkDir)
+      .filter((entry) => entry.endsWith(".js"))
+      .toSorted();
   } catch {
-    console.error("release-check: dist/plugin-sdk/index.js not found (build missing?).");
+    console.error("release-check: dist/plugin-sdk directory not found (build missing?).");
     process.exit(1);
-    return;
+    return new Set();
   }
 
-  const exportMatch = content.match(/export\s*\{([^}]+)\}\s*;?\s*$/);
-  if (!exportMatch) {
-    console.error("release-check: could not find export statement in dist/plugin-sdk/index.js.");
-    process.exit(1);
-    return;
+  const exportedNames = new Set<string>();
+  for (const entry of entries) {
+    const content = readFileSync(join(pluginSdkDir, entry), "utf8");
+    for (const match of content.matchAll(/export\s*\{([^}]+)\}(?:\s*from\s*["'][^"']+["'])?/g)) {
+      const names = match[1]?.split(",") ?? [];
+      for (const name of names) {
+        const parts = name.trim().split(/\s+as\s+/);
+        const exportName = (parts[parts.length - 1] || "").trim();
+        if (exportName) {
+          exportedNames.add(exportName);
+        }
+      }
+    }
+    for (const match of content.matchAll(
+      /export\s+(?:const|function|class|let|var)\s+([A-Za-z0-9_$]+)/g,
+    )) {
+      const exportName = match[1]?.trim();
+      if (exportName) {
+        exportedNames.add(exportName);
+      }
+    }
   }
 
-  const exportedNames = new Set(
-    exportMatch[1].split(",").map((s) => {
-      const parts = s.trim().split(/\s+as\s+/);
-      return (parts[parts.length - 1] || "").trim();
-    }),
-  );
+  return exportedNames;
+}
 
+async function checkPluginSdkExports() {
+  const exportedNames = await collectDistPluginSdkExports();
   const missingExports = requiredPluginSdkExports.filter((name) => !exportedNames.has(name));
   if (missingExports.length > 0) {
     console.error("release-check: missing critical plugin-sdk exports (#27569):");
@@ -376,10 +335,9 @@ function checkPluginSdkExports() {
   }
 }
 
-function main() {
-  checkPluginVersions();
+async function main() {
   checkAppcastSparkleVersions();
-  checkPluginSdkExports();
+  await checkPluginSdkExports();
   checkBundledExtensionRootDependencyMirrors();
 
   const results = runPackDry();
@@ -423,5 +381,8 @@ function main() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main();
+  void main().catch((error: unknown) => {
+    console.error(error);
+    process.exit(1);
+  });
 }

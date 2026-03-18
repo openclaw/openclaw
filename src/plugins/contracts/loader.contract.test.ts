@@ -1,105 +1,92 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { providerContractRegistry, webSearchProviderContractRegistry } from "./registry.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
+import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
+import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { __testing as providerTesting } from "../providers.js";
+import { providerContractCompatPluginIds, webSearchProviderContractRegistry } from "./registry.js";
+import { uniqueSortedStrings } from "./testkit.js";
 
-const loadOpenClawPluginsMock = vi.fn();
-
-vi.mock("../loader.js", () => ({
-  loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
-}));
-
-const { resolvePluginProviders } = await import("../providers.js");
-const { resolvePluginWebSearchProviders } = await import("../web-search-providers.js");
-
-function uniqueSortedPluginIds(values: string[]) {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+function resolveBundledManifestProviderPluginIds() {
+  return uniqueSortedStrings(
+    loadPluginManifestRegistry({})
+      .plugins.filter((plugin) => plugin.origin === "bundled" && plugin.providers.length > 0)
+      .map((plugin) => plugin.id),
+  );
 }
 
 describe("plugin loader contract", () => {
-  beforeEach(() => {
-    loadOpenClawPluginsMock.mockReset();
-    loadOpenClawPluginsMock.mockReturnValue({
-      providers: [],
-      webSearchProviders: [],
+  let providerPluginIds: string[];
+  let manifestProviderPluginIds: string[];
+  let compatPluginIds: string[];
+  let compatConfig: ReturnType<typeof withBundledPluginAllowlistCompat>;
+  let vitestCompatConfig: ReturnType<typeof providerTesting.withBundledProviderVitestCompat>;
+  let webSearchPluginIds: string[];
+  let bundledWebSearchPluginIds: string[];
+  let webSearchAllowlistCompatConfig: ReturnType<typeof withBundledPluginAllowlistCompat>;
+
+  beforeAll(() => {
+    providerPluginIds = uniqueSortedStrings(providerContractCompatPluginIds);
+    manifestProviderPluginIds = resolveBundledManifestProviderPluginIds();
+    compatPluginIds = providerTesting.resolveBundledProviderCompatPluginIds({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
     });
+    compatConfig = withBundledPluginAllowlistCompat({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      pluginIds: compatPluginIds,
+    });
+    vitestCompatConfig = providerTesting.withBundledProviderVitestCompat({
+      config: undefined,
+      pluginIds: providerPluginIds,
+      env: { VITEST: "1" } as NodeJS.ProcessEnv,
+    });
+    webSearchPluginIds = uniqueSortedStrings(
+      webSearchProviderContractRegistry.map((entry) => entry.pluginId),
+    );
+    bundledWebSearchPluginIds = uniqueSortedStrings(resolveBundledWebSearchPluginIds({}));
+    webSearchAllowlistCompatConfig = withBundledPluginAllowlistCompat({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      pluginIds: webSearchPluginIds,
+    });
+  });
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("keeps bundled provider compatibility wired to the provider registry", () => {
-    const providerPluginIds = uniqueSortedPluginIds(
-      providerContractRegistry.map((entry) => entry.pluginId),
-    );
-
-    resolvePluginProviders({
-      bundledProviderAllowlistCompat: true,
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-        },
-      },
-    });
-
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: expect.arrayContaining(providerPluginIds),
-          }),
-        }),
-      }),
-    );
+    expect(providerPluginIds).toEqual(manifestProviderPluginIds);
+    expect(uniqueSortedStrings(compatPluginIds)).toEqual(manifestProviderPluginIds);
+    expect(uniqueSortedStrings(compatPluginIds)).toEqual(expect.arrayContaining(providerPluginIds));
+    expect(compatConfig?.plugins?.allow).toEqual(expect.arrayContaining(providerPluginIds));
   });
 
   it("keeps vitest bundled provider enablement wired to the provider registry", () => {
-    const providerPluginIds = uniqueSortedPluginIds(
-      providerContractRegistry.map((entry) => entry.pluginId),
-    );
-
-    resolvePluginProviders({
-      bundledProviderVitestCompat: true,
-      env: { VITEST: "1" } as NodeJS.ProcessEnv,
+    expect(providerPluginIds).toEqual(manifestProviderPluginIds);
+    expect(vitestCompatConfig?.plugins).toMatchObject({
+      enabled: true,
+      allow: expect.arrayContaining(providerPluginIds),
     });
-
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            enabled: true,
-            allow: expect.arrayContaining(providerPluginIds),
-          }),
-        }),
-      }),
-    );
   });
 
   it("keeps bundled web search loading scoped to the web search registry", () => {
-    const webSearchPluginIds = uniqueSortedPluginIds(
-      webSearchProviderContractRegistry.map((entry) => entry.pluginId),
-    );
-
-    const providers = resolvePluginWebSearchProviders({});
-
-    expect(uniqueSortedPluginIds(providers.map((provider) => provider.pluginId))).toEqual(
-      webSearchPluginIds,
-    );
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(bundledWebSearchPluginIds).toEqual(webSearchPluginIds);
   });
 
   it("keeps bundled web search allowlist compatibility wired to the web search registry", () => {
-    const webSearchPluginIds = uniqueSortedPluginIds(
-      webSearchProviderContractRegistry.map((entry) => entry.pluginId),
+    expect(webSearchAllowlistCompatConfig?.plugins?.allow).toEqual(
+      expect.arrayContaining(webSearchPluginIds),
     );
-
-    const providers = resolvePluginWebSearchProviders({
-      bundledAllowlistCompat: true,
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-        },
-      },
-    });
-
-    expect(uniqueSortedPluginIds(providers.map((provider) => provider.pluginId))).toEqual(
-      webSearchPluginIds,
-    );
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 });

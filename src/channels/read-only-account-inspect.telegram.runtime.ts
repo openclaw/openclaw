@@ -1,2 +1,11 @@
-export { inspectTelegramAccount } from "../plugin-sdk-internal/telegram.js";
-export type { InspectedTelegramAccount } from "../plugin-sdk-internal/telegram.js";
+import { inspectTelegramAccount as inspectTelegramAccountImpl } from "openclaw/plugin-sdk/telegram";
+
+export type { InspectedTelegramAccount } from "openclaw/plugin-sdk/telegram";
+
+type InspectTelegramAccount = typeof import("openclaw/plugin-sdk/telegram").inspectTelegramAccount;
+
+export function inspectTelegramAccount(
+  ...args: Parameters<InspectTelegramAccount>
+): ReturnType<InspectTelegramAccount> {
+  return inspectTelegramAccountImpl(...args);
+}
