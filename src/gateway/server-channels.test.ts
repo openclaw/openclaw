@@ -280,6 +280,36 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
   });
 
+  it("does not force connected=false on startup", async () => {
+    let attempts = 0;
+    const startAccount = vi.fn(async ({ setStatus, abortSignal }) => {
+      attempts += 1;
+      if (attempts === 1) {
+        setStatus({ connected: true });
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", resolve, { once: true });
+      });
+    });
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.connected).toBeUndefined();
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+  });
+
   it("resets connected state when channel is stopped", async () => {
     const startAccount = vi.fn(async ({ setStatus, abortSignal }) => {
       setStatus({ connected: true });
