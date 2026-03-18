@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const resolveProviderUsageAuthWithPluginMock = vi.fn(async (..._args: unknown[]) => null);
+const resolveProviderUsageAuthWithPluginMock = vi.fn(
+  async (..._args: unknown[]): Promise<unknown> => null,
+);
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
