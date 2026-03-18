@@ -4,6 +4,7 @@ import {
   expectCodexBuiltInSuppression,
   expectCodexMissingAuthHint,
 } from "../provider-runtime.test-support.js";
+import { requireProviderContractProvider } from "./registry.js";
 
 type ResolvePluginProviders = typeof import("../providers.js").resolvePluginProviders;
 type ResolveOwningPluginIdsForProvider =
@@ -30,7 +31,6 @@ vi.mock("../providers.js", () => ({
 }));
 
 let augmentModelCatalogWithProviderPlugins: typeof import("../provider-runtime.js").augmentModelCatalogWithProviderPlugins;
-let buildProviderMissingAuthMessageWithPlugin: typeof import("../provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
 let resetProviderRuntimeHookCacheForTest: typeof import("../provider-runtime.js").resetProviderRuntimeHookCacheForTest;
 let resolveProviderBuiltInModelSuppression: typeof import("../provider-runtime.js").resolveProviderBuiltInModelSuppression;
 let resolveProviderContractPluginIdsForProvider: typeof import("./registry.js").resolveProviderContractPluginIdsForProvider;
@@ -46,7 +46,6 @@ describe("provider catalog contract", () => {
     } = await import("./registry.js"));
     ({
       augmentModelCatalogWithProviderPlugins,
-      buildProviderMissingAuthMessageWithPlugin,
       resetProviderRuntimeHookCacheForTest,
       resolveProviderBuiltInModelSuppression,
     } = await import("../provider-runtime.js"));
@@ -74,7 +73,10 @@ describe("provider catalog contract", () => {
   });
 
   it("keeps codex-only missing-auth hints wired through the provider runtime", () => {
-    expectCodexMissingAuthHint(buildProviderMissingAuthMessageWithPlugin);
+    const openaiProvider = requireProviderContractProvider("openai");
+    expectCodexMissingAuthHint((params) =>
+      openaiProvider.buildMissingAuthMessage?.(params.context),
+    );
   });
 
   it("keeps built-in model suppression wired through the provider runtime", () => {
