@@ -402,33 +402,50 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const { saveSettings } = await import("./storage.ts");
     const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:wss://gateway.example:8443`;
 
-    for (let i = 0; i < 12; i += 1) {
-      saveSettings({
-        gatewayUrl: gwUrl,
-        token: "",
-        sessionKey: `agent:test_${i}:main`,
-        lastActiveSessionKey: `agent:test_${i}:main`,
-        theme: "claw",
-        themeMode: "system",
-        chatFocusMode: false,
-        chatShowThinking: true,
-        chatShowToolCalls: true,
-        splitRatio: 0.6,
-        navCollapsed: false,
-        navWidth: 220,
-        navGroupsCollapsed: {},
-        borderRadius: 50,
-      });
+    // Pre-seed sessionsByGateway with 11 stale gateway entries so the next
+    // saveSettings call pushes the total to 12 and triggers the cap (10).
+    const staleEntries: Record<string, { sessionKey: string; lastActiveSessionKey: string }> = {};
+    for (let i = 0; i < 11; i += 1) {
+      staleEntries[`wss://stale-${i}.example:8443`] = {
+        sessionKey: `agent:stale_${i}:main`,
+        lastActiveSessionKey: `agent:stale_${i}:main`,
+      };
     }
+    localStorage.setItem(scopedKey, JSON.stringify({ sessionsByGateway: staleEntries }));
 
-    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    saveSettings({
+      gatewayUrl: gwUrl,
+      token: "",
+      sessionKey: "agent:current:main",
+      lastActiveSessionKey: "agent:current:main",
+      theme: "claw",
+      themeMode: "system",
+      chatFocusMode: false,
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+    });
+
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");
 
     expect(persisted.sessionsByGateway).toBeDefined();
-    expect(persisted.sessionsByGateway[gwUrl]).toEqual({
-      sessionKey: "agent:test_11:main",
-      lastActiveSessionKey: "agent:test_11:main",
+    const scopes = Object.keys(persisted.sessionsByGateway);
+    expect(scopes).toHaveLength(10);
+    // oldest stale entries should be evicted
+    expect(scopes).not.toContain("wss://stale-0.example:8443");
+    expect(scopes).not.toContain("wss://stale-1.example:8443");
+    // newest stale entries and the current gateway should be retained
+    expect(scopes).toContain("wss://stale-10.example:8443");
+    expect(scopes).toContain("wss://gateway.example:8443");
+    expect(persisted.sessionsByGateway["wss://gateway.example:8443"]).toEqual({
+      sessionKey: "agent:current:main",
+      lastActiveSessionKey: "agent:current:main",
     });
   });
 });
