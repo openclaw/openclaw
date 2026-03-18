@@ -122,11 +122,13 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "diffs",
   "llm-task",
   "line",
+  "mattermost",
   "memory-lancedb",
   "nextcloud-talk",
   "synology-chat",
   "talk-voice",
   "thread-ownership",
+  "tlon",
   "voice-call",
 ] as const;
 

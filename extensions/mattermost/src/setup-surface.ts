@@ -3,7 +3,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/mattermost";
+} from "./runtime-api.js";
 import { type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup";
 import { listMattermostAccountIds } from "./mattermost/accounts.js";
