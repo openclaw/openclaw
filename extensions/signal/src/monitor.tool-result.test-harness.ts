@@ -127,13 +127,11 @@ vi.mock("./daemon.js", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
-  return {
-    ...actual,
-    waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
-  };
-});
+// Mock the source module directly so infra-runtime's re-export picks up the stub and
+// the harness's static import of resetSystemEventsForTest stays live/real.
+vi.mock("../../../src/infra/transport-ready.js", () => ({
+  waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
+}));
 
 export function installSignalToolResultTestHooks() {
   beforeEach(() => {
