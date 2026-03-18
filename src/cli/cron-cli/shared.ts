@@ -247,9 +247,9 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     })();
 
     const coloredTarget =
-      job.sessionTarget === "isolated"
-        ? colorize(rich, theme.accentBright, targetLabel)
-        : colorize(rich, theme.accent, targetLabel);
+      job.sessionTarget === "main"
+        ? colorize(rich, theme.accent, targetLabel)
+        : colorize(rich, theme.accentBright, targetLabel);
     const coloredAgent = job.agentId
       ? colorize(rich, theme.info, agentLabel)
       : colorize(rich, theme.muted, agentLabel);

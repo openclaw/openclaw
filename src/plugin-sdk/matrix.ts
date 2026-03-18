@@ -9,7 +9,12 @@ export {
   readStringParam,
 } from "../agents/tools/common.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
-export { resolveAllowlistMatchByCandidates } from "../channels/allowlist-match.js";
+export {
+  compileAllowlist,
+  resolveCompiledAllowlistMatch,
+  resolveAllowlistCandidates,
+  resolveAllowlistMatchByCandidates,
+} from "../channels/allowlist-match.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export type { NormalizedLocation } from "../channels/location.js";
@@ -27,18 +32,13 @@ export {
 } from "../channels/plugins/config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
-export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 export {
   buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
   mergeAllowFromEntries,
   promptSingleChannelSecretInput,
   setTopLevelChannelGroupPolicy,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
@@ -108,3 +108,5 @@ export {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";
+export { matrixSetupWizard } from "../../extensions/matrix/api.js";
+export { matrixSetupAdapter } from "../../extensions/matrix/api.js";
