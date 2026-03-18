@@ -523,7 +523,9 @@ export function detectToolCallLoop(
   const noProgressStreak = noProgress.count;
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
-  const browserSearch = extractBrowserSearchLoopHint(toolName, params);
+  const browserSearch = resolvedConfig.detectors.browserSearchStorm
+    ? extractBrowserSearchLoopHint(toolName, params)
+    : undefined;
 
   if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
     log.error(
