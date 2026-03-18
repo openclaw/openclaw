@@ -103,6 +103,17 @@ const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
   jitter: 0.2,
 };
 
+// Retry the *same* profile on transient overloaded errors before rotating or
+// surfacing the failure.  The delays are deliberately longer than the failover
+// backoff because a 529 usually resolves within seconds/minutes.
+const OVERLOAD_SAME_PROFILE_RETRY_POLICY: BackoffPolicy = {
+  initialMs: 2_000,
+  maxMs: 30_000,
+  factor: 2,
+  jitter: 0.25,
+};
+const MAX_OVERLOAD_SAME_PROFILE_RETRIES = 3;
+
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
@@ -827,6 +838,7 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let overloadSameProfileRetries = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1406,6 +1418,34 @@ export async function runEmbeddedPiAgent(
             ) {
               logPromptFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
+              overloadSameProfileRetries = 0;
+              continue;
+            }
+            // No other profile — retry the same profile on overloaded errors.
+            if (
+              promptFailoverReason === "overloaded" &&
+              overloadSameProfileRetries < MAX_OVERLOAD_SAME_PROFILE_RETRIES
+            ) {
+              overloadSameProfileRetries += 1;
+              const delayMs = computeBackoff(
+                OVERLOAD_SAME_PROFILE_RETRY_POLICY,
+                overloadSameProfileRetries,
+              );
+              log.warn(
+                `overloaded (prompt) — retrying same profile for ${provider}/${modelId}: ` +
+                  `attempt=${overloadSameProfileRetries}/${MAX_OVERLOAD_SAME_PROFILE_RETRIES} ` +
+                  `delayMs=${delayMs}`,
+              );
+              logPromptFailoverDecision("retry_same_profile");
+              if (lastProfileId) {
+                await markAuthProfileGood({
+                  store: authStore,
+                  provider,
+                  profileId: lastProfileId,
+                  agentDir,
+                });
+              }
+              await sleepWithAbort(delayMs, params.abortSignal);
               continue;
             }
             const fallbackThinking = pickFallbackThinkingLevel({
@@ -1538,6 +1578,37 @@ export async function runEmbeddedPiAgent(
             if (rotated) {
               logAssistantFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
+              overloadSameProfileRetries = 0;
+              continue;
+            }
+
+            // No other profile available — retry the *same* profile on
+            // transient overloaded errors before giving up or falling back.
+            if (
+              assistantFailoverReason === "overloaded" &&
+              overloadSameProfileRetries < MAX_OVERLOAD_SAME_PROFILE_RETRIES
+            ) {
+              overloadSameProfileRetries += 1;
+              const delayMs = computeBackoff(
+                OVERLOAD_SAME_PROFILE_RETRY_POLICY,
+                overloadSameProfileRetries,
+              );
+              log.warn(
+                `overloaded — retrying same profile for ${provider}/${modelId}: ` +
+                  `attempt=${overloadSameProfileRetries}/${MAX_OVERLOAD_SAME_PROFILE_RETRIES} ` +
+                  `delayMs=${delayMs}`,
+              );
+              logAssistantFailoverDecision("retry_same_profile");
+              // Un-mark the profile failure so the same profile is used on retry.
+              if (lastProfileId) {
+                await markAuthProfileGood({
+                  store: authStore,
+                  provider,
+                  profileId: lastProfileId,
+                  agentDir,
+                });
+              }
+              await sleepWithAbort(delayMs, params.abortSignal);
               continue;
             }
 
@@ -1651,6 +1722,8 @@ export async function runEmbeddedPiAgent(
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
+          // Reset overload retry counter on success.
+          overloadSameProfileRetries = 0;
           if (lastProfileId) {
             await markAuthProfileGood({
               store: authStore,
