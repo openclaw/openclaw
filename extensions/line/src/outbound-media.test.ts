@@ -1,4 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: vi.fn(),
+  };
+});
+
 import {
   LINE_MEDIA_KIND_PROBE_TIMEOUT_MS,
   detectLineMediaKind,
@@ -15,7 +23,7 @@ function responseWithContentType(contentType: string | null): Response {
 }
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  vi.clearAllMocks();
   vi.useRealTimers();
 });
 
@@ -62,9 +70,13 @@ describe("detectLineMediaKind", () => {
 });
 
 describe("resolveLineOutboundMedia", () => {
+  async function getGuardedFetchMock() {
+    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/infra-runtime");
+    return vi.mocked(fetchWithSsrFGuard);
+  }
+
   it("respects explicit media kind without remote MIME probing", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+    const guardedFetch = await getGuardedFetchMock();
 
     await expect(
       resolveLineOutboundMedia("https://example.com/download?id=123", { mediaKind: "video" }),
@@ -72,32 +84,49 @@ describe("resolveLineOutboundMedia", () => {
       mediaUrl: "https://example.com/download?id=123",
       mediaKind: "video",
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(guardedFetch).not.toHaveBeenCalled();
   });
 
   it("detects video kind from extensionless URL via HEAD content-type", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(responseWithContentType("video/mp4"));
-    vi.stubGlobal("fetch", fetchMock);
+    const guardedFetch = await getGuardedFetchMock();
+    const release = vi.fn().mockResolvedValue(undefined);
+    guardedFetch.mockResolvedValue({
+      response: responseWithContentType("video/mp4"),
+      finalUrl: "https://example.com/download?id=123",
+      release,
+    });
 
     await expect(resolveLineOutboundMedia("https://example.com/download?id=123")).resolves.toEqual({
       mediaUrl: "https://example.com/download?id=123",
       mediaKind: "video",
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://example.com/download?id=123",
-      expect.objectContaining({ method: "HEAD" }),
+    expect(guardedFetch).toHaveBeenCalledTimes(1);
+    expect(guardedFetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "strict",
+        url: "https://example.com/download?id=123",
+        timeoutMs: LINE_MEDIA_KIND_PROBE_TIMEOUT_MS,
+        init: expect.objectContaining({ method: "HEAD" }),
+      }),
     );
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to GET when HEAD cannot determine MIME", async () => {
-    const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
-      if (init?.method === "HEAD") {
-        return Promise.resolve(responseWithContentType("application/octet-stream"));
-      }
-      return Promise.resolve(responseWithContentType("audio/mpeg"));
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    const guardedFetch = await getGuardedFetchMock();
+    const releaseHead = vi.fn().mockResolvedValue(undefined);
+    const releaseGet = vi.fn().mockResolvedValue(undefined);
+    guardedFetch
+      .mockResolvedValueOnce({
+        response: responseWithContentType("application/octet-stream"),
+        finalUrl: "https://example.com/download?id=audio",
+        release: releaseHead,
+      })
+      .mockResolvedValueOnce({
+        response: responseWithContentType("audio/mpeg"),
+        finalUrl: "https://example.com/download?id=audio",
+        release: releaseGet,
+      });
 
     await expect(
       resolveLineOutboundMedia("https://example.com/download?id=audio"),
@@ -105,38 +134,37 @@ describe("resolveLineOutboundMedia", () => {
       mediaUrl: "https://example.com/download?id=audio",
       mediaKind: "audio",
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenNthCalledWith(
+    expect(guardedFetch).toHaveBeenCalledTimes(2);
+    expect(guardedFetch).toHaveBeenNthCalledWith(
       1,
-      "https://example.com/download?id=audio",
-      expect.objectContaining({ method: "HEAD" }),
+      expect.objectContaining({
+        init: expect.objectContaining({ method: "HEAD" }),
+      }),
     );
-    expect(fetchMock).toHaveBeenNthCalledWith(
+    expect(guardedFetch).toHaveBeenNthCalledWith(
       2,
-      "https://example.com/download?id=audio",
-      expect.objectContaining({ method: "GET" }),
+      expect.objectContaining({
+        init: expect.objectContaining({
+          method: "GET",
+          headers: expect.objectContaining({ Range: "bytes=0-0" }),
+        }),
+      }),
     );
+    expect(releaseHead).toHaveBeenCalledTimes(1);
+    expect(releaseGet).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to image when MIME probing times out", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
-          once: true,
-        });
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    const guardedFetch = await getGuardedFetchMock();
+    guardedFetch.mockRejectedValue(new Error("timeout"));
 
-    const pending = resolveLineOutboundMedia("https://example.com/download?id=slow");
-    await vi.advanceTimersByTimeAsync(LINE_MEDIA_KIND_PROBE_TIMEOUT_MS * 2 + 20);
-
-    await expect(pending).resolves.toEqual({
-      mediaUrl: "https://example.com/download?id=slow",
-      mediaKind: "image",
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(resolveLineOutboundMedia("https://example.com/download?id=slow")).resolves.toEqual(
+      {
+        mediaUrl: "https://example.com/download?id=slow",
+        mediaKind: "image",
+      },
+    );
+    expect(guardedFetch).toHaveBeenCalledTimes(2);
   });
 
   it("honors an explicit media kind without inferring from preview image hints", async () => {

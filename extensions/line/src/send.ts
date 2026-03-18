@@ -68,6 +68,10 @@ function normalizeTarget(to: string): string {
   return normalized;
 }
 
+function isLineUserChatId(chatId: string): boolean {
+  return /^U/i.test(chatId);
+}
+
 function createLineMessagingClient(opts: LineClientOpts): {
   account: ReturnType<typeof resolveLineAccount>;
   client: messagingApi.MessagingApiClient;
@@ -244,18 +248,23 @@ export async function sendMessageLine(
 
   const mediaUrl = opts.mediaUrl?.trim();
   if (mediaUrl) {
-    const previewImageUrl = opts.previewImageUrl?.trim() || mediaUrl;
     switch (opts.mediaKind) {
-      case "video":
-        messages.push(createVideoMessage(mediaUrl, previewImageUrl, opts.trackingId));
+      case "video": {
+        const previewImageUrl = opts.previewImageUrl?.trim();
+        if (!previewImageUrl) {
+          throw new Error("LINE video messages require previewImageUrl to reference an image URL");
+        }
+        const trackingId = isLineUserChatId(chatId) ? opts.trackingId : undefined;
+        messages.push(createVideoMessage(mediaUrl, previewImageUrl, trackingId));
         break;
+      }
       case "audio":
         messages.push(createAudioMessage(mediaUrl, opts.durationMs ?? 60000));
         break;
       case "image":
       default:
         // Backward compatibility: keep image as default when media kind is unspecified.
-        messages.push(createImageMessage(mediaUrl, previewImageUrl));
+        messages.push(createImageMessage(mediaUrl, opts.previewImageUrl?.trim() || mediaUrl));
         break;
     }
   }

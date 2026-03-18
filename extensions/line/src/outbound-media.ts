@@ -1,3 +1,5 @@
+import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "openclaw/plugin-sdk/infra-runtime";
+
 export type LineOutboundMediaKind = "image" | "video" | "audio";
 
 export type LineOutboundMediaResolved = {
@@ -80,20 +82,24 @@ async function fetchMimeTypeWithTimeout(
   url: string,
   method: "HEAD" | "GET",
 ): Promise<string | undefined> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), LINE_MEDIA_KIND_PROBE_TIMEOUT_MS);
   try {
-    const response = await fetch(url, {
-      method,
-      redirect: "follow",
-      signal: controller.signal,
-      ...(method === "GET" ? { headers: { Range: "bytes=0-0" } } : {}),
-    });
-    return parseResponseMimeType(response.headers.get("content-type"));
+    const { response, release } = await fetchWithSsrFGuard(
+      withStrictGuardedFetchMode({
+        url,
+        init: {
+          method,
+          ...(method === "GET" ? { headers: { Range: "bytes=0-0" } } : {}),
+        },
+        timeoutMs: LINE_MEDIA_KIND_PROBE_TIMEOUT_MS,
+      }),
+    );
+    try {
+      return parseResponseMimeType(response.headers.get("content-type"));
+    } finally {
+      await release();
+    }
   } catch {
     return undefined;
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
