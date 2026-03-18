@@ -673,4 +673,96 @@ describe("runMessageAction plugin dispatch", () => {
       expect(ctx.params.accountId).toBe(expectedAccountId);
     });
   });
+
+  describe("accountId exact-match validation", () => {
+    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+
+    const multiAccountPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram multi-account test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["8510324544", "8401457831"],
+        resolveAccount: () => ({}),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        handleAction,
+      },
+    };
+
+    beforeEach(() => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            source: "test",
+            plugin: multiAccountPlugin,
+          },
+        ]),
+      );
+      handleAction.mockClear();
+    });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+    });
+
+    it("rejects an accountId that does not exactly match any configured account", async () => {
+      await expect(
+        runMessageAction({
+          cfg: {} as OpenClawConfig,
+          action: "send",
+          params: {
+            channel: "telegram",
+            target: "channel:123",
+            message: "hi",
+            accountId: "851032",
+          },
+        }),
+      ).rejects.toThrow(/not configured for channel/);
+    });
+
+    it("accepts an accountId that exactly matches a configured account", async () => {
+      await runMessageAction({
+        cfg: {} as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "telegram",
+          target: "channel:123",
+          message: "hi",
+          accountId: "8510324544",
+        },
+      });
+
+      expect(handleAction).toHaveBeenCalled();
+      const ctx = (handleAction.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+        | { accountId?: string | null }
+        | undefined;
+      expect(ctx?.accountId).toBe("8510324544");
+    });
+
+    it("does not reject a defaultAccountId that comes from bindings (not tool params)", async () => {
+      await runMessageAction({
+        cfg: {} as OpenClawConfig,
+        action: "send",
+        defaultAccountId: "8510324544",
+        params: {
+          channel: "telegram",
+          target: "channel:123",
+          message: "hi",
+        },
+      });
+
+      expect(handleAction).toHaveBeenCalled();
+    });
+  });
 });

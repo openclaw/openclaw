@@ -19,7 +19,7 @@ import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { hasPollCreationParams, resolveTelegramPollVisibility } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
 import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -759,6 +759,26 @@ export async function runMessageAction(
     const boundAccountIds = byAgent?.get(normalizeAgentId(resolvedAgentId));
     if (boundAccountIds && boundAccountIds.length > 0) {
       accountId = boundAccountIds[0];
+    }
+  }
+  // Validate that an explicitly-provided accountId (from tool params) exists
+  // among the channel's configured accounts.  Without this check a partial or
+  // wrong accountId could silently fall through to the default account and
+  // route messages to the wrong bot.
+  // See: https://github.com/openclaw/openclaw/issues/49383
+  const explicitParamAccountId = readStringParam(params, "accountId");
+  if (explicitParamAccountId) {
+    const plugin = getChannelPlugin(channel);
+    if (plugin?.config.listAccountIds) {
+      const configuredIds = plugin.config.listAccountIds(cfg);
+      const normalizedRequested = normalizeAccountId(explicitParamAccountId);
+      const normalizedConfigured = new Set(configuredIds.map((id) => normalizeAccountId(id)));
+      if (normalizedConfigured.size > 0 && !normalizedConfigured.has(normalizedRequested)) {
+        throw new Error(
+          `Account "${explicitParamAccountId}" is not configured for channel "${channel}". ` +
+            `Configured accounts: ${configuredIds.join(", ")}`,
+        );
+      }
     }
   }
   if (accountId) {
