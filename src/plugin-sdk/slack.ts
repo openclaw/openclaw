@@ -29,13 +29,13 @@ export {
   resolveConfiguredFromRequiredCredentialStatuses,
 } from "../channels/account-snapshot-fields.js";
 export {
-  listSlackDirectoryGroupsFromConfig,
-  listSlackDirectoryPeersFromConfig,
-} from "../channels/plugins/directory-config.js";
-export {
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
 } from "../channels/plugins/normalize/slack.js";
+export {
+  listSlackDirectoryGroupsFromConfig,
+  listSlackDirectoryPeersFromConfig,
+} from "../../extensions/slack/src/directory-config.js";
 export {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
