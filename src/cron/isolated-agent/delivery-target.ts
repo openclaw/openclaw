@@ -120,6 +120,13 @@ export async function resolveDeliveryTarget(
     }
   }
 
+  // When no accountId was resolved from session or bindings, fall back to
+  // the agentId so cron jobs with a specific agent identity send from the
+  // correct account rather than the default one (see #49507).
+  if (!accountId && agentId) {
+    accountId = agentId;
+  }
+
   // job.delivery.accountId takes highest precedence — explicitly set by the job author.
   if (jobPayload.accountId) {
     accountId = jobPayload.accountId;
