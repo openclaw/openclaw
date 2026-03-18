@@ -62,7 +62,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
     };
-    let page: unknown;
+    let page!: Awaited<ReturnType<typeof context.cron.listPage>>;
     try {
       page = await context.cron.listPage({
         includeDisabled: p.includeDisabled,
@@ -91,7 +91,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    let status: unknown;
+    let status!: Awaited<ReturnType<typeof context.cron.status>>;
     try {
       status = await context.cron.status();
     } catch (err) {
@@ -130,17 +130,14 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    let job: unknown;
+    let job!: Awaited<ReturnType<typeof context.cron.add>>;
     try {
       job = await context.cron.add(jobCreate);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
       return;
     }
-    context.logGateway.info("cron: job created", {
-      jobId: (job as { id?: string })?.id,
-      schedule: jobCreate.schedule,
-    });
+    context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {
@@ -186,7 +183,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    let job: unknown;
+    let job!: Awaited<ReturnType<typeof context.cron.update>>;
     try {
       job = await context.cron.update(jobId, patch);
     } catch (err) {
@@ -218,14 +215,14 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    let result: unknown;
+    let result!: Awaited<ReturnType<typeof context.cron.remove>>;
     try {
       result = await context.cron.remove(jobId);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
       return;
     }
-    if ((result as { removed?: boolean })?.removed) {
+    if (result.removed) {
       context.logGateway.info("cron: job removed", { jobId });
     }
     respond(true, result, undefined);
@@ -252,7 +249,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    let result: unknown;
+    let result!: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
     try {
       result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
     } catch (err) {
@@ -298,7 +295,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     if (scope === "all") {
-      let page: unknown;
+      let page!: Awaited<ReturnType<typeof readCronRunLogEntriesPageAll>>;
       try {
         const jobs = await context.cron.list({ includeDisabled: true });
         const jobNameById = Object.fromEntries(
@@ -339,7 +336,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    let page: unknown;
+    let page!: Awaited<ReturnType<typeof readCronRunLogEntriesPage>>;
     try {
       page = await readCronRunLogEntriesPage(logPath, {
         limit: p.limit,
