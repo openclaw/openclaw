@@ -1,7 +1,7 @@
-import type { Command } from "commander";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Command } from "commander";
 
 function repoRoot(): string {
   // After bundling, this file lives in dist/ (flat). One level up is the repo root.
