@@ -375,6 +375,25 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
+  it("does not resolve host browser config for node proxy requests", async () => {
+    mockSingleBrowserProxyNode();
+    browserConfigMocks.resolveBrowserConfig.mockImplementation(() => {
+      throw new Error("bad host browser config");
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "status", target: "node" });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+      }),
+    );
+    expect(browserConfigMocks.resolveBrowserConfig).not.toHaveBeenCalled();
+  });
+
   it("gives node.invoke extra slack beyond the default proxy timeout", async () => {
     mockSingleBrowserProxyNode();
     gatewayMocks.callGatewayTool.mockResolvedValueOnce({

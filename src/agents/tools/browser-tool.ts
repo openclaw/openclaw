@@ -444,10 +444,13 @@ export function createBrowserTool(opts?: {
             return proxy.result;
           }
         : null;
-      const usesHostExistingSessionFlow = shouldUseHostExistingSessionManageTimeout({
-        action,
-        profileName: profile,
-      });
+      const usesHostExistingSessionFlow =
+        typeof requestedTimeoutMs !== "number" && !proxyRequest && !baseUrl
+          ? shouldUseHostExistingSessionManageTimeout({
+              action,
+              profileName: profile,
+            })
+          : false;
       const toolTimeoutMs = resolveBrowserToolManageTimeoutMs({
         action,
         requestedTimeoutMs,
