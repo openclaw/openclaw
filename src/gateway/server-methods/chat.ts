@@ -1412,6 +1412,23 @@ export const chatHandlers: GatewayRequestHandlers = {
         logGateway: context.logGateway,
       });
 
+      // Broadcast the user message to all connected WebSocket clients on
+      // this session so multi-client setups (e.g. phone + desktop) stay in
+      // sync. Without this, only the sending client sees the user message;
+      // other clients only receive assistant replies.
+      const userMessagePayload = {
+        runId: clientRunId,
+        sessionKey: rawSessionKey,
+        state: "user_message" as const,
+        message: {
+          role: "user" as const,
+          content: [{ type: "text" as const, text: parsedMessage }],
+          timestamp: now,
+        },
+      };
+      context.broadcast("chat", userMessagePayload);
+      context.nodeSendToSession(rawSessionKey, "chat", userMessagePayload);
+
       const trimmedMessage = parsedMessage.trim();
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
