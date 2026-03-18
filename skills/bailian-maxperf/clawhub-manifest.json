@@ -1,0 +1,139 @@
+{
+  "$schema": "https://clawhub.com/schemas/manifest-v1.json",
+  "name": "bailian-maxperf",
+  "displayName": "Bailian MaxPerf",
+  "description": "Optimize Alibaba Bailian provider for full performance with accurate token statistics and official model configurations",
+  "descriptionZh": "阿里百炼满血优化 - 准确 Token 统计 + 官方模型配置",
+  "version": "1.0.0",
+  "author": {
+    "name": "Wayne",
+    "username": "swooye",
+    "github": "https://github.com/swooye"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw",
+    "directory": "skills/bailian-maxperf"
+  },
+  "license": "MIT",
+  "tags": [
+    "provider",
+    "bailian",
+    "alibaba",
+    "optimization",
+    "performance",
+    "china",
+    "qwen",
+    "dashscope"
+  ],
+  "category": "Provider Optimization",
+  "compatibility": {
+    "openclaw": {
+      "min": "2026.3.13",
+      "max": "*"
+    },
+    "nodejs": {
+      "min": "18.0.0",
+      "max": "*"
+    }
+  },
+  "providers": [
+    {
+      "id": "bailian",
+      "name": "Alibaba Bailian",
+      "baseUrl": "https://dashscope.aliyuncs.com/v1"
+    }
+  ],
+  "models": [
+    "qwen3.5-plus",
+    "qwen3-max-2026-01-23",
+    "qwen3-coder-next",
+    "qwen3-coder-plus",
+    "MiniMax-M2.5",
+    "glm-5",
+    "glm-4.7",
+    "kimi-k2.5"
+  ],
+  "features": [
+    {
+      "name": "Token Usage Fix",
+      "description": "Maps Bailian token fields to OpenClaw format for accurate statistics"
+    },
+    {
+      "name": "Model Window Update",
+      "description": "Updates all Bailian models to official 2026 specifications"
+    },
+    {
+      "name": "Auto Validation",
+      "description": "Automatically validates configuration after applying changes"
+    }
+  ],
+  "installation": {
+    "method": "manual",
+    "steps": [
+      {
+        "step": 1,
+        "action": "clone",
+        "description": "Clone or download the skill to your workspace",
+        "command": "git clone https://github.com/openclaw/openclaw.git"
+      },
+      {
+        "step": 2,
+        "action": "navigate",
+        "description": "Navigate to the skill directory",
+        "command": "cd skills/bailian-maxperf"
+      },
+      {
+        "step": 3,
+        "action": "execute",
+        "description": "Run the optimization script",
+        "command": "./scripts/maxperf.sh"
+      },
+      {
+        "step": 4,
+        "action": "restart",
+        "description": "Restart OpenClaw Gateway",
+        "command": "openclaw gateway restart"
+      }
+    ]
+  },
+  "usage": {
+    "frequency": "on-demand",
+    "whenToRun": [
+      "After OpenClaw upgrade (npm install -g openclaw@...)",
+      "When token statistics show unknown or 0",
+      "When context window is incorrect",
+      "Initial setup for Bailian provider"
+    ]
+  },
+  "documentation": {
+    "readme": "README.md",
+    "readmeEn": "README.en.md",
+    "changelog": "CHANGELOG.md",
+    "contributing": "CONTRIBUTING.md"
+  },
+  "scripts": {
+    "main": "scripts/maxperf.sh",
+    "executable": true
+  },
+  "config": {
+    "modifies": [
+      "~/.openclaw/openclaw.json",
+      "~/.npm-global/lib/node_modules/openclaw/dist/*.js"
+    ],
+    "requiresRestart": true
+  },
+  "security": {
+    "credentials": false,
+    "networkCalls": false,
+    "systemChanges": "configuration-only",
+    "reversible": true
+  },
+  "metrics": {
+    "downloads": 0,
+    "rating": 0,
+    "reviews": 0
+  },
+  "publishedAt": "2026-03-18T14:00:00Z",
+  "updatedAt": "2026-03-18T14:00:00Z"
+}

@@ -1,0 +1,62 @@
+{
+  "_comment": "阿里百炼官方模型配置 (2026 年最新)",
+  "_source": "https://help.aliyun.com/zh/model-studio/",
+  "_updated": "2026-03-18",
+  
+  "models": {
+    "qwen3.5-plus": {
+      "contextWindow": 262144,
+      "maxTokens": 65536,
+      "input": ["text", "image"],
+      "description": "通义千问 3.5 Plus - 高性能通用模型"
+    },
+    "qwen3-max-2026-01-23": {
+      "contextWindow": 262144,
+      "maxTokens": 65536,
+      "input": ["text"],
+      "description": "通义千问 Max 版本 - 最强性能"
+    },
+    "qwen3-coder-next": {
+      "contextWindow": 262144,
+      "maxTokens": 65536,
+      "input": ["text"],
+      "description": "通义千问代码专项 - Next 版本"
+    },
+    "qwen3-coder-plus": {
+      "contextWindow": 262144,
+      "maxTokens": 65536,
+      "input": ["text"],
+      "description": "通义千问代码专项 - Plus 版本"
+    },
+    "MiniMax-M2.5": {
+      "contextWindow": 204800,
+      "maxTokens": 131072,
+      "input": ["text"],
+      "description": "MiniMax M2.5 - 长文本优化"
+    },
+    "glm-5": {
+      "contextWindow": 202752,
+      "maxTokens": 16384,
+      "input": ["text"],
+      "description": "智谱 GLM-5"
+    },
+    "glm-4.7": {
+      "contextWindow": 202752,
+      "maxTokens": 16384,
+      "input": ["text"],
+      "description": "智谱 GLM-4.7"
+    },
+    "kimi-k2.5": {
+      "contextWindow": 262144,
+      "maxTokens": 32768,
+      "input": ["text", "image"],
+      "description": "月之暗面 Kimi K2.5 - 长上下文"
+    }
+  },
+
+  "_notes": {
+    "contextWindow": "模型支持的最大输入 + 输出 token 数",
+    "maxTokens": "单次生成最大输出 token 数",
+    "tip": "实际可用上下文 = contextWindow - maxTokens"
+  }
+}
