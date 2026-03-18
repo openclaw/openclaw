@@ -751,22 +751,21 @@ function wrapStreamFnMessageTransform(
   streamFn: StreamFn,
   transformFn: (messages: AgentMessage[]) => unknown,
 ): StreamFn {
-  const inner = streamFn;
   return (model, context, options) => {
     const ctx = context as unknown as { messages?: unknown };
     const messages = ctx?.messages;
     if (!Array.isArray(messages)) {
-      return inner(model, context, options);
+      return streamFn(model, context, options);
     }
     const sanitized = transformFn(messages as AgentMessage[]);
     if (sanitized === messages) {
-      return inner(model, context, options);
+      return streamFn(model, context, options);
     }
     const nextContext = {
       ...(context as unknown as Record<string, unknown>),
       messages: sanitized,
     } as unknown;
-    return inner(model, nextContext as typeof context, options);
+    return streamFn(model, nextContext as typeof context, options);
   };
 }
 
