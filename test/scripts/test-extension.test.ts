@@ -35,6 +35,14 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.testFiles.some((file) => file.startsWith("extensions/firecrawl/"))).toBe(true);
   });
 
+  it("returns an empty test list for provider extensions without dedicated tests", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "openrouter", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("openrouter");
+    expect(plan.config).toBe("vitest.extensions.config.ts");
+    expect(plan.testFiles).toEqual([]);
+  });
+
   it("includes paired src roots when they contain tests", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "line", cwd: process.cwd() });
 
@@ -50,6 +58,15 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(plan.extensionId).toBe("slack");
     expect(plan.extensionDir).toBe("extensions/slack");
+  });
+
+  it("treats extensions without dedicated tests as a clean dry-run skip", () => {
+    const stdout = execFileSync(process.execPath, [scriptPath, "openrouter"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(stdout).toContain("No tests found for extensions/openrouter; skipping.");
   });
 
   it("maps changed paths back to extension ids", () => {
