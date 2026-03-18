@@ -21,6 +21,7 @@ import {
   resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
+import { appendCommsLog } from "./sessions-send-comms-log.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
@@ -287,6 +288,14 @@ export function createSessionsSendTool(opts?: {
         }
         runId = start.runId;
         startA2AFlow(undefined, runId);
+        appendCommsLog({
+          type: "MESSAGE",
+          from: effectiveRequesterKey,
+          to: displayKey,
+          ts: new Date().toISOString(),
+          status: "accepted",
+          messagePreview: message?.slice(0, 200),
+        });
         return jsonResult({
           runId,
           status: "accepted",
@@ -354,6 +363,16 @@ export function createSessionsSendTool(opts?: {
       const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
       const reply = last ? extractAssistantText(last) : undefined;
       startA2AFlow(reply ?? undefined);
+
+      appendCommsLog({
+        type: "MESSAGE",
+        from: effectiveRequesterKey,
+        to: displayKey,
+        ts: new Date().toISOString(),
+        status: "ok",
+        messagePreview: message?.slice(0, 200),
+        replyPreview: reply?.slice(0, 200),
+      });
 
       return jsonResult({
         runId,
