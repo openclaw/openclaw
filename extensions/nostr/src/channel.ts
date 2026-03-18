@@ -1,8 +1,4 @@
 import {
-  buildPassiveChannelStatusSummary,
-  buildTrafficStatusSummary,
-} from "../../shared/channel-status-summary.js";
-import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
@@ -10,7 +6,11 @@ import {
   formatPairingApproveHint,
   mapAllowFromEntries,
   type ChannelPlugin,
-} from "../api.js";
+} from "openclaw/plugin-sdk/nostr";
+import {
+  buildPassiveChannelStatusSummary,
+  buildTrafficStatusSummary,
+} from "../../shared/channel-status-summary.js";
 import type { NostrProfile } from "./config-schema.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
