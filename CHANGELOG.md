@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Chutes: add a bundled Chutes provider with plugin-owned OAuth/API-key auth, dynamic model discovery, and default-on extension wiring. (#41416) Thanks @Veightor.
 - Plugins/binding: add `onConversationBindingResolved(...)` so plugins can react immediately after bind approvals or denies without blocking channel interaction acknowledgements. (#48678) Thanks @huntharo.
 - CLI/config: expand `config set` with SecretRef and provider builder modes, JSON/batch assignment support, and `--dry-run` validation with structured JSON output. (#49296) Thanks @joshavant.
+- Control UI/appearance: unify theme border radii across Claw, Knot, and Dash, and add a Roundness slider to the Appearance settings so users can adjust corner radius from sharp to fully rounded. Thanks @BunsDev.
 
 ### Fixes
 
