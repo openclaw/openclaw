@@ -313,10 +313,12 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
   }
 }
 
-// TODO(argus): This assumes sessions.json is co-located with the session transcript file.
-// The session store path is configurable (see config/sessions/paths.ts resolveStorePath),
-// so this heuristic breaks when a custom store path is configured. Fixing this requires
-// threading the resolved store path or config through the lock acquisition call chain.
+/**
+ * Derive the sessions.json path from the session transcript file path.
+ * This is a heuristic that works when the store is co-located with transcripts.
+ * Callers with access to the resolved store path should pass `sessionsStorePath`
+ * to {@link readArgusSessionContext} directly to avoid this fallback.
+ */
 function resolveSessionStorePathForLock(sessionFile: string): string {
   return path.join(path.dirname(sessionFile), "sessions.json");
 }
@@ -335,12 +337,17 @@ function resolveStoredSessionFilePath(params: {
   return path.normalize(candidate);
 }
 
-async function readArgusSessionContext(params: { sessionFile: string; nowMs: number }): Promise<{
+async function readArgusSessionContext(params: {
+  sessionFile: string;
+  nowMs: number;
+  /** Resolved sessions.json path. When omitted, derived from sessionFile (co-located heuristic). */
+  sessionsStorePath?: string;
+}): Promise<{
   argusProtected: boolean;
   argusProtectUntil?: number;
   argusRecoveryActive: boolean;
 }> {
-  const storePath = resolveSessionStorePathForLock(params.sessionFile);
+  const storePath = params.sessionsStorePath ?? resolveSessionStorePathForLock(params.sessionFile);
   try {
     const raw = await fs.readFile(storePath, "utf8");
     const parsed = JSON.parse(raw) as Record<string, SessionEntry>;
@@ -377,6 +384,7 @@ async function inspectLockPayload(
   staleMs: number,
   nowMs: number,
   sessionFile?: string,
+  sessionsStorePath?: string,
 ): Promise<LockInspectionDetails> {
   const pid = isValidLockNumber(payload?.pid) && payload.pid > 0 ? payload.pid : null;
   const pidAlive = pid !== null ? isPidAlive(pid) : false;
@@ -411,7 +419,7 @@ async function inspectLockPayload(
   }
 
   const argusContext = sessionFile
-    ? await readArgusSessionContext({ sessionFile, nowMs })
+    ? await readArgusSessionContext({ sessionFile, nowMs, sessionsStorePath })
     : { argusProtected: false, argusRecoveryActive: false };
   if (argusContext.argusProtected || argusContext.argusRecoveryActive) {
     const filteredReasons = staleReasons.filter((reason) => reason !== "too-old");
@@ -498,12 +506,15 @@ export async function cleanStaleLockFiles(params: {
   staleMs?: number;
   removeStale?: boolean;
   nowMs?: number;
+  /** Resolved sessions.json path. Falls back to `sessionsDir/sessions.json`. */
+  sessionsStorePath?: string;
   log?: {
     warn?: (message: string) => void;
     info?: (message: string) => void;
   };
 }): Promise<{ locks: SessionLockInspection[]; cleaned: SessionLockInspection[] }> {
   const sessionsDir = path.resolve(params.sessionsDir);
+  const sessionsStorePath = params.sessionsStorePath ?? path.join(sessionsDir, "sessions.json");
   const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
   const removeStale = params.removeStale !== false;
   const nowMs = params.nowMs ?? Date.now();
@@ -533,6 +544,7 @@ export async function cleanStaleLockFiles(params: {
       staleMs,
       nowMs,
       lockPath.slice(0, -".lock".length),
+      sessionsStorePath,
     );
     const lockInfo: SessionLockInspection = {
       lockPath,
@@ -561,6 +573,8 @@ export async function acquireSessionWriteLock(params: {
   staleMs?: number;
   maxHoldMs?: number;
   allowReentrant?: boolean;
+  /** Resolved sessions.json path for Argus context lookup. Falls back to co-located heuristic. */
+  sessionsStorePath?: string;
 }): Promise<{
   release: () => Promise<void>;
 }> {
@@ -608,6 +622,7 @@ export async function acquireSessionWriteLock(params: {
       const argusContext = await readArgusSessionContext({
         sessionFile,
         nowMs: Date.now(),
+        sessionsStorePath: params.sessionsStorePath,
       });
       const createdHeld: HeldLock = {
         count: 1,
@@ -643,7 +658,13 @@ export async function acquireSessionWriteLock(params: {
       }
       const payload = await readLockPayload(lockPath);
       const nowMs = Date.now();
-      const inspected = await inspectLockPayload(payload, staleMs, nowMs, normalizedSessionFile);
+      const inspected = await inspectLockPayload(
+        payload,
+        staleMs,
+        nowMs,
+        normalizedSessionFile,
+        params.sessionsStorePath,
+      );
       const orphanSelfLock = shouldTreatAsOrphanSelfLock({
         payload,
         normalizedSessionFile,

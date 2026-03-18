@@ -56,6 +56,62 @@ export { normalizeOutboundPayloads } from "./payloads.js";
 const log = createSubsystemLogger("outbound/deliver");
 const TELEGRAM_TEXT_LIMIT = 4096;
 
+/**
+ * Deferred silent delivery recovery: after a silent delivery is written to the
+ * queue but skipped (because user-visible deliveries are in flight), schedule a
+ * background recovery pass so the entry is retried without waiting for a full
+ * gateway restart.
+ *
+ * Uses a coalescing timer: multiple deferred deliveries within the same window
+ * share a single recovery pass to avoid duplicate sends.
+ */
+const DEFERRED_RECOVERY_DELAY_MS = 5_000;
+let deferredRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+let deferredRecoveryRunning = false;
+
+function scheduleDeferredSilentRecovery(cfg: OpenClawConfig): void {
+  if (deferredRecoveryTimer !== null) {
+    // A recovery pass is already scheduled — coalesce.
+    return;
+  }
+  deferredRecoveryTimer = setTimeout(() => {
+    deferredRecoveryTimer = null;
+    if (deferredRecoveryRunning) {
+      return;
+    }
+    deferredRecoveryRunning = true;
+    void (async () => {
+      try {
+        // Only run recovery when user-visible lane is clear.
+        const stillBusy = await hasPendingUserVisibleDeliveries().catch(() => false);
+        if (stillBusy) {
+          // Re-schedule: user-visible deliveries are still pending.
+          scheduleDeferredSilentRecovery(cfg);
+          return;
+        }
+        const { recoverPendingDeliveries } = await import("./delivery-queue.js");
+        const { deliverOutboundPayloads: deliver } = await import("./deliver.js");
+        await recoverPendingDeliveries({
+          deliver,
+          log: {
+            info: (msg: string) => log.info(msg),
+            warn: (msg: string) => log.warn(msg),
+            error: (msg: string) => log.error(msg),
+          },
+          cfg,
+          maxRecoveryMs: 30_000,
+        });
+      } catch {
+        // Best-effort — don't propagate errors from background recovery.
+      } finally {
+        deferredRecoveryRunning = false;
+      }
+    })();
+  }, DEFERRED_RECOVERY_DELAY_MS);
+  // Allow the process to exit even if the timer is pending.
+  deferredRecoveryTimer.unref?.();
+}
+
 type SendMatrixMessage = (
   to: string,
   text: string,
@@ -498,11 +554,11 @@ export async function deliverOutboundPayloads(
       excludeId: queueId,
     }).catch(() => false);
     if (shouldDeferForLaneWatch) {
-      // TODO(argus): Deferred silent deliveries remain as .json files in the queue
-      // directory and are only recovered on gateway restart (via recoverPendingDeliveries).
-      // A background timer or queue-drain listener would allow these to be retried
-      // without a full restart, but adding retry scheduling here risks re-ordering
-      // deliveries or duplicate sends. Accept the limitation for now.
+      // Schedule a background recovery pass so deferred silent deliveries are
+      // retried once user-visible deliveries drain, rather than waiting for a
+      // full gateway restart. The recovery function uses the existing queue
+      // infrastructure (skipQueue, ackDelivery) so duplicates are prevented.
+      scheduleDeferredSilentRecovery(params.cfg);
       return [];
     }
   }

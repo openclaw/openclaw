@@ -666,6 +666,7 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
           sessionFile: storePath,
           timeoutMs: remainingTimeoutMs,
           staleMs: task.staleMs,
+          sessionsStorePath: storePath,
         });
         result = await task.fn();
       } catch (err) {
