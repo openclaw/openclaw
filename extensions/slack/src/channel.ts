@@ -82,6 +82,36 @@ function getTokenForOperation(
   if (operation === "read") {
     return userToken ?? botToken;
   }
+
+/**
+ * Maps an OutboundIdentity (name/avatarUrl/emoji) to the SlackSendIdentity
+ * shape (username/iconUrl/iconEmoji) expected by sendMessageSlack.
+ *
+ * When the agent has `identity.name` and/or `identity.emoji` configured,
+ * these are passed as `username` and `icon_emoji` in chat.postMessage calls,
+ * enabling per-agent display names via the `chat:write.customize` Slack scope.
+ * Falls back gracefully if the scope is missing (handled in send.ts).
+ */
+export function mapOutboundIdentityToSlack(identity?: {
+  name?: string;
+  avatarUrl?: string;
+  emoji?: string;
+}): { username?: string; iconUrl?: string; iconEmoji?: string } | undefined {
+  if (!identity) {
+    return undefined;
+  }
+  const username = identity.name?.trim() || undefined;
+  const iconUrl = identity.avatarUrl?.trim() || undefined;
+  // Only use emoji as icon when no avatar URL is present and the emoji is in
+  // Slack's colon-wrapped format (e.g. ":robot_face:").
+  const rawEmoji = identity.emoji?.trim();
+  const iconEmoji = !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+  if (!username && !iconUrl && !iconEmoji) {
+    return undefined;
+  }
+  return { username, iconUrl, iconEmoji };
+}
+
   if (!allowUserWrites) {
     return botToken;
   }
@@ -396,6 +426,17 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       threadId: null,
     }),
   },
+  agentPrompt: {
+    messageToolHints: ({ cfg, accountId }) =>
+      isSlackInteractiveRepliesEnabled({ cfg, accountId })
+        ? [
+            "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
+            "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
+          ]
+        : [
+            '- Slack interactive replies are disabled. If needed, ask to add `"interactiveReplies"` to `channels.slack.capabilities` (or `channels.slack.accounts.<account>.capabilities`).',
+          ],
+  },
   messaging: {
     normalizeTarget: normalizeSlackMessagingTarget,
     resolveSessionTarget: ({ id }) => normalizeSlackMessagingTarget(`channel:${id}`),
@@ -485,7 +526,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     textChunkLimit: 4000,
     ...createAttachedChannelResultAdapter({
       channel: "slack",
-      sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
+      sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg , identity}\) => {
         const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
           cfg,
           accountId: accountId ?? undefined,
@@ -493,11 +534,13 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
           replyToId,
           threadId,
         });
+        const slackIdentity = mapOutboundIdentityToSlack(identity);
         return await send(to, text, {
           cfg,
           threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
           accountId: accountId ?? undefined,
           ...(tokenOverride ? { token: tokenOverride } : {}),
+          ...(slackIdentity ? { identity: slackIdentity } : {}),
         });
       },
       sendMedia: async ({
@@ -510,6 +553,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         replyToId,
         threadId,
         cfg,
+        identity,
       }) => {
         const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
           cfg,
@@ -518,6 +562,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
           replyToId,
           threadId,
         });
+        const slackIdentity = mapOutboundIdentityToSlack(identity);
         return await send(to, text, {
           cfg,
           mediaUrl,
@@ -525,6 +570,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
           threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
           accountId: accountId ?? undefined,
           ...(tokenOverride ? { token: tokenOverride } : {}),
+          ...(slackIdentity ? { identity: slackIdentity } : {}),
         });
       },
     }),

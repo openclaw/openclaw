@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/slack";
 import { describe, expect, it, vi } from "vitest";
+import { mapOutboundIdentityToSlack } from "./channel.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import { slackOutbound } from "./outbound-adapter.js";
 
@@ -389,5 +390,70 @@ describe("slackPlugin config", () => {
     expect(snapshot?.configured).toBe(true);
     expect(snapshot?.botTokenStatus).toBe("available");
     expect(snapshot?.signingSecretStatus).toBe("configured_unavailable");
+  });
+});
+
+describe("mapOutboundIdentityToSlack", () => {
+  it("returns undefined for undefined identity", () => {
+    expect(mapOutboundIdentityToSlack(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined for empty identity", () => {
+    expect(mapOutboundIdentityToSlack({})).toBeUndefined();
+  });
+
+  it("returns undefined for whitespace-only fields", () => {
+    expect(mapOutboundIdentityToSlack({ name: "  ", avatarUrl: " ", emoji: " " })).toBeUndefined();
+  });
+
+  it("maps name to username", () => {
+    expect(mapOutboundIdentityToSlack({ name: "Levy" })).toEqual({
+      username: "Levy",
+      iconUrl: undefined,
+      iconEmoji: undefined,
+    });
+  });
+
+  it("maps avatarUrl to iconUrl", () => {
+    expect(mapOutboundIdentityToSlack({ avatarUrl: "https://example.com/avatar.png" })).toEqual({
+      username: undefined,
+      iconUrl: "https://example.com/avatar.png",
+      iconEmoji: undefined,
+    });
+  });
+
+  it("maps colon-wrapped emoji to iconEmoji when no avatarUrl", () => {
+    expect(mapOutboundIdentityToSlack({ emoji: ":robot_face:" })).toEqual({
+      username: undefined,
+      iconUrl: undefined,
+      iconEmoji: ":robot_face:",
+    });
+  });
+
+  it("prefers avatarUrl over emoji for icon", () => {
+    const result = mapOutboundIdentityToSlack({
+      avatarUrl: "https://example.com/avatar.png",
+      emoji: ":robot_face:",
+    });
+    expect(result?.iconUrl).toBe("https://example.com/avatar.png");
+    expect(result?.iconEmoji).toBeUndefined();
+  });
+
+  it("ignores non-colon-wrapped emoji", () => {
+    expect(mapOutboundIdentityToSlack({ emoji: "🤖" })).toBeUndefined();
+  });
+
+  it("maps all fields together", () => {
+    expect(
+      mapOutboundIdentityToSlack({
+        name: "Byte",
+        avatarUrl: "https://example.com/byte.png",
+        emoji: ":gear:",
+      }),
+    ).toEqual({
+      username: "Byte",
+      iconUrl: "https://example.com/byte.png",
+      iconEmoji: undefined, // avatarUrl takes precedence
+    });
   });
 });
