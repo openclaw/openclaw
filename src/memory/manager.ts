@@ -46,6 +46,16 @@ const log = createSubsystemLogger("memory");
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
 
+function buildMemoryManagerCacheKey(params: {
+  baseKey: string;
+  explicitTimeoutKey: string;
+  provider: EmbeddingProvider | null;
+}): string {
+  const timeoutKey =
+    params.provider && params.provider.id !== "local" ? params.explicitTimeoutKey : "ignored";
+  return `${params.baseKey}:batch-timeout-override:${timeoutKey}`;
+}
+
 function resolveExplicitRemoteBatchTimeoutMinutes(
   cfg: OpenClawConfig,
   agentId: string,
@@ -65,7 +75,7 @@ export async function closeAllMemoryIndexManagers(): Promise<void> {
   if (pending.length > 0) {
     await Promise.allSettled(pending);
   }
-  const managers = Array.from(INDEX_CACHE.values());
+  const managers = Array.from(new Set(INDEX_CACHE.values()));
   INDEX_CACHE.clear();
   for (const manager of managers) {
     try {
@@ -170,7 +180,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       explicitRemoteBatchTimeoutMinutes === null
         ? "none"
         : String(explicitRemoteBatchTimeoutMinutes);
-    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:batch-timeout-override:${explicitTimeoutKey}`;
+    const baseKey = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}`;
+    const key = `${baseKey}:batch-timeout-override:${explicitTimeoutKey}`;
     const existing = INDEX_CACHE.get(key);
     if (existing) {
       return existing;
@@ -190,12 +201,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         fallback: settings.fallback,
         local: settings.local,
       });
-      const refreshed = INDEX_CACHE.get(key);
+      const finalKey = buildMemoryManagerCacheKey({
+        baseKey,
+        explicitTimeoutKey,
+        provider: providerResult.provider,
+      });
+      const refreshed = INDEX_CACHE.get(finalKey);
       if (refreshed) {
+        INDEX_CACHE.set(key, refreshed);
         return refreshed;
       }
       const manager = new MemoryIndexManager({
-        cacheKey: key,
+        cacheKey: finalKey,
         cfg,
         agentId,
         workspaceDir,
@@ -203,7 +220,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         providerResult,
         purpose: params.purpose,
       });
-      INDEX_CACHE.set(key, manager);
+      INDEX_CACHE.set(finalKey, manager);
+      if (finalKey !== key) {
+        INDEX_CACHE.set(key, manager);
+      }
       return manager;
     })();
     INDEX_CACHE_PENDING.set(key, createPromise);
@@ -862,6 +882,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       } catch {}
     }
     this.db.close();
-    INDEX_CACHE.delete(this.cacheKey);
+    for (const [key, manager] of INDEX_CACHE.entries()) {
+      if (manager === this) {
+        INDEX_CACHE.delete(key);
+      }
+    }
   }
 }

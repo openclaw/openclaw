@@ -12,6 +12,7 @@ type ManagerModule = typeof import("./manager.js");
 const hoisted = vi.hoisted(() => ({
   providerCreateCalls: 0,
   providerDelayMs: 0,
+  providerMode: "remote" as "remote" | "local" | "none",
 }));
 
 vi.mock("./embeddings.js", () => ({
@@ -20,10 +21,17 @@ vi.mock("./embeddings.js", () => ({
     if (hoisted.providerDelayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, hoisted.providerDelayMs));
     }
+    if (hoisted.providerMode === "none") {
+      return {
+        requestedProvider: "openai",
+        provider: null,
+      };
+    }
+    const providerId = hoisted.providerMode === "local" ? "local" : "mock";
     return {
-      requestedProvider: "openai",
+      requestedProvider: providerId === "local" ? "local" : "openai",
       provider: {
-        id: "mock",
+        id: providerId,
         model: "mock-embed",
         maxInputTokens: 8192,
         embedQuery: async () => [0, 1, 0],
@@ -54,6 +62,7 @@ describe("memory manager cache hydration", () => {
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
     hoisted.providerCreateCalls = 0;
     hoisted.providerDelayMs = 50;
+    hoisted.providerMode = "remote";
   });
 
   afterEach(async () => {
@@ -144,4 +153,36 @@ describe("memory manager cache hydration", () => {
     await first?.close?.();
     await second?.close?.();
   });
+
+  it.each([
+    { providerMode: "local" as const, label: "local provider" },
+    { providerMode: "none" as const, label: "fts-only mode" },
+  ])(
+    "reuses cache entry when batch timeout override provenance changes in $label",
+    async ({ providerMode }) => {
+      const indexPath = path.join(workspaceDir, "index.sqlite");
+      const cfgInherited = createMemoryConcurrencyConfig(indexPath);
+      const cfgExplicit = createMemoryConcurrencyConfig(indexPath);
+      cfgExplicit.agents = cfgExplicit.agents ?? {};
+      cfgExplicit.agents.defaults = cfgExplicit.agents.defaults ?? {};
+      cfgExplicit.agents.defaults.memorySearch = cfgExplicit.agents.defaults.memorySearch ?? {};
+      cfgExplicit.agents.defaults.memorySearch.remote = {
+        ...cfgExplicit.agents.defaults.memorySearch.remote,
+        batch: {
+          ...cfgExplicit.agents.defaults.memorySearch.remote?.batch,
+          timeoutMinutes: 60,
+        },
+      };
+      hoisted.providerMode = providerMode;
+
+      const first = await RawMemoryIndexManager.get({ cfg: cfgInherited, agentId: "main" });
+      const second = await RawMemoryIndexManager.get({ cfg: cfgExplicit, agentId: "main" });
+
+      expect(first).toBeTruthy();
+      expect(second).toBeTruthy();
+      expect(Object.is(second, first)).toBe(true);
+
+      await first?.close?.();
+    },
+  );
 });
