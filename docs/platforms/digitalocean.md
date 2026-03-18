@@ -231,7 +231,7 @@ For the full setup guide, see [Oracle Cloud](/platforms/oracle). For signup tips
 
 ## Troubleshooting
 
-### Gateway won't start
+### Gateway will not start
 
 ```bash
 openclaw gateway status
