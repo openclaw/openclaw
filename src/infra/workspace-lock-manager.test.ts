@@ -732,6 +732,30 @@ describe("workspace lock manager", () => {
     await held.release();
   });
 
+  it("refresh produces valid JSON with no trailing garbage after multiple refreshes", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "refresh-integrity.txt");
+    const lock = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    // Refresh several times to trigger potential truncation bugs
+    for (let i = 0; i < 5; i++) {
+      await lock.refresh();
+    }
+    const raw = await fs.readFile(lock.lockPath, "utf8");
+    const parsed = JSON.parse(raw);
+    expect(parsed).toHaveProperty("token");
+    expect(parsed).toHaveProperty("expiresAt");
+    // Ensure no trailing characters beyond the JSON payload
+    expect(raw).toBe(JSON.stringify(parsed));
+
+    await lock.release();
+  });
+
   it("refresh writes payload from offset 0 so release can still parse and clean up", async () => {
     const dir = await makeCaseDir();
     const target = path.join(dir, "refresh-offset.txt");

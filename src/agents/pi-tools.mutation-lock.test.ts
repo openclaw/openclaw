@@ -524,4 +524,120 @@ describe("wrapToolMutationLock", () => {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it("aborting a middle waiter preserves queue order for later waiters", async () => {
+    const tempRoot = path.join(os.tmpdir(), `oc-lock-queue-abort-${Date.now()}`);
+    await fs.mkdir(tempRoot, { recursive: true });
+
+    try {
+      const events: string[] = [];
+      const gate1 = deferred();
+
+      const base: AnyAgentTool = {
+        name: "write",
+        label: "write",
+        description: "test write",
+        parameters: {},
+        execute: async (_toolCallId, params) => {
+          const record = params as Record<string, unknown>;
+          const content = typeof record.content === "string" ? record.content : "";
+          events.push(`start:${content}`);
+          if (content === "first") {
+            await gate1.promise;
+          }
+          events.push(`end:${content}`);
+          return textResult(content);
+        },
+      };
+
+      const wrapped = wrapToolMutationLock(base, tempRoot);
+      const targetPath = path.join(tempRoot, "queue-order.txt");
+      await fs.writeFile(targetPath, "");
+
+      // Call 1: starts executing, blocks on gate
+      const p1 = wrapped.execute("c1", { path: targetPath, content: "first" });
+      await new Promise((r) => setTimeout(r, 10));
+      expect(events).toEqual(["start:first"]);
+
+      // Call 2: queued behind call 1, will be aborted
+      const controller = new AbortController();
+      const p2 = wrapped.execute("c2", { path: targetPath, content: "second" }, controller.signal);
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Call 3: queued behind call 2
+      const p3 = wrapped.execute("c3", { path: targetPath, content: "third" });
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Abort call 2 while it's still waiting in queue
+      controller.abort();
+      await expect(p2).rejects.toThrow();
+
+      // Release call 1 — call 3 should still execute after call 1
+      gate1.resolve();
+      await p1;
+      await p3;
+
+      // Call 3 must not have started before call 1 ended
+      expect(events).toEqual(["start:first", "end:first", "start:third", "end:third"]);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("new write arriving after abort but before predecessor settles still queues correctly", async () => {
+    const tempRoot = path.join(os.tmpdir(), `oc-lock-abort-race-${Date.now()}`);
+    await fs.mkdir(tempRoot, { recursive: true });
+
+    try {
+      const events: string[] = [];
+      const gate1 = deferred();
+
+      const base: AnyAgentTool = {
+        name: "write",
+        label: "write",
+        description: "test write",
+        parameters: {},
+        execute: async (_toolCallId, params) => {
+          const record = params as Record<string, unknown>;
+          const content = typeof record.content === "string" ? record.content : "";
+          events.push(`start:${content}`);
+          if (content === "first") {
+            await gate1.promise;
+          }
+          events.push(`end:${content}`);
+          return textResult(content);
+        },
+      };
+
+      const wrapped = wrapToolMutationLock(base, tempRoot);
+      const targetPath = path.join(tempRoot, "abort-race.txt");
+      await fs.writeFile(targetPath, "");
+
+      // Call 1: starts, blocks on gate
+      const p1 = wrapped.execute("c1", { path: targetPath, content: "first" });
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Call 2: queued, then aborted
+      const ctrl = new AbortController();
+      const p2 = wrapped.execute("c2", { path: targetPath, content: "second" }, ctrl.signal);
+      await new Promise((r) => setTimeout(r, 10));
+      ctrl.abort();
+      await expect(p2).rejects.toThrow();
+
+      // Call 3: arrives AFTER abort — must still wait for call 1
+      const p3 = wrapped.execute("c3", { path: targetPath, content: "third" });
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Call 1 still running — call 3 must not have started
+      expect(events).toEqual(["start:first"]);
+
+      gate1.resolve();
+      await p1;
+      await p3;
+
+      expect(events).toEqual(["start:first", "end:first", "start:third", "end:third"]);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 });

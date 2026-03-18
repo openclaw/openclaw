@@ -84,6 +84,7 @@ function loadMonolithicSdk() {
 
   const jiti = getJiti();
 
+
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
   if (fs.existsSync(distCandidate)) {
     try {

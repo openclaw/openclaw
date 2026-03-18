@@ -10,7 +10,16 @@ import {
   readFileWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
-import { withWorkspaceLock } from "../infra/workspace-lock-manager.js";
+// Lazy-load workspace lock manager to avoid startup memory overhead.
+let _withWorkspaceLock:
+  | typeof import("../infra/workspace-lock-manager.js").withWorkspaceLock
+  | undefined;
+async function getWithWorkspaceLock() {
+  if (!_withWorkspaceLock) {
+    _withWorkspaceLock = (await import("../infra/workspace-lock-manager.js")).withWorkspaceLock;
+  }
+  return _withWorkspaceLock;
+}
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -388,9 +397,12 @@ export function wrapToolMutationLock(
       });
       workspaceMutationLocks.set(lockKey, current);
 
+      let ranMutation = false;
       try {
         await waitForQueuedMutation(previous, signal);
-        return await withWorkspaceLock(
+        ranMutation = true;
+        const lockFn = await getWithWorkspaceLock();
+        return await lockFn(
           lockKey,
           {
             kind: "file",
@@ -403,9 +415,30 @@ export function wrapToolMutationLock(
           },
         );
       } finally {
-        release?.();
-        if (workspaceMutationLocks.get(lockKey) === current) {
-          workspaceMutationLocks.delete(lockKey);
+        if (ranMutation) {
+          // Mutation completed (or failed) — release so next waiter can proceed.
+          release?.();
+          if (workspaceMutationLocks.get(lockKey) === current) {
+            workspaceMutationLocks.delete(lockKey);
+          }
+        } else {
+          // Aborted/errored before mutation ran — keep `current` in the map so
+          // new same-path writes still queue behind it, then forward resolution
+          // to when our predecessor completes.
+          void previous.then(
+            () => {
+              release?.();
+              if (workspaceMutationLocks.get(lockKey) === current) {
+                workspaceMutationLocks.delete(lockKey);
+              }
+            },
+            () => {
+              release?.();
+              if (workspaceMutationLocks.get(lockKey) === current) {
+                workspaceMutationLocks.delete(lockKey);
+              }
+            },
+          );
         }
       }
     },
