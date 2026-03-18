@@ -234,6 +234,7 @@ describe("exec approvals", () => {
   });
 
   it("reuses approval id as the node runId", async () => {
+    let prepareParams: unknown;
     let invokeParams: unknown;
     let agentParams: unknown;
 
@@ -244,6 +245,7 @@ describe("exec approvals", () => {
       onNodeInvoke: (params) => {
         const invoke = params as { command?: string };
         if (invoke.command === "system.run.prepare") {
+          prepareParams = (params as { params?: unknown }).params;
           return buildPreparedSystemRunPayload(params);
         }
         if (invoke.command === "system.run") {
@@ -268,6 +270,7 @@ describe("exec approvals", () => {
       interactive: true,
     });
     const approvalId = details.approvalId;
+    expect(prepareParams).not.toHaveProperty("cwd");
 
     await expect
       .poll(() => (invokeParams as { params?: { runId?: string } } | undefined)?.params?.runId, {
@@ -280,6 +283,9 @@ describe("exec approvals", () => {
     ).toMatchObject({
       suppressNotifyOnExit: true,
     });
+    expect(
+      (invokeParams as { params?: Record<string, unknown> } | undefined)?.params,
+    ).not.toHaveProperty("cwd");
     await expect.poll(() => agentParams, { timeout: 2_000, interval: 20 }).toBeTruthy();
   });
 
@@ -320,7 +326,9 @@ describe("exec approvals", () => {
     expect(runParams).not.toHaveProperty("cwd");
   });
 
-  it("reuses a node-provided cwd from the prepare plan for execution", async () => {
+  it("forwards an explicit workdir to node prepare and execution", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-cwd-"));
+    let prepareParams: Record<string, unknown> | undefined;
     let runParams: Record<string, unknown> | undefined;
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
@@ -330,11 +338,8 @@ describe("exec approvals", () => {
           params?: Record<string, unknown>;
         };
         if (invoke.command === "system.run.prepare") {
-          expect(invoke.params).not.toHaveProperty("cwd");
-          return buildSystemRunPreparePayload({
-            ...invoke.params,
-            cwd: "C:\\\\node-workspace",
-          });
+          prepareParams = invoke.params;
+          return buildPreparedSystemRunPayload(params);
         }
         if (invoke.command === "system.run") {
           runParams = invoke.params;
@@ -351,9 +356,13 @@ describe("exec approvals", () => {
       approvalRunningNoticeMs: 0,
     });
 
-    const result = await tool.execute("call-node-remote-cwd", { command: "echo hello" });
+    const result = await tool.execute("call-node-remote-cwd", {
+      command: "echo hello",
+      workdir: tempDir,
+    });
     expect(result.details.status).toBe("completed");
-    expect(runParams).toMatchObject({ cwd: "C:\\\\node-workspace" });
+    expect(prepareParams).toMatchObject({ cwd: tempDir });
+    expect(runParams).toMatchObject({ cwd: tempDir });
   });
 
   it("skips approval when node allowlist is satisfied", async () => {

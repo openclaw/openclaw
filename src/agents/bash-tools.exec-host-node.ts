@@ -30,6 +30,7 @@ import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 export type ExecuteNodeHostCommandParams = {
   command: string;
   workdir: string;
+  forwardedWorkdir?: string;
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;
   requestedNode?: string;
@@ -100,6 +101,7 @@ export async function executeNodeHostCommand(
       params: {
         command: argv,
         rawCommand: params.command,
+        ...(params.forwardedWorkdir ? { cwd: params.forwardedWorkdir } : {}),
         agentId: params.agentId,
         sessionKey: params.sessionKey,
       },
@@ -219,7 +221,7 @@ export async function executeNodeHostCommand(
         approvalId,
         systemRunPlan: prepared.plan,
         env: nodeEnv,
-        workdir: runCwd,
+        workdir: runCwd ?? params.workdir,
         host: "node",
         nodeId,
         security: hostSecurity,
