@@ -1,7 +1,4 @@
-import "./run.overflow-compaction.mocks.shared.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { pickFallbackThinkingLevel } from "../pi-embedded-helpers.js";
-import { runEmbeddedPiAgent } from "./run.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -10,24 +7,30 @@ import {
   queueOverflowAttemptWithOversizedToolOutput,
 } from "./run.overflow-compaction.fixture.js";
 import {
+  loadRunOverflowCompactionHarness,
   mockedCoerceToFailoverError,
   mockedDescribeFailoverError,
   mockedGlobalHookRunner,
+  mockedPickFallbackThinkingLevel,
   mockedResolveFailoverStatus,
-} from "./run.overflow-compaction.mocks.shared.js";
-import {
   mockedContextEngine,
   mockedCompactDirect,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams,
-} from "./run.overflow-compaction.shared-test.js";
-const mockedPickFallbackThinkingLevel = vi.mocked(pickFallbackThinkingLevel);
+} from "./run.overflow-compaction.harness.js";
+
+let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
 describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    return loadRunOverflowCompactionHarness().then((loaded) => {
+      runEmbeddedPiAgent = loaded.runEmbeddedPiAgent;
+    });
+  });
+
+  beforeEach(() => {
     mockedRunEmbeddedAttempt.mockReset();
     mockedCompactDirect.mockReset();
     mockedCoerceToFailoverError.mockReset();
@@ -257,7 +260,8 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   it("returns retry_limit when repeated retries never converge", async () => {
     mockedRunEmbeddedAttempt.mockClear();
     mockedCompactDirect.mockClear();
-    mockedPickFallbackThinkingLevel.mockClear();
+    mockedPickFallbackThinkingLevel.mockReset();
+    mockedPickFallbackThinkingLevel.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({ promptError: new Error("unsupported reasoning mode") }),
     );
@@ -288,15 +292,15 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       status: 429,
     });
 
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError }));
-    mockedCoerceToFailoverError.mockReturnValueOnce(normalized);
+    mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError }));
+    mockedCoerceToFailoverError.mockReturnValue(normalized);
     mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
       message: err instanceof Error ? err.message : String(err),
       reason: err === normalized ? "rate_limit" : undefined,
       status: err === normalized ? 429 : undefined,
       code: undefined,
     }));
-    mockedResolveFailoverStatus.mockReturnValueOnce(429);
+    mockedResolveFailoverStatus.mockReturnValue(429);
 
     await expect(
       runEmbeddedPiAgent({
