@@ -539,10 +539,9 @@ export async function preflightDiscordMessage(
   // escaped <@id> tokens (e.g. \<@id>) that Discord renders as literal text.
   const textForMentionCheck = baseText
     ? baseText
-        .replace(/```[\s\S]*?```/g, "")   // fenced code blocks
-        .replace(/``[^`]*``/g, "")           // double-backtick code spans
-        .replace(/`[^`]*`/g, "")            // inline code spans
-        .replace(/\\<@/g, "")              // escaped mention literals \<@
+        .replace(/`{3,}[\s\S]*?`{3,}/g, "")  // fenced code blocks (3+ backticks, any length)
+        .replace(/`+[^`\n]+`+/g, "")           // inline code spans (arbitrary backtick count)
+        .replace(/\\<@/g, "")               // escaped mention literals \<@
     : undefined;
   const explicitlyMentionedViaText = Boolean(
     botId && textForMentionCheck && getBotMentionRegex(botId).test(textForMentionCheck),
