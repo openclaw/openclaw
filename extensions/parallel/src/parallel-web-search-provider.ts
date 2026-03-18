@@ -80,7 +80,7 @@ async function runParallelSearch(params: {
 }): Promise<Array<{ title: string; url: string; text: string }>> {
   return withTrustedWebSearchEndpoint(
     {
-      url: `${params.baseUrl}/v1beta/search`,
+      url: `${params.baseUrl.replace(/\/+$/, "")}/v1beta/search`,
       timeoutSeconds: params.timeoutSeconds,
       init: {
         method: "POST",
