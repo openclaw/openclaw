@@ -204,7 +204,7 @@ describe("CronService read ops while job is running", () => {
       );
 
       isolatedRun.completeRun({ status: "ok", summary: "manual done" });
-      await expect(runPromise).resolves.toEqual({ ok: true, ran: true });
+      await expect(runPromise).resolves.toMatchObject({ ok: true, ran: true });
 
       const completed = await cron.list({ includeDisabled: true });
       expect(completed[0]?.state.lastStatus).toBe("ok");

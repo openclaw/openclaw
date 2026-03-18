@@ -81,7 +81,7 @@ describe("CronService delivery plan consistency", () => {
       });
 
       const result = await cron.run(job.id, "force");
-      expect(result).toEqual({ ok: true, ran: true });
+      expect(result).toMatchObject({ ok: true, ran: true });
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
     });
   });
@@ -95,7 +95,7 @@ describe("CronService delivery plan consistency", () => {
       });
 
       const result = await cron.run(job.id, "force");
-      expect(result).toEqual({ ok: true, ran: true });
+      expect(result).toMatchObject({ ok: true, ran: true });
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
       expect(cron.getJob(job.id)?.state.lastDeliveryStatus).toBe("unknown");
     });
@@ -118,7 +118,7 @@ describe("CronService delivery plan consistency", () => {
         });
 
         const result = await cron.run(job.id, "force");
-        expect(result).toEqual({ ok: true, ran: true });
+        expect(result).toMatchObject({ ok: true, ran: true });
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
         expect(requestHeartbeatNow).not.toHaveBeenCalled();
       },

@@ -849,6 +849,28 @@ describe("cron controller", () => {
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
   });
 
+  it("validates failure alert threshold and cooldown as i18n keys", () => {
+    const errorsAfter = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      failureAlertMode: "custom",
+      failureAlertAfter: "0",
+      failureAlertCooldownSeconds: "",
+    });
+    expect(errorsAfter.failureAlertAfter).toBe("cron.errors.failureAlertAfterInvalid");
+    expect(errorsAfter.failureAlertCooldownSeconds).toBeUndefined();
+
+    const errorsCooldown = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      failureAlertMode: "custom",
+      failureAlertAfter: "",
+      failureAlertCooldownSeconds: "-1",
+    });
+    expect(errorsCooldown.failureAlertAfter).toBeUndefined();
+    expect(errorsCooldown.failureAlertCooldownSeconds).toBe(
+      "cron.errors.failureAlertCooldownInvalid",
+    );
+  });
+
   it("blocks add/update submit when validation errors exist", async () => {
     const request = vi.fn(async () => ({}));
     const state = createState({

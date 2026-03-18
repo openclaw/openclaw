@@ -53,4 +53,6 @@ export type CronFormState = {
   failureAlertDeliveryMode: "announce" | "webhook";
   failureAlertAccountId: string;
   timeoutSeconds: string;
+  onSuccessJobId: string;
+  onFailureJobId: string;
 };

@@ -1,6 +1,8 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
@@ -473,6 +475,101 @@ export function applyJobResult(
   return shouldDelete;
 }
 
+/**
+ * Enqueue a chained job (onSuccessJobId / onFailureJobId) in the cron lane.
+ *
+ * `visited` tracks every job ID already in the current chain so that cycles
+ * like A→B→A are caught before they are enqueued. Callers start with a set
+ * containing the originating job ID; each hop extends it with the just-run
+ * job ID before dispatching the next one.
+ */
+export function triggerChainedJob(
+  state: CronServiceState,
+  sourceJobId: string,
+  targetJobId: string,
+  visited: ReadonlySet<string> = new Set(),
+): void {
+  if (targetJobId === sourceJobId || visited.has(targetJobId)) {
+    state.deps.log.warn(
+      { sourceJobId, targetJobId, visited: [...visited] },
+      visited.has(targetJobId)
+        ? "cron: chain trigger ignored — cycle detected"
+        : "cron: chain trigger ignored — job references itself",
+    );
+    return;
+  }
+  // Build the ancestry set for the next hop before enqueuing so the closure
+  // captures it immutably (no shared mutable state across lane tasks).
+  const nextVisited: ReadonlySet<string> = new Set([...visited, sourceJobId]);
+  const chainRunId = `chain:${sourceJobId}->${targetJobId}:${state.deps.nowMs()}`;
+  void enqueueCommandInLane(
+    CommandLane.Cron,
+    async () => {
+      // Snapshot chain targets before the run: the job may be removed from
+      // the store after a successful one-shot (deleteAfterRun) execution.
+      const jobSnapshot = state.store?.jobs.find((j) => j.id === targetJobId);
+      const successId = jobSnapshot?.onSuccessJobId;
+      const failureId = jobSnapshot?.onFailureJobId;
+
+      // Respect the disabled flag: `run(..., "force")` bypasses due-time
+      // gating but disabled jobs must never run — even as chain targets.
+      if (jobSnapshot && !jobSnapshot.enabled) {
+        state.deps.log.warn(
+          { sourceJobId, targetJobId, chainRunId },
+          "cron: chained job is disabled — chain stopped",
+        );
+        return { ok: true, ran: false, reason: "disabled" } as const;
+      }
+
+      // Lazy-import the runtime boundary (not ops.js directly) to avoid a
+      // circular dep while also keeping ops.ts in the purely-static import
+      // graph (service.ts already imports it statically — mixing static and
+      // dynamic imports of the same module creates two separate instances).
+      const { run } = await import("./ops.runtime.js");
+      const result = await run(state, targetJobId, "force");
+      if (!result.ok) {
+        state.deps.log.warn(
+          { sourceJobId, targetJobId, chainRunId, result },
+          "cron: chained job run returned not-ok",
+        );
+        return result;
+      }
+      // Propagate the next hop with the updated ancestry so cycles are caught.
+      // We handle it here (not in finishPreparedManualRun) to carry `nextVisited`.
+      if (!result.ran) {
+        // Job was skipped (not due, not found, or already running). Log so
+        // broken pipelines are visible rather than silently stopping the chain.
+        state.deps.log.warn(
+          { sourceJobId, targetJobId, chainRunId },
+          "cron: chained job run skipped — chain stopped",
+        );
+      }
+      if (result.ran) {
+        if (result.status === "ok" && successId) {
+          triggerChainedJob(state, targetJobId, successId, nextVisited);
+        } else if (result.status === "error" && failureId) {
+          triggerChainedJob(state, targetJobId, failureId, nextVisited);
+        }
+      }
+      return result;
+    },
+    {
+      warnAfterMs: 5_000,
+      onWait: (waitMs, queuedAhead) => {
+        state.deps.log.warn(
+          { sourceJobId, targetJobId, chainRunId, waitMs, queuedAhead },
+          "cron: chained job waiting for execution slot",
+        );
+      },
+    },
+  ).catch((err) => {
+    state.deps.log.error(
+      { sourceJobId, targetJobId, chainRunId, err: String(err) },
+      "cron: chained job execution failed",
+    );
+  });
+}
+
 function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
   const store = state.store;
   if (!store) {
@@ -488,6 +585,13 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     return;
   }
 
+  // Capture chain targets before applyJobResult mutates state and before any
+  // potential deletion — one-shot jobs (deleteAfterRun) are removed from the
+  // store on success/error and must still be able to trigger their next hop.
+  const successId = job.onSuccessJobId;
+  const failureId = job.onFailureJobId;
+  const jobId = job.id;
+
   const shouldDelete = applyJobResult(state, job, {
     status: result.status,
     error: result.error,
@@ -501,6 +605,15 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   if (shouldDelete) {
     store.jobs = jobs.filter((entry) => entry.id !== job.id);
     emit(state, { jobId: job.id, action: "removed" });
+  }
+
+  // Dispatch chain after state is settled (including deletion).
+  // Use a visited set seeded with this job to break A→B→A cycles.
+  const initialVisited: ReadonlySet<string> = new Set([jobId]);
+  if (result.status === "ok" && successId) {
+    triggerChainedJob(state, jobId, successId, initialVisited);
+  } else if (result.status === "error" && failureId) {
+    triggerChainedJob(state, jobId, failureId, initialVisited);
   }
 }
 
@@ -1183,6 +1296,13 @@ export async function executeJob(
     coreResult = { status: "error", error: String(err) };
   }
 
+  // Capture chain targets before applyJobResult mutates state and before any
+  // potential deletion — one-shot jobs are removed from the store on
+  // success/error and must still be able to trigger their next hop.
+  const successId = job.onSuccessJobId;
+  const failureId = job.onFailureJobId;
+  const jobId = job.id;
+
   const endedAt = state.deps.nowMs();
   const shouldDelete = applyJobResult(state, job, {
     status: coreResult.status,
@@ -1197,6 +1317,15 @@ export async function executeJob(
   if (shouldDelete && state.store) {
     state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
     emit(state, { jobId: job.id, action: "removed" });
+  }
+
+  // Dispatch chain after state is settled (including deletion).
+  // Use a visited set seeded with this job to break A→B→A cycles.
+  const initialVisited: ReadonlySet<string> = new Set([jobId]);
+  if (coreResult.status === "ok" && successId) {
+    triggerChainedJob(state, jobId, successId, initialVisited);
+  } else if (coreResult.status === "error" && failureId) {
+    triggerChainedJob(state, jobId, failureId, initialVisited);
   }
 }
 

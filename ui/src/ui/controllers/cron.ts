@@ -157,14 +157,14 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     if (afterRaw) {
       const after = toNumber(afterRaw, 0);
       if (!Number.isFinite(after) || after <= 0) {
-        errors.failureAlertAfter = "Failure alert threshold must be greater than 0.";
+        errors.failureAlertAfter = "cron.errors.failureAlertAfterInvalid";
       }
     }
     const cooldownRaw = form.failureAlertCooldownSeconds.trim();
     if (cooldownRaw) {
       const cooldown = toNumber(cooldownRaw, -1);
       if (!Number.isFinite(cooldown) || cooldown < 0) {
-        errors.failureAlertCooldownSeconds = "Cooldown must be 0 or greater.";
+        errors.failureAlertCooldownSeconds = "cron.errors.failureAlertCooldownInvalid";
       }
     }
   }
@@ -491,6 +491,8 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
       job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
         ? String(job.payload.timeoutSeconds)
         : "",
+    onSuccessJobId: job.onSuccessJobId ?? "",
+    onFailureJobId: job.onFailureJobId ?? "",
   };
 
   if (job.schedule.kind === "at") {
@@ -670,6 +672,8 @@ export async function addCronJob(state: CronState) {
     const agentId = form.clearAgent ? null : form.agentId.trim();
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
+    const onSuccessJobId = form.onSuccessJobId.trim() || null;
+    const onFailureJobId = form.onFailureJobId.trim() || null;
     const job = {
       name: form.name.trim(),
       description: form.description.trim(),
@@ -683,6 +687,8 @@ export async function addCronJob(state: CronState) {
       payload,
       delivery,
       failureAlert,
+      onSuccessJobId,
+      onFailureJobId,
     };
     if (!job.name) {
       throw new Error(t("cron.errors.nameRequiredShort"));
