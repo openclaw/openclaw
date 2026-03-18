@@ -63,7 +63,8 @@ openclaw models auth login --provider openai-codex --profile-id openai-codex:lai
 ```
 
 Use `--profile-id` when you want multiple `openai-codex` logins in the same
-agent and later want to control them via auth ordering or `/model ...@<profileId>`.
+agent and later want to control them via auth ordering or
+`/model <alias-or-id>@<profileId>`.
 
 ### Config snippet (Codex subscription)
 
