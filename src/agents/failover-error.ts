@@ -176,6 +176,12 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (status === 502 || status === 503 || status === 504) {
     return "timeout";
   }
+  // Anthropic returns 529 for overloaded_error. Classify as "rate_limit" to
+  // stay consistent with the message-based path in classifyFailoverReason(),
+  // where isOverloadedErrorMessage() also maps to "rate_limit".
+  if (status === 529) {
+    return "rate_limit";
+  }
   if (status === 400) {
     return "format";
   }

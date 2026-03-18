@@ -20,6 +20,35 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
   });
 
+  it("classifies Anthropic 529 overloaded as rate_limit (consistent with message path)", () => {
+    // Status 529 alone
+    expect(resolveFailoverReasonFromError({ status: 529 })).toBe("rate_limit");
+
+    // Status 529 with overloaded message
+    expect(
+      resolveFailoverReasonFromError({
+        status: 529,
+        message: "Overloaded",
+      }),
+    ).toBe("rate_limit");
+
+    // Error object with overloaded message but no status — goes through
+    // classifyFailoverReason() where isOverloadedErrorMessage() → "rate_limit"
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The AI service is temporarily overloaded.",
+      }),
+    ).toBe("rate_limit");
+
+    // Raw Anthropic JSON error payload
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      }),
+    ).toBe("rate_limit");
+  });
+
   it("infers format errors from error messages", () => {
     expect(
       resolveFailoverReasonFromError({
