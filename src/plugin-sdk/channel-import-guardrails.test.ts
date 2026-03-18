@@ -26,7 +26,6 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "msteams",
   "nostr",
   "nextcloud-talk",
-  "nostr",
   "signal",
   "slack",
   "synology-chat",
