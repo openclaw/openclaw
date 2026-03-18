@@ -1,25 +1,27 @@
 import { Type } from "@sinclair/typebox";
-import { readNumberParam, readStringParam } from "../../../src/agents/tools/common.js";
-import { resolveCitationRedirectUrl } from "../../../src/agents/tools/web-search-citation-redirect.js";
-import type { SearchConfigRecord } from "../../../src/agents/tools/web-search-provider-common.js";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
   readCachedSearchPayload,
   readConfiguredSecretString,
+  readNumberParam,
   readProviderEnvValue,
+  readStringParam,
+  resolveCitationRedirectUrl,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
+  resolveProviderWebSearchPluginConfig,
+  setProviderWebSearchPluginConfigValue,
+  type OpenClawConfig,
+  type SearchConfigRecord,
+  type WebSearchProviderPlugin,
+  type WebSearchProviderToolDefinition,
   withTrustedWebSearchEndpoint,
+  wrapWebContent,
   writeCachedSearchPayload,
-} from "../../../src/agents/tools/web-search-provider-common.js";
-import type {
-  WebSearchProviderPlugin,
-  WebSearchProviderToolDefinition,
-} from "../../../src/plugins/types.js";
-import { wrapWebContent } from "../../../src/security/external-content.js";
+} from "openclaw/plugin-sdk/provider-web-search";
 
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
@@ -52,8 +54,15 @@ type GeminiGroundingResponse = {
   };
 };
 
-function resolveGeminiConfig(searchConfig?: SearchConfigRecord): GeminiConfig {
-  const gemini = searchConfig?.gemini;
+function resolveGeminiConfig(
+  config?: OpenClawConfig,
+  searchConfig?: SearchConfigRecord,
+): GeminiConfig {
+  const pluginConfig = resolveProviderWebSearchPluginConfig(config, "google");
+  if (pluginConfig) {
+    return pluginConfig as GeminiConfig;
+  }
+  const gemini = (searchConfig as Record<string, unknown> | undefined)?.gemini;
   return gemini && typeof gemini === "object" && !Array.isArray(gemini)
     ? (gemini as GeminiConfig)
     : {};
@@ -61,7 +70,7 @@ function resolveGeminiConfig(searchConfig?: SearchConfigRecord): GeminiConfig {
 
 function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
   return (
-    readConfiguredSecretString(gemini?.apiKey, "tools.web.search.gemini.apiKey") ??
+    readConfiguredSecretString(gemini?.apiKey, "plugins.entries.google.config.webSearch.apiKey") ??
     readProviderEnvValue(["GEMINI_API_KEY"])
   );
 }
@@ -168,6 +177,7 @@ function createGeminiSchema() {
 }
 
 function createGeminiToolDefinition(
+  config?: OpenClawConfig,
   searchConfig?: SearchConfigRecord,
 ): WebSearchProviderToolDefinition {
   return {
@@ -194,13 +204,13 @@ function createGeminiToolDefinition(
         }
       }
 
-      const geminiConfig = resolveGeminiConfig(searchConfig);
+      const geminiConfig = resolveGeminiConfig(config, searchConfig);
       const apiKey = resolveGeminiApiKey(geminiConfig);
       if (!apiKey) {
         return {
           error: "missing_gemini_api_key",
           message:
-            "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, or configure tools.web.search.gemini.apiKey.",
+            "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, or configure plugins.entries.google.config.webSearch.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
@@ -259,8 +269,8 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://aistudio.google.com/apikey",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 20,
-    credentialPath: "tools.web.search.gemini.apiKey",
-    inactiveSecretPaths: ["tools.web.search.gemini.apiKey"],
+    credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
     getCredentialValue: (searchConfig) => {
       const gemini = searchConfig?.gemini;
       return gemini && typeof gemini === "object" && !Array.isArray(gemini)
@@ -275,8 +285,13 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
       }
       (scoped as Record<string, unknown>).apiKey = value;
     },
+    getConfiguredCredentialValue: (config) =>
+      resolveProviderWebSearchPluginConfig(config, "google")?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setProviderWebSearchPluginConfigValue(configTarget, "google", "apiKey", value);
+    },
     createTool: (ctx) =>
-      createGeminiToolDefinition(ctx.searchConfig as SearchConfigRecord | undefined),
+      createGeminiToolDefinition(ctx.config, ctx.searchConfig as SearchConfigRecord | undefined),
   };
 }
 

@@ -1,6 +1,10 @@
 import { Type } from "@sinclair/typebox";
-import { enablePluginInConfig } from "../../../src/plugins/enable.js";
-import type { WebSearchProviderPlugin } from "../../../src/plugins/types.js";
+import {
+  enablePluginInConfig,
+  resolveProviderWebSearchPluginConfig,
+  setProviderWebSearchPluginConfigValue,
+  type WebSearchProviderPlugin,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { runFirecrawlSearch } from "./firecrawl-client.js";
 
 const GenericFirecrawlSearchSchema = Type.Object(
@@ -47,10 +51,15 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://www.firecrawl.dev/",
     docsUrl: "https://docs.openclaw.ai/tools/firecrawl",
     autoDetectOrder: 60,
-    credentialPath: "tools.web.search.firecrawl.apiKey",
-    inactiveSecretPaths: ["tools.web.search.firecrawl.apiKey"],
+    credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.firecrawl.config.webSearch.apiKey"],
     getCredentialValue: getScopedCredentialValue,
     setCredentialValue: setScopedCredentialValue,
+    getConfiguredCredentialValue: (config) =>
+      resolveProviderWebSearchPluginConfig(config, "firecrawl")?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setProviderWebSearchPluginConfigValue(configTarget, "firecrawl", "apiKey", value);
+    },
     applySelectionConfig: (config) => enablePluginInConfig(config, "firecrawl").config,
     createTool: (ctx) => ({
       description:

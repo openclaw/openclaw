@@ -1,28 +1,30 @@
 import { Type } from "@sinclair/typebox";
-import { readNumberParam, readStringParam } from "../../../src/agents/tools/common.js";
-import type { SearchConfigRecord } from "../../../src/agents/tools/web-search-provider-common.js";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
+  formatCliCommand,
   normalizeFreshness,
   normalizeToIsoDate,
   readCachedSearchPayload,
   readConfiguredSecretString,
+  readNumberParam,
   readProviderEnvValue,
+  readStringParam,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
+  resolveProviderWebSearchPluginConfig,
+  setProviderWebSearchPluginConfigValue,
+  type OpenClawConfig,
+  type SearchConfigRecord,
+  type WebSearchProviderPlugin,
+  type WebSearchProviderToolDefinition,
   withTrustedWebSearchEndpoint,
+  wrapWebContent,
   writeCachedSearchPayload,
-} from "../../../src/agents/tools/web-search-provider-common.js";
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import type {
-  WebSearchProviderPlugin,
-  WebSearchProviderToolDefinition,
-} from "../../../src/plugins/types.js";
-import { wrapWebContent } from "../../../src/security/external-content.js";
+} from "openclaw/plugin-sdk/provider-web-search";
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
@@ -90,6 +92,7 @@ const BRAVE_SEARCH_LANG_ALIASES: Record<string, string> = {
 const BRAVE_UI_LANG_LOCALE = /^([a-z]{2})-([a-z]{2})$/i;
 
 type BraveConfig = {
+  apiKey?: unknown;
   mode?: string;
 };
 
@@ -112,18 +115,41 @@ type BraveLlmContextResponse = {
   sources?: { url?: string; hostname?: string; date?: string }[];
 };
 
-function resolveBraveConfig(searchConfig?: SearchConfigRecord): BraveConfig {
-  const brave = searchConfig?.brave;
-  return brave && typeof brave === "object" && !Array.isArray(brave) ? (brave as BraveConfig) : {};
+function resolveBraveConfig(
+  config?: OpenClawConfig,
+  searchConfig?: SearchConfigRecord,
+): BraveConfig {
+  const pluginConfig = resolveProviderWebSearchPluginConfig(config, "brave");
+  if (pluginConfig) {
+    return pluginConfig as BraveConfig;
+  }
+  const scoped = (searchConfig as Record<string, unknown> | undefined)?.brave;
+  return scoped && typeof scoped === "object" && !Array.isArray(scoped)
+    ? ({
+        ...(scoped as BraveConfig),
+        apiKey: (searchConfig as Record<string, unknown> | undefined)?.apiKey,
+      } as BraveConfig)
+    : ({ apiKey: (searchConfig as Record<string, unknown> | undefined)?.apiKey } as BraveConfig);
 }
 
-function resolveBraveMode(brave: BraveConfig): "web" | "llm-context" {
-  return brave.mode === "llm-context" ? "llm-context" : "web";
+function resolveBraveMode(brave?: BraveConfig): "web" | "llm-context" {
+  return brave?.mode === "llm-context" ? "llm-context" : "web";
 }
 
-function resolveBraveApiKey(searchConfig?: SearchConfigRecord): string | undefined {
+function resolveBraveApiKey(
+  config?: OpenClawConfig,
+  searchConfig?: SearchConfigRecord,
+): string | undefined {
+  const braveConfig = resolveBraveConfig(config, searchConfig);
   return (
-    readConfiguredSecretString(searchConfig?.apiKey, "tools.web.search.apiKey") ??
+    readConfiguredSecretString(
+      braveConfig.apiKey,
+      "plugins.entries.brave.config.webSearch.apiKey",
+    ) ??
+    readConfiguredSecretString(
+      (searchConfig as Record<string, unknown> | undefined)?.apiKey,
+      "tools.web.search.apiKey",
+    ) ??
     readProviderEnvValue(["BRAVE_API_KEY"])
   );
 }
@@ -384,9 +410,10 @@ function missingBraveKeyPayload() {
 }
 
 function createBraveToolDefinition(
+  config?: OpenClawConfig,
   searchConfig?: SearchConfigRecord,
 ): WebSearchProviderToolDefinition {
-  const braveConfig = resolveBraveConfig(searchConfig);
+  const braveConfig = resolveBraveConfig(config, searchConfig);
   const braveMode = resolveBraveMode(braveConfig);
 
   return {
@@ -396,7 +423,7 @@ function createBraveToolDefinition(
         : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.",
     parameters: createBraveSchema(),
     execute: async (args) => {
-      const apiKey = resolveBraveApiKey(searchConfig);
+      const apiKey = resolveBraveApiKey(config, searchConfig);
       if (!apiKey) {
         return missingBraveKeyPayload();
       }
@@ -594,14 +621,19 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://brave.com/search/api/",
     docsUrl: "https://docs.openclaw.ai/brave-search",
     autoDetectOrder: 10,
-    credentialPath: "tools.web.search.apiKey",
-    inactiveSecretPaths: ["tools.web.search.apiKey"],
+    credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.brave.config.webSearch.apiKey"],
     getCredentialValue: (searchConfig) => searchConfig?.apiKey,
     setCredentialValue: (searchConfigTarget, value) => {
       searchConfigTarget.apiKey = value;
     },
+    getConfiguredCredentialValue: (config) =>
+      resolveProviderWebSearchPluginConfig(config, "brave")?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setProviderWebSearchPluginConfigValue(configTarget, "brave", "apiKey", value);
+    },
     createTool: (ctx) =>
-      createBraveToolDefinition(ctx.searchConfig as SearchConfigRecord | undefined),
+      createBraveToolDefinition(ctx.config, ctx.searchConfig as SearchConfigRecord | undefined),
   };
 }
 

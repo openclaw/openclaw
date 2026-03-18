@@ -173,6 +173,22 @@ Direction:
 - prefer `before_prompt_build` for prompt mutation work
 - remove only after real usage drops and fixture coverage proves migration safety
 
+### Compatibility signals
+
+When you run `openclaw doctor` or `openclaw plugins inspect <id>`, you may see
+one of these labels:
+
+| Signal                     | Meaning                                                      |
+| -------------------------- | ------------------------------------------------------------ |
+| **config valid**           | Config parses fine and plugins resolve                       |
+| **compatibility advisory** | Plugin uses a supported-but-older pattern (e.g. `hook-only`) |
+| **legacy warning**         | Plugin uses `before_agent_start`, which is deprecated        |
+| **hard error**             | Config is invalid or plugin failed to load                   |
+
+Neither `hook-only` nor `before_agent_start` will break your plugin today —
+`hook-only` is advisory, and `before_agent_start` only triggers a warning. These
+signals also appear in `openclaw status --all` and `openclaw plugins doctor`.
+
 ## Architecture
 
 OpenClaw's plugin system has four layers:
@@ -1122,23 +1138,67 @@ authoring plugins:
 - `openclaw/plugin-sdk/whatsapp` for WhatsApp channel plugin types and shared channel-facing helpers. Built-in WhatsApp implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/line` for LINE channel plugins.
 - `openclaw/plugin-sdk/msteams` for the bundled Microsoft Teams plugin surface.
-- Bundled extension-specific subpaths are also available:
+- Additional bundled extension-specific subpaths remain available where OpenClaw
+  intentionally exposes extension-facing helpers:
   `openclaw/plugin-sdk/acpx`, `openclaw/plugin-sdk/bluebubbles`,
-  `openclaw/plugin-sdk/copilot-proxy`, `openclaw/plugin-sdk/device-pair`,
-  `openclaw/plugin-sdk/diagnostics-otel`, `openclaw/plugin-sdk/diffs`,
   `openclaw/plugin-sdk/feishu`, `openclaw/plugin-sdk/googlechat`,
-  `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/llm-task`,
-  `openclaw/plugin-sdk/lobster`, `openclaw/plugin-sdk/matrix`,
+  `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/lobster`,
+  `openclaw/plugin-sdk/matrix`,
   `openclaw/plugin-sdk/mattermost`, `openclaw/plugin-sdk/memory-core`,
-  `openclaw/plugin-sdk/memory-lancedb`,
   `openclaw/plugin-sdk/minimax-portal-auth`,
   `openclaw/plugin-sdk/nextcloud-talk`, `openclaw/plugin-sdk/nostr`,
-  `openclaw/plugin-sdk/open-prose`, `openclaw/plugin-sdk/phone-control`,
-  `openclaw/plugin-sdk/qwen-portal-auth`, `openclaw/plugin-sdk/synology-chat`,
-  `openclaw/plugin-sdk/talk-voice`, `openclaw/plugin-sdk/test-utils`,
-  `openclaw/plugin-sdk/thread-ownership`, `openclaw/plugin-sdk/tlon`,
-  `openclaw/plugin-sdk/twitch`, `openclaw/plugin-sdk/voice-call`,
+  `openclaw/plugin-sdk/synology-chat`, `openclaw/plugin-sdk/test-utils`,
+  `openclaw/plugin-sdk/tlon`, `openclaw/plugin-sdk/twitch`,
+  `openclaw/plugin-sdk/voice-call`,
   `openclaw/plugin-sdk/zalo`, and `openclaw/plugin-sdk/zalouser`.
+
+## Channel target resolution
+
+Channel plugins should own channel-specific target semantics. Keep the shared
+outbound host generic and use the messaging adapter surface for provider rules:
+
+- `messaging.inferTargetChatType({ to })` decides whether a normalized target
+  should be treated as `direct`, `group`, or `channel` before directory lookup.
+- `messaging.targetResolver.looksLikeId(raw, normalized)` tells core whether an
+  input should skip straight to id-like resolution instead of directory search.
+- `messaging.targetResolver.resolveTarget(...)` is the plugin fallback when
+  core needs a final provider-owned resolution after normalization or after a
+  directory miss.
+- `messaging.resolveOutboundSessionRoute(...)` owns provider-specific session
+  route construction once a target is resolved.
+
+Recommended split:
+
+- Use `inferTargetChatType` for category decisions that should happen before
+  searching peers/groups.
+- Use `looksLikeId` for “treat this as an explicit/native target id” checks.
+- Use `resolveTarget` for provider-specific normalization fallback, not for
+  broad directory search.
+- Keep provider-native ids like chat ids, thread ids, JIDs, handles, and room
+  ids inside `target` values or provider-specific params, not in generic SDK
+  fields.
+
+## Config-backed directories
+
+Plugins that derive directory entries from config should keep that logic in the
+plugin and reuse the shared helpers from
+`openclaw/plugin-sdk/directory-runtime`.
+
+Use this when a channel needs config-backed peers/groups such as:
+
+- allowlist-driven DM peers
+- configured channel/group maps
+- account-scoped static directory fallbacks
+
+The shared helpers in `directory-runtime` only handle generic operations:
+
+- query filtering
+- limit application
+- deduping/normalization helpers
+- building `ChannelDirectoryEntry[]`
+
+Channel-specific account inspection and id normalization should stay in the
+plugin implementation.
 
 ## Provider catalogs
 
@@ -1762,6 +1822,36 @@ export default function (api) {
 }
 ```
 
+If your engine does **not** own the compaction algorithm, keep `compact()`
+implemented and delegate it explicitly:
+
+```ts
+import { delegateCompactionToRuntime } from "openclaw/plugin-sdk/core";
+
+export default function (api) {
+  api.registerContextEngine("my-memory-engine", () => ({
+    info: {
+      id: "my-memory-engine",
+      name: "My Memory Engine",
+      ownsCompaction: false,
+    },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact(params) {
+      return await delegateCompactionToRuntime(params);
+    },
+  }));
+}
+```
+
+`ownsCompaction: false` does not automatically fall back to legacy compaction.
+If your engine is active, its `compact()` method still handles `/compact` and
+overflow recovery.
+
 Then enable it in config:
 
 ```json5
@@ -2200,7 +2290,7 @@ Preferred setup split:
 - optional DM allowlist resolution (for example `@username` -> numeric id)
 - optional completion note after setup finishes
 
-### Write a new messaging channel (step‑by‑step)
+### Write a new messaging channel (step-by-step)
 
 Use this when you want a **new chat surface** (a "messaging channel"), not a model provider.
 Model provider docs live under `/providers/*`.

@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { type ChannelGroupContext } from "openclaw/plugin-sdk/channel-runtime";
 import { normalizeAtHashSlug } from "openclaw/plugin-sdk/core";
-import type { DiscordConfig } from "openclaw/plugin-sdk/discord";
+import type { DiscordConfig } from "./runtime-api.js";
 
 function normalizeDiscordSlug(value?: string | null) {
   return normalizeAtHashSlug(value);

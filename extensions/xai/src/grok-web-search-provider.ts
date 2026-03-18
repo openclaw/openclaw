@@ -1,24 +1,26 @@
 import { Type } from "@sinclair/typebox";
-import { readNumberParam, readStringParam } from "../../../src/agents/tools/common.js";
-import type { SearchConfigRecord } from "../../../src/agents/tools/web-search-provider-common.js";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
   readCachedSearchPayload,
   readConfiguredSecretString,
+  readNumberParam,
   readProviderEnvValue,
+  readStringParam,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
+  resolveProviderWebSearchPluginConfig,
+  setProviderWebSearchPluginConfigValue,
+  type OpenClawConfig,
+  type SearchConfigRecord,
+  type WebSearchProviderPlugin,
+  type WebSearchProviderToolDefinition,
   withTrustedWebSearchEndpoint,
+  wrapWebContent,
   writeCachedSearchPayload,
-} from "../../../src/agents/tools/web-search-provider-common.js";
-import type {
-  WebSearchProviderPlugin,
-  WebSearchProviderToolDefinition,
-} from "../../../src/plugins/types.js";
-import { wrapWebContent } from "../../../src/security/external-content.js";
+} from "openclaw/plugin-sdk/provider-web-search";
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
@@ -60,14 +62,18 @@ type GrokSearchResponse = {
   }>;
 };
 
-function resolveGrokConfig(searchConfig?: SearchConfigRecord): GrokConfig {
-  const grok = searchConfig?.grok;
+function resolveGrokConfig(config?: OpenClawConfig, searchConfig?: SearchConfigRecord): GrokConfig {
+  const pluginConfig = resolveProviderWebSearchPluginConfig(config, "xai");
+  if (pluginConfig) {
+    return pluginConfig as GrokConfig;
+  }
+  const grok = (searchConfig as Record<string, unknown> | undefined)?.grok;
   return grok && typeof grok === "object" && !Array.isArray(grok) ? (grok as GrokConfig) : {};
 }
 
 function resolveGrokApiKey(grok?: GrokConfig): string | undefined {
   return (
-    readConfiguredSecretString(grok?.apiKey, "tools.web.search.grok.apiKey") ??
+    readConfiguredSecretString(grok?.apiKey, "plugins.entries.xai.config.webSearch.apiKey") ??
     readProviderEnvValue(["XAI_API_KEY"])
   );
 }
@@ -179,6 +185,7 @@ function createGrokSchema() {
 }
 
 function createGrokToolDefinition(
+  config?: OpenClawConfig,
   searchConfig?: SearchConfigRecord,
 ): WebSearchProviderToolDefinition {
   return {
@@ -205,13 +212,13 @@ function createGrokToolDefinition(
         }
       }
 
-      const grokConfig = resolveGrokConfig(searchConfig);
+      const grokConfig = resolveGrokConfig(config, searchConfig);
       const apiKey = resolveGrokApiKey(grokConfig);
       if (!apiKey) {
         return {
           error: "missing_xai_api_key",
           message:
-            "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure tools.web.search.grok.apiKey.",
+            "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
@@ -274,8 +281,8 @@ export function createGrokWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://console.x.ai/",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 30,
-    credentialPath: "tools.web.search.grok.apiKey",
-    inactiveSecretPaths: ["tools.web.search.grok.apiKey"],
+    credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.xai.config.webSearch.apiKey"],
     getCredentialValue: (searchConfig) => {
       const grok = searchConfig?.grok;
       return grok && typeof grok === "object" && !Array.isArray(grok)
@@ -290,8 +297,13 @@ export function createGrokWebSearchProvider(): WebSearchProviderPlugin {
       }
       (scoped as Record<string, unknown>).apiKey = value;
     },
+    getConfiguredCredentialValue: (config) =>
+      resolveProviderWebSearchPluginConfig(config, "xai")?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setProviderWebSearchPluginConfigValue(configTarget, "xai", "apiKey", value);
+    },
     createTool: (ctx) =>
-      createGrokToolDefinition(ctx.searchConfig as SearchConfigRecord | undefined),
+      createGrokToolDefinition(ctx.config, ctx.searchConfig as SearchConfigRecord | undefined),
   };
 }
 
