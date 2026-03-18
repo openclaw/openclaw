@@ -1,3 +1,11 @@
+---
+title: "Kilo Gateway Integration Design"
+summary: "Design doc for integrating Kilo Gateway as a first-class OpenClaw provider"
+read_when:
+  - Working on the Kilo Gateway provider integration
+  - Understanding provider integration patterns
+---
+
 # Kilo Gateway Provider Integration Design
 
 ## Overview
