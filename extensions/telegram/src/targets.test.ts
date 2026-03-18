@@ -48,6 +48,14 @@ describe("parseTelegramTarget", () => {
     });
   });
 
+  it("parses legacy chatId/topicId format", () => {
+    expect(parseTelegramTarget("-1001234567890/123")).toEqual({
+      chatId: "-1001234567890",
+      messageThreadId: 123,
+      chatType: "group",
+    });
+  });
+
   it("parses chatId:topic:topicId format", () => {
     expect(parseTelegramTarget("-1001234567890:topic:456")).toEqual({
       chatId: "-1001234567890",
@@ -73,6 +81,14 @@ describe("parseTelegramTarget", () => {
 
   it("strips internal prefixes before parsing", () => {
     expect(parseTelegramTarget("telegram:group:-1001234567890:topic:456")).toEqual({
+      chatId: "-1001234567890",
+      messageThreadId: 456,
+      chatType: "group",
+    });
+  });
+
+  it("parses slash targets after stripping telegram prefixes", () => {
+    expect(parseTelegramTarget("telegram:-1001234567890/456")).toEqual({
       chatId: "-1001234567890",
       messageThreadId: 456,
       chatType: "group",

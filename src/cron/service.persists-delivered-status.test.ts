@@ -40,6 +40,7 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
 function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
   delivered?: boolean;
+  deliveryError?: string;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
 }) {
   const finished = createFinishedBarrier();
@@ -53,6 +54,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
       status: "ok" as const,
       summary: "done",
       ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
+      ...(params.deliveryError === undefined ? {} : { deliveryError: params.deliveryError }),
     })),
     onEvent: (evt) => {
       if (evt.action === "finished") {
@@ -117,12 +119,14 @@ function expectDeliveryNotRequested(
 async function runIsolatedJobAndReadState(params: {
   job: CronAddInput;
   delivered?: boolean;
+  deliveryError?: string;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
 }) {
   const store = await makeStorePath();
   const { cron, finished } = createIsolatedCronWithFinishedBarrier({
     storePath: store.storePath,
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
+    ...(params.deliveryError !== undefined ? { deliveryError: params.deliveryError } : {}),
     ...(params.onFinished ? { onFinished: params.onFinished } : {}),
   });
 
@@ -160,6 +164,18 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDelivered).toBe(false);
     expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
     expect(updated?.state.lastDeliveryError).toBeUndefined();
+  });
+
+  it("persists delivery-specific error text when announce delivery reports not delivered", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildIsolatedAgentTurnJob("delivery-error"),
+      delivered: false,
+      deliveryError: "Telegram recipient must be a numeric chat ID",
+    });
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBe(false);
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryError).toBe("Telegram recipient must be a numeric chat ID");
   });
 
   it("persists not-requested delivery state when delivery is not configured", async () => {

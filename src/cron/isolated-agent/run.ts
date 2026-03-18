@@ -833,7 +833,11 @@ export async function runCronIsolatedAgentTurn(params: {
   const embeddedRunError = hasFatalErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
-  const resolveRunOutcome = (params?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
+  const resolveRunOutcome = (params?: {
+    delivered?: boolean;
+    deliveryAttempted?: boolean;
+    deliveryError?: string;
+  }) =>
     withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
       ...(hasFatalErrorPayload
@@ -843,6 +847,7 @@ export async function runCronIsolatedAgentTurn(params: {
       outputText,
       delivered: params?.delivered,
       deliveryAttempted: params?.deliveryAttempted,
+      deliveryError: params?.deliveryError,
       ...telemetry,
     });
 
@@ -892,6 +897,7 @@ export async function runCronIsolatedAgentTurn(params: {
       ...deliveryResult.result,
       deliveryAttempted:
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
+      deliveryError: deliveryResult.result.deliveryError ?? deliveryResult.deliveryError,
     };
     if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;
@@ -899,6 +905,7 @@ export async function runCronIsolatedAgentTurn(params: {
     return resolveRunOutcome({
       delivered: deliveryResult.result.delivered,
       deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
+      deliveryError: resultWithDeliveryMeta.deliveryError,
     });
   }
   const delivered = deliveryResult.delivered;
@@ -906,5 +913,9 @@ export async function runCronIsolatedAgentTurn(params: {
   summary = deliveryResult.summary;
   outputText = deliveryResult.outputText;
 
-  return resolveRunOutcome({ delivered, deliveryAttempted });
+  return resolveRunOutcome({
+    delivered,
+    deliveryAttempted,
+    deliveryError: deliveryResult.deliveryError,
+  });
 }

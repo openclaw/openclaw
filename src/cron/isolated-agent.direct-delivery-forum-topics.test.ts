@@ -61,4 +61,27 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       });
     });
   });
+
+  it("routes slash-encoded telegram forum-topic targets through the correct delivery path", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "forum message" }]);
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: { mode: "announce", channel: "telegram", to: "-1001234567890/42" },
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(true);
+      expectDirectTelegramDelivery(deps, {
+        chatId: "-1001234567890",
+        text: "forum message",
+        messageThreadId: 42,
+      });
+    });
+  });
 });

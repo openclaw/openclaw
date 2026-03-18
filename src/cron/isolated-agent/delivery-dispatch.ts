@@ -106,6 +106,7 @@ export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
   deliveryAttempted: boolean;
+  deliveryError?: string;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
@@ -293,10 +294,12 @@ export async function dispatchCronDelivery(
   // remains the only source of delivered state.
   let delivered = skipMessagingToolDelivery;
   let deliveryAttempted = skipMessagingToolDelivery;
+  let deliveryError: string | undefined;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
       error,
+      deliveryError: error,
       errorKind: "delivery-target",
       summary,
       outputText,
@@ -376,16 +379,19 @@ export async function dispatchCronDelivery(
       }
       return null;
     } catch (err) {
+      const errorMessage = summarizeDirectCronDeliveryError(err);
       if (!params.deliveryBestEffort) {
         return params.withRunSession({
           status: "error",
           summary,
           outputText,
-          error: String(err),
+          error: errorMessage,
+          deliveryError: errorMessage,
           deliveryAttempted,
           ...params.telemetry,
         });
       }
+      deliveryError = errorMessage;
       return null;
     }
   };
@@ -522,6 +528,7 @@ export async function dispatchCronDelivery(
           result: failDeliveryTarget(params.resolvedDelivery.error.message),
           delivered,
           deliveryAttempted,
+          deliveryError,
           summary,
           outputText,
           synthesizedText,
@@ -534,11 +541,13 @@ export async function dispatchCronDelivery(
           status: "ok",
           summary,
           outputText,
+          deliveryError,
           deliveryAttempted,
           ...params.telemetry,
         }),
         delivered,
         deliveryAttempted,
+        deliveryError,
         summary,
         outputText,
         synthesizedText,
@@ -558,6 +567,7 @@ export async function dispatchCronDelivery(
           result: directResult,
           delivered,
           deliveryAttempted,
+          deliveryError,
           summary,
           outputText,
           synthesizedText,
@@ -571,6 +581,7 @@ export async function dispatchCronDelivery(
           result: finalizedTextResult,
           delivered,
           deliveryAttempted,
+          deliveryError,
           summary,
           outputText,
           synthesizedText,
@@ -583,6 +594,7 @@ export async function dispatchCronDelivery(
   return {
     delivered,
     deliveryAttempted,
+    deliveryError,
     summary,
     outputText,
     synthesizedText,

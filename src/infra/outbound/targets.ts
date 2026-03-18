@@ -62,6 +62,7 @@ function parseExplicitTargetWithPlugin(params: {
   channel?: DeliverableMessageChannel;
   fallbackChannel?: DeliverableMessageChannel;
   raw?: string;
+  cfg?: OpenClawConfig;
 }) {
   const raw = params.raw?.trim();
   if (!raw) {
@@ -72,7 +73,10 @@ function parseExplicitTargetWithPlugin(params: {
     return null;
   }
   return (
-    resolveOutboundChannelPlugin({ channel: provider })?.messaging?.parseExplicitTarget?.({
+    resolveOutboundChannelPlugin({
+      channel: provider,
+      cfg: params.cfg,
+    })?.messaging?.parseExplicitTarget?.({
       raw,
     }) ?? null
   );
@@ -105,6 +109,8 @@ export function resolveSessionDeliveryTarget(params: {
   turnSourceAccountId?: string;
   /** Turn-source `threadId` — paired with `turnSourceChannel`. */
   turnSourceThreadId?: string | number;
+  /** Config object — used to bootstrap channel plugins for explicit target parsing (e.g. forum topic formats). */
+  cfg?: OpenClawConfig;
 }): SessionDeliveryTarget {
   const context = deliveryContextFromSession(params.entry);
   const sessionLastChannel =
@@ -142,6 +148,7 @@ export function resolveSessionDeliveryTarget(params: {
     channel,
     fallbackChannel: !channel ? lastChannel : undefined,
     raw: rawExplicitTo,
+    cfg: params.cfg,
   });
   if (parsedExplicitTarget?.to) {
     explicitTo = parsedExplicitTarget.to;

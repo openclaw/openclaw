@@ -284,10 +284,15 @@ the topic/thread into the `to` field:
 - `-1001234567890` (chat id only)
 - `-1001234567890:topic:123` (preferred: explicit topic marker)
 - `-1001234567890:123` (shorthand: numeric suffix)
+- `-1001234567890/123` (legacy slash form — also accepted)
 
 Prefixed targets like `telegram:...` / `telegram:group:...` are also accepted:
 
 - `telegram:group:-1001234567890:topic:123`
+
+> **Note:** Prior to this fix, `announce` delivery to Telegram forum topics silently produced
+> `deliveryStatus: "not-delivered"` because the channel plugin was not bootstrapped during
+> target resolution. All formats above now work correctly for cron `announce` delivery.
 
 ## JSON schema for tool calls
 

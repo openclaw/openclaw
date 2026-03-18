@@ -175,7 +175,7 @@ function validateTelegramDeliveryTarget(to: string | undefined): string | undefi
     return undefined;
   }
   if (TELEGRAM_SLASH_TOPIC_REGEX.test(trimmed)) {
-    return `Invalid Telegram delivery target "${to}". Use colon (:) as delimiter for topics, not slash. Valid formats: -1001234567890, -1001234567890:123, -1001234567890:topic:123, @username, https://t.me/username`;
+    return undefined;
   }
   return undefined;
 }
