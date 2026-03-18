@@ -730,6 +730,13 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
 
+// Transient signal patterns for api_error payloads. Only treat an api_error as
+// retryable when the message text itself indicates a transient server issue.
+// Non-transient api_error payloads (context overflow, validation/schema errors)
+// must NOT be classified as timeout.
+const API_ERROR_TRANSIENT_SIGNALS_RE =
+  /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream error|backend error|try again later|temporarily.+unable/i;
+
 function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {
     return false;
@@ -747,7 +754,10 @@ function isJsonApiInternalServerError(raw: string): boolean {
   if (isBillingErrorMessage(raw) || isAuthErrorMessage(raw) || isAuthPermanentErrorMessage(raw)) {
     return false;
   }
-  return true;
+  // Only match when the message contains a transient signal. api_error payloads
+  // with non-transient messages (e.g. context overflow, schema validation) should
+  // fall through to more specific classifiers or remain unclassified.
+  return API_ERROR_TRANSIENT_SIGNALS_RE.test(raw);
 }
 
 export function parseImageDimensionError(raw: string): {
