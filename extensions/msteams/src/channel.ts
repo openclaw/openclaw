@@ -1,12 +1,13 @@
-import {
-  collectAllowlistProviderRestrictSendersWarnings,
-  formatAllowFromLowercase,
-} from "openclaw/plugin-sdk/compat";
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { createTopLevelChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
+import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
 import type {
-  ChannelMessageActionName,
-  ChannelPlugin,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/msteams";
+  ChannelMessageActionAdapter,
+  ChannelMessageToolDiscovery,
+} from "openclaw/plugin-sdk/channel-runtime";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
 import {
   buildProbeChannelStatusSummary,
   buildRuntimeAccountStatusSnapshot,
@@ -15,7 +16,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   MSTeamsConfigSchema,
   PAIRING_APPROVED_MESSAGE,
-} from "openclaw/plugin-sdk/msteams";
+} from "../runtime-api.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
 import {
@@ -27,6 +28,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
+import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
 import { msteamsSetupAdapter } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
@@ -58,8 +60,54 @@ const TEAMS_GRAPH_PERMISSION_HINTS: Record<string, string> = {
   "Files.Read.All": "files (OneDrive)",
 };
 
-async function loadMSTeamsChannelRuntime() {
-  return await import("./channel.runtime.js");
+const loadMSTeamsChannelRuntime = createLazyRuntimeNamedExport(
+  () => import("./channel.runtime.js"),
+  "msTeamsChannelRuntime",
+);
+
+const resolveMSTeamsChannelConfig = (cfg: OpenClawConfig) => ({
+  allowFrom: cfg.channels?.msteams?.allowFrom,
+  defaultTo: cfg.channels?.msteams?.defaultTo,
+});
+
+const msteamsConfigAdapter = createTopLevelChannelConfigAdapter<
+  ResolvedMSTeamsAccount,
+  {
+    allowFrom?: Array<string | number>;
+    defaultTo?: string;
+  }
+>({
+  sectionKey: "msteams",
+  resolveAccount: (cfg) => ({
+    accountId: DEFAULT_ACCOUNT_ID,
+    enabled: cfg.channels?.msteams?.enabled !== false,
+    configured: Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
+  }),
+  resolveAccessorAccount: ({ cfg }) => resolveMSTeamsChannelConfig(cfg),
+  resolveAllowFrom: (account) => account.allowFrom,
+  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  resolveDefaultTo: (account) => account.defaultTo,
+});
+
+function describeMSTeamsMessageTool({
+  cfg,
+}: Parameters<
+  NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
+>[0]): ChannelMessageToolDiscovery {
+  const enabled =
+    cfg.channels?.msteams?.enabled !== false &&
+    Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams));
+  return {
+    actions: enabled ? (["poll"] satisfies ChannelMessageActionName[]) : [],
+    capabilities: enabled ? ["cards"] : [],
+    schema: enabled
+      ? {
+          properties: {
+            card: createMessageToolCardSchema(),
+          },
+        }
+      : null,
+  };
 }
 
 export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
@@ -106,43 +154,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   reload: { configPrefixes: ["channels.msteams"] },
   configSchema: buildChannelConfigSchema(MSTeamsConfigSchema),
   config: {
-    listAccountIds: () => [DEFAULT_ACCOUNT_ID],
-    resolveAccount: (cfg) => ({
-      accountId: DEFAULT_ACCOUNT_ID,
-      enabled: cfg.channels?.msteams?.enabled !== false,
-      configured: Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
-    }),
-    defaultAccountId: () => DEFAULT_ACCOUNT_ID,
-    setAccountEnabled: ({ cfg, enabled }) => ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        msteams: {
-          ...cfg.channels?.msteams,
-          enabled,
-        },
-      },
-    }),
-    deleteAccount: ({ cfg }) => {
-      const next = { ...cfg } as OpenClawConfig;
-      const nextChannels = { ...cfg.channels };
-      delete nextChannels.msteams;
-      if (Object.keys(nextChannels).length > 0) {
-        next.channels = nextChannels;
-      } else {
-        delete next.channels;
-      }
-      return next;
-    },
+    ...msteamsConfigAdapter,
     isConfigured: (_account, cfg) => Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
     describeAccount: (account) => ({
       accountId: account.accountId,
       enabled: account.enabled,
       configured: account.configured,
     }),
-    resolveAllowFrom: ({ cfg }) => cfg.channels?.msteams?.allowFrom ?? [],
-    formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }),
-    resolveDefaultTo: ({ cfg }) => cfg.channels?.msteams?.defaultTo?.trim() || undefined,
   },
   security: {
     collectWarnings: ({ cfg }) => {
@@ -160,6 +178,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   setup: msteamsSetupAdapter,
   messaging: {
     normalizeTarget: normalizeMSTeamsMessagingTarget,
+    resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: (raw) => {
         const trimmed = raw.trim();
@@ -368,21 +387,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
     },
   },
   actions: {
-    listActions: ({ cfg }) => {
-      const enabled =
-        cfg.channels?.msteams?.enabled !== false &&
-        Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams));
-      if (!enabled) {
-        return [];
-      }
-      return ["poll"] satisfies ChannelMessageActionName[];
-    },
-    getCapabilities: ({ cfg }) => {
-      return cfg.channels?.msteams?.enabled !== false &&
-        Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams))
-        ? (["cards"] as const)
-        : [];
-    },
+    describeMessageTool: describeMSTeamsMessageTool,
     handleAction: async (ctx) => {
       // Handle send action with card parameter
       if (ctx.action === "send" && ctx.params.card) {

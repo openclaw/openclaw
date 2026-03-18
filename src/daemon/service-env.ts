@@ -247,10 +247,11 @@ export function buildServiceEnvironment(params: {
   port: number;
   launchdLabel?: string;
   platform?: NodeJS.Platform;
+  extraPathDirs?: string[];
 }): Record<string, string | undefined> {
-  const { env, port, launchdLabel } = params;
+  const { env, port, launchdLabel, extraPathDirs } = params;
   const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
+  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform, extraPathDirs);
   const profile = env.OPENCLAW_PROFILE;
   const resolvedLaunchdLabel =
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
@@ -271,10 +272,11 @@ export function buildServiceEnvironment(params: {
 export function buildNodeServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
+  extraPathDirs?: string[];
 }): Record<string, string | undefined> {
-  const { env } = params;
+  const { env, extraPathDirs } = params;
   const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
+  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform, extraPathDirs);
   const gatewayToken =
     env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
   return {
@@ -313,6 +315,7 @@ function buildCommonServiceEnvironment(
 function resolveSharedServiceEnvironmentFields(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
+  extraPathDirs: string[] | undefined,
 ): SharedServiceEnvironmentFields {
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
@@ -331,7 +334,10 @@ function resolveSharedServiceEnvironmentFields(
     tmpDir,
     // On Windows, Scheduled Tasks should inherit the current task PATH instead of
     // freezing the install-time snapshot into gateway.cmd/node-host.cmd.
-    minimalPath: platform === "win32" ? undefined : buildMinimalServicePath({ env, platform }),
+    minimalPath:
+      platform === "win32"
+        ? undefined
+        : buildMinimalServicePath({ env, platform, extraDirs: extraPathDirs }),
     proxyEnv,
     nodeCaCerts,
     nodeUseSystemCa,

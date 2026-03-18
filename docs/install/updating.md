@@ -22,7 +22,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 
 Notes:
 
-- Add `--no-onboard` if you don’t want the setup wizard to run again.
+- Add `--no-onboard` if you don’t want onboarding to run again.
 - For **source installs**, use:
 
   ```bash
@@ -268,7 +268,7 @@ git checkout main
 git pull
 ```
 
-## If you’re stuck
+## If you are stuck
 
 - Run `openclaw doctor` again and read the output carefully (it often tells you the fix).
 - Check: [Troubleshooting](/gateway/troubleshooting)
