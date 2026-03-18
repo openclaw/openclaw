@@ -1,8 +1,4 @@
-import type {
-  ChannelDirectoryEntry,
-  OpenClawConfig,
-  RuntimeEnv,
-} from "../runtime-api.js";
+import type { ChannelDirectoryEntry, OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { listMattermostAccountIds, resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
