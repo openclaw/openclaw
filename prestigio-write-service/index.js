@@ -29,7 +29,7 @@ const ACTION_FIELDS = {
   'search-xero-bank-transactions': ['search', 'contact_id', 'from_date', 'to_date', 'reference', 'requested_at'],
   'search-xero-credit-notes': ['search', 'contact_id', 'credit_note_number', 'statuses', 'requested_at'],
   'create-invoice': ['xero_contact_id', 'reference', 'line_items', 'due_days', 'requested_at'],
-  'record-payment': ['payments', 'check_date', 'payment_method', 'check_number', 'requested_at']
+  'record-payment': ['payments', 'check_date', 'payment_method', 'check_number', 'account_id', 'requested_at']
 };
 
 // --- Write response atomically ---
