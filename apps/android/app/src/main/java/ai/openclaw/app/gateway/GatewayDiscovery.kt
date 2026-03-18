@@ -6,8 +6,10 @@ import android.net.DnsResolver
 import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.os.Build
 import android.os.CancellationSignal
 import android.util.Log
+import androidx.annotation.RequiresApi
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
@@ -50,7 +52,7 @@ class GatewayDiscovery(
 ) {
   private val nsd = context.getSystemService(NsdManager::class.java)
   private val connectivity = context.getSystemService(ConnectivityManager::class.java)
-  private val dns = DnsResolver.getInstance()
+  private val dns = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) DnsResolver.getInstance() else null
   private val serviceType = "_openclaw-gw._tcp."
   private val wideAreaDomain = System.getenv("OPENCLAW_WIDE_AREA_DOMAIN")
   private val logTag = "OpenClaw/GatewayDiscovery"
@@ -321,8 +323,11 @@ class GatewayDiscovery(
         return null
       }
 
-    val system = queryViaSystemDns(query)
-    if (records(system, Section.ANSWER).any { it.type == type }) return system
+    val system = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      val system = queryViaSystemDns(query)
+      if (records(system, Section.ANSWER).any { it.type == type }) return system
+      system
+    } else null
 
     val direct = createDirectResolver() ?: return system
     return try {
@@ -333,6 +338,7 @@ class GatewayDiscovery(
     }
   }
 
+  @RequiresApi(Build.VERSION_CODES.Q)
   private suspend fun queryViaSystemDns(query: Message): Message? {
     val network = preferredDnsNetwork()
     val bytes =
@@ -439,11 +445,12 @@ class GatewayDiscovery(
     }
   }
 
-  private suspend fun rawQuery(network: android.net.Network?, wireQuery: ByteArray): ByteArray =
-    suspendCancellableCoroutine { cont ->
+  @RequiresApi(Build.VERSION_CODES.Q)
+  private suspend fun rawQuery(network: android.net.Network?, wireQuery: ByteArray): ByteArray {
+    val dns = this.dns ?: throw IOException("DnsResolver not available on this platform")
+    return suspendCancellableCoroutine { cont ->
       val signal = CancellationSignal()
       cont.invokeOnCancellation { signal.cancel() }
-
       dns.rawQuery(
         network,
         wireQuery,
@@ -461,6 +468,7 @@ class GatewayDiscovery(
         },
       )
     }
+  }
 
   private fun txtValue(records: List<TXTRecord>, key: String): String? {
     val prefix = "$key="
