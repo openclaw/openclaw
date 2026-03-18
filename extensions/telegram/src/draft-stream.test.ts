@@ -423,6 +423,7 @@ describe("createTelegramDraftStream", () => {
     const clearCall = api.sendMessageDraft.mock.calls[1];
     expect(clearCall?.[1]).toBe(firstDraftId);
     expect(clearCall?.[2]).toBe("");
+    expect(clearCall?.[3]).toEqual({ message_thread_id: 42 });
 
     stream.update("Second draft");
     await stream.flush();
