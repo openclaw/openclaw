@@ -234,7 +234,7 @@ describe("resolveSpawnCommand", () => {
       resolveSpawnCommand(
         {
           command: wrapperPath,
-          args: ["--cwd", payload, "agent", "status"],
+          args: ["--cd", payload, "agent", "status"],
         },
         {
           strictWindowsCmdWrapper: true,
