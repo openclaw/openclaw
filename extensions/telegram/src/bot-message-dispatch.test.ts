@@ -41,6 +41,10 @@ vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
 
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
+  getCachedSticker: () => null,
+  getCacheStats: () => ({ count: 0 }),
+  searchStickers: () => [],
+  getAllCachedStickers: () => [],
   describeStickerImage: vi.fn(),
 }));
 
