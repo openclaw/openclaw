@@ -407,6 +407,10 @@
   box-sizing: border-box;
 }
 
+.agent-chat__input > textarea:focus-visible {
+  box-shadow: none;
+}
+
 .agent-chat__input > textarea::placeholder {
   color: var(--muted);
 }
