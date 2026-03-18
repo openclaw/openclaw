@@ -71,6 +71,20 @@ pnpm sense:nemo-runner -- --once
 
 For a long-running worker process, omit `--once`.
 
+The runner sends `POST /jobs/{job_id}/heartbeat` while a job is in progress.
+Defaults:
+
+- requested interval: `30s`
+- if the job payload includes `lease_timeout_sec`, the runner uses a safer interval:
+  - `min(requested_interval, lease_timeout_sec * 0.4)`
+  - never below `1s`
+
+You can override the requested interval for testing:
+
+```bash
+pnpm sense:nemo-runner -- --heartbeat-interval 5 --once
+```
+
 You can also pass a file:
 
 ```bash
@@ -224,6 +238,7 @@ It instructs Ollama to return JSON only:
 If Ollama returns invalid JSON, the runner applies a lightweight local parse fallback.
 If Ollama is unavailable or times out, the job still completes with `exit_code != 0` and an `error`
 field in the stored result so operators can see the failure without losing the job record.
+While the job is running, heartbeat success/failure is logged to stderr.
 
 Quick connectivity check:
 

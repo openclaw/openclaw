@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+import threading
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ DEFAULT_BASE_URL = os.environ.get("SENSE_WORKER_URL", "http://192.168.11.11:8787
 DEFAULT_TOKEN_ENV = "SENSE_WORKER_TOKEN"
 DEFAULT_POLL_INTERVAL = 2.0
 DEFAULT_PROCESSING_DELAY = 1.5
+DEFAULT_HEARTBEAT_INTERVAL = 30.0
 DEFAULT_OLLAMA_URL = "http://192.168.11.11:11434"
 DEFAULT_OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gpt-oss:20b")
 
@@ -31,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--token-env", default=DEFAULT_TOKEN_ENV, help="Environment variable to read the shared token from.")
     parser.add_argument("--poll-interval", type=float, default=DEFAULT_POLL_INTERVAL, help="Seconds to wait between empty polls.")
     parser.add_argument("--processing-delay", type=float, default=DEFAULT_PROCESSING_DELAY, help="Seconds to simulate processing work.")
+    parser.add_argument("--heartbeat-interval", type=float, default=DEFAULT_HEARTBEAT_INTERVAL, help="Seconds between job heartbeat calls.")
     parser.add_argument("--runner-name", default="nemoclaw_runner", help="Runner identifier stored in result.runner.")
     parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL, help="Local Ollama base URL.")
     parser.add_argument("--ollama-model", default=DEFAULT_OLLAMA_MODEL, help="Ollama model name.")
@@ -206,6 +209,29 @@ def complete_job(base_url: str, job_id: str, token: str | None, result: dict) ->
     return body
 
 
+def heartbeat_job(base_url: str, job_id: str, token: str | None) -> dict:
+    status, body = request_json("POST", f"{base_url}/jobs/{job_id}/heartbeat", token=token)
+    if status != 200:
+        raise RuntimeError(f"jobs/{job_id}/heartbeat failed with status={status} body={json.dumps(body, ensure_ascii=False)}")
+    return body
+
+
+def resolve_heartbeat_interval(job: dict, requested_interval: float) -> float:
+    lease_timeout = job.get("lease_timeout_sec")
+    if isinstance(lease_timeout, (int, float)) and lease_timeout > 0:
+        return max(1.0, min(float(requested_interval), float(lease_timeout) * 0.4))
+    return max(1.0, float(requested_interval))
+
+
+def heartbeat_loop(base_url: str, job_id: str, token: str | None, interval_sec: float, stop_event: threading.Event) -> None:
+    while not stop_event.wait(interval_sec):
+        try:
+            heartbeat_job(base_url, job_id, token)
+            log(f"heartbeat ok job_id={job_id} interval={interval_sec:.1f}s")
+        except Exception as exc:
+            log(f"heartbeat failed job_id={job_id} error={exc}")
+
+
 def main() -> int:
     args = parse_args()
     token = resolve_token(args)
@@ -227,11 +253,24 @@ def main() -> int:
         if params:
             mode = str(params.get("mode") or "")
         ollama_url = resolve_ollama_url(args, params)
+        heartbeat_interval = resolve_heartbeat_interval(job, args.heartbeat_interval)
         log(f"picked job_id={job_id} mode={mode or 'unknown'} status={job.get('status')}")
         log(f"ollama_host={ollama_url}")
-        time.sleep(max(args.processing_delay, 0.0))
-        result = build_result(job, args.runner_name, ollama_url, args.ollama_model, args.ollama_timeout)
-        completion = complete_job(base_url, job_id, token, result)
+        log(f"heartbeat_interval={heartbeat_interval:.1f}s")
+        stop_event = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=heartbeat_loop,
+            args=(base_url, job_id, token, heartbeat_interval, stop_event),
+            daemon=True,
+        )
+        heartbeat_thread.start()
+        try:
+            time.sleep(max(args.processing_delay, 0.0))
+            result = build_result(job, args.runner_name, ollama_url, args.ollama_model, args.ollama_timeout)
+            completion = complete_job(base_url, job_id, token, result)
+        finally:
+            stop_event.set()
+            heartbeat_thread.join(timeout=1.0)
         log(f"completed job_id={job_id} status={completion.get('status')}")
         print(json.dumps({"job_id": job_id, "result": result, "completion": completion}, ensure_ascii=False, indent=2))
         if args.once:
