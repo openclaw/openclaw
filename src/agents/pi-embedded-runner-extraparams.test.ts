@@ -585,6 +585,31 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("respects camelCase parallelToolCalls: false config to disable default for openai-codex", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.3-codex",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.3-codex": {
+                params: {
+                  parallelToolCalls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.3-codex",
+      } as unknown as Model<"openai-codex-responses">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(false);
+  });
 
   it("defaults parallel_tool_calls on for openai-codex responses", () => {
     const payload = runParallelToolCallsPayloadMutationCase({
