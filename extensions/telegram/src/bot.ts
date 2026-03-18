@@ -484,6 +484,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     resolveGroupActivation,
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
+    loadFreshConfig: () => opts.config ?? telegramDeps.loadConfig(),
     sendChatActionHandler,
     runtime,
     replyToMode,

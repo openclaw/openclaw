@@ -27,10 +27,7 @@ import {
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/reply-runtime";
 import { buildCommandsPaginationKeyboard } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  buildModelsProviderData,
-  formatModelsAvailableHeader,
-} from "openclaw/plugin-sdk/reply-runtime";
+import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/reply-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -645,6 +642,7 @@ export const registerTelegramHandlers = ({
         isForum: params.isForum,
         messageThreadId: params.messageThreadId,
         groupAllowFrom,
+        readChannelAllowFromStore: telegramDeps.readChannelAllowFromStore,
         resolveTelegramGroupConfig,
       }));
     // Use direct config dmPolicy override if available for DMs
@@ -1339,7 +1337,7 @@ export const registerTelegramHandlers = ({
           resolvedThreadId,
           senderId,
         });
-        const modelData = await buildModelsProviderData(cfg, sessionState.agentId);
+        const modelData = await telegramDeps.buildModelsProviderData(cfg, sessionState.agentId);
         const { byProvider, providers } = modelData;
 
         const editMessageWithButtons = async (
@@ -1645,6 +1643,7 @@ export const registerTelegramHandlers = ({
           accountId,
           bot,
           logger,
+          upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
         });
         if (!dmAuthorized) {
           return;

@@ -152,6 +152,7 @@ async function resolveTelegramCommandAuth(params: {
   cfg: OpenClawConfig;
   accountId: string;
   telegramCfg: TelegramAccountConfig;
+  readChannelAllowFromStore: TelegramBotDeps["readChannelAllowFromStore"];
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   useAccessGroups: boolean;
@@ -168,6 +169,7 @@ async function resolveTelegramCommandAuth(params: {
     cfg,
     accountId,
     telegramCfg,
+    readChannelAllowFromStore,
     allowFrom,
     groupAllowFrom,
     useAccessGroups,
@@ -192,6 +194,7 @@ async function resolveTelegramCommandAuth(params: {
     isForum,
     messageThreadId,
     groupAllowFrom,
+    readChannelAllowFromStore,
     resolveTelegramGroupConfig,
   });
   const {
@@ -573,6 +576,7 @@ export const registerTelegramNativeCommands = ({
             cfg,
             accountId,
             telegramCfg,
+            readChannelAllowFromStore: telegramDeps.readChannelAllowFromStore,
             allowFrom,
             groupAllowFrom,
             useAccessGroups,
@@ -837,6 +841,7 @@ export const registerTelegramNativeCommands = ({
             cfg,
             accountId,
             telegramCfg,
+            readChannelAllowFromStore: telegramDeps.readChannelAllowFromStore,
             allowFrom,
             groupAllowFrom,
             useAccessGroups,
