@@ -42,6 +42,39 @@ export function createQuickActionLauncherCard(params: {
           tag: "action",
           actions: [
             buildFeishuCardButton({
+              label: "Status",
+              type: "primary",
+              value: createFeishuCardInteractionEnvelope({
+                k: "quick",
+                a: "feishu.quick_actions.status",
+                q: "/status",
+                c: context,
+              }),
+            }),
+            buildFeishuCardButton({
+              label: "Commands",
+              value: createFeishuCardInteractionEnvelope({
+                k: "quick",
+                a: "feishu.quick_actions.commands",
+                q: "/commands",
+                c: context,
+              }),
+            }),
+            buildFeishuCardButton({
+              label: "Model",
+              value: createFeishuCardInteractionEnvelope({
+                k: "quick",
+                a: "feishu.quick_actions.model",
+                q: "/model",
+                c: context,
+              }),
+            }),
+          ],
+        },
+        {
+          tag: "action",
+          actions: [
+            buildFeishuCardButton({
               label: "Help",
               value: createFeishuCardInteractionEnvelope({
                 k: "quick",

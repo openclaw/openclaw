@@ -36,11 +36,13 @@ describe("feishu quick-action launcher", () => {
       };
     };
 
-    const actionBlock = card.body.elements.find((entry) => entry.tag === "action");
-    expect(actionBlock?.actions).toHaveLength(3);
-    expect(actionBlock?.actions?.[0]?.value?.oc).toBe("ocf1");
-    expect(actionBlock?.actions?.[0]?.value?.c?.s).toBe("agent:codex:feishu:chat:chat1");
-    expect(actionBlock?.actions?.[0]?.value?.c?.t).toBeUndefined();
+    const actionBlocks = card.body.elements.filter((entry) => entry.tag === "action");
+    expect(actionBlocks).toHaveLength(2);
+    expect(actionBlocks[0]?.actions).toHaveLength(3);
+    expect(actionBlocks[1]?.actions).toHaveLength(3);
+    expect(actionBlocks[0]?.actions?.[0]?.value?.oc).toBe("ocf1");
+    expect(actionBlocks[0]?.actions?.[0]?.value?.c?.s).toBe("agent:codex:feishu:chat:chat1");
+    expect(actionBlocks[0]?.actions?.[0]?.value?.c?.t).toBeUndefined();
   });
 
   it("opens the launcher from a supported bot menu event", async () => {

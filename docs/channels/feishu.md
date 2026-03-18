@@ -435,7 +435,20 @@ openclaw pairing list feishu
 | `/reset`  | Reset the session |
 | `/model`  | Show/switch model |
 
-> Note: Feishu does not support native command menus yet, so commands must be sent as text.
+> Note: Feishu still does not auto-register native slash-command menus like Telegram. Text commands continue to work everywhere, and bot-menu events can now be mapped to slash commands or the built-in quick-actions launcher.
+
+### Bot menu shortcuts
+
+If your Feishu app has the `application:bot.menu:write` scope and bot-menu events enabled, you can configure Feishu bot menu entries in the Open Platform console and point their `event_key` values at OpenClaw commands:
+
+- `quick-actions` → opens the built-in quick-actions card
+- `status` → runs `/status`
+- `commands` → runs `/commands`
+- `model` → runs `/model`
+- `command:status` → explicit command mapping form
+- `cmd:model gmn/gpt-5.4` → command mapping with arguments
+
+Unrecognized menu keys still fall back to `/menu <event_key>` so existing custom automations keep working.
 
 ## Gateway management commands
 
@@ -539,7 +552,7 @@ Feishu supports ACP for:
 - DMs
 - group topic conversations
 
-Feishu ACP is text-command driven. There are no native slash-command menus, so use `/acp ...` messages directly in the conversation.
+Feishu ACP is still primarily text-command driven. There is no auto-registered native slash-command menu, so use `/acp ...` messages directly in the conversation, or map bot-menu `event_key` values to ACP slash commands manually if you want shortcuts.
 
 #### Persistent ACP bindings
 

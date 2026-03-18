@@ -171,6 +171,33 @@ describe("Feishu bot menu handler", () => {
     await pending;
   });
 
+  it("maps native-style bot menu keys to slash commands", async () => {
+    const onBotMenu = await registerHandlers();
+
+    await onBotMenu({
+      event_key: "status",
+      timestamp: "1700000000000",
+      operator: {
+        operator_id: {
+          open_id: "ou_user1",
+          user_id: "user_1",
+          union_id: "union_1",
+        },
+      },
+    });
+
+    expect(handleFeishuMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          message: expect.objectContaining({
+            content: '{"text":"/status"}',
+          }),
+        }),
+      }),
+    );
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("falls back to the legacy /menu synthetic message path for unrelated bot menu keys", async () => {
     const onBotMenu = await registerHandlers();
 

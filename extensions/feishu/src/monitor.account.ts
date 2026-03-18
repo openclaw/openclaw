@@ -3,6 +3,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
+import { resolveFeishuBotMenuCommand } from "./bot-menu.js";
 import {
   handleFeishuMessage,
   parseFeishuMessageEvent,
@@ -525,6 +526,7 @@ function registerEventHandlers(
         if (!operatorOpenId || !eventKey) {
           return;
         }
+        const resolvedCommand = resolveFeishuBotMenuCommand(eventKey);
         const syntheticEvent: FeishuMessageEvent = {
           sender: {
             sender_id: {
@@ -540,7 +542,7 @@ function registerEventHandlers(
             chat_type: "p2p",
             message_type: "text",
             content: JSON.stringify({
-              text: `/menu ${eventKey}`,
+              text: resolvedCommand ?? `/menu ${eventKey}`,
             }),
           },
         };
