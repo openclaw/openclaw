@@ -1,3 +1,4 @@
+import { loadModelCatalog } from "../agents/model-catalog.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -75,6 +76,15 @@ export function createGatewayReloadHandlers(params: {
 
     if (plan.restartHeartbeat) {
       nextState.heartbeatRunner.updateConfig(nextConfig);
+    }
+
+    if (plan.regenerateModelCatalog) {
+      // Re-run model catalog generation so models.json reflects the updated
+      // provider config, then bust the in-memory cache so the next caller
+      // sees the freshly-written file instead of the stale startup snapshot.
+      await loadModelCatalog({ config: nextConfig, useCache: false }).catch((err) => {
+        params.logReload.warn(`model catalog reload failed: ${String(err)}`);
+      });
     }
 
     resetDirectoryCache();

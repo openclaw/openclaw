@@ -159,6 +159,27 @@ describe("buildGatewayReloadPlan", () => {
     );
   });
 
+  it("regenerates model catalog when models provider config changes", () => {
+    const plan = buildGatewayReloadPlan(["models.providers.xai.models"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.regenerateModelCatalog).toBe(true);
+    expect(plan.restartHeartbeat).toBe(true);
+  });
+
+  it("does not regenerate model catalog for agents.defaults.model changes", () => {
+    const plan = buildGatewayReloadPlan(["agents.defaults.model"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.regenerateModelCatalog).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+  });
+
+  it("does not regenerate model catalog for agents.defaults.models allowlist changes", () => {
+    const plan = buildGatewayReloadPlan(["agents.defaults.models"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.regenerateModelCatalog).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+  });
+
   it("restarts heartbeat when agents.defaults.models allowlist changes", () => {
     const plan = buildGatewayReloadPlan(["agents.defaults.models"]);
     expect(plan.restartGateway).toBe(false);
