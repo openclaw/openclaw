@@ -587,6 +587,7 @@ export async function compactEmbeddedPiSessionDirect(
       abortSignal: runAbortController.signal,
       modelProvider: model.provider,
       modelId,
+      modelCompat: effectiveModel.compat,
       modelContextWindowTokens: ctxInfo.tokens,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
