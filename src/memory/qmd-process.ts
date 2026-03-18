@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
-} from "../plugin-sdk/windows-spawn.js";
+} from "openclaw/plugin-sdk/windows-spawn";
 
 export type CliSpawnInvocation = {
   command: string;

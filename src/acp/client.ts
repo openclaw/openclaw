@@ -13,12 +13,12 @@ import {
   type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
-import { isKnownCoreToolId } from "../agents/tool-catalog.js";
-import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
-} from "../plugin-sdk/windows-spawn.js";
+} from "openclaw/plugin-sdk/windows-spawn";
+import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import {
   listKnownProviderAuthEnvVarNames,
   omitEnvKeysCaseInsensitive,
