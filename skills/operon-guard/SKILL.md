@@ -1,6 +1,7 @@
 ---
 name: operon-guard
 description: "Pre-flight trust verification for AI agents. Verify behavior, detect injection vulnerabilities, check for PII leaks, and measure reliability before granting Write/Execute permissions."
+homepage: https://pypi.org/project/operon-guard/
 metadata:
   {
     "openclaw":
