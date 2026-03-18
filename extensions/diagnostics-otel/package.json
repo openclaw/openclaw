@@ -19,9 +19,6 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ],
-    "release": {
-      "publishToNpm": true
-    }
+    ]
   }
 }

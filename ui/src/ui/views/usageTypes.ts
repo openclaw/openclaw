@@ -1,5 +1,6 @@
 import type {
   CostUsageDailyEntry,
+  ProviderUsageSummary,
   SessionsUsageEntry,
   SessionsUsageResult,
   SessionsUsageTotals,
@@ -33,6 +34,8 @@ export type UsageProps = {
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
+  providerUsage: ProviderUsageSummary | null;
+  providerUsageError: string | null;
   selectedSessions: string[]; // Support multiple session selection
   selectedDays: string[]; // Support multiple day selection
   selectedHours: number[]; // Support multiple hour selection

@@ -29,9 +29,6 @@
       "localPath": "extensions/msteams",
       "defaultChoice": "npm"
     },
-    "release": {
-      "publishToNpm": true
-    },
     "releaseChecks": {
       "rootDependencyMirrorAllowlist": [
         "@microsoft/agents-hosting"

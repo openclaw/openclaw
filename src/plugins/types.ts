@@ -881,6 +881,7 @@ export type WebSearchRuntimeMetadataContext = {
 
 export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
+  pluginId?: string;
   label: string;
   hint: string;
   envVars: string[];

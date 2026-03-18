@@ -12,6 +12,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { editSlackMessage, reactSlackMessage, removeSlackReaction } from "../../actions.js";
+import { buildSlackBlocksFallbackText } from "../../blocks-fallback.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
@@ -250,17 +251,40 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
 
   const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
-    if (
-      streamFailed ||
-      hasMedia(payload) ||
-      readSlackReplyBlocks(payload)?.length ||
-      !payload.text?.trim()
-    ) {
+    const slackBlocks = readSlackReplyBlocks(payload);
+    const trimmedText = payload.text?.trim() ?? "";
+    if (streamSession && !streamFailed && !hasMedia(payload) && slackBlocks?.length) {
+      const activeThreadTs = streamSession.threadTs;
+      try {
+        await stopSlackStream({
+          session: streamSession,
+          text: normalizeSlackOutboundText(
+            trimmedText || buildSlackBlocksFallbackText(slackBlocks),
+          ),
+          blocks: slackBlocks,
+        });
+        // A block finalize ends the active stream. Later replies in the same
+        // dispatch cycle must fall back to normal delivery instead of trying
+        // to append to a stopped ChatStreamer session.
+        streamSession = null;
+        streamFailed = true;
+        return;
+      } catch (err) {
+        runtime.error?.(
+          danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
+        );
+        streamFailed = true;
+        await deliverNormally(payload, activeThreadTs);
+        return;
+      }
+    }
+
+    if (streamFailed || hasMedia(payload) || slackBlocks?.length || !trimmedText) {
       await deliverNormally(payload, streamSession?.threadTs);
       return;
     }
 
-    const text = payload.text.trim();
+    const text = trimmedText;
     let plannedThreadTs: string | undefined;
     try {
       if (!streamSession) {

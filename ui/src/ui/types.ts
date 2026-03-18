@@ -414,6 +414,9 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
 export type {
   CostUsageDailyEntry,
   CostUsageSummary,
+  ProviderUsageSnapshot,
+  ProviderUsageSummary,
+  ProviderUsageWindow,
   SessionsUsageEntry,
   SessionsUsageResult,
   SessionsUsageTotals,

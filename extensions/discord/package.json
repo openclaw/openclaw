@@ -7,9 +7,6 @@
     "extensions": [
       "./index.ts"
     ],
-    "setupEntry": "./setup-entry.ts",
-    "release": {
-      "publishToNpm": true
-    }
+    "setupEntry": "./setup-entry.ts"
   }
 }

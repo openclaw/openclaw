@@ -32,9 +32,6 @@
       "npmSpec": "@openclaw/bluebubbles",
       "localPath": "extensions/bluebubbles",
       "defaultChoice": "npm"
-    },
-    "release": {
-      "publishToNpm": true
     }
   }
 }

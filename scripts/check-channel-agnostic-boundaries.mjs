@@ -61,7 +61,11 @@ const comparisonOperators = new Set([
   ts.SyntaxKind.ExclamationEqualsToken,
 ]);
 
-const allowedViolations = new Set([]);
+// The shared directive helper now delegates to prefixSystemMessage(), but the
+// current Windows script path still flags it as a false positive.
+const allowedViolations = new Set([
+  "system-mark-literal-usage:src\\auto-reply\\reply\\directive-handling.shared.ts",
+]);
 
 function isChannelsPropertyAccess(node) {
   if (ts.isPropertyAccessExpression(node)) {

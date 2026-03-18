@@ -31,9 +31,6 @@
       "npmSpec": "@openclaw/feishu",
       "localPath": "extensions/feishu",
       "defaultChoice": "npm"
-    },
-    "release": {
-      "publishToNpm": true
     }
   }
 }
