@@ -158,6 +158,7 @@ function applyOpenAIResponsesPayloadOverrides(params: {
   payloadObj: Record<string, unknown>;
   forceStore: boolean;
   stripStore: boolean;
+  stripPromptCache: boolean;
   useServerCompaction: boolean;
   compactThreshold: number;
 }): void {
@@ -166,6 +167,10 @@ function applyOpenAIResponsesPayloadOverrides(params: {
   }
   if (params.stripStore) {
     delete params.payloadObj.store;
+  }
+  if (params.stripPromptCache) {
+    delete params.payloadObj.prompt_cache_key;
+    delete params.payloadObj.prompt_cache_retention;
   }
   if (params.useServerCompaction && params.payloadObj.context_management === undefined) {
     params.payloadObj.context_management = [
@@ -297,7 +302,15 @@ export function createOpenAIResponsesContextManagementWrapper(
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
     const stripStore = shouldStripResponsesStore(model, forceStore);
-    if (!forceStore && !useServerCompaction && !stripStore) {
+    // Strip prompt_cache_key/prompt_cache_retention for openai-responses
+    // streams targeting non-OpenAI endpoints. pi-ai injects these fields
+    // unconditionally, but third-party providers (e.g. Volcano Engine)
+    // reject unknown fields with HTTP 400.
+    const stripPromptCache =
+      typeof model.api === "string" &&
+      OPENAI_RESPONSES_APIS.has(model.api) &&
+      !isDirectOpenAIBaseUrl(model.baseUrl);
+    if (!forceStore && !useServerCompaction && !stripStore && !stripPromptCache) {
       return underlying(model, context, options);
     }
 
@@ -313,6 +326,7 @@ export function createOpenAIResponsesContextManagementWrapper(
             payloadObj: payload as Record<string, unknown>,
             forceStore,
             stripStore,
+            stripPromptCache,
             useServerCompaction,
             compactThreshold,
           });
