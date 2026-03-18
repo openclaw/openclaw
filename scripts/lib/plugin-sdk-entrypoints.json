@@ -14,6 +14,7 @@
   "config-runtime",
   "reply-runtime",
   "channel-runtime",
+  "interactive-runtime",
   "infra-runtime",
   "media-runtime",
   "media-understanding-runtime",
