@@ -318,6 +318,14 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    tavily: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

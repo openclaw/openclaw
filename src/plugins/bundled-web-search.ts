@@ -8,6 +8,7 @@ export const BUNDLED_WEB_SEARCH_PLUGIN_IDS = [
   "moonshot",
   "perplexity",
   "xai",
+  "tavily",
 ] as const;
 
 const bundledWebSearchPluginIdSet = new Set<string>(BUNDLED_WEB_SEARCH_PLUGIN_IDS);

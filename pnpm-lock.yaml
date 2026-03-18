@@ -164,6 +164,9 @@ importers:
       node-llama-cpp:
         specifier: 3.16.2
         version: 3.16.2(typescript@5.9.3)
+      nostr-tools:
+        specifier: ^2.23.3
+        version: 2.23.3(typescript@5.9.3)
       opusscript:
         specifier: ^0.1.1
         version: 0.1.1
@@ -200,6 +203,9 @@ importers:
       yaml:
         specifier: ^2.8.2
         version: 2.8.2
+      zca-js:
+        specifier: ^2.1.2
+        version: 2.1.2
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -524,6 +530,15 @@ importers:
         version: 4.3.6
 
   extensions/synthetic: {}
+
+  extensions/tavily:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+      openclaw:
+        specifier: '*'
+        version: 2026.3.13(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
   extensions/telegram: {}
 

@@ -688,6 +688,7 @@
     "long": "^5.3.2",
     "markdown-it": "^14.1.1",
     "node-edge-tts": "^1.2.10",
+    "nostr-tools": "^2.23.3",
     "opusscript": "^0.1.1",
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.5.207",
@@ -700,6 +701,7 @@
     "undici": "^7.24.4",
     "ws": "^8.19.0",
     "yaml": "^2.8.2",
+    "zca-js": "^2.1.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {

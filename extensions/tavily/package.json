@@ -1,0 +1,25 @@
+{
+  "name": "tavily",
+  "version": "1.0.0",
+  "description": "Tavily search plugin for OpenClaw",
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "search",
+    "tavily"
+  ],
+  "license": "MIT",
+  "author": "",
+  "main": "index.ts",
+  "dependencies": {
+    "@sinclair/typebox": "^0.29.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

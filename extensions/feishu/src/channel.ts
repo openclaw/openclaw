@@ -1,23 +1,26 @@
+import type { ChannelMessageActionName } from "openclaw/channels/plugins/types";
+import type { ClawdbotConfig } from "openclaw/config/config";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  buildChannelConfigSchema,
+  DEFAULT_ACCOUNT_ID,
+  PAIRING_APPROVED_MESSAGE,
+} from "openclaw/plugin-sdk/channel-plugin-common";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
 import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-runtime";
+import { createActionGate } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelMeta, ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "../runtime-api.js";
 import {
-  buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
-  createActionGate,
   buildRuntimeAccountStatusSnapshot,
   createDefaultChannelRuntimeState,
-  DEFAULT_ACCOUNT_ID,
-  PAIRING_APPROVED_MESSAGE,
-} from "../runtime-api.js";
-import type { ChannelMessageActionName } from "../runtime-api.js";
+} from "openclaw/plugin-sdk/status-helpers";
 import {
   resolveFeishuAccount,
   resolveFeishuCredentials,

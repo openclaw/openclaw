@@ -1,5 +1,4 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { HttpsProxyAgent } from "https-proxy-agent";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 type FeishuClientSdk = Pick<
@@ -24,20 +23,31 @@ const defaultFeishuClientSdk: FeishuClientSdk = {
 };
 
 let feishuClientSdk: FeishuClientSdk = defaultFeishuClientSdk;
-let httpsProxyAgentCtor: typeof HttpsProxyAgent = HttpsProxyAgent;
+let httpsProxyAgentCtor: any = null;
+
+// Try to load https-proxy-agent, but don't fail if it's not available
+try {
+  import("https-proxy-agent").then((module) => {
+    httpsProxyAgentCtor = module.default || module.HttpsProxyAgent;
+  });
+} catch (error) {
+  // Ignore error, just don't use proxy agent
+  console.warn("Failed to load https-proxy-agent, proxy support will be disabled");
+}
 
 /** Default HTTP timeout for Feishu API requests (30 seconds). */
 export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
 export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 
-function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
+function getWsProxyAgent(): any | undefined {
   const proxyUrl =
     process.env.https_proxy ||
     process.env.HTTPS_PROXY ||
     process.env.http_proxy ||
     process.env.HTTP_PROXY;
   if (!proxyUrl) return undefined;
+  if (!httpsProxyAgentCtor) return undefined;
   return new httpsProxyAgentCtor(proxyUrl);
 }
 

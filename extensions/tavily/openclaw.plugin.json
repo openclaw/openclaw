@@ -1,0 +1,30 @@
+{
+  "id": "tavily",
+  "name": "Tavily Search",
+  "description": "Web search using Tavily API",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string",
+            "description": "Tavily API key"
+          },
+          "baseUrl": {
+            "type": "string",
+            "description": "Tavily API base URL"
+          },
+          "model": {
+            "type": "string",
+            "description": "Tavily search model"
+          }
+        }
+      }
+    }
+  }
+}
