@@ -437,6 +437,7 @@ Interactive helper that:
 Exec note:
 
 - Preflight skips exec SecretRef checks unless `--allow-exec` is set.
+- If you apply directly from `configure --apply` and the plan includes exec refs/providers, keep `--allow-exec` set for the apply step too.
 
 Helpful modes:
 

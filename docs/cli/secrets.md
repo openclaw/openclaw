@@ -16,7 +16,7 @@ Command roles:
 - `reload`: gateway RPC (`secrets.reload`) that re-resolves refs and swaps runtime snapshot only on full success (no config writes).
 - `audit`: read-only scan of configuration/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift (exec refs are skipped unless `--allow-exec` is set).
 - `configure`: interactive planner for provider setup, target mapping, and preflight (TTY required).
-- `apply`: execute a saved plan (`--dry-run` for validation only; exec refs are skipped unless `--allow-exec` is set), then scrub targeted plaintext residues.
+- `apply`: execute a saved plan (`--dry-run` for validation only; dry-run skips exec checks by default, and write mode rejects exec-containing plans unless `--allow-exec` is set), then scrub targeted plaintext residues.
 
 Recommended operator loop:
 
@@ -28,6 +28,8 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
 openclaw secrets audit --check
 openclaw secrets reload
 ```
+
+If your plan includes `exec` SecretRefs/providers, pass `--allow-exec` on both dry-run and write apply commands.
 
 Exit code note for CI/gates:
 
@@ -117,7 +119,7 @@ Flags:
 - `--providers-only`: configure `secrets.providers` only, skip credential mapping.
 - `--skip-provider-setup`: skip provider setup and map credentials to existing providers.
 - `--agent <id>`: scope `auth-profiles.json` target discovery and writes to one agent store.
-- `--allow-exec`: allow exec SecretRef checks during preflight (may execute provider commands).
+- `--allow-exec`: allow exec SecretRef checks during preflight/apply (may execute provider commands).
 
 Notes:
 
@@ -156,7 +158,7 @@ Exec behavior:
 - `--dry-run` validates preflight without writing files.
 - exec SecretRef checks are skipped by default in dry-run.
 - write mode rejects plans that contain exec SecretRefs/providers unless `--allow-exec` is set.
-- use `--allow-exec` to opt in to exec provider checks/execution in either mode.
+- Use `--allow-exec` to opt in to exec provider checks/execution in either mode.
 
 Plan contract details (allowed target paths, validation rules, and failure semantics):
 
