@@ -5,42 +5,24 @@ import { registerExecuTorchCli } from "./src/cli.js";
 import type { RunnerBackend } from "./src/native-addon.js";
 import { createExecuTorchProvider } from "./src/provider.js";
 import { RunnerManager } from "./src/runner-manager.js";
+import {
+  resolveExecuTorchRuntimeConfig,
+  type ExecuTorchPluginConfig,
+} from "./src/runtime-config.js";
 
-type ExecuTorchPluginConfig = {
-  enabled?: boolean;
-  backend?: string;
-  runtimeLibraryPath?: string;
-  modelDir?: string;
-  modelPath?: string;
-  tokenizerPath?: string;
-  dataPath?: string;
-};
-
-const DEFAULT_RUNTIME_LIBRARY_PATH =
-  process.env.OPENCLAW_EXECUTORCH_RUNTIME_LIBRARY?.trim() ||
-  path.join(os.homedir(), ".openclaw/lib", defaultRuntimeLibraryFileName());
-const DEFAULT_MODEL_ROOT =
-  process.env.OPENCLAW_EXECUTORCH_MODEL_ROOT?.trim() ||
-  path.join(os.homedir(), ".openclaw/models/parakeet");
-const DEFAULT_MODEL_DIR = path.join(DEFAULT_MODEL_ROOT, "parakeet-tdt-metal");
-const DEFAULT_MODEL_FILE = "model.pte";
-const DEFAULT_TOKENIZER_FILE = "tokenizer.model";
-const DEFAULT_BACKEND: RunnerBackend = "metal";
-
-function defaultRuntimeLibraryFileName(): string {
-  if (os.platform() === "darwin") return "libparakeet_tdt_runtime.dylib";
-  if (os.platform() === "win32") return "parakeet_tdt_runtime.dll";
-  return "libparakeet_tdt_runtime.so";
-}
-
-function isMetalHost(): boolean {
-  return os.platform() === "darwin" && os.arch() === "arm64";
+function isBackendSupportedOnHost(backend: RunnerBackend): boolean {
+  switch (backend) {
+    case "metal":
+      return os.platform() === "darwin" && os.arch() === "arm64";
+    default:
+      return false;
+  }
 }
 
 const plugin = {
   id: "executorch",
   name: "ExecuTorch",
-  description: "On-device speech-to-text via embedded ExecuTorch Parakeet-TDT (Metal)",
+  description: "On-device speech-to-text via embedded ExecuTorch model plugins",
 
   register(api: OpenClawPluginApi) {
     const raw = (api.pluginConfig ?? {}) as ExecuTorchPluginConfig;
@@ -50,26 +32,27 @@ const plugin = {
       return;
     }
 
-    if (!isMetalHost()) {
+    const resolved = resolveExecuTorchRuntimeConfig(raw);
+    for (const warning of resolved.warnings) {
+      api.logger.warn(`[executorch] ${warning}`);
+    }
+    const {
+      modelPlugin,
+      modelRoot,
+      modelDir,
+      backend,
+      runtimeLibraryPath,
+      modelPath,
+      tokenizerPath,
+      dataPath,
+    } = resolved;
+
+    if (!isBackendSupportedOnHost(backend)) {
       api.logger.warn(
-        `[executorch] Parakeet metal runtime is only supported on darwin/arm64 (found ${os.platform()}/${os.arch()}); plugin disabled`,
+        `[executorch] backend='${backend}' from modelPlugin='${modelPlugin.id}' is not supported on ${os.platform()}/${os.arch()}; plugin disabled`,
       );
       return;
     }
-
-    const requestedBackend = raw.backend?.trim();
-    if (requestedBackend && requestedBackend !== DEFAULT_BACKEND) {
-      api.logger.warn(
-        `[executorch] backend='${requestedBackend}' is not supported for this migration; forcing backend=metal`,
-      );
-    }
-    const backend = DEFAULT_BACKEND;
-
-    const modelDir = raw.modelDir?.trim() || DEFAULT_MODEL_DIR;
-    const runtimeLibraryPath = raw.runtimeLibraryPath?.trim() || DEFAULT_RUNTIME_LIBRARY_PATH;
-    const modelPath = raw.modelPath?.trim() || path.join(modelDir, DEFAULT_MODEL_FILE);
-    const tokenizerPath = raw.tokenizerPath?.trim() || path.join(modelDir, DEFAULT_TOKENIZER_FILE);
-    const dataPath = raw.dataPath?.trim() || undefined;
 
     let runner: RunnerManager | null = null;
 
@@ -79,7 +62,9 @@ const plugin = {
           runtimeLibraryPath,
           backend,
           modelPath,
+          modelFileCandidates: modelPlugin.modelFileCandidates,
           tokenizerPath,
+          tokenizerFileCandidates: modelPlugin.tokenizerFileCandidates,
           dataPath,
           logger: api.logger,
         });
@@ -87,7 +72,10 @@ const plugin = {
       return runner;
     };
 
-    const provider = createExecuTorchProvider(getRunner);
+    const provider = createExecuTorchProvider(getRunner, {
+      providerId: "executorch",
+      modelId: modelPlugin.modelId,
+    });
 
     if (typeof api.registerMediaProvider === "function") {
       api.registerMediaProvider(provider);
@@ -99,7 +87,7 @@ const plugin = {
 
     api.registerHook("gateway_start", () => {
       api.logger.info(
-        `[executorch] Registered embedded STT provider (backend=${backend}, library=${runtimeLibraryPath}, models=${modelDir})`,
+        `[executorch] Registered embedded STT provider (modelPlugin=${modelPlugin.id}, backend=${backend}, library=${runtimeLibraryPath}, models=${modelDir})`,
       );
 
       try {
@@ -118,7 +106,7 @@ const plugin = {
       name: "executorch_transcribe",
       label: "ExecuTorch Transcribe",
       description:
-        "Transcribe audio on-device using embedded ExecuTorch Parakeet runtime. " +
+        `Transcribe audio on-device using embedded ExecuTorch ${modelPlugin.displayName} runtime. ` +
         "No cloud API needed.",
       parameters: {
         type: "object" as const,
@@ -155,14 +143,14 @@ const plugin = {
                 text: JSON.stringify({
                   text: result.text,
                   model: result.model,
-                  provider: "executorch",
+                  provider: provider.id,
                 }),
               },
             ],
             details: {
               text: result.text,
               model: result.model,
-              provider: "executorch",
+              provider: provider.id,
             },
           };
         } catch (err) {
@@ -203,7 +191,7 @@ const plugin = {
             apiKey: "local",
             timeoutMs: 120_000,
           });
-          respond(true, { text: result.text, model: result.model, provider: "executorch" });
+          respond(true, { text: result.text, model: result.model, provider: provider.id });
         } catch (err) {
           respond(false, { error: err instanceof Error ? err.message : String(err) });
         }
@@ -216,8 +204,11 @@ const plugin = {
         respond(true, {
           available: true,
           platform: `${os.platform()}/${os.arch()}`,
+          modelPlugin: modelPlugin.id,
+          modelId: modelPlugin.modelId,
           backend,
           runtimeLibraryPath,
+          modelRoot,
           modelPath,
           tokenizerPath,
           dataPath,
@@ -231,6 +222,7 @@ const plugin = {
     api.registerCli(
       ({ program }) =>
         registerExecuTorchCli(program, {
+          modelPlugin,
           backend,
           runtimeLibraryPath,
           modelPath,

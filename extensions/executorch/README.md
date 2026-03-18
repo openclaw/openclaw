@@ -1,8 +1,12 @@
-# ExecuTorch Parakeet Plugin for OpenClaw
+# ExecuTorch Plugin for OpenClaw
 
 https://github.com/user-attachments/assets/cb39ffcd-509e-4205-8ab1-34e7bbdc0c23
 
-On-device speech-to-text (STT) for OpenClaw using an embedded ExecuTorch runtime with **Parakeet-TDT** on **Metal**.
+On-device speech-to-text (STT) for OpenClaw using an embedded ExecuTorch runtime.
+
+Current bundled model plugin:
+
+- **Parakeet-TDT** on **Metal**
 
 ## Scope
 
@@ -10,6 +14,17 @@ On-device speech-to-text (STT) for OpenClaw using an embedded ExecuTorch runtime
 - Platform: macOS Apple Silicon (`darwin/arm64`)
 - Runtime mode: embedded (native addon + C ABI dylib)
 - No subprocess runner in the plugin path
+
+## Model-Plugin Architecture
+
+The extension is structured so new ExecuTorch model integrations can be added with minimal changes:
+
+- model plugin contract: `extensions/executorch/src/models/types.ts`
+- model plugin registry: `extensions/executorch/src/models/registry.ts`
+- current model plugin implementation: `extensions/executorch/src/models/parakeet.ts`
+- shared runtime config resolution: `extensions/executorch/src/runtime-config.ts`
+
+The top-level plugin (`extensions/executorch/index.ts`) is model-agnostic and loads the selected model plugin from the registry.
 
 ## Required Artifacts
 
@@ -56,6 +71,7 @@ pnpm openclaw executorch transcribe /path/to/short.wav
 `plugins.entries.executorch` supports:
 
 - `enabled`: boolean
+- `modelPlugin`: `"parakeet"` (currently only bundled option)
 - `backend`: `"metal"` (only value accepted in this migration)
 - `runtimeLibraryPath`: string
 - `modelDir`: string
@@ -71,6 +87,7 @@ Example:
     "entries": {
       "executorch": {
         "enabled": true,
+        "modelPlugin": "parakeet",
         "backend": "metal",
         "runtimeLibraryPath": "/Users/me/.openclaw/lib/libparakeet_tdt_runtime.dylib",
         "modelPath": "/Users/me/.openclaw/models/parakeet/parakeet-tdt-metal/model.pte",
@@ -153,3 +170,7 @@ This migration path is intentionally metal-only. Non-`darwin/arm64` hosts log a 
   - `pqt_runner_transcribe`
   - `pqt_last_error`
 - Plugin default model id: `parakeet-tdt-0.6b-v3`
+- To add a new model plugin:
+  - implement `ExecuTorchModelPlugin` in `extensions/executorch/src/models/<name>.ts`
+  - register it in `extensions/executorch/src/models/registry.ts`
+  - add the id to `openclaw.plugin.json` `modelPlugin` enum

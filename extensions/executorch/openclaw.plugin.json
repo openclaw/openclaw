@@ -6,7 +6,12 @@
     "properties": {
       "enabled": {
         "type": "boolean",
-        "description": "Enable on-device STT via ExecuTorch Parakeet-TDT"
+        "description": "Enable on-device STT via ExecuTorch model plugins"
+      },
+      "modelPlugin": {
+        "type": "string",
+        "enum": ["parakeet"],
+        "description": "ExecuTorch model plugin id (extensible architecture; currently parakeet)"
       },
       "backend": {
         "type": "string",

@@ -6,8 +6,15 @@ import type {
 import { convertToPcmF32 } from "./audio-convert.js";
 import type { RunnerManager } from "./runner-manager.js";
 
+type ExecuTorchProviderOptions = {
+  /** Provider id in OpenClaw media-understanding registry. */
+  providerId?: string;
+  /** Model id surfaced in transcription results. */
+  modelId: string;
+};
+
 /**
- * Build an on-device STT provider backed by the ExecuTorch Parakeet runner.
+ * Build an on-device STT provider backed by an ExecuTorch model runner.
  *
  * Unlike cloud providers this needs no API key; the `apiKey` field in the
  * request is ignored. Audio is converted to 16 kHz mono f32le PCM locally
@@ -15,9 +22,11 @@ import type { RunnerManager } from "./runner-manager.js";
  */
 export function createExecuTorchProvider(
   getRunner: () => RunnerManager,
+  options: ExecuTorchProviderOptions,
 ): MediaUnderstandingProvider {
+  const providerId = options.providerId ?? "executorch";
   return {
-    id: "executorch",
+    id: providerId,
     capabilities: ["audio"],
     async transcribeAudio(req: AudioTranscriptionRequest): Promise<AudioTranscriptionResult> {
       const pcmBuffer = await convertToPcmF32(req.buffer, req.fileName);
@@ -32,7 +41,7 @@ export function createExecuTorchProvider(
         );
       }
       const text = await runner.transcribe(pcmBuffer);
-      return { text, model: "parakeet-tdt-0.6b-v3" };
+      return { text, model: options.modelId };
     },
   };
 }

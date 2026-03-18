@@ -2,11 +2,13 @@ import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
 import type { PluginLogger } from "openclaw/plugin-sdk/executorch";
+import type { ExecuTorchModelPlugin } from "./models/types.js";
 import type { RunnerBackend } from "./native-addon.js";
 import { RunnerManager } from "./runner-manager.js";
 import { ensureRuntimeLibraryLoadable } from "./runtime-library.js";
 
 export type ExecuTorchCliOptions = {
+  modelPlugin: ExecuTorchModelPlugin;
   backend: RunnerBackend;
   runtimeLibraryPath: string;
   modelPath: string;
@@ -15,28 +17,14 @@ export type ExecuTorchCliOptions = {
   logger: PluginLogger;
 };
 
-const DEFAULT_MODEL_ROOT =
-  process.env.OPENCLAW_EXECUTORCH_MODEL_ROOT?.trim() ||
-  path.join(os.homedir(), ".openclaw/models/parakeet");
-const DEFAULT_MODEL_DIR = path.join(DEFAULT_MODEL_ROOT, "parakeet-tdt-metal");
-const PARAKEET_MODEL_REPO = "younghan-meta/Parakeet-TDT-ExecuTorch-Metal";
-
-type SetupFileGroup = {
-  label: string;
-  candidates: string[];
-};
-
-const REQUIRED_MODEL_FILE_GROUPS: SetupFileGroup[] = [
-  { label: "model", candidates: ["model.pte"] },
-  { label: "tokenizer", candidates: ["tokenizer.model"] },
-];
-
 function createRunner(options: ExecuTorchCliOptions): RunnerManager {
   return new RunnerManager({
     backend: options.backend,
     runtimeLibraryPath: options.runtimeLibraryPath,
     modelPath: options.modelPath,
+    modelFileCandidates: options.modelPlugin.modelFileCandidates,
     tokenizerPath: options.tokenizerPath,
+    tokenizerFileCandidates: options.modelPlugin.tokenizerFileCandidates,
     dataPath: options.dataPath,
     logger: options.logger,
   });
@@ -45,11 +33,11 @@ function createRunner(options: ExecuTorchCliOptions): RunnerManager {
 export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOptions): void {
   const et = program
     .command("executorch")
-    .description("ExecuTorch on-device voice commands (Parakeet-TDT Metal)");
-  const defaultModelDir = DEFAULT_MODEL_DIR;
+    .description(`ExecuTorch on-device voice commands (${options.modelPlugin.displayName})`);
+  const defaultModelDir = path.dirname(options.modelPath);
 
   et.command("status")
-    .description("Check Parakeet runtime and model availability")
+    .description(`Check ${options.modelPlugin.displayName} runtime and model availability`)
     .action(async () => {
       const { logger, backend, runtimeLibraryPath, modelPath, tokenizerPath, dataPath } = options;
 
@@ -57,6 +45,7 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
       const checks = [
         { label: "Platform", value: `${os.platform()}/${os.arch()}`, ok: true },
         { label: "Backend", value: backend, ok: true },
+        { label: "Model plugin", value: options.modelPlugin.id, ok: true },
         { label: "Runtime library", value: runtimeLibraryPath, ok: false },
         { label: "Model file", value: modelPath, ok: false },
         { label: "Tokenizer", value: tokenizerPath, ok: false },
@@ -66,7 +55,13 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
       }
 
       for (const check of checks) {
-        if (check.label === "Platform" || check.label === "Backend") continue;
+        if (
+          check.label === "Platform" ||
+          check.label === "Backend" ||
+          check.label === "Model plugin"
+        ) {
+          continue;
+        }
         try {
           await fs.access(check.value);
           check.ok = true;
@@ -104,7 +99,9 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
     });
 
   et.command("transcribe")
-    .description("Transcribe an audio file using on-device ExecuTorch Parakeet-TDT")
+    .description(
+      `Transcribe an audio file using on-device ExecuTorch ${options.modelPlugin.displayName}`,
+    )
     .argument("<file>", "Path to audio file")
     .action(async (file: string) => {
       const { logger } = options;
@@ -124,15 +121,21 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
     });
 
   et.command("setup")
-    .description("Download Parakeet-TDT Metal model/runtime files")
-    .option("--backend <backend>", "Target backend (metal only)", options.backend)
+    .description(`Download ${options.modelPlugin.displayName} model/runtime files`)
+    .option(
+      "--backend <backend>",
+      `Target backend (${options.modelPlugin.supportedBackends.join(" or ")})`,
+      options.backend,
+    )
     .option("--model-dir <dir>", "Target directory for model files", defaultModelDir)
     .action(async (opts: { modelDir: string; backend: string }) => {
       const { logger } = options;
       const targetDir = opts.modelDir;
-      const backend = opts.backend.trim();
-      if (backend !== "metal") {
-        logger.error("[setup] backend must be 'metal' for Parakeet-TDT migration");
+      const backend = opts.backend.trim() as RunnerBackend;
+      if (!options.modelPlugin.supportedBackends.includes(backend)) {
+        logger.error(
+          `[setup] backend must be one of: ${options.modelPlugin.supportedBackends.join(", ")}`,
+        );
         return;
       }
 
@@ -141,10 +144,15 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
       const { promisify } = await import("node:util");
       const execFileAsync = promisify(execFileCb);
       const runtimeDir = path.dirname(options.runtimeLibraryPath);
-      const runtimeFile = path.basename(options.runtimeLibraryPath);
+      const runtimeCandidates = uniqueNonEmpty([
+        path.basename(options.runtimeLibraryPath),
+        ...options.modelPlugin.setupRuntimeLibraryCandidates,
+      ]);
 
-      logger.info(`[setup] Downloading Parakeet Metal files to ${targetDir}...`);
-      logger.info(`[setup] Source: huggingface.co/${PARAKEET_MODEL_REPO}`);
+      logger.info(
+        `[setup] Downloading ${options.modelPlugin.displayName} files to ${targetDir}...`,
+      );
+      logger.info(`[setup] Source: huggingface.co/${options.modelPlugin.setupRepository}`);
 
       await fs.mkdir(targetDir, { recursive: true });
 
@@ -162,22 +170,17 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
         candidates,
         localDir,
         required,
-        makeExecutable,
       }: {
         label: string;
-        candidates: string[];
+        candidates: readonly string[];
         localDir: string;
         required: boolean;
-        makeExecutable?: boolean;
       }): Promise<string | null> => {
         await fs.mkdir(localDir, { recursive: true });
 
         for (const candidate of candidates) {
           const localPath = path.join(localDir, candidate);
           if (await fileExists(localPath)) {
-            if (makeExecutable) {
-              await fs.chmod(localPath, 0o755);
-            }
             logger.info(`[setup] ${label}: ${candidate} (already present)`);
             return localPath;
           }
@@ -188,15 +191,12 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
           try {
             await execFileAsync(
               "hf",
-              ["download", PARAKEET_MODEL_REPO, candidate, "--local-dir", localDir],
+              ["download", options.modelPlugin.setupRepository, candidate, "--local-dir", localDir],
               { timeout: 600_000 },
             );
             const localPath = path.join(localDir, candidate);
             if (!(await fileExists(localPath))) {
               throw new Error("download reported success but file is missing");
-            }
-            if (makeExecutable) {
-              await fs.chmod(localPath, 0o755);
             }
             logger.info(`[setup] ${label}: ${candidate}`);
             return localPath;
@@ -207,7 +207,7 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
 
         const details = errors.length > 0 ? ` Last error: ${errors[errors.length - 1]}` : "";
         const message =
-          `${label} not found. Tried: ${candidates.join(", ")} from huggingface.co/${PARAKEET_MODEL_REPO}.` +
+          `${label} not found. Tried: ${candidates.join(", ")} from huggingface.co/${options.modelPlugin.setupRepository}.` +
           details;
         if (required) {
           throw new Error(message);
@@ -217,7 +217,7 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
       };
 
       try {
-        for (const group of REQUIRED_MODEL_FILE_GROUPS) {
+        for (const group of options.modelPlugin.setupModelFileGroups) {
           await ensureGroup({
             label: group.label,
             candidates: group.candidates,
@@ -230,7 +230,7 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
 
         await ensureGroup({
           label: "runtime library",
-          candidates: [runtimeFile],
+          candidates: runtimeCandidates,
           localDir: runtimeDir,
           required: true,
         });
@@ -244,4 +244,8 @@ export function registerExecuTorchCli(program: Command, options: ExecuTorchCliOp
         logger.info("[setup] Make sure huggingface-cli is installed: pip install huggingface_hub");
       }
     });
+}
+
+function uniqueNonEmpty(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }

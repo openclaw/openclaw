@@ -15,17 +15,19 @@ type RunnerManagerOptions = {
   runtimeLibraryPath: string;
   backend: RunnerBackend;
   modelPath: string;
+  modelFileCandidates?: readonly string[];
   tokenizerPath: string;
+  tokenizerFileCandidates?: readonly string[];
   dataPath?: string;
   logger: PluginLogger;
   warmup?: boolean;
 };
 
 /**
- * Manages an embedded Parakeet runtime loaded from a native library.
+ * Manages an embedded ExecuTorch runtime loaded from a native library.
  *
- * This replaces the previous subprocess approach and runs inference in-process
- * through the ExecuTorch C API bridge.
+ * The manager is model-plugin agnostic: callers provide model/tokenizer
+ * fallback file names so additional model plugins can reuse the same lifecycle.
  */
 export class RunnerManager {
   private handle: object | null = null;
@@ -41,7 +43,9 @@ export class RunnerManager {
   private readonly runtimeLibraryPath: string;
   private readonly backend: RunnerBackend;
   private modelPath: string;
+  private readonly fallbackModelFileNames: string[];
   private tokenizerPath: string;
+  private readonly fallbackTokenizerFileNames: string[];
   private dataPath: string | undefined;
   private readonly logger: PluginLogger;
   private readonly warmup: boolean;
@@ -50,7 +54,15 @@ export class RunnerManager {
     this.runtimeLibraryPath = options.runtimeLibraryPath;
     this.backend = options.backend;
     this.modelPath = options.modelPath;
+    this.fallbackModelFileNames = this.normalizeFallbackNames(options.modelFileCandidates, [
+      "model.pte",
+      "parakeet.pte",
+    ]);
     this.tokenizerPath = options.tokenizerPath;
+    this.fallbackTokenizerFileNames = this.normalizeFallbackNames(options.tokenizerFileCandidates, [
+      "tokenizer.model",
+      "tokenizer.json",
+    ]);
     this.dataPath = options.dataPath;
     this.logger = options.logger;
     this.warmup = options.warmup ?? true;
@@ -194,8 +206,7 @@ export class RunnerManager {
     const modelDir = path.dirname(this.modelPath);
     const candidates = [
       this.modelPath,
-      path.join(modelDir, "model.pte"),
-      path.join(modelDir, "parakeet.pte"),
+      ...this.fallbackModelFileNames.map((name) => path.join(modelDir, name)),
     ];
     return [...new Set(candidates)];
   }
@@ -203,12 +214,22 @@ export class RunnerManager {
   private tokenizerFileCandidates(resolvedModelPath: string): string[] {
     const tokenizerDir = path.dirname(this.tokenizerPath);
     const modelDir = path.dirname(resolvedModelPath);
-    const preferredNames = ["tokenizer.model", "tokenizer.json"];
     const candidates = [
       this.tokenizerPath,
-      ...preferredNames.map((name) => path.join(tokenizerDir, name)),
-      ...preferredNames.map((name) => path.join(modelDir, name)),
+      ...this.fallbackTokenizerFileNames.map((name) => path.join(tokenizerDir, name)),
+      ...this.fallbackTokenizerFileNames.map((name) => path.join(modelDir, name)),
     ];
     return [...new Set(candidates)];
+  }
+
+  private normalizeFallbackNames(
+    candidates: readonly string[] | undefined,
+    defaults: string[],
+  ): string[] {
+    const picked = (candidates ?? defaults).map((entry) => entry.trim()).filter(Boolean);
+    if (picked.length === 0) {
+      return defaults;
+    }
+    return [...new Set(picked)];
   }
 }
