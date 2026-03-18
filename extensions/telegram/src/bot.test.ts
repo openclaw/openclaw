@@ -7,7 +7,7 @@ import {
   registerPluginInteractiveHandler,
 } from "../../../src/plugins/interactive.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import {
+const {
   answerCallbackQuerySpy,
   commandSpy,
   editMessageReplyMarkupSpy,
@@ -22,8 +22,12 @@ import {
   replySpy,
   sendMessageSpy,
   setMyCommandsSpy,
+  telegramBotHandlersRuntimeForTest,
+  telegramBotMessageDispatchRuntimeForTest,
+  telegramBotNativeCommandsRuntimeForTest,
+  telegramBotRuntimeForTest,
   wasSentByBot,
-} from "./bot.create-telegram-bot.test-harness.js";
+} = await import("./bot.create-telegram-bot.test-harness.js");
 
 // Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
 const { listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
@@ -31,7 +35,15 @@ const { listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
 const { loadSessionStore } = await import("../../../src/config/sessions.js");
 const { normalizeTelegramCommandName } =
   await import("../../../src/config/telegram-custom-commands.js");
-const { createTelegramBot } = await import("./bot.js");
+const { createTelegramBot, setTelegramBotRuntimeForTest } = await import("./bot.js");
+const { setBotHandlersRuntimeForTest } = await import("./bot-handlers.runtime.js");
+const { setBotMessageDispatchRuntimeForTest } = await import("./bot-message-dispatch.js");
+const { setBotNativeCommandsRuntimeForTest } = await import("./bot-native-commands.js");
+
+setTelegramBotRuntimeForTest(telegramBotRuntimeForTest);
+setBotHandlersRuntimeForTest(telegramBotHandlersRuntimeForTest);
+setBotMessageDispatchRuntimeForTest(telegramBotMessageDispatchRuntimeForTest);
+setBotNativeCommandsRuntimeForTest(telegramBotNativeCommandsRuntimeForTest);
 
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
