@@ -359,6 +359,8 @@ describe("normalizeCompatibilityConfigValues", () => {
         providers: {
           google: {
             apiKey: "existing-google-key",
+            baseUrl: "https://generativelanguage.googleapis.com",
+            models: [],
           },
         },
       },
