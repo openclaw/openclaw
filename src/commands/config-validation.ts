@@ -1,6 +1,10 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { type OpenClawConfig, readConfigFileSnapshot } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import {
+  buildPluginCompatibilityNotices,
+  formatPluginCompatibilityNotice,
+} from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 export async function requireValidConfigSnapshot(
@@ -16,6 +20,19 @@ export async function requireValidConfigSnapshot(
     runtime.error(`Fix the config or run ${formatCliCommand("openclaw doctor")}.`);
     runtime.exit(1);
     return null;
+  }
+  const compatibility = buildPluginCompatibilityNotices({ config: snapshot.config });
+  if (compatibility.length > 0) {
+    runtime.log(
+      [
+        `Plugin compatibility: ${compatibility.length} notice${compatibility.length === 1 ? "" : "s"}.`,
+        ...compatibility
+          .slice(0, 3)
+          .map((notice) => `- ${formatPluginCompatibilityNotice(notice)}`),
+        ...(compatibility.length > 3 ? [`- ... +${compatibility.length - 3} more`] : []),
+        `Review: ${formatCliCommand("openclaw doctor")}`,
+      ].join("\n"),
+    );
   }
   return snapshot.config;
 }
