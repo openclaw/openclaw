@@ -16,9 +16,9 @@ export {
 export {
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
   collectAllowlistProviderGroupPolicyWarnings,
-  resolveMentionGatingWithBypass,
-} from "../../src/channels/channel-policy.js";
-export { formatNormalizedAllowFromEntries } from "../../src/channels/allow-from.js";
+} from "../../src/plugin-sdk/channel-policy.js";
+export { resolveMentionGatingWithBypass } from "../../src/channels/mention-gating.js";
+export { formatNormalizedAllowFromEntries } from "../../src/plugin-sdk/allow-from.js";
 export { buildComputedAccountStatusSnapshot } from "../../src/plugin-sdk/status-helpers.js";
 export {
   createAccountStatusSink,
