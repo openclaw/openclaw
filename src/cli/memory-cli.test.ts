@@ -2,24 +2,26 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const getMemorySearchManager = vi.fn();
-const getCortexStatus = vi.fn();
-const previewCortexContext = vi.fn();
-const ensureCortexGraphInitialized = vi.fn();
-const getCortexModeOverride = vi.fn();
-const setCortexModeOverride = vi.fn();
-const clearCortexModeOverride = vi.fn();
-const loadConfig = vi.fn(() => ({}));
-const readConfigFileSnapshot = vi.fn();
-const writeConfigFile = vi.fn(async () => {});
-const resolveDefaultAgentId = vi.fn(() => "main");
-const resolveAgentWorkspaceDir = vi.fn(() => "/tmp/openclaw-workspace");
-const resolveCommandSecretRefsViaGateway = vi.fn(async ({ config }: { config: unknown }) => ({
-  resolvedConfig: config,
-  diagnostics: [] as string[],
-}));
+const getMemorySearchManager = vi.hoisted(() => vi.fn());
+const getCortexStatus = vi.hoisted(() => vi.fn());
+const previewCortexContext = vi.hoisted(() => vi.fn());
+const ensureCortexGraphInitialized = vi.hoisted(() => vi.fn());
+const getCortexModeOverride = vi.hoisted(() => vi.fn());
+const setCortexModeOverride = vi.hoisted(() => vi.fn());
+const clearCortexModeOverride = vi.hoisted(() => vi.fn());
+const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
+const readConfigFileSnapshot = vi.hoisted(() => vi.fn());
+const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
+const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
+const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-workspace"));
+const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
+  vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    diagnostics: [] as string[],
+  })),
+);
 
 vi.mock("../memory/index.js", () => ({
   getMemorySearchManager,
@@ -57,7 +59,8 @@ let defaultRuntime: typeof import("../runtime.js").defaultRuntime;
 let isVerbose: typeof import("../globals.js").isVerbose;
 let setVerbose: typeof import("../globals.js").setVerbose;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({ registerMemoryCli } = await import("./memory-cli.js"));
   ({ defaultRuntime } = await import("../runtime.js"));
   ({ isVerbose, setVerbose } = await import("../globals.js"));

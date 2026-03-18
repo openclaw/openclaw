@@ -1,2 +1,2 @@
-// Shim: re-exports from extensions/whatsapp/src/agent-tools-login.ts
-export * from "../../../../extensions/whatsapp/src/agent-tools-login.js";
+// Shim: keep legacy import path while the runtime loads the plugin SDK surface.
+export * from "../../../plugin-sdk/whatsapp.js";

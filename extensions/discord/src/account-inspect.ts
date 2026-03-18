@@ -1,10 +1,13 @@
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DiscordAccountConfig } from "../../../src/config/types.discord.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-resolution";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
-} from "../../../src/config/types.secrets.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/discord";
 import {
   mergeDiscordAccountConfig,
   resolveDefaultDiscordAccountId,

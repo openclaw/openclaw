@@ -4,11 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { loadConfig } from "../config/config.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
-import { resolveOpenClawUserDataDir } from "./chrome.js";
 import type { BrowserTab } from "./client.js";
-import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
 
 type ChromeMcpStructuredPage = {
@@ -29,12 +26,16 @@ type ChromeMcpSession = {
   ready: Promise<void>;
 };
 
-type ChromeMcpSessionFactory = (profileName: string) => Promise<ChromeMcpSession>;
+type ChromeMcpSessionFactory = (
+  profileName: string,
+  userDataDir?: string,
+) => Promise<ChromeMcpSession>;
 
 const DEFAULT_CHROME_MCP_COMMAND = "npx";
 const DEFAULT_CHROME_MCP_ARGS = [
   "-y",
   "chrome-devtools-mcp@latest",
+  "--autoConnect",
   // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
   "--experimentalStructuredContent",
   "--experimental-page-id-routing",
@@ -43,51 +44,6 @@ const DEFAULT_CHROME_MCP_ARGS = [
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
-
-type ChromeMcpLaunchPlan = {
-  args: string[];
-  mode: "autoConnect" | "browserUrl" | "wsEndpoint" | "headless";
-};
-
-function buildChromeMcpLaunchPlan(profileName: string): ChromeMcpLaunchPlan {
-  const cfg = loadConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const profile = resolveProfile(resolved, profileName);
-  if (!profile || profile.driver !== "existing-session") {
-    throw new BrowserProfileUnavailableError(
-      `Chrome MCP profile "${profileName}" is missing or is not driver=existing-session.`,
-    );
-  }
-
-  const args = [...DEFAULT_CHROME_MCP_ARGS];
-  if (profile.mcpTargetUrl) {
-    const parsed = new URL(profile.mcpTargetUrl);
-    if (parsed.protocol === "ws:" || parsed.protocol === "wss:") {
-      args.push("--wsEndpoint", profile.mcpTargetUrl);
-      return { args, mode: "wsEndpoint" };
-    }
-    args.push("--browserUrl", profile.mcpTargetUrl);
-    return { args, mode: "browserUrl" };
-  }
-
-  if (!resolved.headless) {
-    args.push("--autoConnect");
-    return { args, mode: "autoConnect" };
-  }
-
-  args.push("--headless");
-  args.push("--userDataDir", resolveOpenClawUserDataDir(profile.name));
-  if (resolved.executablePath) {
-    args.push("--executablePath", resolved.executablePath);
-  }
-  if (resolved.noSandbox) {
-    args.push("--chromeArg", "--no-sandbox", "--chromeArg", "--disable-setuid-sandbox");
-  }
-  for (const arg of resolved.extraArgs) {
-    args.push("--chromeArg", arg);
-  }
-  return { args, mode: "headless" };
-}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -215,11 +171,62 @@ function extractJsonMessage(result: ChromeMcpToolResult): unknown {
   return null;
 }
 
-async function createRealSession(profileName: string): Promise<ChromeMcpSession> {
-  const launchPlan = buildChromeMcpLaunchPlan(profileName);
+function normalizeChromeMcpUserDataDir(userDataDir?: string): string | undefined {
+  const trimmed = userDataDir?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function buildChromeMcpSessionCacheKey(profileName: string, userDataDir?: string): string {
+  return JSON.stringify([profileName, normalizeChromeMcpUserDataDir(userDataDir) ?? ""]);
+}
+
+function cacheKeyMatchesProfileName(cacheKey: string, profileName: string): boolean {
+  try {
+    const parsed = JSON.parse(cacheKey);
+    return Array.isArray(parsed) && parsed[0] === profileName;
+  } catch {
+    return false;
+  }
+}
+
+async function closeChromeMcpSessionsForProfile(
+  profileName: string,
+  keepKey?: string,
+): Promise<boolean> {
+  let closed = false;
+
+  for (const key of Array.from(pendingSessions.keys())) {
+    if (key !== keepKey && cacheKeyMatchesProfileName(key, profileName)) {
+      pendingSessions.delete(key);
+      closed = true;
+    }
+  }
+
+  for (const [key, session] of Array.from(sessions.entries())) {
+    if (key !== keepKey && cacheKeyMatchesProfileName(key, profileName)) {
+      sessions.delete(key);
+      closed = true;
+      await session.client.close().catch(() => {});
+    }
+  }
+
+  return closed;
+}
+
+export function buildChromeMcpArgs(userDataDir?: string): string[] {
+  const normalizedUserDataDir = normalizeChromeMcpUserDataDir(userDataDir);
+  return normalizedUserDataDir
+    ? [...DEFAULT_CHROME_MCP_ARGS, "--userDataDir", normalizedUserDataDir]
+    : [...DEFAULT_CHROME_MCP_ARGS];
+}
+
+async function createRealSession(
+  profileName: string,
+  userDataDir?: string,
+): Promise<ChromeMcpSession> {
   const transport = new StdioClientTransport({
     command: DEFAULT_CHROME_MCP_COMMAND,
-    args: launchPlan.args,
+    args: buildChromeMcpArgs(userDataDir),
     stderr: "pipe",
   });
   const client = new Client(
@@ -239,15 +246,12 @@ async function createRealSession(profileName: string): Promise<ChromeMcpSession>
       }
     } catch (err) {
       await client.close().catch(() => {});
-      const hint =
-        launchPlan.mode === "autoConnect"
-          ? "Make sure Chrome is running, enable chrome://inspect/#remote-debugging, and approve the connection."
-          : launchPlan.mode === "browserUrl" || launchPlan.mode === "wsEndpoint"
-            ? "Make sure the configured browserUrl/wsEndpoint is reachable and Chrome is running with remote debugging enabled."
-            : "Make sure a Chrome executable is available, and use browser.noSandbox=true on Linux containers/root setups when needed.";
+      const targetLabel = userDataDir
+        ? `the configured Chromium user data dir (${userDataDir})`
+        : "Google Chrome's default profile";
       throw new BrowserProfileUnavailableError(
         `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
-          `${hint} ` +
+          `Make sure ${targetLabel} is running locally with remote debugging enabled. ` +
           `Details: ${String(err)}`,
       );
     }
@@ -260,27 +264,34 @@ async function createRealSession(profileName: string): Promise<ChromeMcpSession>
   };
 }
 
-async function getSession(profileName: string): Promise<ChromeMcpSession> {
-  let session = sessions.get(profileName);
+async function getSession(profileName: string, userDataDir?: string): Promise<ChromeMcpSession> {
+  const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir);
+  await closeChromeMcpSessionsForProfile(profileName, cacheKey);
+
+  let session = sessions.get(cacheKey);
   if (session && session.transport.pid === null) {
-    sessions.delete(profileName);
+    sessions.delete(cacheKey);
     session = undefined;
   }
   if (!session) {
-    let pending = pendingSessions.get(profileName);
+    let pending = pendingSessions.get(cacheKey);
     if (!pending) {
       pending = (async () => {
-        const created = await (sessionFactory ?? createRealSession)(profileName);
-        sessions.set(profileName, created);
+        const created = await (sessionFactory ?? createRealSession)(profileName, userDataDir);
+        if (pendingSessions.get(cacheKey) === pending) {
+          sessions.set(cacheKey, created);
+        } else {
+          await created.client.close().catch(() => {});
+        }
         return created;
       })();
-      pendingSessions.set(profileName, pending);
+      pendingSessions.set(cacheKey, pending);
     }
     try {
       session = await pending;
     } finally {
-      if (pendingSessions.get(profileName) === pending) {
-        pendingSessions.delete(profileName);
+      if (pendingSessions.get(cacheKey) === pending) {
+        pendingSessions.delete(cacheKey);
       }
     }
   }
@@ -288,9 +299,9 @@ async function getSession(profileName: string): Promise<ChromeMcpSession> {
     await session.ready;
     return session;
   } catch (err) {
-    const current = sessions.get(profileName);
+    const current = sessions.get(cacheKey);
     if (current?.transport === session.transport) {
-      sessions.delete(profileName);
+      sessions.delete(cacheKey);
     }
     throw err;
   }
@@ -298,10 +309,12 @@ async function getSession(profileName: string): Promise<ChromeMcpSession> {
 
 async function callTool(
   profileName: string,
+  userDataDir: string | undefined,
   name: string,
   args: Record<string, unknown> = {},
 ): Promise<ChromeMcpToolResult> {
-  const session = await getSession(profileName);
+  const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir);
+  const session = await getSession(profileName, userDataDir);
   let result: ChromeMcpToolResult;
   try {
     result = (await session.client.callTool({
@@ -310,7 +323,7 @@ async function callTool(
     })) as ChromeMcpToolResult;
   } catch (err) {
     // Transport/connection error — tear down session so it reconnects on next call
-    sessions.delete(profileName);
+    sessions.delete(cacheKey);
     await session.client.close().catch(() => {});
     throw err;
   }
@@ -332,8 +345,12 @@ async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T>
   }
 }
 
-async function findPageById(profileName: string, pageId: number): Promise<ChromeMcpStructuredPage> {
-  const pages = await listChromeMcpPages(profileName);
+async function findPageById(
+  profileName: string,
+  pageId: number,
+  userDataDir?: string,
+): Promise<ChromeMcpStructuredPage> {
+  const pages = await listChromeMcpPages(profileName, userDataDir);
   const page = pages.find((entry) => entry.id === pageId);
   if (!page) {
     throw new BrowserTabNotFoundError();
@@ -341,43 +358,54 @@ async function findPageById(profileName: string, pageId: number): Promise<Chrome
   return page;
 }
 
-export async function ensureChromeMcpAvailable(profileName: string): Promise<void> {
-  await getSession(profileName);
+export async function ensureChromeMcpAvailable(
+  profileName: string,
+  userDataDir?: string,
+): Promise<void> {
+  await getSession(profileName, userDataDir);
 }
 
 export function getChromeMcpPid(profileName: string): number | null {
-  return sessions.get(profileName)?.transport.pid ?? null;
+  for (const [key, session] of sessions.entries()) {
+    if (cacheKeyMatchesProfileName(key, profileName)) {
+      return session.transport.pid ?? null;
+    }
+  }
+  return null;
 }
 
 export async function closeChromeMcpSession(profileName: string): Promise<boolean> {
-  pendingSessions.delete(profileName);
-  const session = sessions.get(profileName);
-  if (!session) {
-    return false;
-  }
-  sessions.delete(profileName);
-  await session.client.close().catch(() => {});
-  return true;
+  return await closeChromeMcpSessionsForProfile(profileName);
 }
 
 export async function stopAllChromeMcpSessions(): Promise<void> {
-  const names = [...sessions.keys()];
+  const names = [...new Set([...sessions.keys()].map((key) => JSON.parse(key)[0] as string))];
   for (const name of names) {
     await closeChromeMcpSession(name).catch(() => {});
   }
 }
 
-export async function listChromeMcpPages(profileName: string): Promise<ChromeMcpStructuredPage[]> {
-  const result = await callTool(profileName, "list_pages");
+export async function listChromeMcpPages(
+  profileName: string,
+  userDataDir?: string,
+): Promise<ChromeMcpStructuredPage[]> {
+  const result = await callTool(profileName, userDataDir, "list_pages");
   return extractStructuredPages(result);
 }
 
-export async function listChromeMcpTabs(profileName: string): Promise<BrowserTab[]> {
-  return toBrowserTabs(await listChromeMcpPages(profileName));
+export async function listChromeMcpTabs(
+  profileName: string,
+  userDataDir?: string,
+): Promise<BrowserTab[]> {
+  return toBrowserTabs(await listChromeMcpPages(profileName, userDataDir));
 }
 
-export async function openChromeMcpTab(profileName: string, url: string): Promise<BrowserTab> {
-  const result = await callTool(profileName, "new_page", { url });
+export async function openChromeMcpTab(
+  profileName: string,
+  url: string,
+  userDataDir?: string,
+): Promise<BrowserTab> {
+  const result = await callTool(profileName, userDataDir, "new_page", { url });
   const pages = extractStructuredPages(result);
   const chosen = pages.find((page) => page.selected) ?? pages.at(-1);
   if (!chosen) {
@@ -391,38 +419,52 @@ export async function openChromeMcpTab(profileName: string, url: string): Promis
   };
 }
 
-export async function focusChromeMcpTab(profileName: string, targetId: string): Promise<void> {
-  await callTool(profileName, "select_page", {
+export async function focusChromeMcpTab(
+  profileName: string,
+  targetId: string,
+  userDataDir?: string,
+): Promise<void> {
+  await callTool(profileName, userDataDir, "select_page", {
     pageId: parsePageId(targetId),
     bringToFront: true,
   });
 }
 
-export async function closeChromeMcpTab(profileName: string, targetId: string): Promise<void> {
-  await callTool(profileName, "close_page", { pageId: parsePageId(targetId) });
+export async function closeChromeMcpTab(
+  profileName: string,
+  targetId: string,
+  userDataDir?: string,
+): Promise<void> {
+  await callTool(profileName, userDataDir, "close_page", { pageId: parsePageId(targetId) });
 }
 
 export async function navigateChromeMcpPage(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   url: string;
   timeoutMs?: number;
 }): Promise<{ url: string }> {
-  await callTool(params.profileName, "navigate_page", {
+  await callTool(params.profileName, params.userDataDir, "navigate_page", {
     pageId: parsePageId(params.targetId),
     type: "url",
     url: params.url,
     ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
   });
-  const page = await findPageById(params.profileName, parsePageId(params.targetId));
+  const page = await findPageById(
+    params.profileName,
+    parsePageId(params.targetId),
+    params.userDataDir,
+  );
   return { url: page.url ?? params.url };
 }
 
 export async function takeChromeMcpSnapshot(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
 }): Promise<ChromeMcpSnapshotNode> {
-  const result = await callTool(params.profileName, "take_snapshot", {
+  const result = await callTool(params.profileName, params.userDataDir, "take_snapshot", {
     pageId: parsePageId(params.targetId),
   });
   return extractSnapshot(result);
@@ -430,13 +472,14 @@ export async function takeChromeMcpSnapshot(params: {
 
 export async function takeChromeMcpScreenshot(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   uid?: string;
   fullPage?: boolean;
   format?: "png" | "jpeg";
 }): Promise<Buffer> {
   return await withTempFile(async (filePath) => {
-    await callTool(params.profileName, "take_screenshot", {
+    await callTool(params.profileName, params.userDataDir, "take_screenshot", {
       pageId: parsePageId(params.targetId),
       filePath,
       format: params.format ?? "png",
@@ -449,11 +492,12 @@ export async function takeChromeMcpScreenshot(params: {
 
 export async function clickChromeMcpElement(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   uid: string;
   doubleClick?: boolean;
 }): Promise<void> {
-  await callTool(params.profileName, "click", {
+  await callTool(params.profileName, params.userDataDir, "click", {
     pageId: parsePageId(params.targetId),
     uid: params.uid,
     ...(params.doubleClick ? { dblClick: true } : {}),
@@ -462,11 +506,12 @@ export async function clickChromeMcpElement(params: {
 
 export async function fillChromeMcpElement(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   uid: string;
   value: string;
 }): Promise<void> {
-  await callTool(params.profileName, "fill", {
+  await callTool(params.profileName, params.userDataDir, "fill", {
     pageId: parsePageId(params.targetId),
     uid: params.uid,
     value: params.value,
@@ -475,10 +520,11 @@ export async function fillChromeMcpElement(params: {
 
 export async function fillChromeMcpForm(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   elements: Array<{ uid: string; value: string }>;
 }): Promise<void> {
-  await callTool(params.profileName, "fill_form", {
+  await callTool(params.profileName, params.userDataDir, "fill_form", {
     pageId: parsePageId(params.targetId),
     elements: params.elements,
   });
@@ -486,10 +532,11 @@ export async function fillChromeMcpForm(params: {
 
 export async function hoverChromeMcpElement(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   uid: string;
 }): Promise<void> {
-  await callTool(params.profileName, "hover", {
+  await callTool(params.profileName, params.userDataDir, "hover", {
     pageId: parsePageId(params.targetId),
     uid: params.uid,
   });
@@ -497,11 +544,12 @@ export async function hoverChromeMcpElement(params: {
 
 export async function dragChromeMcpElement(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   fromUid: string;
   toUid: string;
 }): Promise<void> {
-  await callTool(params.profileName, "drag", {
+  await callTool(params.profileName, params.userDataDir, "drag", {
     pageId: parsePageId(params.targetId),
     from_uid: params.fromUid,
     to_uid: params.toUid,
@@ -510,11 +558,12 @@ export async function dragChromeMcpElement(params: {
 
 export async function uploadChromeMcpFile(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   uid: string;
   filePath: string;
 }): Promise<void> {
-  await callTool(params.profileName, "upload_file", {
+  await callTool(params.profileName, params.userDataDir, "upload_file", {
     pageId: parsePageId(params.targetId),
     uid: params.uid,
     filePath: params.filePath,
@@ -523,10 +572,11 @@ export async function uploadChromeMcpFile(params: {
 
 export async function pressChromeMcpKey(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   key: string;
 }): Promise<void> {
-  await callTool(params.profileName, "press_key", {
+  await callTool(params.profileName, params.userDataDir, "press_key", {
     pageId: parsePageId(params.targetId),
     key: params.key,
   });
@@ -534,11 +584,12 @@ export async function pressChromeMcpKey(params: {
 
 export async function resizeChromeMcpPage(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   width: number;
   height: number;
 }): Promise<void> {
-  await callTool(params.profileName, "resize_page", {
+  await callTool(params.profileName, params.userDataDir, "resize_page", {
     pageId: parsePageId(params.targetId),
     width: params.width,
     height: params.height,
@@ -547,11 +598,12 @@ export async function resizeChromeMcpPage(params: {
 
 export async function handleChromeMcpDialog(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   action: "accept" | "dismiss";
   promptText?: string;
 }): Promise<void> {
-  await callTool(params.profileName, "handle_dialog", {
+  await callTool(params.profileName, params.userDataDir, "handle_dialog", {
     pageId: parsePageId(params.targetId),
     action: params.action,
     ...(params.promptText ? { promptText: params.promptText } : {}),
@@ -560,11 +612,12 @@ export async function handleChromeMcpDialog(params: {
 
 export async function evaluateChromeMcpScript(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   fn: string;
   args?: string[];
 }): Promise<unknown> {
-  const result = await callTool(params.profileName, "evaluate_script", {
+  const result = await callTool(params.profileName, params.userDataDir, "evaluate_script", {
     pageId: parsePageId(params.targetId),
     function: params.fn,
     ...(params.args?.length ? { args: params.args } : {}),
@@ -574,19 +627,16 @@ export async function evaluateChromeMcpScript(params: {
 
 export async function waitForChromeMcpText(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   text: string[];
   timeoutMs?: number;
 }): Promise<void> {
-  await callTool(params.profileName, "wait_for", {
+  await callTool(params.profileName, params.userDataDir, "wait_for", {
     pageId: parsePageId(params.targetId),
     text: params.text,
     ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
   });
-}
-
-export function buildChromeMcpLaunchPlanForTest(profileName: string): ChromeMcpLaunchPlan {
-  return buildChromeMcpLaunchPlan(profileName);
 }
 
 export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFactory | null): void {

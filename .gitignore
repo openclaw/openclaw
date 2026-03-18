@@ -4,10 +4,12 @@ node_modules
 docker-compose.override.yml
 docker-compose.extra.yml
 dist
+dist-runtime
 pnpm-lock.yaml
 bun.lock
 bun.lockb
 coverage
+__openclaw_vitest__/
 __pycache__/
 *.pyc
 .tsbuildinfo
@@ -101,6 +103,13 @@ package-lock.json
 .agents/
 .agents
 .agent/
+!.agent/
+!.agent/workflows/
+!.agent/workflows/update_clawdbot.md
+!.agents/
+!.agents/skills/
+!.agents/skills/parallels-discord-roundtrip/
+!.agents/skills/parallels-discord-roundtrip/SKILL.md
 skills-lock.json
 
 # Local iOS signing overrides

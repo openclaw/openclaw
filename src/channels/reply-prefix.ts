@@ -1,10 +1,10 @@
-import { isSlackInteractiveRepliesEnabled } from "../../extensions/slack/src/interactive-replies.js";
 import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
 import {
   extractShortModelName,
   type ResponsePrefixContext,
 } from "../auto-reply/reply/response-prefix-template.js";
 import type { GetReplyOptions } from "../auto-reply/types.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 type ModelSelectionContext = Parameters<NonNullable<GetReplyOptions["onModelSelected"]>>[0];
@@ -50,10 +50,12 @@ export function createReplyPrefixContext(params: {
       channel: params.channel,
       accountId: params.accountId,
     }).responsePrefix,
-    enableSlackInteractiveReplies:
-      params.channel === "slack"
-        ? isSlackInteractiveRepliesEnabled({ cfg, accountId: params.accountId })
-        : undefined,
+    enableSlackInteractiveReplies: params.channel
+      ? (getChannelPlugin(params.channel)?.messaging?.enableInteractiveReplies?.({
+          cfg,
+          accountId: params.accountId,
+        }) ?? undefined)
+      : undefined,
     responsePrefixContextProvider: () => prefixContext,
     onModelSelected,
   };
