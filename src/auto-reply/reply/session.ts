@@ -217,6 +217,9 @@ export async function initSessionState(params: {
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
+  let persistedAuthProfileOverride: string | undefined;
+  let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
+  let persistedAuthProfileOverrideCompactionCount: number | undefined;
   let persistedLabel: string | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
@@ -353,6 +356,9 @@ export async function initSessionState(params: {
     persistedTtsAuto = entry.ttsAuto;
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
+    persistedAuthProfileOverride = entry.authProfileOverride;
+    persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
+    persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
     persistedLabel = entry.label;
   } else {
     sessionId = crypto.randomUUID();
@@ -369,6 +375,9 @@ export async function initSessionState(params: {
       persistedTtsAuto = entry.ttsAuto;
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
+      persistedAuthProfileOverride = entry.authProfileOverride;
+      persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
+      persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
       persistedLabel = entry.label;
     }
   }
@@ -420,6 +429,11 @@ export async function initSessionState(params: {
     responseUsage: baseEntry?.responseUsage,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
+    authProfileOverride: persistedAuthProfileOverride ?? baseEntry?.authProfileOverride,
+    authProfileOverrideSource:
+      persistedAuthProfileOverrideSource ?? baseEntry?.authProfileOverrideSource,
+    authProfileOverrideCompactionCount:
+      persistedAuthProfileOverrideCompactionCount ?? baseEntry?.authProfileOverrideCompactionCount,
     label: persistedLabel ?? baseEntry?.label,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,

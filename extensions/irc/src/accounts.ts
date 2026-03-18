@@ -1,10 +1,10 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
 import {
   createAccountListHelpers,
   normalizeResolvedSecretInputString,
   parseOptionalDelimitedEntries,
-} from "openclaw/plugin-sdk/irc";
+} from "./runtime-api.js";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
