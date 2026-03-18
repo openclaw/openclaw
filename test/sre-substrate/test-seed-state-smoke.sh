@@ -16,7 +16,14 @@ for bundled_skill in \
   foundry-evm-debug \
   grafana-metrics-best-practices \
   go-memory-profiling \
-  terraform-ci-review; do
+  terraform-ci-review \
+  sre-incident-triage \
+  sre-db-evidence \
+  sre-api-wrappers \
+  sre-auto-remediation \
+  sre-consumer-frontend \
+  sre-sentinel \
+  sre-verify; do
   mkdir -p "$RUNTIME_REPO/skills/$bundled_skill"
   cp -R "$REPO_ROOT/skills/$bundled_skill/." "$RUNTIME_REPO/skills/$bundled_skill/"
 done
@@ -96,3 +103,10 @@ test -f "$STATE_DIR/skills/eks-troubleshoot/SKILL.md"
 test -f "$STATE_DIR/skills/grafana-metrics-best-practices/SKILL.md"
 test -f "$STATE_DIR/skills/go-memory-profiling/SKILL.md"
 test -f "$STATE_DIR/skills/terraform-ci-review/SKILL.md"
+test -f "$STATE_DIR/skills/sre-incident-triage/SKILL.md"
+test -f "$STATE_DIR/skills/sre-db-evidence/SKILL.md"
+test -f "$STATE_DIR/skills/sre-api-wrappers/SKILL.md"
+test -f "$STATE_DIR/skills/sre-auto-remediation/SKILL.md"
+test -f "$STATE_DIR/skills/sre-consumer-frontend/SKILL.md"
+test -f "$STATE_DIR/skills/sre-sentinel/SKILL.md"
+test -f "$STATE_DIR/skills/sre-verify/SKILL.md"
