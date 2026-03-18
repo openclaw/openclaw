@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("./send.js", () => ({
-  fetchChannelPermissionsDiscord: vi.fn(),
-}));
+vi.mock("./send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./send.js")>();
+  return {
+    ...actual,
+    fetchChannelPermissionsDiscord: vi.fn(),
+  };
+});
 
 describe("discord audit", () => {
   it("collects numeric channel ids and counts unresolved keys", async () => {
