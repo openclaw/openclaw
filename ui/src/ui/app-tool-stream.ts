@@ -1,3 +1,4 @@
+import { stripInlineDirectiveTagsForDisplay } from "../../../src/utils/directive-tags.js";
 import { truncateText } from "./format.ts";
 
 const TOOL_STREAM_LIMIT = 50;
@@ -436,7 +437,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
         ];
       }
       (host as unknown as { _chatStreamType?: string })._chatStreamType = payload.stream;
-      host.chatStream = text;
+      host.chatStream = stripInlineDirectiveTagsForDisplay(text).text;
       if (!host.chatStreamStartedAt) {
         host.chatStreamStartedAt = Date.now();
       }
