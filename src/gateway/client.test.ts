@@ -662,3 +662,64 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 });
+
+describe("GatewayClient reconnect timer lifecycle", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
+  });
+
+  it("schedules a ref'd reconnect timer after unexpected close (keeps event loop alive)", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        token: "t",
+      });
+
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+
+      // Simulate unexpected close — triggers scheduleReconnect.
+      ws.emitClose(1006, "");
+
+      // Before the backoff elapses, no new WebSocket should exist.
+      expect(wsInstances).toHaveLength(1);
+
+      // Advance past the initial backoff (1 s) — reconnect should fire.
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(wsInstances.length).toBeGreaterThan(1);
+
+      client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears pending reconnect timer on stop (no stale reconnect after shutdown)", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        token: "t",
+      });
+
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+
+      // Unexpected close queues a reconnect timer.
+      ws.emitClose(1006, "");
+      expect(wsInstances).toHaveLength(1);
+
+      // Stop before the timer fires.
+      client.stop();
+
+      // Advance well past the max backoff — no reconnect should occur.
+      await vi.advanceTimersByTimeAsync(35_000);
+      expect(wsInstances).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
