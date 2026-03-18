@@ -7,8 +7,7 @@ import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 const resolveProviderUsageAuthWithPluginMock = vi.fn(async (..._args: unknown[]) => null);
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderUsageAuthWithPlugin: (...args: unknown[]) =>
-    resolveProviderUsageAuthWithPluginMock(...args),
+  resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
 }));
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
