@@ -6,6 +6,9 @@ import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/bac
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import {
@@ -77,6 +80,8 @@ type ChannelManagerOptions = {
   loadConfig: () => OpenClawConfig;
   channelLogs: Record<ChannelId, SubsystemLogger>;
   channelRuntimeEnvs: Record<ChannelId, RuntimeEnv>;
+  pluginRegistry?: PluginRegistry;
+  pluginRegistryCacheKey?: string | null;
   /**
    * Optional channel runtime helpers for external channel plugins.
    *
@@ -115,6 +120,7 @@ type ChannelManagerOptions = {
    * a channel account actually starts.
    */
   resolveChannelRuntime?: () => PluginRuntime["channel"];
+  resolvePluginRuntimeState?: () => { registry: PluginRegistry; cacheKey?: string | null } | null;
 };
 
 type StartChannelOptions = {
@@ -135,8 +141,16 @@ export type ChannelManager = {
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
 export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
-  const { loadConfig, channelLogs, channelRuntimeEnvs, channelRuntime, resolveChannelRuntime } =
-    opts;
+  const {
+    loadConfig,
+    channelLogs,
+    channelRuntimeEnvs,
+    channelRuntime,
+    resolveChannelRuntime,
+    pluginRegistry,
+    pluginRegistryCacheKey,
+    resolvePluginRuntimeState,
+  } = opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
   // Tracks restart attempts per channel:account. Reset on successful start.
@@ -145,6 +159,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const manuallyStopped = new Set<string>();
 
   const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
+
+  const syncPluginRuntimeState = () => {
+    const resolved =
+      resolvePluginRuntimeState?.() ??
+      (pluginRegistry ? { registry: pluginRegistry, cacheKey: pluginRegistryCacheKey } : null);
+    if (!resolved?.registry) {
+      return;
+    }
+    setActivePluginRegistry(resolved.registry, resolved.cacheKey ?? undefined);
+    initializeGlobalHookRunner(resolved.registry);
+  };
 
   const resolveAccountHealthMonitorOverride = (
     channelConfig: ChannelHealthMonitorConfig | undefined,
@@ -239,6 +264,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     accountId?: string,
     opts: StartChannelOptions = {},
   ) => {
+    syncPluginRuntimeState();
     const plugin = getChannelPlugin(channelId);
     const startAccount = plugin?.gateway?.startAccount;
     if (!startAccount) {
@@ -435,6 +461,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const stopChannel = async (channelId: ChannelId, accountId?: string) => {
+    syncPluginRuntimeState();
     const plugin = getChannelPlugin(channelId);
     const store = getStore(channelId);
     // Fast path: nothing running and no explicit plugin shutdown hook to run.
@@ -493,12 +520,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
+    // Bulk startup enumerates plugins from the active registry, so rebind before listing them.
+    syncPluginRuntimeState();
     for (const plugin of listChannelPlugins()) {
       await startChannel(plugin.id);
     }
   };
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {
+    syncPluginRuntimeState();
     const plugin = getChannelPlugin(channelId);
     if (!plugin) {
       return;

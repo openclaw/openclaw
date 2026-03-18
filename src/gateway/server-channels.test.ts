@@ -5,8 +5,18 @@ import {
   type SubsystemLogger,
   runtimeForLogger,
 } from "../logging/subsystem.js";
+import {
+  getGlobalPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -103,6 +113,9 @@ function createManager(options?: {
   channelRuntime?: PluginRuntime["channel"];
   resolveChannelRuntime?: () => PluginRuntime["channel"];
   loadConfig?: () => Record<string, unknown>;
+  pluginRegistry?: PluginRegistry;
+  pluginRegistryCacheKey?: string | null;
+  resolvePluginRuntimeState?: () => { registry: PluginRegistry; cacheKey?: string | null } | null;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
@@ -112,18 +125,29 @@ function createManager(options?: {
     loadConfig: () => options?.loadConfig?.() ?? {},
     channelLogs,
     channelRuntimeEnvs,
+    ...(options?.pluginRegistry ? { pluginRegistry: options.pluginRegistry } : {}),
+    ...(options && "pluginRegistryCacheKey" in options
+      ? { pluginRegistryCacheKey: options.pluginRegistryCacheKey }
+      : {}),
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
     ...(options?.resolveChannelRuntime
       ? { resolveChannelRuntime: options.resolveChannelRuntime }
+      : {}),
+    ...(options?.resolvePluginRuntimeState
+      ? { resolvePluginRuntimeState: options.resolvePluginRuntimeState }
       : {}),
   });
 }
 
 describe("server-channels auto restart", () => {
   let previousRegistry: PluginRegistry | null = null;
+  let previousRegistryKey: string | null = null;
+  let previousHookRegistry: PluginRegistry | null = null;
 
   beforeEach(() => {
     previousRegistry = getActivePluginRegistry();
+    previousRegistryKey = getActivePluginRegistryKey();
+    previousHookRegistry = getGlobalPluginRegistry();
     vi.useFakeTimers();
     hoisted.computeBackoff.mockClear();
     hoisted.sleepWithAbort.mockClear();
@@ -131,7 +155,15 @@ describe("server-channels auto restart", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
+    setActivePluginRegistry(
+      previousRegistry ?? createEmptyPluginRegistry(),
+      previousRegistryKey ?? undefined,
+    );
+    if (previousHookRegistry) {
+      initializeGlobalHookRunner(previousHookRegistry);
+    } else {
+      resetGlobalHookRunner();
+    }
   });
 
   it("caps crash-loop restarts after max attempts", async () => {
@@ -408,5 +440,47 @@ describe("server-channels auto restart", () => {
     });
 
     expect(manager.isHealthMonitorEnabled("discord", "")).toBe(true);
+  });
+
+  it("rebinds the active plugin registry and hook runner before channel startup", async () => {
+    const startupRegistry = createEmptyPluginRegistry();
+    startupRegistry.channels.push({
+      pluginId: "discord",
+      source: "test",
+      plugin: createTestPlugin({
+        startAccount: async () => {
+          registerPluginHttpRoute({
+            path: "/probe-webhook",
+            auth: "plugin",
+            pluginId: "discord",
+            source: "test-webhook",
+            handler: () => true,
+          });
+        },
+      }),
+    });
+    // Drift to an empty registry to verify bulk startup rebinds before listing channels.
+    const driftedRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(startupRegistry, "startup-registry");
+    initializeGlobalHookRunner(startupRegistry);
+    const manager = createManager({
+      resolvePluginRuntimeState: () => ({
+        registry: startupRegistry,
+        cacheKey: "startup-registry",
+      }),
+    });
+
+    // Simulate registry drift before a hot-reload channel restart.
+    setActivePluginRegistry(driftedRegistry, "drifted-registry");
+    initializeGlobalHookRunner(driftedRegistry);
+
+    await manager.startChannels();
+
+    expect(startupRegistry.httpRoutes).toHaveLength(1);
+    expect(startupRegistry.httpRoutes[0]?.path).toBe("/probe-webhook");
+    expect(driftedRegistry.httpRoutes).toHaveLength(0);
+    expect(getActivePluginRegistryKey()).toBe("startup-registry");
+    expect(getGlobalPluginRegistry()).toBe(startupRegistry);
   });
 });
