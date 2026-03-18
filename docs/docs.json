@@ -536,10 +536,6 @@
       "destination": "/start/onboarding"
     },
     {
-      "source": "/onboarding-config-protocol",
-      "destination": "/experiments/onboarding-config-protocol"
-    },
-    {
       "source": "/pairing",
       "destination": "/channels/pairing"
     },
@@ -560,10 +556,6 @@
       "destination": "/concepts/presence"
     },
     {
-      "source": "/proposals/model-config",
-      "destination": "/experiments/proposals/model-config"
-    },
-    {
       "source": "/provider-routing",
       "destination": "/channels/channel-routing"
     },
@@ -582,10 +574,6 @@
     {
       "source": "/remote-gateway-readme",
       "destination": "/gateway/remote-gateway-readme"
-    },
-    {
-      "source": "/research/memory",
-      "destination": "/experiments/research/memory"
     },
     {
       "source": "/rpc",
@@ -1358,21 +1346,6 @@
               {
                 "group": "Release policy",
                 "pages": ["reference/RELEASING", "reference/test"]
-              },
-              {
-                "group": "Experiments",
-                "pages": [
-                  "design/kilo-gateway-integration",
-                  "experiments/onboarding-config-protocol",
-                  "experiments/plans/acp-thread-bound-agents",
-                  "experiments/plans/acp-unified-streaming-refactor",
-                  "experiments/plans/browser-evaluate-cdp-refactor",
-                  "experiments/plans/openresponses-gateway",
-                  "experiments/plans/pty-process-supervision",
-                  "experiments/plans/session-binding-channel-agnostic",
-                  "experiments/research/memory",
-                  "experiments/proposals/model-config"
-                ]
               }
             ]
           },
@@ -1938,17 +1911,6 @@
               {
                 "group": "发布策略",
                 "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
-              },
-              {
-                "group": "实验性功能",
-                "pages": [
-                  "zh-CN/experiments/onboarding-config-protocol",
-                  "zh-CN/experiments/plans/openresponses-gateway",
-                  "zh-CN/experiments/plans/cron-add-hardening",
-                  "zh-CN/experiments/plans/group-policy-hardening",
-                  "zh-CN/experiments/research/memory",
-                  "zh-CN/experiments/proposals/model-config"
-                ]
               }
             ]
           },
