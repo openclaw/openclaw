@@ -67,3 +67,4 @@ export type { ContextEngineFactory } from "../context-engine/registry.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { registerContextEngine } from "../context-engine/registry.js";
+export { delegateCompactionToRuntime } from "../context-engine/delegate.js";

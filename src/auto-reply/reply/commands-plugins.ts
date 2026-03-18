@@ -7,8 +7,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
+  buildAllPluginInspectReports,
   buildPluginInspectReport,
   buildPluginStatusReport,
+  formatPluginCompatibilityNotice,
   type PluginStatusReport,
 } from "../../plugins/status.js";
 import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
@@ -32,6 +34,11 @@ function buildPluginInspectJson(params: {
   report: PluginStatusReport;
 }): {
   inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>;
+  compatibilityWarnings: Array<{
+    code: string;
+    severity: string;
+    message: string;
+  }>;
   install: PluginInstallRecord | null;
 } | null {
   const inspect = buildPluginInspectReport({
@@ -44,8 +51,39 @@ function buildPluginInspectJson(params: {
   }
   return {
     inspect,
+    compatibilityWarnings: inspect.compatibility.map((warning) => ({
+      code: warning.code,
+      severity: warning.severity,
+      message: formatPluginCompatibilityNotice(warning),
+    })),
     install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
   };
+}
+
+function buildAllPluginInspectJson(params: {
+  config: OpenClawConfig;
+  report: PluginStatusReport;
+}): Array<{
+  inspect: ReturnType<typeof buildAllPluginInspectReports>[number];
+  compatibilityWarnings: Array<{
+    code: string;
+    severity: string;
+    message: string;
+  }>;
+  install: PluginInstallRecord | null;
+}> {
+  return buildAllPluginInspectReports({
+    config: params.config,
+    report: params.report,
+  }).map((inspect) => ({
+    inspect,
+    compatibilityWarnings: inspect.compatibility.map((warning) => ({
+      code: warning.code,
+      severity: warning.severity,
+      message: formatPluginCompatibilityNotice(warning),
+    })),
+    install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
+  }));
 }
 
 function formatPluginLabel(plugin: PluginRecord): string {
@@ -162,6 +200,14 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
       return {
         shouldContinue: false,
         reply: { text: formatPluginsList(loaded.report) },
+      };
+    }
+    if (pluginsCommand.name.toLowerCase() === "all") {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: renderJsonBlock("🔌 Plugins", buildAllPluginInspectJson(loaded)),
+        },
       };
     }
     const payload = buildPluginInspectJson({

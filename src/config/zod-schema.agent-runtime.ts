@@ -263,17 +263,8 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
 export const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
-    provider: z
-      .union([
-        z.literal("aimlapi"),
-        z.literal("brave"),
-        z.literal("firecrawl"),
-        z.literal("perplexity"),
-        z.literal("grok"),
-        z.literal("gemini"),
-        z.literal("kimi"),
-      ])
-      .optional(),
+    provider: z.string().optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
     aimlapi: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
@@ -282,15 +273,29 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
-    apiKey: SecretInputSchema.optional().register(sensitive),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
-    perplexity: z
+    brave: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
-        // Legacy Sonar/OpenRouter compatibility fields.
-        // Setting either opts Perplexity back into the chat-completions path.
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
+        mode: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    firecrawl: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    gemini: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -299,22 +304,9 @@ export const ToolsWebSearchSchema = z
     grok: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
         model: z.string().optional(),
         inlineCitations: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-    gemini: z
-      .object({
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        model: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    firecrawl: z
-      .object({
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
       })
       .strict()
       .optional(),
@@ -326,9 +318,11 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
-    brave: z
+    perplexity: z
       .object({
-        mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
       })
       .strict()
       .optional(),

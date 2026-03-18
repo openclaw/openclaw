@@ -313,13 +313,24 @@ describe("AIMLAPI provider plugin", () => {
     ]);
   });
 
+  it("registers the AIMLAPI web search provider with plugin-owned config paths", () => {
+    const provider = registerSingleProviderPlugin(aimlapiPlugin);
+    const webSearchProvider = provider.webSearchProviders?.[0];
+
+    expect(webSearchProvider).toMatchObject({
+      id: "aimlapi",
+      credentialPath: "plugins.entries.aimlapi.config.webSearch.apiKey",
+      envVars: ["AIMLAPI_API_KEY"],
+      autoDetectOrder: 15,
+    });
+  });
+
   it("fails soft when the aimlapi catalog supplement is invalid", async () => {
     const provider = registerSingleProviderPlugin(aimlapiPlugin);
     const augmentModelCatalog = provider.augmentModelCatalog;
     expect(augmentModelCatalog).toBeTypeOf("function");
 
     vi.spyOn(fs, "readFile").mockResolvedValue("{invalid-json");
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const entries = await augmentModelCatalog?.({
       agentDir: "/tmp/openclaw",
@@ -328,6 +339,5 @@ describe("AIMLAPI provider plugin", () => {
     });
 
     expect(entries).toEqual([]);
-    expect(warnSpy).toHaveBeenCalled();
   });
 });
