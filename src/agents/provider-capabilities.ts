@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveProviderCapabilitiesWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
 
 export type ProviderCapabilities = {
   anthropicToolSchemaMode: "native" | "openai-functions";
@@ -125,8 +125,7 @@ export function usesOpenAiStringModeAnthropicToolChoice(
   options?: ProviderCapabilityLookupOptions,
 ): boolean {
   return (
-    resolveProviderCapabilities(provider, options).anthropicToolChoiceMode ===
-    "openai-string-modes"
+    resolveProviderCapabilities(provider, options).anthropicToolChoiceMode === "openai-string-modes"
   );
 }
 
