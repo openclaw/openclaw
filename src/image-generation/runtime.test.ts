@@ -19,6 +19,10 @@ describe("image-generation runtime helpers", () => {
       source: "test",
       provider: {
         id: "image-plugin",
+        capabilities: {
+          generate: {},
+          edit: { enabled: false },
+        },
         async generateImage(req) {
           seenAuthStore = req.authStore;
           return {
@@ -76,7 +80,18 @@ describe("image-generation runtime helpers", () => {
         id: "image-plugin",
         defaultModel: "img-v1",
         models: ["img-v1", "img-v2"],
-        supportedResolutions: ["1K", "2K"],
+        capabilities: {
+          generate: {
+            supportsResolution: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 3,
+          },
+          geometry: {
+            resolutions: ["1K", "2K"],
+          },
+        },
         generateImage: async () => ({
           images: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
         }),
@@ -89,7 +104,18 @@ describe("image-generation runtime helpers", () => {
         id: "image-plugin",
         defaultModel: "img-v1",
         models: ["img-v1", "img-v2"],
-        supportedResolutions: ["1K", "2K"],
+        capabilities: {
+          generate: {
+            supportsResolution: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 3,
+          },
+          geometry: {
+            resolutions: ["1K", "2K"],
+          },
+        },
       },
     ]);
   });
