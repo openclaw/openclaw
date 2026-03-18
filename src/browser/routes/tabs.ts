@@ -1,4 +1,5 @@
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "../errors.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { getProfileContext, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
@@ -50,6 +51,9 @@ async function withTabsProfileRoute(params: {
 }
 
 async function ensureBrowserRunning(profileCtx: ProfileContext, res: BrowserResponse) {
+  if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+    return true;
+  }
   if (!(await profileCtx.isReachable(300))) {
     jsonError(
       res,
@@ -106,6 +110,10 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       res,
       ctx,
       run: async (profileCtx) => {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+          const tabs = await profileCtx.listTabs();
+          return res.json({ running: true, tabs });
+        }
         const reachable = await profileCtx.isReachable(300);
         if (!reachable) {
           return res.json({ running: false, tabs: [] as unknown[] });
@@ -178,6 +186,10 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       mapTabError: true,
       run: async (profileCtx) => {
         if (action === "list") {
+          if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+            const tabs = await profileCtx.listTabs();
+            return res.json({ ok: true, tabs });
+          }
           const reachable = await profileCtx.isReachable(300);
           if (!reachable) {
             return res.json({ ok: true, tabs: [] as unknown[] });

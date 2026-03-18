@@ -321,6 +321,10 @@ export function createBrowserTool(opts?: {
       const action = readStringParam(params, "action", { required: true });
       const profile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
+      const toolTimeoutMs =
+        typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+          ? Math.max(1, Math.floor(params.timeoutMs))
+          : undefined;
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
 
       if (requestedNode && target && target !== "node") {
@@ -389,55 +393,68 @@ export function createBrowserTool(opts?: {
                 method: "GET",
                 path: "/",
                 profile,
+                timeoutMs: toolTimeoutMs,
               }),
             );
           }
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          return jsonResult(await browserStatus(baseUrl, { profile, timeoutMs: toolTimeoutMs }));
         case "start":
           if (proxyRequest) {
             await proxyRequest({
               method: "POST",
               path: "/start",
               profile,
+              timeoutMs: toolTimeoutMs,
             });
             return jsonResult(
               await proxyRequest({
                 method: "GET",
                 path: "/",
                 profile,
+                timeoutMs: toolTimeoutMs,
               }),
             );
           }
-          await browserStart(baseUrl, { profile });
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          await browserStart(baseUrl, { profile, timeoutMs: toolTimeoutMs });
+          return jsonResult(await browserStatus(baseUrl, { profile, timeoutMs: toolTimeoutMs }));
         case "stop":
           if (proxyRequest) {
             await proxyRequest({
               method: "POST",
               path: "/stop",
               profile,
+              timeoutMs: toolTimeoutMs,
             });
             return jsonResult(
               await proxyRequest({
                 method: "GET",
                 path: "/",
                 profile,
+                timeoutMs: toolTimeoutMs,
               }),
             );
           }
-          await browserStop(baseUrl, { profile });
-          return jsonResult(await browserStatus(baseUrl, { profile }));
+          await browserStop(baseUrl, { profile, timeoutMs: toolTimeoutMs });
+          return jsonResult(await browserStatus(baseUrl, { profile, timeoutMs: toolTimeoutMs }));
         case "profiles":
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "GET",
               path: "/profiles",
+              timeoutMs: toolTimeoutMs,
             });
             return jsonResult(result);
           }
-          return jsonResult({ profiles: await browserProfiles(baseUrl) });
+          return jsonResult({
+            profiles: await browserProfiles(baseUrl, { timeoutMs: toolTimeoutMs }),
+          });
         case "tabs":
-          return await executeTabsAction({ baseUrl, profile, proxyRequest });
+          return await executeTabsAction({
+            baseUrl,
+            profile,
+            timeoutMs: toolTimeoutMs,
+            proxyRequest,
+          });
         case "open": {
           const targetUrl = readTargetUrlParam(params);
           if (proxyRequest) {
@@ -446,10 +463,14 @@ export function createBrowserTool(opts?: {
               path: "/tabs/open",
               profile,
               body: { url: targetUrl },
+              timeoutMs: toolTimeoutMs,
             });
             return jsonResult(result);
           }
-          const opened = await browserOpenTab(baseUrl, targetUrl, { profile });
+          const opened = await browserOpenTab(baseUrl, targetUrl, {
+            profile,
+            timeoutMs: toolTimeoutMs,
+          });
           trackSessionBrowserTab({
             sessionKey: opts?.agentSessionKey,
             targetId: opened.targetId,
@@ -468,10 +489,11 @@ export function createBrowserTool(opts?: {
               path: "/tabs/focus",
               profile,
               body: { targetId },
+              timeoutMs: toolTimeoutMs,
             });
             return jsonResult(result);
           }
-          await browserFocusTab(baseUrl, targetId, { profile });
+          await browserFocusTab(baseUrl, targetId, { profile, timeoutMs: toolTimeoutMs });
           return jsonResult({ ok: true });
         }
         case "close": {
@@ -482,6 +504,7 @@ export function createBrowserTool(opts?: {
                   method: "DELETE",
                   path: `/tabs/${encodeURIComponent(targetId)}`,
                   profile,
+                  timeoutMs: toolTimeoutMs,
                 })
               : await proxyRequest({
                   method: "POST",
@@ -492,7 +515,10 @@ export function createBrowserTool(opts?: {
             return jsonResult(result);
           }
           if (targetId) {
-            await browserCloseTab(baseUrl, targetId, { profile });
+            await browserCloseTab(baseUrl, targetId, {
+              profile,
+              timeoutMs: toolTimeoutMs,
+            });
             untrackSessionBrowserTab({
               sessionKey: opts?.agentSessionKey,
               targetId,

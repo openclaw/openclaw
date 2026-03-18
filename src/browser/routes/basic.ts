@@ -74,13 +74,14 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }
 
     try {
-      const [cdpHttp, cdpReady] = await Promise.all([
-        profileCtx.isHttpReachable(300),
-        profileCtx.isReachable(600),
-      ]);
+      const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+      const [cdpHttp, cdpReady] = capabilities.usesChromeMcp
+        ? (await profileCtx.isReachable(600))
+          ? [true, true]
+          : [false, false]
+        : await Promise.all([profileCtx.isHttpReachable(300), profileCtx.isReachable(600)]);
 
       const profileState = current.profiles.get(profileCtx.profile.name);
-      const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
       let detectedBrowser: string | null = null;
       let detectedExecutablePath: string | null = null;
       let detectError: string | null = null;

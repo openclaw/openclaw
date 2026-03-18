@@ -31,10 +31,10 @@ describe("basic browser routes", () => {
             color: "#00AA00",
             attachOnly: true,
           },
-          isHttpReachable: async () => {
+          isHttpReachable: async () => true,
+          isReachable: async () => {
             throw new BrowserProfileUnavailableError("attach failed");
           },
-          isReachable: async () => true,
         }) as never,
     } as never);
 
@@ -50,6 +50,8 @@ describe("basic browser routes", () => {
 
   it("reports Chrome MCP transport without fake CDP fields", async () => {
     const { app, getHandlers } = createBrowserRouteApp();
+    const isHttpReachable = vi.fn(async () => true);
+    const isReachable = vi.fn(async () => true);
     registerBrowserBasicRoutes(app, {
       state: () => ({
         resolved: {
@@ -71,8 +73,8 @@ describe("basic browser routes", () => {
             color: "#00AA00",
             attachOnly: true,
           },
-          isHttpReachable: async () => true,
-          isReachable: async () => true,
+          isHttpReachable,
+          isReachable,
         }) as never,
     } as never);
 
@@ -93,5 +95,8 @@ describe("basic browser routes", () => {
       userDataDir: "/tmp/brave-profile",
       pid: 4321,
     });
+    expect(isReachable).toHaveBeenCalledTimes(1);
+    expect(isReachable).toHaveBeenCalledWith(600);
+    expect(isHttpReachable).not.toHaveBeenCalled();
   });
 });
