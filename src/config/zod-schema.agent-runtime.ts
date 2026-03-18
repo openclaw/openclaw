@@ -312,6 +312,7 @@ export const ToolsWebSearchSchema = z
     brave: z
       .object({
         mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
+        baseUrl: z.url().optional(),
       })
       .strict()
       .optional(),

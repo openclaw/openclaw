@@ -26,8 +26,9 @@ const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as co
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
-const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
-const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
+const DEFAULT_BRAVE_BASE_URL = "https://api.search.brave.com";
+const BRAVE_SEARCH_PATH = "/res/v1/web/search";
+const BRAVE_LLM_CONTEXT_PATH = "/res/v1/llm/context";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
@@ -309,6 +310,7 @@ type BraveLlmContextResponse = {
 
 type BraveConfig = {
   mode?: string;
+  baseUrl?: string;
 };
 
 type PerplexityConfig = {
@@ -682,6 +684,14 @@ function resolveBraveConfig(search?: WebSearchConfig): BraveConfig {
 
 function resolveBraveMode(brave: BraveConfig): "web" | "llm-context" {
   return brave.mode === "llm-context" ? "llm-context" : "web";
+}
+
+function resolveBraveBaseUrl(brave?: BraveConfig): string {
+  let braveBaseUrl = "";
+  if (brave && "baseUrl" in brave && typeof brave.baseUrl === "string") {
+    braveBaseUrl = brave.baseUrl.trim().replace(/\/+$/, "");
+  }
+  return braveBaseUrl || DEFAULT_BRAVE_BASE_URL;
 }
 
 function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
@@ -1529,6 +1539,7 @@ async function runBraveLlmContextSearch(params: {
   country?: string;
   search_lang?: string;
   freshness?: string;
+  baseUrl?: string;
 }): Promise<{
   results: Array<{
     url: string;
@@ -1538,7 +1549,7 @@ async function runBraveLlmContextSearch(params: {
   }>;
   sources?: BraveLlmContextResponse["sources"];
 }> {
-  const url = new URL(BRAVE_LLM_CONTEXT_ENDPOINT);
+  const url = new URL(BRAVE_LLM_CONTEXT_PATH, params.baseUrl);
   url.searchParams.set("q", params.query);
   if (params.country) {
     url.searchParams.set("country", params.country);
@@ -1603,6 +1614,7 @@ async function runWebSearch(params: {
   kimiBaseUrl?: string;
   kimiModel?: string;
   braveMode?: "web" | "llm-context";
+  braveBaseUrl?: string;
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
   const providerSpecificKey =
@@ -1617,8 +1629,8 @@ async function runWebSearch(params: {
             : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
-      ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
-      : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
+      ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}:${params.braveBaseUrl || "default"}`
+      : `${params.provider}:${effectiveBraveMode}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}:${params.braveBaseUrl || "default"}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -1781,6 +1793,7 @@ async function runWebSearch(params: {
       country: params.country,
       search_lang: params.search_lang,
       freshness: params.freshness,
+      baseUrl: params.braveBaseUrl,
     });
 
     const mapped = llmResults.map((entry) => ({
@@ -1809,7 +1822,7 @@ async function runWebSearch(params: {
     return payload;
   }
 
-  const url = new URL(BRAVE_SEARCH_ENDPOINT);
+  const url = new URL(BRAVE_SEARCH_PATH, params.braveBaseUrl);
   url.searchParams.set("q", params.query);
   url.searchParams.set("count", String(params.count));
   if (params.country) {
@@ -1911,6 +1924,7 @@ export function createWebSearchTool(options?: {
   const kimiConfig = resolveKimiConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
+  const braveBaseUrl = resolveBraveBaseUrl(braveConfig);
 
   const description =
     provider === "perplexity"
@@ -2186,6 +2200,7 @@ export function createWebSearchTool(options?: {
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         braveMode,
+        braveBaseUrl,
       });
       return jsonResult(result);
     },
@@ -2218,5 +2233,7 @@ export const __testing = {
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
+  DEFAULT_BRAVE_BASE_URL,
+  resolveBraveBaseUrl,
   mapBraveLlmContextResults,
 } as const;

@@ -23,6 +23,8 @@ const {
   resolveKimiBaseUrl,
   extractKimiCitations,
   resolveBraveMode,
+  DEFAULT_BRAVE_BASE_URL,
+  resolveBraveBaseUrl,
   mapBraveLlmContextResults,
 } = __testing;
 
@@ -392,6 +394,32 @@ describe("resolveBraveMode", () => {
 
   it("falls back to 'web' for unrecognized mode values", () => {
     expect(resolveBraveMode({ mode: "invalid" })).toBe("web");
+  });
+});
+
+describe("resolveBraveBaseUrl", () => {
+  it("returns default when no config is provided", () => {
+    expect(resolveBraveBaseUrl(undefined)).toBe(DEFAULT_BRAVE_BASE_URL);
+  });
+
+  it("returns default when brave config has no baseUrl", () => {
+    expect(resolveBraveBaseUrl({})).toBe(DEFAULT_BRAVE_BASE_URL);
+  });
+
+  it("returns brave.baseUrl when set", () => {
+    expect(resolveBraveBaseUrl({ baseUrl: "http://proxy/brave" })).toBe("http://proxy/brave");
+  });
+
+  it("trims whitespace from brave.baseUrl", () => {
+    expect(resolveBraveBaseUrl({ baseUrl: "http://proxy/brave/ " })).toBe("http://proxy/brave");
+  });
+
+  it("trims double slashes from brave.baseUrl", () => {
+    expect(resolveBraveBaseUrl({ baseUrl: "http://proxy/brave// " })).toBe("http://proxy/brave");
+  });
+
+  it("returns default when brave.baseUrl is empty string", () => {
+    expect(resolveBraveBaseUrl({ baseUrl: "" })).toBe(DEFAULT_BRAVE_BASE_URL);
   });
 });
 
