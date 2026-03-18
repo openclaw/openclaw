@@ -268,7 +268,12 @@ function normalizeToolNames(value: unknown): string[] {
     .filter(Boolean);
 }
 
-function isThinkingDisabled(value: unknown): boolean {
+function isThinkingDisabled(value: unknown, depth = 0): boolean {
+  if (depth > 5) {
+    // Stop recursion at a reasonable depth to avoid stack overflow or OOM
+    // on malicious or deeply nested config payloads.
+    return false;
+  }
   if (value == null || value === false) {
     return true;
   }
@@ -291,10 +296,10 @@ function isThinkingDisabled(value: unknown): boolean {
   if (typeof value === "object" && !Array.isArray(value)) {
     const obj = value as Record<string, unknown>;
     if ("type" in obj) {
-      return isThinkingDisabled(obj.type);
+      return isThinkingDisabled(obj.type, depth + 1);
     }
     if ("effort" in obj) {
-      return isThinkingDisabled(obj.effort);
+      return isThinkingDisabled(obj.effort, depth + 1);
     }
     // If it's an object without known 'type' or 'effort' fields, it's disabled only if empty.
     // Non-empty objects (e.g. { budget_tokens: 1000 }) imply enabled thinking.
