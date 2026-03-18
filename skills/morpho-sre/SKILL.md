@@ -6,6 +6,28 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 
 # Morpho SRE
 
+## Response Discipline (overrides all other rules)
+
+Every text output you produce becomes a visible Slack message. Intermediate thinking is spam.
+
+- **ONE message per task.** Investigate silently. Send a single consolidated reply with conclusions, evidence, and next steps. Do not narrate your investigation.
+- **Zero progress messages.** Never send messages like "Checking...", "Found it", "I'm looking into...", "Let me verify", "I have one check now", "I'm pulling the data", "I found the concrete failure", "I'm checking whether...". These are noise. Suppress them completely.
+- **No play-by-play.** Do not describe what you are about to do, what you just found, or what you will check next as separate messages. All of that is internal. The user sees only the finished answer.
+- **This applies to ALL contexts** — Slack channels, Slack threads, Slack DMs, group DMs, PR comments, Linear comments, and any other output surface. DMs with the operator are not casual chat; the same discipline applies.
+- **Between tool calls, produce no text.** If you need to run 10 commands to answer a question, run all 10 silently. Only after you have the complete answer, write one reply.
+- **If you cannot answer yet, stay silent.** Do not send partial findings. Do not send "I found X, now checking Y". Wait until you have the full picture.
+- **Bad example** (real conversation — 20+ messages for one task):
+  - "I'm checking the local cron/session evidence..."
+  - "It did trigger, but I want the failure reason before I answer."
+  - "I have one successful live check now. I'm pulling the timeout..."
+  - "Found it."
+  - "I'm checking the actual timeout limit..."
+  - "There's still no schema cap, but the runtime uses setTimeout()..."
+  - "Done. I set sre-daily-session-audit to the practical maximum..."
+  - (and 15 more messages)
+- **Good example** (same task, one message):
+  - "The daily improvement session fired at 06:00 UTC but failed after 300s due to cron timeout. I bumped `timeoutSeconds` to 2147483 (max safe JS timer value) and restarted the job. It's running now with the new timeout."
+
 ## Hard Rules
 
 - Diagnose first. Never mutate cluster resources automatically.
@@ -35,7 +57,6 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - For repo materialization: if mapped path has no `.git`, call `repo-clone.sh --image <workload>` to create a proper clone before attempting commits.
 - For any PR work requested by a human or triggered by autofix confidence gate, use `autofix-pr.sh` which handles: repo cloning, GitHub App auth, branch creation, commit, PR creation, and Linear linking. Do not attempt manual `git clone` + `git push` + `gh pr create` — the `autofix-pr.sh` pipeline handles all auth and repo bootstrap.
 - No root-cause ranking before one successful live check. Access/runtime failures alone are not enough evidence for hypotheses.
-- Never send progress-only replies in any Slack context — channels, threads, DMs, or group DMs. Buffer investigation and send one consolidated reply with findings. This applies even when the conversation is a DM with the operator. Messages like "Let me check", "Found it", "Looking into this" are noise; wait until you have substantive content.
 - When the operator corrects your approach or tells you to change behavior, apply the correction immediately in the current context. Do not ask permission to act — the correction itself is the authorization. Investigate, act, and report findings.
 - Latent corruption investigation: when a corrupt/truncated data file predates the current alert window, investigate what activated the code path that reads it. Check for: recent deploys, pod restarts, config syncs, feature flag toggles, or compaction threshold changes since the file's last-modified timestamp. Include the activation trigger in the RCA.
 - Self-referential incident: when the bot is triaging an alert about its own pod (openclaw-sre), note this in the Status line ("Self-referential incident — runtime responsiveness may be degraded during investigation") and prioritize fast, minimal evidence collection.
@@ -54,8 +75,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
 - In monitored Slack incident threads, human follow-ups after the first bot reply must pass ingress and trigger fresh live checks; do not treat them like duplicate alert updates.
 - If an incident thread drifts into unrelated design/history questions, redirect that discussion to a DM or new thread instead of mixing it into RCA.
-- Do not send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack context. Wait for net-new evidence, mitigation, validation, or a PR URL before replying.
-- Reply with conclusions only. This applies to ALL bot communications — Slack threads, Slack DMs, channel posts, PR comments, Linear comments, and any other output surface. Never include investigation steps, intermediate reasoning, tool output summaries, or step-by-step analysis. Every message must read as a polished summary, not a live investigation log. All investigation work happens silently; only the final answer is sent.
+- Before posting a Slack reply, verify it contains a conclusion, evidence, or actionable content — not just a status update about what you are doing.
 - Fix PR gate — when RCA confidence is high:
   1. First, search for an existing open PR that already fixes the issue: `gh search prs --repo <owner/repo> --state open --match title,body --limit 10 -- "<keyword>"`. Also check recent merged PRs that may not yet be deployed.
   2. If an existing fix PR exists: link it in the reply under `*Fix PR:*` with its status (open/merged/deployed).
@@ -122,7 +142,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - `autofix-pr.sh` can exit non-zero after creating the PR if the Linear labeling step fails — always check GitHub for the PR before retrying
 - Always search for existing fix PRs before creating a new one — a recent merged PR may already contain the fix but not yet be deployed (check ArgoCD sync status)
 - `pods.metrics.k8s.io` is Forbidden for the incident-readonly SA — do not retry it
-- Before posting a Slack reply, verify the message contains at least one `*Evidence:*` fact or `*Mitigation:*` action — if not, buffer until you have substantive content
+- Before posting a Slack reply, verify the message contains a conclusion or actionable content (see Response Discipline) — if not, do not send it
 
 ## Companion Skills
 
