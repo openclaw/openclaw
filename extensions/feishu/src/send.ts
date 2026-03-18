@@ -2,7 +2,7 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention.js";
-import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
+import { buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
@@ -453,7 +453,7 @@ export async function sendMessageFeishu(
   // Build message content (with @mention support)
   let rawText = text ?? "";
   if (mentions && mentions.length > 0) {
-    rawText = buildMentionedMessage(mentions, rawText);
+    rawText = buildMentionedCardContent(mentions, rawText);
   }
   const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode);
 
