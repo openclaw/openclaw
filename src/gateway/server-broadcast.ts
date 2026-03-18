@@ -72,24 +72,51 @@ function seqKey(c: GatewayWsClient): string {
 }
 
 export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
-  // Seq counters keyed by a stable client identity (survives reconnects).
-  // Incremented when an event is sent *or* intentionally dropped via
-  // dropIfSlow, so the client sees a seq gap and can trigger onGap.
-  // Only scope filtering (client never subscribed) skips without advancing seq.
-  const seqByIdentity = new Map<string, number>();
-
-  // Fast-path cache: avoids recomputing seqKey() on every iteration.
-  // Populated on first use per GatewayWsClient and auto-cleaned on GC.
+  // --- Seq tracking (two-layer design) ---
+  //
+  // Layer 1 — per-socket live counter (WeakMap).  Each GatewayWsClient gets
+  // its own independent sequence so concurrent sockets with the same identity
+  // (e.g. half-open TCP + fresh reconnect) never alias each other's counters.
+  //
+  // Layer 2 — identity high-water mark (Map<string, number>).  Stores the
+  // highest seq ever delivered/dropped for a given stable client identity.
+  // When a *new* socket is first seen, it inherits this value so its sequence
+  // continues forward from where the previous socket left off — the browser
+  // client keeps lastSeq across auto-reconnects and only triggers onGap for
+  // forward jumps.
+  //
+  // Seq is advanced when an event is sent *or* intentionally dropped via
+  // dropIfSlow.  Scope-filtered skips (client never subscribed) do not
+  // advance seq.
+  const liveSeqs = new WeakMap<GatewayWsClient, number>();
+  const highWaterByIdentity = new Map<string, number>();
   const keyCache = new WeakMap<GatewayWsClient, string>();
 
-  function advanceSeq(c: GatewayWsClient): number {
+  function resolveKey(c: GatewayWsClient): string {
     let key = keyCache.get(c);
     if (key === undefined) {
       key = seqKey(c);
       keyCache.set(c, key);
     }
-    const next = (seqByIdentity.get(key) ?? 0) + 1;
-    seqByIdentity.set(key, next);
+    return key;
+  }
+
+  function advanceSeq(c: GatewayWsClient): number {
+    let prev = liveSeqs.get(c);
+    if (prev === undefined) {
+      // First broadcast to this socket — inherit the identity high-water mark
+      // so the reconnecting client sees a forward seq jump (not a reset to 1).
+      const key = resolveKey(c);
+      prev = highWaterByIdentity.get(key) ?? 0;
+    }
+    const next = prev + 1;
+    liveSeqs.set(c, next);
+    // Update high-water mark for future reconnects.
+    const key = resolveKey(c);
+    const hw = highWaterByIdentity.get(key) ?? 0;
+    if (next > hw) {
+      highWaterByIdentity.set(key, next);
+    }
     return next;
   }
 
