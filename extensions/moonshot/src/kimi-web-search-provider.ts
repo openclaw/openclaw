@@ -14,6 +14,11 @@ import {
   withTrustedWebSearchEndpoint,
   writeCachedSearchPayload,
 } from "../../../src/agents/tools/web-search-provider-common.js";
+import {
+  resolveProviderWebSearchPluginConfig,
+  setProviderWebSearchPluginConfigValue,
+} from "../../../src/agents/tools/web-search-provider-config.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
 import type {
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
@@ -61,14 +66,18 @@ type KimiSearchResponse = {
   }>;
 };
 
-function resolveKimiConfig(searchConfig?: SearchConfigRecord): KimiConfig {
-  const kimi = searchConfig?.kimi;
+function resolveKimiConfig(config?: OpenClawConfig, searchConfig?: SearchConfigRecord): KimiConfig {
+  const pluginConfig = resolveProviderWebSearchPluginConfig(config, "moonshot");
+  if (pluginConfig) {
+    return pluginConfig as KimiConfig;
+  }
+  const kimi = (searchConfig as Record<string, unknown> | undefined)?.kimi;
   return kimi && typeof kimi === "object" && !Array.isArray(kimi) ? (kimi as KimiConfig) : {};
 }
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
   return (
-    readConfiguredSecretString(kimi?.apiKey, "tools.web.search.kimi.apiKey") ??
+    readConfiguredSecretString(kimi?.apiKey, "plugins.entries.moonshot.config.webSearch.apiKey") ??
     readProviderEnvValue(["KIMI_API_KEY", "MOONSHOT_API_KEY"])
   );
 }
@@ -237,6 +246,7 @@ function createKimiSchema() {
 }
 
 function createKimiToolDefinition(
+  config?: OpenClawConfig,
   searchConfig?: SearchConfigRecord,
 ): WebSearchProviderToolDefinition {
   return {
@@ -263,13 +273,13 @@ function createKimiToolDefinition(
         }
       }
 
-      const kimiConfig = resolveKimiConfig(searchConfig);
+      const kimiConfig = resolveKimiConfig(config, searchConfig);
       const apiKey = resolveKimiApiKey(kimiConfig);
       if (!apiKey) {
         return {
           error: "missing_kimi_api_key",
           message:
-            "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure tools.web.search.kimi.apiKey.",
+            "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure plugins.entries.moonshot.config.webSearch.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
@@ -331,8 +341,8 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://platform.moonshot.cn/",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 40,
-    credentialPath: "tools.web.search.kimi.apiKey",
-    inactiveSecretPaths: ["tools.web.search.kimi.apiKey"],
+    credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.moonshot.config.webSearch.apiKey"],
     getCredentialValue: (searchConfig) => {
       const kimi = searchConfig?.kimi;
       return kimi && typeof kimi === "object" && !Array.isArray(kimi)
@@ -347,8 +357,13 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
       }
       (scoped as Record<string, unknown>).apiKey = value;
     },
+    getConfiguredCredentialValue: (config) =>
+      resolveProviderWebSearchPluginConfig(config, "moonshot")?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setProviderWebSearchPluginConfigValue(configTarget, "moonshot", "apiKey", value);
+    },
     createTool: (ctx) =>
-      createKimiToolDefinition(ctx.searchConfig as SearchConfigRecord | undefined),
+      createKimiToolDefinition(ctx.config, ctx.searchConfig as SearchConfigRecord | undefined),
   };
 }
 

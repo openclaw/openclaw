@@ -15,6 +15,11 @@ import {
   withTrustedWebSearchEndpoint,
   writeCachedSearchPayload,
 } from "../../../src/agents/tools/web-search-provider-common.js";
+import {
+  resolveProviderWebSearchPluginConfig,
+  setProviderWebSearchPluginConfigValue,
+} from "../../../src/agents/tools/web-search-provider-config.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
 import type {
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
@@ -52,8 +57,15 @@ type GeminiGroundingResponse = {
   };
 };
 
-function resolveGeminiConfig(searchConfig?: SearchConfigRecord): GeminiConfig {
-  const gemini = searchConfig?.gemini;
+function resolveGeminiConfig(
+  config?: OpenClawConfig,
+  searchConfig?: SearchConfigRecord,
+): GeminiConfig {
+  const pluginConfig = resolveProviderWebSearchPluginConfig(config, "google");
+  if (pluginConfig) {
+    return pluginConfig as GeminiConfig;
+  }
+  const gemini = (searchConfig as Record<string, unknown> | undefined)?.gemini;
   return gemini && typeof gemini === "object" && !Array.isArray(gemini)
     ? (gemini as GeminiConfig)
     : {};
@@ -61,7 +73,7 @@ function resolveGeminiConfig(searchConfig?: SearchConfigRecord): GeminiConfig {
 
 function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
   return (
-    readConfiguredSecretString(gemini?.apiKey, "tools.web.search.gemini.apiKey") ??
+    readConfiguredSecretString(gemini?.apiKey, "plugins.entries.google.config.webSearch.apiKey") ??
     readProviderEnvValue(["GEMINI_API_KEY"])
   );
 }
@@ -168,6 +180,7 @@ function createGeminiSchema() {
 }
 
 function createGeminiToolDefinition(
+  config?: OpenClawConfig,
   searchConfig?: SearchConfigRecord,
 ): WebSearchProviderToolDefinition {
   return {
@@ -194,13 +207,13 @@ function createGeminiToolDefinition(
         }
       }
 
-      const geminiConfig = resolveGeminiConfig(searchConfig);
+      const geminiConfig = resolveGeminiConfig(config, searchConfig);
       const apiKey = resolveGeminiApiKey(geminiConfig);
       if (!apiKey) {
         return {
           error: "missing_gemini_api_key",
           message:
-            "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, or configure tools.web.search.gemini.apiKey.",
+            "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, or configure plugins.entries.google.config.webSearch.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
@@ -259,8 +272,8 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://aistudio.google.com/apikey",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 20,
-    credentialPath: "tools.web.search.gemini.apiKey",
-    inactiveSecretPaths: ["tools.web.search.gemini.apiKey"],
+    credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
     getCredentialValue: (searchConfig) => {
       const gemini = searchConfig?.gemini;
       return gemini && typeof gemini === "object" && !Array.isArray(gemini)
@@ -275,8 +288,13 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
       }
       (scoped as Record<string, unknown>).apiKey = value;
     },
+    getConfiguredCredentialValue: (config) =>
+      resolveProviderWebSearchPluginConfig(config, "google")?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setProviderWebSearchPluginConfigValue(configTarget, "google", "apiKey", value);
+    },
     createTool: (ctx) =>
-      createGeminiToolDefinition(ctx.searchConfig as SearchConfigRecord | undefined),
+      createGeminiToolDefinition(ctx.config, ctx.searchConfig as SearchConfigRecord | undefined),
   };
 }
 
