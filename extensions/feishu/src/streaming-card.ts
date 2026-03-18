@@ -332,6 +332,7 @@ export class FeishuStreamingSession {
       return;
     }
     if (this.closePromise) {
+      this.log?.("close() called again while already closing; ignoring new finalText", finalText ? truncateSummary(finalText) : "(none)");
       return this.closePromise;
     }
     this.closed = true;
@@ -340,9 +341,6 @@ export class FeishuStreamingSession {
   }
 
   private async _doClose(finalText?: string): Promise<void> {
-    if (!this.state) {
-      return;
-    }
     await this.queue;
 
     const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
