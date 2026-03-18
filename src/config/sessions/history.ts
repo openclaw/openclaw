@@ -15,7 +15,19 @@ function extractTextContent(content: unknown): string {
     return content;
   }
   if (Array.isArray(content)) {
-    return content.map((c: { text?: string }) => c.text ?? "").join(" ");
+    const parts: string[] = [];
+    for (const c of content as Array<{ type?: string; text?: string }>) {
+      if (c.text) {
+        parts.push(c.text);
+      } else if (c.type === "image") {
+        parts.push("[image]");
+      } else if (c.type === "tool_use" || c.type === "tool_result") {
+        // skip tool blocks
+      } else if (c.type) {
+        parts.push(`[${c.type}]`);
+      }
+    }
+    return parts.join(" ");
   }
   return "";
 }
@@ -34,9 +46,14 @@ function extractTextContent(content: unknown): string {
  * consumers needing branch-accurate history should use the gateway API instead.
  */
 export async function readSessionRecentMessages(params: {
+  /**
+   * Path to the sessions store (sessions.json). For non-main agents, callers
+   * must pass the agent-specific store path (e.g., via
+   * `rt.channel.session.resolveStorePath(cfg.session?.store, { agentId })`).
+   */
   storePath: string;
   sessionKey: string;
-  /** Agent ID used to resolve the sessions directory (default: main agent). */
+  /** Agent ID used as a hint for session file path resolution. */
   agentId?: string;
   /** Maximum number of messages to return, counting from the end (default: 10). */
   limit?: number;
