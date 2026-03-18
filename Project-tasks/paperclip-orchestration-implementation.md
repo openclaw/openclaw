@@ -4,7 +4,7 @@ title: "Paperclip Orchestration: Workspaces, Tasks, Goals, Budgets, Governance"
 description: "Adapt Paperclip's company orchestration model into Operator1 with workspaces, task assignment, cost budgets, and approval governance."
 dartboard: "Operator1/Tasks"
 type: Project
-status: "To-do"
+status: "In Progress"
 priority: high
 assignee: "rohit sharma"
 tags: [feature, backend, ui, migration, paperclip]
@@ -413,14 +413,27 @@ src/gateway/protocol/schema/
   activity.ts
 
 ui-next/src/pages/
-  workspaces.tsx                    # Workspace management
-  tasks.tsx                         # Task board (kanban + list)
-  task-detail.tsx                   # Task detail view
-  goals.tsx                         # Goal hierarchy
-  budgets.tsx                       # Cost dashboard + budget settings
-  approvals-org.tsx                 # Approval inbox
-  activity.tsx                      # Activity feed
+  workspaces.tsx                    # Workspace management (settings only — low priority)
+  tasks.tsx                         # Task board — lower priority; primary surface is org view
+  task-detail.tsx                   # Task detail — lower priority
+  goals.tsx                         # Goals — lower priority
+  budgets.tsx                       # Cost dashboard — lower priority
+  approvals-org.tsx                 # Approval inbox — lower priority
+  activity.tsx                      # Activity feed — lower priority
+
+ui-next/src/components/agents/
+  agent-flow-node.tsx               # Extend AgentNodeData with workspace/task/budget fields
+  org-workspace-bar.tsx             # NEW: workspace stats bar above the canvas
+  org-agent-panel.tsx               # NEW: slide-out side panel (tasks, goals, cost, activity)
+  org-workspace-selector.tsx        # NEW: workspace dropdown (parallel to bundle selector)
 ```
+
+> **UI Architecture Decision (updated):** The primary UI surface for all orchestration
+> features is the **existing Agent Organization page** (`/agents/organization`), augmented
+> in-place. Separate dedicated pages (`/tasks`, `/goals`, `/budgets`, etc.) are lower
+> priority and built only after the org view augmentation is complete. This approach keeps
+> the workflow in one place — you see your agents, their workspace, task load, health, and
+> budget all in a single canvas view.
 
 ---
 
@@ -439,107 +452,127 @@ ui-next/src/pages/
 
 ### Task 1: Phase 1 — Workspace Foundation
 
-**Status:** To-do | **Priority:** High | **Assignee:** rohit sharma | **Due:** | **Est:** 8h
+**Status:** Done | **Priority:** High | **Assignee:** rohit sharma | **Due:** | **Est:** 8h
 
 Build the workspace isolation layer. Adds `op1_workspaces` and `op1_workspace_agents` tables, CRUD store, RPC handlers, protocol schemas, and UI workspace selector. Seeds a "default" workspace on migration. Adds optional `workspace_id` FK to `op1_projects`. See SS5.1 (v18 migration).
 
-- [ ] 1.1 Schema migration v18 — add `op1_workspaces` and `op1_workspace_agents` tables with default workspace seed, plus `workspace_id` column on `op1_projects`
-- [ ] 1.2 Workspace store — create `src/orchestration/workspace-store-sqlite.ts` with CRUD functions following `project-store-sqlite.ts` pattern
-- [ ] 1.3 Workspace types — create `src/orchestration/types.ts` with Workspace and agent assignment types
-- [ ] 1.4 Protocol schemas — create `src/gateway/protocol/schema/workspaces.ts` with TypeBox params following `teams.ts` pattern
-- [ ] 1.5 RPC handlers — create `src/gateway/server-methods/workspaces.ts` with 8 workspace handlers
-- [ ] 1.6 Registration — add to `server-methods.ts`, `server-methods-list.ts`, `method-scopes.ts`
-- [ ] 1.7 Protocol exports — add validators to `src/gateway/protocol/index.ts`
-- [ ] 1.8 UI workspace page — workspace switcher in sidebar and `/workspaces` settings page
+- [x] 1.1 Schema migration v18 — add `op1_workspaces` and `op1_workspace_agents` tables with default workspace seed, plus `workspace_id` column on `op1_projects`
+- [x] 1.2 Workspace store — create `src/orchestration/workspace-store-sqlite.ts` with CRUD functions following `project-store-sqlite.ts` pattern
+- [x] 1.3 Workspace types — create `src/orchestration/types.ts` with Workspace and agent assignment types
+- [x] 1.4 Protocol schemas — create `src/gateway/protocol/schema/workspaces.ts` with TypeBox params following `teams.ts` pattern
+- [x] 1.5 RPC handlers — create `src/gateway/server-methods/workspaces.ts` with 8 workspace handlers
+- [x] 1.6 Registration — add to `server-methods.ts`, `server-methods-list.ts`, `method-scopes.ts`
+- [x] 1.7 Protocol exports — add validators to `src/gateway/protocol/index.ts`
+- [ ] 1.8 UI workspace page — `/workspaces` settings page for CRUD (create/rename/archive/brand-color); workspace switching is handled by the org view selector (6.7), not a sidebar switcher
 - [ ] 1.9 Tests — store + handler unit tests with in-memory DB
 
 ### Task 2: Phase 2 — Task System
 
-**Status:** To-do | **Priority:** High | **Assignee:** rohit sharma | **Due:** | **Est:** 12h
+**Status:** Done | **Priority:** High | **Assignee:** rohit sharma | **Due:** | **Est:** 12h
 
 Build the persistent task system with identifier generation, status workflow, agent assignment, and comments. See SS5.1 (v19), SS5.3 (identifier gen), SS5.5 (status transitions).
 
-- [ ] 2.1 Schema migration v19 — add `op1_tasks` and `op1_task_comments` tables
-- [ ] 2.2 Task store — create `src/orchestration/task-store-sqlite.ts` with CRUD, atomic identifier generation, status transition validation, comment append
-- [ ] 2.3 Task types — add Task, TaskStatus, TaskPriority, TaskComment to types.ts
-- [ ] 2.4 Status transition validation — implement allowed transitions map per SS5.5
-- [ ] 2.5 Protocol schemas — create `src/gateway/protocol/schema/tasks.ts`
-- [ ] 2.6 RPC handlers — create `src/gateway/server-methods/tasks.ts` with 8 task handlers
-- [ ] 2.7 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
-- [ ] 2.8 UI task board — `/tasks` page with kanban columns, list view, create dialog, filters
-- [ ] 2.9 UI task detail — `/tasks/:id` with status transitions, assignee picker, comment thread
+- [x] 2.1 Schema migration v19 — add `op1_tasks` and `op1_task_comments` tables
+- [x] 2.2 Task store — create `src/orchestration/task-store-sqlite.ts` with CRUD, atomic identifier generation, status transition validation, comment append
+- [x] 2.3 Task types — add Task, TaskStatus, TaskPriority, TaskComment to types.ts
+- [x] 2.4 Status transition validation — implement allowed transitions map per SS5.5
+- [x] 2.5 Protocol schemas — create `src/gateway/protocol/schema/tasks.ts`
+- [x] 2.6 RPC handlers — create `src/gateway/server-methods/tasks.ts` with 8 task handlers
+- [x] 2.7 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
+- [ ] 2.8 UI task board — `/tasks` page (secondary; primary task surface is org view agent side panel 6.10); kanban columns, list view, create dialog, filters
+- [ ] 2.9 UI task detail — `/tasks/:id` with status transitions, assignee picker, comment thread (secondary)
 - [ ] 2.10 Tests — store tests (identifier gen, transitions, comments) + handler tests
 
 ### Task 3: Phase 3 — Goal Hierarchy
 
-**Status:** To-do | **Priority:** Medium | **Assignee:** rohit sharma | **Due:** | **Est:** 8h
+**Status:** Done | **Priority:** Medium | **Assignee:** rohit sharma | **Due:** | **Est:** 8h
 
 Build goal hierarchy: vision to objective to key_result to task. Tasks reference goals for traceability. See SS5.1 (v20).
 
-- [ ] 3.1 Schema migration v20 — add `op1_goals` table with self-referential parent_id
-- [ ] 3.2 Goal store — create `src/orchestration/goal-store-sqlite.ts` with CRUD and tree traversal
-- [ ] 3.3 Goal types — add Goal, GoalLevel, GoalStatus to types.ts
-- [ ] 3.4 Protocol schemas — create `src/gateway/protocol/schema/goals.ts`
-- [ ] 3.5 RPC handlers — create `src/gateway/server-methods/goals.ts` with 6 goal handlers
-- [ ] 3.6 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
-- [ ] 3.7 Task-goal linking — extend task create/update to accept goalId, show goal ancestry on task detail
+- [x] 3.1 Schema migration v20 — add `op1_goals` table with self-referential parent_id
+- [x] 3.2 Goal store — create `src/orchestration/goal-store-sqlite.ts` with CRUD and tree traversal
+- [x] 3.3 Goal types — add Goal, GoalLevel, GoalStatus to types.ts
+- [x] 3.4 Protocol schemas — create `src/gateway/protocol/schema/goals.ts`
+- [x] 3.5 RPC handlers — create `src/gateway/server-methods/goals.ts` with 6 goal handlers
+- [x] 3.6 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
+- [x] 3.7 Task-goal linking — extend task create/update to accept goalId, show goal ancestry on task detail
 - [ ] 3.8 UI goals page — `/goals` with indented tree view, create dialog, progress bars
 - [ ] 3.9 Tests — store tests (tree operations, progress) + handler tests
 
 ### Task 4: Phase 4 — Cost Budgets and Enforcement
 
-**Status:** To-do | **Priority:** High | **Assignee:** rohit sharma | **Due:** | **Est:** 14h
+**Status:** In Progress | **Priority:** High | **Assignee:** rohit sharma | **Due:** | **Est:** 14h
 
 Cost event recording, budget policies, enforcement, and incident tracking. Hooks into existing usage pipeline. See SS5.1 (v21), SS5.4 (enforcement architecture).
 
-- [ ] 4.1 Schema migration v21 — add `op1_cost_events`, `op1_budget_policies`, `op1_budget_incidents`
-- [ ] 4.2 Cost event store — create `src/orchestration/cost-event-store-sqlite.ts` with insert + aggregation queries
-- [ ] 4.3 Budget store — create `src/orchestration/budget-store-sqlite.ts` with policy CRUD + incident tracking
-- [ ] 4.4 Cost recording hook — hook into `src/agents/usage.ts` (`normalizeUsage` call site in Pi agent runtime) post-LLM-response; resolve workspace_id via session → project_id → op1_projects join, then insert cost event
-- [ ] 4.5 Workspace attribution helper — `resolveWorkspaceForSession(sessionId, db)` returning workspaceId via project_id FK; used by cost recording hook and budget enforcement
-- [ ] 4.6 Budget reconciliation cron — hourly cron to reconcile totals, reset monthly counters, create incidents
-- [ ] 4.7 Protocol schemas — create `src/gateway/protocol/schema/budgets.ts`
-- [ ] 4.8 RPC handlers — create `src/gateway/server-methods/budgets.ts` with 8 budget/cost handlers
-- [ ] 4.9 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
+- [x] 4.1 Schema migration v21 — add `op1_cost_events`, `op1_budget_policies`, `op1_budget_incidents`
+- [x] 4.2 Cost event store — create `src/orchestration/cost-event-store-sqlite.ts` with insert + aggregation queries
+- [x] 4.3 Budget store — create `src/orchestration/budget-store-sqlite.ts` with policy CRUD + incident tracking
+- [x] 4.4 Cost recording hook — hook into `src/agents/usage.ts` (`normalizeUsage` call site in Pi agent runtime) post-LLM-response; resolve workspace_id via session → project_id → op1_projects join, then insert cost event
+- [x] 4.5 Workspace attribution helper — `resolveWorkspaceForSession(sessionId, db)` returning workspaceId via project*id FK; used by cost recording hook and budget enforcement *(deviation: implemented as `resolveAgentWorkspace(agentId)` via `op1_workspace_agents` lookup — agent-scoped rather than session→project→workspace chain; simpler and avoids the indirect FK join)\_
+- [x] 4.6 Budget reconciliation cron — hourly cron to reconcile totals, reset monthly counters, create incidents
+- [x] 4.7 Protocol schemas — create `src/gateway/protocol/schema/budgets.ts`
+- [x] 4.8 RPC handlers — create `src/gateway/server-methods/budgets.ts` with 8 budget/cost handlers
+- [x] 4.9 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
 - [ ] 4.10 Gateway events — emit `budget.warning` and `budget.exceeded` for real-time UI notifications
 - [ ] 4.11 UI cost dashboard — `/budgets` with spend charts, policy CRUD, incident list, alert badges
 - [ ] 4.12 Tests — cost recording, budget enforcement (warn/block), reconciliation, handler tests
 
 ### Task 5: Phase 5 — Governance and Approvals
 
-**Status:** To-do | **Priority:** Medium | **Assignee:** rohit sharma | **Due:** | **Est:** 10h
+**Status:** In Progress | **Priority:** Medium | **Assignee:** rohit sharma | **Due:** | **Est:** 10h
 
 Organizational approval workflow + activity audit log + agent config revision tracking. See SS5.1 (v22-v23).
 
-- [ ] 5.1 Schema migration v22 — add `op1_approvals` and `op1_activity_log` tables
-- [ ] 5.2 Schema migration v23 — add `op1_agent_config_revisions` table
-- [ ] 5.3 Approval store — create `src/orchestration/approval-store-sqlite.ts` with CRUD + status transitions
-- [ ] 5.4 Activity log store — create `src/orchestration/activity-log-sqlite.ts` with append + paginated query
-- [ ] 5.5 Config revision store — create `src/orchestration/agent-config-revision-sqlite.ts`
-- [ ] 5.6 Activity log integration — add recording calls to all mutation handlers via shared helper
-- [ ] 5.7 Protocol schemas — create `src/gateway/protocol/schema/approvals-org.ts` and `activity.ts`
-- [ ] 5.8 RPC handlers — create `src/gateway/server-methods/approvals-org.ts` and `activity.ts`
-- [ ] 5.9 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
-- [ ] 5.10 Gateway events — emit `approval.requested` and `approval.resolved` for real-time notification
+- [x] 5.1 Schema migration v22 — add `op1_approvals` and `op1_activity_log` tables
+- [x] 5.2 Schema migration v23 — add `op1_agent_config_revisions` table
+- [x] 5.3 Approval store — create `src/orchestration/approval-store-sqlite.ts` with CRUD + status transitions
+- [x] 5.4 Activity log store — create `src/orchestration/activity-log-sqlite.ts` with append + paginated query
+- [x] 5.5 Config revision store — create `src/orchestration/agent-config-revision-sqlite.ts`
+- [x] 5.6 Activity log integration — add recording calls to all mutation handlers via shared helper
+- [x] 5.7 Protocol schemas — create `src/gateway/protocol/schema/approvals-org.ts` and `activity.ts`
+- [x] 5.8 RPC handlers — create `src/gateway/server-methods/approvals-org.ts` and `activity.ts`
+- [x] 5.9 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
+- [x] 5.10 Gateway events — emit `approval.requested` and `approval.resolved` for real-time notification
 - [ ] 5.11 UI approval inbox — `/approvals` with pending list, approve/reject/revise buttons
 - [ ] 5.12 UI activity feed — `/activity` with filterable, paginated timeline
 - [ ] 5.13 Tests — approval transitions, activity log, config revisions, handler tests
 
 ### Task 6: Phase 6 — Agent Lifecycle and Integration
 
-**Status:** To-do | **Priority:** Medium | **Assignee:** rohit sharma | **Due:** | **Est:** 14h
+**Status:** In Progress | **Priority:** Medium | **Assignee:** rohit sharma | **Due:** | **Est:** 14h
 
 Workspace-aware agent status, performance metrics, department budget aggregation, and workspace context injection into agent sessions. Note: 6.5 (context injection) touches the Pi agent runtime's prompt construction pipeline and is a significant integration — treat it as a separate investigation before implementation.
 
-- [ ] 6.1 Agent status tracking — extend `op1_workspace_agents` with status and capabilities columns
-- [ ] 6.2 Session-workspace binding — document and enforce the `session → project_id → workspace_id` attribution chain; extend `sessions.list` to surface resolved workspaceId; note this is an indirect FK (no workspace_id column on session_entries) and must join through op1_projects
-- [ ] 6.3 Agent performance metrics — query cost events + tasks for per-agent metrics (completed, cost, tokens, response time)
-- [ ] 6.4 Department budget aggregation — aggregate cost events by department using Matrix tier map (`ui-next/src/lib/matrix-tier-map.ts`)
-- [ ] 6.5 Workspace context injection (investigation) — identify exact prompt construction call site in Pi agent runtime; determine injection point, payload shape (goals summary, active tasks, budget status), and size budget; produce a design note before implementation
-- [ ] 6.6 Workspace context injection (implementation) — implement context injection per design note from 6.5; validate prompt size stays within model context limits
-- [ ] 6.7 UI org chart integration — extend org chart page with workspace badges, status indicators, budget utilization
-- [ ] 6.8 UI workspace dashboard — enhance overview with workspace stats (tasks, goals, spend, activity)
-- [ ] 6.9 Tests — session binding, workspace attribution, metrics computation, department aggregation tests
+- [x] 6.1 Agent status tracking — extend `op1_workspace_agents` with status and capabilities columns
+- [x] 6.2 Session-workspace binding — document and enforce the `session → project_id → workspace_id` attribution chain; extend `sessions.list` to surface resolved workspaceId; note this is an indirect FK (no workspace_id column on session_entries) and must join through op1_projects
+- [x] 6.3 Agent performance metrics — query cost events + tasks for per-agent metrics (completed, cost, tokens, response time)
+- [x] 6.4 Department budget aggregation — aggregate cost events by department using Matrix tier map (`ui-next/src/lib/matrix-tier-map.ts`)
+- [x] 6.5 Workspace context injection (investigation) — identify exact prompt construction call site in Pi agent runtime; determine injection point, payload shape (goals summary, active tasks, budget status), and size budget; produce a design note before implementation
+- [x] 6.6 Workspace context injection (implementation) — implement context injection per design note from 6.5; validate prompt size stays within model context limits (`src/orchestration/workspace-context.ts`, injected in `attempt.ts` gated on `promptMode !== "minimal"`, hard cap 800 chars)
+- [ ] 6.7 UI org chart — workspace selector dropdown (parallel to Bundle selector; fetches `workspaces.list`, filters canvas by workspace membership via `workspaces.agents`)
+- [ ] 6.8 UI org chart — agent node augmentation: extend `AgentNodeData` with `agentStatus`, `taskCount`, `budgetPctUsed`, `workspaceName`; render status ring (active=green/inactive=grey/paused=amber), open task count badge, budget micro-bar on each node card; fetch `agents.metrics.list` + `workspaces.agents` in parallel with existing agents/health calls
+- [ ] 6.9 UI org chart — workspace stats bar: compact strip above the canvas showing selected workspace name, tasks in-progress, active goals, monthly spend %, pending approvals count (badge); fetches `workspaces.get` + `approvals.list{status:pending}` + `goals.list{status:in_progress}`
+- [ ] 6.10 UI org chart — agent side panel: slide-out panel when clicking a node (replaces preview-only dialog); shows assigned tasks list (`tasks.list{assigneeAgentId}`), owned goals, monthly cost from `agents.metrics.get`, recent activity from `activityLogs.list`; inline task status transitions
+- [ ] 6.11 UI org chart — department legend augmentation: add budget % bar per department in the legend using `budgets.department.summary`; color-coded to warn/exceeded thresholds
+- [ ] 6.12 UI org chart — workspace assignment actions: add assign/remove workspace buttons to node hover action bar (calling `workspaces.assignAgent` / `workspaces.removeAgent`); show agent status toggle (active/inactive/paused) via `workspaces.updateAgentStatus`
+- [ ] 6.13 UI secondary pages — task board (`/tasks`), goals tree (`/goals`), approvals inbox (`/approvals`), activity feed (`/activity`): implement after 6.7–6.12; use DataTable + Dialog patterns from projects.tsx
+- [ ] 6.14 Tests — session binding, workspace attribution, metrics computation, department aggregation tests
+
+> **Data flows for org view augmentation:**
+>
+> - `workspaces.list` → workspace selector options
+> - `workspaces.agents { workspaceId }` → agent status (active/inactive/paused) per agent in selected workspace
+> - `agents.metrics.list { workspaceId }` → taskCount + monthlyCostMicrocents per agent (fetched once, keyed by agentId)
+> - `budgets.department.summary { workspaceId }` → departmentBudgetPct per department for legend bars
+> - `approvals.list { status: "pending" }` → count for stats bar badge
+> - `goals.list { workspaceId, status: "in_progress" }` → active goal count for stats bar
+> - `tasks.list { assigneeAgentId }` → task list for agent side panel (fetched on panel open)
+> - `activityLogs.list { actorId, limit: 10 }` → recent activity for agent side panel
+>
+> **Key constraint:** All new RPCs added to the existing `fetchAndLayout` callback in
+> `organization.tsx` using `Promise.all` — same loading cycle, no extra round-trips.
+> `AgentNodeData` extended (not replaced) so existing node rendering is unchanged.
 
 ---
 

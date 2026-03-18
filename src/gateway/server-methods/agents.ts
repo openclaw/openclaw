@@ -18,7 +18,9 @@ import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
 import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
 import { isNotFoundPathError } from "../../infra/path-guards.js";
+import { createAgentConfigRevision } from "../../orchestration/agent-config-revision-sqlite.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
   ErrorCodes,
   errorShape,
@@ -542,7 +544,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "agents.files.set": async ({ params, respond }) => {
+  "agents.files.set": async ({ params, respond, client }) => {
     if (!validateAgentsFilesSetParams(params)) {
       respondInvalidMethodParams(respond, "agents.files.set", validateAgentsFilesSetParams.errors);
       return;
@@ -579,6 +581,21 @@ export const agentsHandlers: GatewayRequestHandlers = {
         data: content,
         encoding: "utf8",
       });
+      // Emit governance events on protected system files
+      if (PROTECTED_FILES.has(name)) {
+        const actor = resolveControlPlaneActor(client);
+        // We use the workspace as empty string, and the target configuration payload
+        // to show exactly what was saved to the file by whom
+        createAgentConfigRevision({
+          // File-system agent config revisions have no workspace FK (predates workspace model).
+          // Using empty string as a sentinel; consumers must treat "" as unscoped.
+          workspaceId: "",
+          agentId,
+          changedBy: actor.actor ?? "system",
+          config: content,
+          changeNote: `Updated ${name} via gateway`,
+        });
+      }
     } catch {
       respondWorkspaceFileUnsafe(respond, name);
       return;
@@ -654,7 +671,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { ok: true, agentId, deleted: name }, undefined);
   },
-  "agents.files.create": async ({ params, respond }) => {
+  "agents.files.create": async ({ params, respond, client }) => {
     if (!validateAgentsFilesCreateParams(params)) {
       respondInvalidMethodParams(
         respond,
@@ -708,6 +725,18 @@ export const agentsHandlers: GatewayRequestHandlers = {
         data: content,
         encoding: "utf8",
       });
+      // Emit governance events on protected system files
+      if (PROTECTED_FILES.has(name)) {
+        const actor = resolveControlPlaneActor(client);
+        createAgentConfigRevision({
+          // File-system agent config revisions have no workspace FK (predates workspace model).
+          workspaceId: "",
+          agentId,
+          changedBy: actor.actor ?? "system",
+          config: content,
+          changeNote: `Created ${name} via gateway`,
+        });
+      }
     } catch {
       respondWorkspaceFileUnsafe(respond, name);
       return;

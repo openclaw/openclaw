@@ -1,3 +1,7 @@
+import type { OpenClawConfig } from "../config/config.js";
+import { recordCostEvent } from "../orchestration/cost-event-store-sqlite.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+
 export type UsageLike = {
   input?: number;
   output?: number;
@@ -187,4 +191,51 @@ export function deriveSessionTotalTokens(params: {
   // Keep this value unclamped; display layers are responsible for capping
   // percentages for terminal output.
   return promptTokens;
+}
+
+export async function recordUsageCost(params: {
+  workspaceId: string;
+  agentId: string;
+  sessionId?: string | null;
+  taskId?: string | null;
+  projectId?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  usage: NormalizedUsage;
+  config?: OpenClawConfig;
+}) {
+  const { provider, model, config, usage, workspaceId, agentId, sessionId, taskId, projectId } =
+    params;
+
+  const costConfig = resolveModelCostConfig({
+    provider: provider || undefined,
+    model: model || undefined,
+    config,
+  });
+  const costMicrocents = estimateUsageCost({ usage, cost: costConfig });
+
+  if (costMicrocents === undefined) {
+    return;
+  }
+
+  const inputTokens = usage.input ?? 0;
+  // Fallback: output tokens are what's left after input, cache read/write
+  const cacheTokens = (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+  let outputTokens = usage.output ?? 0;
+  if (!outputTokens && usage.total) {
+    outputTokens = Math.max(0, usage.total - inputTokens - cacheTokens);
+  }
+
+  recordCostEvent({
+    workspaceId,
+    agentId,
+    sessionId,
+    taskId,
+    projectId,
+    provider,
+    model,
+    inputTokens,
+    outputTokens,
+    costMicrocents,
+  });
 }

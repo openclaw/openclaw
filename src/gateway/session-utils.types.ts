@@ -51,6 +51,8 @@ export type GatewaySessionRow = {
   lastAccountId?: string;
   archived?: boolean;
   archivedAt?: number;
+  /** Resolved workspace ID via session.projectId → op1_projects.workspace_id. */
+  workspaceId?: string;
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;

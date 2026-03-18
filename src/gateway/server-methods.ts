@@ -6,7 +6,9 @@ import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
+import { approvalsHandlers } from "./server-methods/approvals-org.js";
 import { browserHandlers } from "./server-methods/browser.js";
+import { budgetsHandlers } from "./server-methods/budgets.js";
 import { channelsHandlers } from "./server-methods/channels.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import { clawhubHandlers } from "./server-methods/clawhub.js";
@@ -17,12 +19,14 @@ import { cronHandlers } from "./server-methods/cron.js";
 import { deviceHandlers } from "./server-methods/devices.js";
 import { doctorHandlers } from "./server-methods/doctor.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
+import { goalsHandlers } from "./server-methods/goals.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { hubHandlers } from "./server-methods/hub.js";
 import { logsHandlers } from "./server-methods/logs.js";
 import { marketplaceHandlers } from "./server-methods/marketplace.js";
 import { mcpHandlers } from "./server-methods/mcp.js";
 import { memoryDashboardHandlers } from "./server-methods/memory-dashboard.js";
+import { metricsHandlers } from "./server-methods/metrics.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
@@ -37,6 +41,7 @@ import { stateHandlers } from "./server-methods/state.js";
 import { sttHandlers } from "./server-methods/stt.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
+import { tasksHandlers } from "./server-methods/tasks.js";
 import { teamsHandlers } from "./server-methods/teams.js";
 import { toolsCatalogHandlers } from "./server-methods/tools-catalog.js";
 import { ttsHandlers } from "./server-methods/tts.js";
@@ -46,6 +51,7 @@ import { usageHandlers } from "./server-methods/usage.js";
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
+import { workspacesHandlers } from "./server-methods/workspaces.js";
 
 const CONTROL_PLANE_WRITE_METHODS = new Set(["config.apply", "config.patch", "update.run"]);
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
@@ -112,6 +118,11 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...clawhubHandlers,
   ...hubHandlers,
   ...projectsHandlers,
+  ...workspacesHandlers,
+  ...tasksHandlers,
+  ...goalsHandlers,
+  ...budgetsHandlers,
+  ...approvalsHandlers,
   ...marketplaceHandlers,
   ...mcpHandlers,
   ...teamsHandlers,
@@ -119,6 +130,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...stateHandlers,
   ...personasHandlers,
   ...onboardingHandlers,
+  ...metricsHandlers,
 };
 
 export async function handleGatewayRequest(

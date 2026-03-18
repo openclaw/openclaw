@@ -41,6 +41,9 @@ import {
   DepartmentEdgeComponent,
   type DepartmentEdgeData,
 } from "@/components/agents/department-edge";
+import { OrgAgentPanel } from "@/components/agents/org-agent-panel";
+import { OrgWorkspaceBar } from "@/components/agents/org-workspace-bar";
+import { WorkspaceSelector, type OrgWorkspace } from "@/components/agents/org-workspace-selector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useGateway } from "@/hooks/use-gateway";
@@ -94,6 +97,24 @@ interface MarketplaceBundle {
 interface HealthCheck {
   agentId: string;
   checks: Array<{ check: string; status: string }>;
+}
+
+interface AgentMetrics {
+  agentId: string;
+  tasksInProgress: number;
+  tasksCompleted: number;
+  totalCostMicrocents: number;
+}
+
+interface WorkspaceAgent {
+  agentId: string;
+  status?: "active" | "inactive" | "paused";
+  role?: string;
+}
+
+interface DepartmentBudget {
+  department: string;
+  totalCostMicrocents: number;
 }
 
 const LEGEND_ITEMS = [
@@ -537,6 +558,19 @@ export function AgentOrganizationPage() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<AgentNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge<DepartmentEdgeData>>([]);
 
+  // Orchestration state (6.7–6.12)
+  const [workspaces, setWorkspaces] = useState<OrgWorkspace[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [workspaceAgentMap, setWorkspaceAgentMap] = useState<Map<string, WorkspaceAgent>>(
+    new Map(),
+  );
+  const [metricsMap, setMetricsMap] = useState<Map<string, AgentMetrics>>(new Map());
+  const [departmentBudgets, setDepartmentBudgets] = useState<DepartmentBudget[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState(0);
+  const [activeGoalCount, setActiveGoalCount] = useState(0);
+  const [tasksInProgressCount, setTasksInProgressCount] = useState(0);
+  const [panelAgentId, setPanelAgentId] = useState<string | null>(null);
+
   // Wire node actions (runs once on mount + when handlers change)
   useEffect(() => {
     setNodeActions({
@@ -569,8 +603,21 @@ export function AgentOrganizationPage() {
         }
       },
       onHealthClick: (agentId) => openHealth(agentId),
+      // Orchestration actions
+      onOpenPanel: (agentId) => setPanelAgentId(agentId),
+      onWorkspaceAssign: async (agentId) => {
+        const wsId = activeWorkspaceId ?? "default";
+        try {
+          await sendRpc("workspaces.assignAgent", { workspaceId: wsId, agentId });
+          setToast({ message: "Agent assigned to workspace", type: "success" });
+          void fetchAndLayout();
+        } catch {
+          setToast({ message: "Failed to assign agent", type: "error" });
+        }
+      },
     });
-  }, [openCreateAgent, openPreview, openConfig, openHealth, sendRpc]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openCreateAgent, openPreview, openConfig, openHealth, sendRpc, activeWorkspaceId]);
 
   const fetchAndLayout = useCallback(async () => {
     if (!isConnected) {
@@ -578,10 +625,42 @@ export function AgentOrganizationPage() {
     }
     setLoading(true);
     try {
-      const [agentsRes, bundlesRes, healthRes] = await Promise.all([
+      const wsId = activeWorkspaceId ?? "default";
+
+      const [
+        agentsRes,
+        bundlesRes,
+        healthRes,
+        workspacesRes,
+        metricsRes,
+        deptBudgetsRes,
+        approvalsRes,
+        goalsRes,
+        wsAgentsRes,
+      ] = await Promise.all([
         sendRpc<{ agents?: MarketplaceAgent[] }>("agents.marketplace.browse", {}),
         sendRpc<{ bundles?: MarketplaceBundle[] }>("agents.marketplace.bundles", {}),
         sendRpc<{ results?: HealthCheck[] }>("agents.marketplace.health", {}).catch(() => null),
+        sendRpc<{ workspaces?: OrgWorkspace[] }>("workspaces.list", {}).catch(() => null),
+        sendRpc<{ metrics?: AgentMetrics[] }>("agents.metrics.list", { workspaceId: wsId }).catch(
+          () => null,
+        ),
+        sendRpc<{ departments?: DepartmentBudget[] }>("budgets.department.summary", {
+          workspaceId: wsId,
+        }).catch(() => null),
+        sendRpc<{ approvals?: unknown[] }>("approvals.list", {
+          workspaceId: wsId,
+          status: "pending",
+        }).catch(() => null),
+        sendRpc<{ goals?: unknown[] }>("goals.list", {
+          workspaceId: wsId,
+          status: "in_progress",
+        }).catch(() => null),
+        activeWorkspaceId
+          ? sendRpc<{ agents?: WorkspaceAgent[] }>("workspaces.agents", {
+              workspaceId: activeWorkspaceId,
+            }).catch(() => null)
+          : Promise.resolve(null),
       ]);
 
       let fetched: MarketplaceAgent[] = [];
@@ -606,14 +685,53 @@ export function AgentOrganizationPage() {
       }
       setHealthMap(hMap);
 
+      // Parse workspaces
+      if (workspacesRes && Array.isArray(workspacesRes.workspaces)) {
+        setWorkspaces(workspacesRes.workspaces);
+      }
+
+      // Parse workspace agents (status map)
+      const newWsAgentMap = new Map<string, WorkspaceAgent>();
+      if (wsAgentsRes && Array.isArray((wsAgentsRes as { agents?: WorkspaceAgent[] }).agents)) {
+        for (const wa of (wsAgentsRes as { agents: WorkspaceAgent[] }).agents) {
+          newWsAgentMap.set(wa.agentId, wa);
+        }
+      }
+      setWorkspaceAgentMap(newWsAgentMap);
+
+      // Parse metrics
+      const newMetricsMap = new Map<string, AgentMetrics>();
+      if (metricsRes && Array.isArray(metricsRes.metrics)) {
+        for (const m of metricsRes.metrics) {
+          newMetricsMap.set(m.agentId, m);
+        }
+      }
+      setMetricsMap(newMetricsMap);
+
+      // Parse department budgets
+      if (deptBudgetsRes && Array.isArray(deptBudgetsRes.departments)) {
+        setDepartmentBudgets(deptBudgetsRes.departments);
+      }
+
+      // Parse pending approvals and goals count
+      setPendingApprovals(
+        Array.isArray(approvalsRes?.approvals) ? approvalsRes.approvals.length : 0,
+      );
+      setActiveGoalCount(Array.isArray(goalsRes?.goals) ? goalsRes.goals.length : 0);
+
+      // Count in-progress tasks from metrics
+      let inProgressTotal = 0;
+      for (const m of newMetricsMap.values()) {
+        inProgressTotal += m.tasksInProgress;
+      }
+      setTasksInProgressCount(inProgressTotal);
+
       // Determine active bundle filter
       const currentBundleId = bundleFilter;
-      let _filteredBundle: MarketplaceBundle | null = null;
 
       if (currentBundleId) {
         const bundle = fetchedBundles.find((b) => b.id === currentBundleId);
         if (bundle) {
-          _filteredBundle = bundle;
           setActiveBundle(bundle);
           const ids = new Set(bundle.bundle_agents);
           const coo = fetched.find((a) => a.tier === 1);
@@ -631,14 +749,31 @@ export function AgentOrganizationPage() {
         setActiveBundle(null);
       }
 
+      // Workspace filter: if a workspace is selected, show only its agents
+      if (activeWorkspaceId && newWsAgentMap.size > 0) {
+        const coo = fetched.find((a) => a.tier === 1);
+        fetched = fetched.filter((a) => newWsAgentMap.has(a.id) || a.tier === 1);
+        // Always include T1 (COO)
+        if (coo && !fetched.find((a) => a.id === coo.id)) {
+          fetched = [coo, ...fetched];
+        }
+      }
+
       setAgents(fetched);
 
-      // Build graph with health + enabled data
+      // Build graph with health + orchestration data
+      const activeWorkspace = workspacesRes?.workspaces?.find(
+        (w: OrgWorkspace) => w.id === activeWorkspaceId,
+      );
       const enriched = fetched.map((a) => ({
         ...a,
         healthStatus: hMap[a.id],
         enabled: a.enabled !== false,
         bundled: a.bundled ?? false,
+        agentStatus: newWsAgentMap.get(a.id)?.status,
+        taskCount: newMetricsMap.get(a.id)?.tasksInProgress,
+        workspaceName: activeWorkspace?.name,
+        workspaceId: newWsAgentMap.has(a.id) ? (activeWorkspaceId ?? undefined) : undefined,
       }));
       const graph = buildOrgGraph(enriched);
       setNodes(graph.nodes);
@@ -648,7 +783,7 @@ export function AgentOrganizationPage() {
     } finally {
       setLoading(false);
     }
-  }, [isConnected, sendRpc, setNodes, setEdges, bundleFilter]);
+  }, [isConnected, sendRpc, setNodes, setEdges, bundleFilter, activeWorkspaceId]);
 
   useEffect(() => {
     void fetchAndLayout();
@@ -796,6 +931,11 @@ export function AgentOrganizationPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <WorkspaceSelector
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            onSelect={setActiveWorkspaceId}
+          />
           <BundleSelector
             bundles={bundles}
             activeBundle={bundleFilter}
@@ -853,6 +993,20 @@ export function AgentOrganizationPage() {
           </Button>
         </div>
       </div>
+
+      {/* Workspace stats bar — shown when a workspace is selected */}
+      {activeWorkspaceId && (
+        <OrgWorkspaceBar
+          workspaceName={
+            workspaces.find((w) => w.id === activeWorkspaceId)?.name ?? activeWorkspaceId
+          }
+          brandColor={workspaces.find((w) => w.id === activeWorkspaceId)?.brandColor}
+          tasksInProgress={tasksInProgressCount}
+          activeGoals={activeGoalCount}
+          budgetPctUsed={-1}
+          pendingApprovals={pendingApprovals}
+        />
+      )}
 
       {/* Flow canvas */}
       <div
@@ -918,12 +1072,48 @@ export function AgentOrganizationPage() {
             <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
               Departments
             </span>
-            {LEGEND_ITEMS.map((item) => (
-              <div key={item.label} className="flex items-center gap-2">
-                <div className="size-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-                <span className="text-xs text-muted-foreground">{item.label}</span>
-              </div>
-            ))}
+            {LEGEND_ITEMS.map((item) => {
+              const deptBudget = departmentBudgets.find(
+                (d) => d.department.toLowerCase() === item.label.toLowerCase(),
+              );
+              return (
+                <div key={item.label} className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="size-2.5 rounded-full"
+                      style={{ backgroundColor: item.color }}
+                    />
+                    <span className="text-xs text-muted-foreground">{item.label}</span>
+                  </div>
+                  {deptBudget && deptBudget.totalCostMicrocents > 0 && (
+                    <div className="flex items-center gap-1.5 pl-4">
+                      <div className="w-14 h-1 rounded-full bg-muted overflow-hidden">
+                        {/* Display relative spend — max across all departments */}
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            backgroundColor: item.color,
+                            width: `${Math.min(
+                              (deptBudget.totalCostMicrocents /
+                                Math.max(
+                                  ...departmentBudgets.map((d) => d.totalCostMicrocents),
+                                  1,
+                                )) *
+                                100,
+                              100,
+                            )}%`,
+                            opacity: 0.7,
+                          }}
+                        />
+                      </div>
+                      <span className="text-[9px] text-muted-foreground">
+                        ${(deptBudget.totalCostMicrocents / 1_000_000).toFixed(2)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
             <div className="border-t pt-1.5 mt-1.5 space-y-1">
               <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
                 Tiers
@@ -943,6 +1133,66 @@ export function AgentOrganizationPage() {
             </div>
           </div>
         )}
+
+        {/* Agent side panel — slides in from right when a node is clicked */}
+        {panelAgentId &&
+          (() => {
+            const agent = allAgents.find((a) => a.id === panelAgentId);
+            const wsId = activeWorkspaceId ?? "default";
+            const workspace = workspaces.find((w) => w.id === wsId);
+            const wa = workspaceAgentMap.get(panelAgentId);
+            const m = metricsMap.get(panelAgentId);
+            if (!agent) {
+              return null;
+            }
+            return (
+              <OrgAgentPanel
+                agentId={panelAgentId}
+                agentName={agent.name}
+                department={agent.department}
+                departmentColor={
+                  agent.department in DEPARTMENT_COLORS
+                    ? DEPARTMENT_COLORS[agent.department]
+                    : "#64748b"
+                }
+                workspaceId={wsId}
+                workspaceName={workspace?.name ?? wsId}
+                agentStatus={wa?.status}
+                metrics={
+                  m
+                    ? {
+                        tasksInProgress: m.tasksInProgress,
+                        tasksCompleted: m.tasksCompleted,
+                        totalCostMicrocents: m.totalCostMicrocents,
+                      }
+                    : undefined
+                }
+                onClose={() => setPanelAgentId(null)}
+                onStatusChange={(_agentId, _workspaceId, newStatus) => {
+                  setWorkspaceAgentMap((prev) => {
+                    const next = new Map(prev);
+                    const existing = next.get(_agentId) ?? { agentId: _agentId };
+                    next.set(_agentId, { ...existing, status: newStatus });
+                    return next;
+                  });
+                  setToast({ message: `Agent status set to ${newStatus}`, type: "success" });
+                }}
+                onWorkspaceRemove={async (_agentId, _workspaceId) => {
+                  try {
+                    await sendRpc("workspaces.removeAgent", {
+                      workspaceId: _workspaceId,
+                      agentId: _agentId,
+                    });
+                    setToast({ message: "Agent removed from workspace", type: "success" });
+                    setPanelAgentId(null);
+                    void fetchAndLayout();
+                  } catch {
+                    setToast({ message: "Failed to remove agent", type: "error" });
+                  }
+                }}
+              />
+            );
+          })()}
       </div>
 
       {/* Modal dialogs — all actions stay on canvas */}

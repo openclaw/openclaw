@@ -25,6 +25,7 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { getStateDb } from "../infra/state-db/connection.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -70,6 +71,32 @@ export type {
 } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
+
+/**
+ * Resolve workspace_id for a given project_id via the DB.
+ * Returns undefined if projectId is falsy, the project is not found, or the DB is unavailable.
+ */
+function resolveWorkspaceIdForProject(
+  projectId: string,
+  cache: Map<string, string | null>,
+): string | undefined {
+  const cached = cache.get(projectId);
+  if (cached !== undefined) {
+    return cached ?? undefined;
+  }
+  try {
+    const db = getStateDb();
+    const row = db
+      .prepare("SELECT workspace_id FROM op1_projects WHERE id = ? LIMIT 1")
+      .get(projectId) as { workspace_id: string | null } | undefined;
+    const resolved = row?.workspace_id ?? null;
+    cache.set(projectId, resolved);
+    return resolved ?? undefined;
+  } catch {
+    cache.set(projectId, null);
+    return undefined;
+  }
+}
 
 function tryResolveExistingPath(value: string): string | null {
   try {
@@ -1005,6 +1032,7 @@ export function listSessionsFromStore(params: {
     sessions = sessions.slice(0, limit);
   }
 
+  const workspaceCache = new Map<string, string | null>();
   const finalSessions: GatewaySessionRow[] = sessions.map((s) => {
     const { entry, ...rest } = s;
     let derivedTitle: string | undefined;
@@ -1028,7 +1056,10 @@ export function listSessionsFromStore(params: {
         }
       }
     }
-    return { ...rest, derivedTitle, lastMessagePreview } satisfies GatewaySessionRow;
+    const workspaceId = entry?.projectId
+      ? resolveWorkspaceIdForProject(entry.projectId, workspaceCache)
+      : undefined;
+    return { ...rest, derivedTitle, lastMessagePreview, workspaceId } satisfies GatewaySessionRow;
   });
 
   return {

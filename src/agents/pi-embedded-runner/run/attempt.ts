@@ -15,6 +15,8 @@ import type { ProjectDetails } from "../../../gateway/server-methods/projects.ty
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { getCachedMcpTools } from "../../../mcp/index.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import { buildWorkspaceContextBlock } from "../../../orchestration/workspace-context.js";
+import { resolveAgentWorkspace } from "../../../orchestration/workspace-store-sqlite.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -85,6 +87,7 @@ import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import { resolveImageModelConfigForTool, runImagePrompt } from "../../tools/image-tool.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
+import { recordUsageCost } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
@@ -979,6 +982,23 @@ export async function runEmbeddedAttempt(
         }
       } catch {
         // Non-fatal: skip project context if lookup fails
+      }
+    }
+
+    // Inject workspace context for full-mode sessions (skip cron/subagent to keep prompts minimal)
+    if (promptMode !== "minimal") {
+      try {
+        const agentWorkspace = resolveAgentWorkspace(sessionAgentId);
+        if (agentWorkspace) {
+          const workspaceBlock = buildWorkspaceContextBlock(agentWorkspace.id);
+          if (workspaceBlock) {
+            effectiveExtraSystemPrompt = effectiveExtraSystemPrompt
+              ? `${effectiveExtraSystemPrompt}\n\n${workspaceBlock}`
+              : workspaceBlock;
+          }
+        }
+      } catch {
+        // Non-fatal: skip workspace context if lookup fails
       }
     }
 
@@ -2008,6 +2028,23 @@ export async function runEmbeddedAttempt(
           .catch((err) => {
             log.warn(`llm_output hook failed: ${String(err)}`);
           });
+      }
+
+      // Record cost event for orchestration budget tracking (fire-and-forget)
+      const costWorkspace = resolveAgentWorkspace(sessionAgentId);
+      const costUsage = getUsageTotals();
+      if (costWorkspace && costUsage) {
+        recordUsageCost({
+          workspaceId: costWorkspace.id,
+          agentId: sessionAgentId,
+          sessionId: params.sessionId,
+          provider: params.provider,
+          model: params.modelId,
+          usage: costUsage,
+          config: params.config,
+        }).catch((err) => {
+          log.warn(`recordUsageCost failed: ${String(err)}`);
+        });
       }
 
       return {

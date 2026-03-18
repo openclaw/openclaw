@@ -1,5 +1,6 @@
 import type { HealthSummary } from "../commands/health.js";
 import { cleanOldMedia } from "../media/store.js";
+import { reconcileBudgets } from "../orchestration/budget-cron.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
@@ -131,6 +132,18 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatDeltaSentAt.delete(runId);
     }
   }, 60_000);
+
+  // Hourly budget policy reconciliation — creates incidents when thresholds are crossed
+  const runBudgetReconcile = () => {
+    try {
+      reconcileBudgets();
+    } catch (err) {
+      params.logHealth.error(`budget reconciliation failed: ${formatError(err)}`);
+    }
+  };
+  setInterval(runBudgetReconcile, 60 * 60_000);
+  // Prime on startup so incidents are detected without waiting an hour
+  runBudgetReconcile();
 
   if (typeof params.mediaCleanupTtlMs !== "number") {
     return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null };

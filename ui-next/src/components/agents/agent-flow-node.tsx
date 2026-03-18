@@ -1,5 +1,5 @@
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
-import { CheckCircle2, Users, Pencil, Copy, UserPlus, Power, Trash2 } from "lucide-react";
+import { CheckCircle2, Users, Pencil, Copy, UserPlus, Power, Trash2, Link } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,12 @@ export interface AgentNodeData {
   enabled?: boolean;
   bundled?: boolean;
   healthStatus?: "healthy" | "warning" | "error";
+  // Orchestration fields (6.8)
+  agentStatus?: "active" | "inactive" | "paused";
+  taskCount?: number;
+  budgetPctUsed?: number;
+  workspaceName?: string;
+  workspaceId?: string;
   [key: string]: unknown;
 }
 
@@ -29,6 +35,9 @@ export interface AgentNodeActions {
   onToggleEnabled?: (agentId: string, enabled: boolean) => void;
   onDelete?: (agentId: string) => void;
   onHealthClick?: (agentId: string) => void;
+  // Orchestration actions (6.8, 6.12)
+  onOpenPanel?: (agentId: string) => void;
+  onWorkspaceAssign?: (agentId: string) => void;
 }
 
 // Stored externally so the ReactFlow nodeTypes object stays stable
@@ -99,11 +108,15 @@ export function AgentFlowNodeComponent({ data }: NodeProps<AgentFlowNode>) {
         isDisabled && "opacity-40",
       )}
       style={{ borderColor: data.departmentColor }}
-      onClick={() =>
-        _nodeActions.onPreview
-          ? _nodeActions.onPreview(data.agentId)
-          : navigate(`/agents/preview/${data.agentId}`)
-      }
+      onClick={() => {
+        if (_nodeActions.onOpenPanel) {
+          _nodeActions.onOpenPanel(data.agentId);
+        } else if (_nodeActions.onPreview) {
+          _nodeActions.onPreview(data.agentId);
+        } else {
+          void navigate(`/agents/preview/${data.agentId}`);
+        }
+      }}
       onMouseLeave={() => setConfirmDelete(false)}
     >
       {/* Top handle for incoming edges */}
@@ -116,11 +129,26 @@ export function AgentFlowNodeComponent({ data }: NodeProps<AgentFlowNode>) {
       )}
 
       <div className="flex items-center gap-2">
-        {/* Color dot */}
-        <div
-          className="size-2.5 rounded-full shrink-0"
-          style={{ backgroundColor: data.departmentColor }}
-        />
+        {/* Color dot — doubles as agent status ring when workspace is active */}
+        <div className="shrink-0 relative">
+          <div
+            className="size-2.5 rounded-full"
+            style={{ backgroundColor: data.departmentColor }}
+          />
+          {data.agentStatus && (
+            <div
+              className={cn(
+                "absolute -bottom-0.5 -right-0.5 size-1.5 rounded-full border border-card",
+                data.agentStatus === "active"
+                  ? "bg-green-500"
+                  : data.agentStatus === "paused"
+                    ? "bg-amber-400"
+                    : "bg-muted-foreground/50",
+              )}
+              title={`Status: ${data.agentStatus}`}
+            />
+          )}
+        </div>
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
@@ -128,6 +156,15 @@ export function AgentFlowNodeComponent({ data }: NodeProps<AgentFlowNode>) {
               {data.name}
             </span>
             {data.installed && <CheckCircle2 className="size-3 text-green-500 shrink-0" />}
+            {/* Task count badge */}
+            {typeof data.taskCount === "number" && data.taskCount > 0 && (
+              <span
+                className="text-[9px] font-medium px-1 py-0 rounded-full bg-amber-500/20 text-amber-400 shrink-0"
+                title={`${data.taskCount} task${data.taskCount !== 1 ? "s" : ""} in progress`}
+              >
+                {data.taskCount}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] text-muted-foreground truncate">{data.role}</span>
@@ -165,7 +202,33 @@ export function AgentFlowNodeComponent({ data }: NodeProps<AgentFlowNode>) {
             <Users className="size-2.5" />
           </span>
         )}
+        {data.workspaceName && (
+          <span
+            className="text-[9px] text-muted-foreground truncate max-w-[60px]"
+            title={data.workspaceName}
+          >
+            {data.workspaceName}
+          </span>
+        )}
       </div>
+
+      {/* Budget micro-bar */}
+      {typeof data.budgetPctUsed === "number" && data.budgetPctUsed >= 0 && (
+        <div className="mt-1.5 w-full h-0.5 rounded-full bg-muted overflow-hidden">
+          <div
+            className={cn(
+              "h-full rounded-full",
+              data.budgetPctUsed >= 90
+                ? "bg-red-500"
+                : data.budgetPctUsed >= 75
+                  ? "bg-amber-400"
+                  : "bg-green-500",
+            )}
+            style={{ width: `${Math.min(data.budgetPctUsed, 100)}%` }}
+            title={`Budget: ${data.budgetPctUsed}% used`}
+          />
+        </div>
+      )}
 
       {/* Action buttons — shown on hover via CSS group-hover */}
       <div className="hidden group-hover:flex items-center gap-0.5 mt-1.5 pt-1.5 border-t border-white/10">
@@ -196,6 +259,16 @@ export function AgentFlowNodeComponent({ data }: NodeProps<AgentFlowNode>) {
             onClick={(e) => {
               e.stopPropagation();
               _nodeActions.onAddSpecialist!(data.agentId, data.department);
+            }}
+          />
+        )}
+        {_nodeActions.onWorkspaceAssign && !data.workspaceId && (
+          <ActionBtn
+            icon={Link}
+            label="Assign to workspace"
+            onClick={(e) => {
+              e.stopPropagation();
+              _nodeActions.onWorkspaceAssign!(data.agentId);
             }}
           />
         )}

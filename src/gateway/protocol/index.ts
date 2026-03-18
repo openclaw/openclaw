@@ -285,6 +285,42 @@ import {
   OnboardingResetParamsSchema,
   type OnboardingValidatePathParams,
   OnboardingValidatePathParamsSchema,
+  WorkspaceSchema,
+  type Workspace,
+  WorkspaceAgentSchema,
+  type WorkspaceAgent,
+  WorkspacesListParamsSchema,
+  type WorkspacesListParams,
+  WorkspacesGetParamsSchema,
+  type WorkspacesGetParams,
+  WorkspacesCreateParamsSchema,
+  type WorkspacesCreateParams,
+  WorkspacesUpdateParamsSchema,
+  type WorkspacesUpdateParams,
+  WorkspacesArchiveParamsSchema,
+  type WorkspacesArchiveParams,
+  WorkspacesAgentsParamsSchema,
+  type WorkspacesAgentsParams,
+  WorkspacesAssignAgentParamsSchema,
+  type WorkspacesAssignAgentParams,
+  WorkspacesRemoveAgentParamsSchema,
+  type WorkspacesRemoveAgentParams,
+  WorkspacesListReturnSchema,
+  type WorkspacesListReturn,
+  WorkspacesGetReturnSchema,
+  type WorkspacesGetReturn,
+  WorkspacesCreateReturnSchema,
+  type WorkspacesCreateReturn,
+  WorkspacesUpdateReturnSchema,
+  type WorkspacesUpdateReturn,
+  WorkspacesArchiveReturnSchema,
+  type WorkspacesArchiveReturn,
+  WorkspacesAgentsReturnSchema,
+  type WorkspacesAgentsReturn,
+  WorkspacesAssignAgentReturnSchema,
+  type WorkspacesAssignAgentReturn,
+  WorkspacesRemoveAgentReturnSchema,
+  type WorkspacesRemoveAgentReturn,
 } from "./schema.js";
 
 const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").default)({
@@ -543,6 +579,29 @@ export const validateOnboardingResetParams = ajv.compile<
 export const validateOnboardingValidatePathParams = ajv.compile<OnboardingValidatePathParams>(
   OnboardingValidatePathParamsSchema,
 );
+export const validateWorkspacesListParams = ajv.compile<WorkspacesListParams>(
+  WorkspacesListParamsSchema,
+);
+export const validateWorkspacesGetParams =
+  ajv.compile<WorkspacesGetParams>(WorkspacesGetParamsSchema);
+export const validateWorkspacesCreateParams = ajv.compile<WorkspacesCreateParams>(
+  WorkspacesCreateParamsSchema,
+);
+export const validateWorkspacesUpdateParams = ajv.compile<WorkspacesUpdateParams>(
+  WorkspacesUpdateParamsSchema,
+);
+export const validateWorkspacesArchiveParams = ajv.compile<WorkspacesArchiveParams>(
+  WorkspacesArchiveParamsSchema,
+);
+export const validateWorkspacesAgentsParams = ajv.compile<WorkspacesAgentsParams>(
+  WorkspacesAgentsParamsSchema,
+);
+export const validateWorkspacesAssignAgentParams = ajv.compile<WorkspacesAssignAgentParams>(
+  WorkspacesAssignAgentParamsSchema,
+);
+export const validateWorkspacesRemoveAgentParams = ajv.compile<WorkspacesRemoveAgentParams>(
+  WorkspacesRemoveAgentParamsSchema,
+);
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors?.length) {
@@ -690,6 +749,24 @@ export {
   OnboardingSkipParamsSchema,
   OnboardingResetParamsSchema,
   OnboardingValidatePathParamsSchema,
+  WorkspaceSchema,
+  WorkspaceAgentSchema,
+  WorkspacesListParamsSchema,
+  WorkspacesGetParamsSchema,
+  WorkspacesCreateParamsSchema,
+  WorkspacesUpdateParamsSchema,
+  WorkspacesArchiveParamsSchema,
+  WorkspacesAgentsParamsSchema,
+  WorkspacesAssignAgentParamsSchema,
+  WorkspacesRemoveAgentParamsSchema,
+  WorkspacesListReturnSchema,
+  WorkspacesGetReturnSchema,
+  WorkspacesCreateReturnSchema,
+  WorkspacesUpdateReturnSchema,
+  WorkspacesArchiveReturnSchema,
+  WorkspacesAgentsReturnSchema,
+  WorkspacesAssignAgentReturnSchema,
+  WorkspacesRemoveAgentReturnSchema,
 };
 
 export type {
@@ -798,6 +875,24 @@ export type {
   PollParams,
   UpdateRunParams,
   ChatInjectParams,
+  Workspace,
+  WorkspaceAgent,
+  WorkspacesListParams,
+  WorkspacesGetParams,
+  WorkspacesCreateParams,
+  WorkspacesUpdateParams,
+  WorkspacesArchiveParams,
+  WorkspacesAgentsParams,
+  WorkspacesAssignAgentParams,
+  WorkspacesRemoveAgentParams,
+  WorkspacesListReturn,
+  WorkspacesGetReturn,
+  WorkspacesCreateReturn,
+  WorkspacesUpdateReturn,
+  WorkspacesArchiveReturn,
+  WorkspacesAgentsReturn,
+  WorkspacesAssignAgentReturn,
+  WorkspacesRemoveAgentReturn,
   OnboardingUpdateParams,
   OnboardingValidatePathParams,
 };

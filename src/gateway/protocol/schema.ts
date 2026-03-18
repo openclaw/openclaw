@@ -19,3 +19,8 @@ export * from "./schema/state.js";
 export * from "./schema/teams.js";
 export * from "./schema/wizard.js";
 export * from "./schema/onboarding.js";
+export * from "./schema/workspaces.js";
+export * from "./schema/tasks.js";
+export * from "./schema/goals.js";
+export * from "./schema/budgets.js";
+export * from "./schema/approvals-org.js";

@@ -1178,6 +1178,312 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+
+  // ── v18: Workspaces ───────────────────────────────────────────────────────
+  {
+    version: 18,
+    description:
+      "Workspaces: op1_workspaces, op1_workspace_agents, add workspace_id to op1_projects",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_workspaces (
+          id            TEXT PRIMARY KEY,
+          name          TEXT NOT NULL,
+          description   TEXT,
+          status        TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'archived', 'suspended')),
+          task_prefix   TEXT NOT NULL DEFAULT 'OP1',
+          task_counter  INTEGER NOT NULL DEFAULT 0,
+          budget_monthly_microcents INTEGER,
+          spent_monthly_microcents  INTEGER NOT NULL DEFAULT 0,
+          brand_color   TEXT,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at    INTEGER NOT NULL DEFAULT (unixepoch())
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_workspace_agents (
+          workspace_id  TEXT NOT NULL,
+          agent_id      TEXT NOT NULL,
+          role          TEXT,
+          joined_at     INTEGER NOT NULL DEFAULT (unixepoch()),
+          PRIMARY KEY (workspace_id, agent_id),
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_ws_agents_agent ON op1_workspace_agents(agent_id)");
+
+      // Seed default workspace
+      db.exec(`
+        INSERT OR IGNORE INTO op1_workspaces (id, name, description, task_prefix)
+        VALUES ('default', 'Default Workspace', 'Auto-created default workspace', 'OP1')
+      `);
+
+      // Add workspace_id to existing projects table
+      try {
+        db.exec(
+          "ALTER TABLE op1_projects ADD COLUMN workspace_id TEXT REFERENCES op1_workspaces(id)",
+        );
+      } catch {
+        // Column exists
+      }
+      db.exec("UPDATE op1_projects SET workspace_id = 'default' WHERE workspace_id IS NULL");
+    },
+  },
+
+  // ── v19: Tasks and Task Comments ──────────────────────────────────────────
+  {
+    version: 19,
+    description: "Task System: op1_tasks, op1_task_comments",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_tasks (
+          id              TEXT PRIMARY KEY,
+          workspace_id    TEXT NOT NULL,
+          project_id      TEXT,
+          goal_id         TEXT,
+          parent_id       TEXT,
+          identifier      TEXT NOT NULL,
+          title           TEXT NOT NULL,
+          description     TEXT,
+          status          TEXT NOT NULL DEFAULT 'backlog'
+                          CHECK (status IN ('backlog','todo','in_progress','in_review','blocked','done','cancelled')),
+          priority        TEXT NOT NULL DEFAULT 'medium'
+                          CHECK (priority IN ('low','medium','high','critical')),
+          assignee_agent_id TEXT,
+          billing_code    TEXT,
+          created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+          completed_at    INTEGER,
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE,
+          FOREIGN KEY (parent_id) REFERENCES op1_tasks(id) ON DELETE SET NULL
+        )
+      `);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON op1_tasks(workspace_id, status)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON op1_tasks(assignee_agent_id)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_project ON op1_tasks(project_id)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_goal ON op1_tasks(goal_id)");
+      db.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_identifier ON op1_tasks(workspace_id, identifier)",
+      );
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_task_comments (
+          id            TEXT PRIMARY KEY,
+          task_id       TEXT NOT NULL,
+          author_id     TEXT NOT NULL,
+          author_type   TEXT NOT NULL DEFAULT 'agent'
+                        CHECK (author_type IN ('agent', 'user', 'system')),
+          body          TEXT NOT NULL,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (task_id) REFERENCES op1_tasks(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_task_comments_task ON op1_task_comments(task_id, created_at)",
+      );
+    },
+  },
+
+  // ── v20: Goals ────────────────────────────────────────────────────────────
+  {
+    version: 20,
+    description: "Goals Hierarchy: op1_goals",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_goals (
+          id            TEXT PRIMARY KEY,
+          workspace_id  TEXT NOT NULL,
+          parent_id     TEXT,
+          title         TEXT NOT NULL,
+          description   TEXT,
+          level         TEXT NOT NULL DEFAULT 'objective'
+                        CHECK (level IN ('vision','objective','key_result')),
+          status        TEXT NOT NULL DEFAULT 'planned'
+                        CHECK (status IN ('planned','in_progress','achieved','abandoned')),
+          owner_agent_id TEXT,
+          progress      INTEGER DEFAULT 0,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE,
+          FOREIGN KEY (parent_id) REFERENCES op1_goals(id) ON DELETE SET NULL
+        )
+      `);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_goals_workspace ON op1_goals(workspace_id, status)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_goals_parent ON op1_goals(parent_id)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_goals_owner ON op1_goals(owner_agent_id)");
+    },
+  },
+
+  // ── v21: Cost Events and Budget Policies ──────────────────────────────────
+  {
+    version: 21,
+    description:
+      "Cost tracking and budgets: op1_cost_events, op1_budget_policies, op1_budget_incidents",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_cost_events (
+          id            TEXT PRIMARY KEY,
+          workspace_id  TEXT NOT NULL,
+          agent_id      TEXT NOT NULL,
+          session_id    TEXT,
+          task_id       TEXT,
+          project_id    TEXT,
+          provider      TEXT,
+          model         TEXT,
+          input_tokens  INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          cost_microcents INTEGER NOT NULL DEFAULT 0,
+          occurred_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_cost_events_workspace ON op1_cost_events(workspace_id, occurred_at)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_cost_events_agent ON op1_cost_events(agent_id, occurred_at)",
+      );
+      db.exec("CREATE INDEX IF NOT EXISTS idx_cost_events_project ON op1_cost_events(project_id)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_cost_events_task ON op1_cost_events(task_id)");
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_budget_policies (
+          id            TEXT PRIMARY KEY,
+          workspace_id  TEXT NOT NULL,
+          scope_type    TEXT NOT NULL CHECK (scope_type IN ('workspace','agent','project')),
+          scope_id      TEXT NOT NULL,
+          amount_microcents INTEGER NOT NULL,
+          window_kind   TEXT NOT NULL DEFAULT 'calendar_month_utc'
+                        CHECK (window_kind IN ('calendar_month_utc','lifetime')),
+          warn_percent  INTEGER NOT NULL DEFAULT 80,
+          hard_stop     INTEGER NOT NULL DEFAULT 0,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_budget_policies_scope ON op1_budget_policies(scope_type, scope_id)",
+      );
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_budget_incidents (
+          id            TEXT PRIMARY KEY,
+          workspace_id  TEXT NOT NULL,
+          policy_id     TEXT NOT NULL,
+          type          TEXT NOT NULL CHECK (type IN ('warning','hard_stop','resolved')),
+          agent_id      TEXT,
+          spent_microcents INTEGER NOT NULL,
+          limit_microcents INTEGER NOT NULL,
+          message       TEXT,
+          resolved_at   INTEGER,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE,
+          FOREIGN KEY (policy_id) REFERENCES op1_budget_policies(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_budget_incidents_workspace ON op1_budget_incidents(workspace_id, created_at)",
+      );
+    },
+  },
+
+  // ── v22: Approvals and Activity Log ───────────────────────────────────────
+  {
+    version: 22,
+    description: "Governance: op1_approvals, op1_activity_log",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_approvals (
+          id              TEXT PRIMARY KEY,
+          workspace_id    TEXT NOT NULL,
+          type            TEXT NOT NULL CHECK (type IN ('agent_hire','budget_override','config_change')),
+          status          TEXT NOT NULL DEFAULT 'pending'
+                          CHECK (status IN ('pending','revision_requested','approved','rejected')),
+          requester_id    TEXT NOT NULL,
+          requester_type  TEXT NOT NULL DEFAULT 'agent'
+                          CHECK (requester_type IN ('agent','user','system')),
+          payload_json    TEXT,
+          decision_note   TEXT,
+          decided_by      TEXT,
+          decided_at      INTEGER,
+          created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_approvals_workspace ON op1_approvals(workspace_id, status)",
+      );
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_activity_log (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          workspace_id  TEXT NOT NULL,
+          actor_type    TEXT NOT NULL DEFAULT 'system'
+                        CHECK (actor_type IN ('user','agent','system')),
+          actor_id      TEXT,
+          action        TEXT NOT NULL,
+          entity_type   TEXT,
+          entity_id     TEXT,
+          details_json  TEXT,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_activity_log_workspace ON op1_activity_log(workspace_id, created_at)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_activity_log_entity ON op1_activity_log(entity_type, entity_id)",
+      );
+    },
+  },
+
+  // ── v23: Agent Config Revisions ───────────────────────────────────────────
+  {
+    version: 23,
+    description: "Agent config tracking: op1_agent_config_revisions",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_agent_config_revisions (
+          id            TEXT PRIMARY KEY,
+          workspace_id  TEXT NOT NULL,
+          agent_id      TEXT NOT NULL,
+          config_json   TEXT NOT NULL,
+          changed_by    TEXT,
+          change_note   TEXT,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (workspace_id) REFERENCES op1_workspaces(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_agent_config_revisions ON op1_agent_config_revisions(agent_id, created_at)",
+      );
+    },
+  },
+
+  // ── v24: Agent Status Tracking ────────────────────────────────────────────
+  {
+    version: 24,
+    description: "Agent status tracking: op1_workspace_agents columns",
+    up(db) {
+      try {
+        db.exec(
+          "ALTER TABLE op1_workspace_agents ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+        );
+      } catch {
+        // Ignore if exists
+      }
+      try {
+        db.exec("ALTER TABLE op1_workspace_agents ADD COLUMN capabilities_json TEXT");
+      } catch {
+        // Ignore if exists
+      }
+    },
+  },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────
