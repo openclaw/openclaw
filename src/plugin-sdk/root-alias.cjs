@@ -69,8 +69,11 @@ function getJiti() {
   const { createJiti } = require("jiti");
   jitiLoader = createJiti(__filename, {
     interopDefault: true,
-    // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
-    // so local plugins do not create a second transpiled OpenClaw core graph.
+    // tryNative: true is safe here because this loader is only ever called
+    // synchronously (jiti(), not jiti.import()). The async tryNative path that
+    // is broken on Node 22.6+ (native TS loading bypasses .js->.ts remapping)
+    // is never triggered. compat.ts also has no dynamic import() calls that
+    // would reach the async path via jitiImport.
     tryNative: true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });

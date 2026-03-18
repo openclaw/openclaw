@@ -3331,10 +3331,10 @@ module.exports = {
     expect(subpaths).not.toContain("root-alias");
   });
 
-  it("configures the plugin loader jiti boundary to prefer native dist modules", () => {
+  it("configures the plugin loader jiti boundary to use jiti's own transform for Node 22.6+ compatibility", () => {
     const options = __testing.buildPluginLoaderJitiOptions({});
 
-    expect(options.tryNative).toBe(true);
+    expect(options.tryNative).toBe(false);
     expect(options.interopDefault).toBe(true);
     expect(options.extensions).toContain(".js");
     expect(options.extensions).toContain(".ts");
