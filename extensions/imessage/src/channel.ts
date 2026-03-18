@@ -5,7 +5,6 @@ import {
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   formatTrimmedAllowFromEntries,
-  looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/imessage";
@@ -25,7 +24,12 @@ import {
   imessageResolveDmPolicy,
   imessageSetupWizard,
 } from "./shared.js";
-import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
+import {
+  inferIMessageTargetChatType,
+  looksLikeIMessageExplicitTargetId,
+  normalizeIMessageHandle,
+  parseIMessageTarget,
+} from "./targets.js";
 
 const loadIMessageChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
@@ -139,10 +143,26 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeIMessageMessagingTarget,
+    inferTargetChatType: ({ to }) => inferIMessageTargetChatType(to),
     resolveOutboundSessionRoute: (params) => resolveIMessageOutboundSessionRoute(params),
     targetResolver: {
-      looksLikeId: looksLikeIMessageTargetId,
+      looksLikeId: looksLikeIMessageExplicitTargetId,
       hint: "<handle|chat_id:ID>",
+      resolveTarget: async ({ normalized }) => {
+        const to = normalized?.trim();
+        if (!to) {
+          return null;
+        }
+        const chatType = inferIMessageTargetChatType(to);
+        if (!chatType) {
+          return null;
+        }
+        return {
+          to,
+          kind: chatType === "direct" ? "user" : "group",
+          source: "normalized" as const,
+        };
+      },
     },
   },
   outbound: {
