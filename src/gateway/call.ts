@@ -59,6 +59,8 @@ type CallGatewayBaseOptions = {
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
    */
   configPath?: string;
+  /** Custom HTTP headers to include in the WebSocket upgrade request. */
+  headers?: Record<string, string>;
 };
 
 export type CallGatewayScopedOptions = CallGatewayBaseOptions & {
@@ -116,6 +118,8 @@ export function ensureExplicitGatewayAuth(params: {
   resolvedAuth?: ExplicitGatewayAuth;
   errorHint: string;
   configPath?: string;
+  /** Custom HTTP headers to include in the WebSocket upgrade request. */
+  headers?: Record<string, string>;
 }): void {
   if (!params.urlOverride) {
     return;
@@ -152,6 +156,8 @@ export function buildGatewayConnectionDetails(
     config?: OpenClawConfig;
     url?: string;
     configPath?: string;
+    /** Custom HTTP headers to include in the WebSocket upgrade request. */
+    headers?: Record<string, string>;
     urlSource?: "cli" | "env";
   } = {},
 ): GatewayConnectionDetails {
@@ -820,6 +826,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       token,
       password,
       tlsFingerprint,
+      headers: opts.headers,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: opts.clientDisplayName,

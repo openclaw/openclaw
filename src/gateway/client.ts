@@ -101,6 +101,8 @@ export type GatewayClientOptions = {
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
+  /** Custom HTTP headers to include in the WebSocket upgrade request. */
+  headers?: Record<string, string>;
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
@@ -224,6 +226,10 @@ export class GatewayClient {
         return undefined;
         // oxlint-disable-next-line typescript/no-explicit-any
       }) as any;
+    }
+    // Merge custom HTTP headers into the WebSocket upgrade request.
+    if (this.opts.headers && Object.keys(this.opts.headers).length > 0) {
+      wsOptions.headers = { ...wsOptions.headers, ...this.opts.headers };
     }
     const ws = new WebSocket(url, wsOptions);
     this.ws = ws;

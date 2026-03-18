@@ -198,6 +198,11 @@ export type GatewayRemoteConfig = {
   password?: SecretInput;
   /** Expected TLS certificate fingerprint (sha256) for remote gateways. */
   tlsFingerprint?: string;
+  /**
+   * Custom HTTP headers to send on the WebSocket upgrade request.
+   * Useful for authenticating reverse proxies (Cloudflare Access, etc.).
+   */
+  headers?: Record<string, string>;
   /** SSH target for tunneling remote Gateway (user@host). */
   sshTarget?: string;
   /** SSH identity file path for tunneling remote Gateway. */
