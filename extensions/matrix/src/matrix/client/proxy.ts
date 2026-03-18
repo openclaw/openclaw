@@ -84,9 +84,9 @@ export function configureMatrixProxy(env: NodeJS.ProcessEnv = process.env): bool
   }
 
   try {
+    const matrixProxy = env.MATRIX_PROXY?.trim() || undefined;
     const proxyAgent = new EnvHttpProxyAgent({
-      httpProxy: proxyUrl,
-      httpsProxy: proxyUrl,
+      ...(matrixProxy ? { httpProxy: matrixProxy, httpsProxy: matrixProxy } : {}),
       noProxy: env.NO_PROXY ?? env.no_proxy,
     });
     setGlobalDispatcher(proxyAgent as Dispatcher);
