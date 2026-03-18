@@ -1260,12 +1260,45 @@ install_homebrew() {
 }
 
 # Check Node.js version
+source_nvm_if_available() {
+    if [[ -n "${NVM_DIR:-}" && -s "${NVM_DIR}/nvm.sh" ]]; then
+        # shellcheck disable=SC1090
+        . "${NVM_DIR}/nvm.sh" >/dev/null 2>&1 || true
+        return 0
+    fi
+
+    if [[ -s "$HOME/.nvm/nvm.sh" ]]; then
+        export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+        # shellcheck disable=SC1090
+        . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1 || true
+        return 0
+    fi
+
+    return 1
+}
+
+resolve_node_command() {
+    if command -v node &> /dev/null; then
+        command -v node 2>/dev/null || true
+        return 0
+    fi
+
+    if source_nvm_if_available && command -v node &> /dev/null; then
+        command -v node 2>/dev/null || true
+        return 0
+    fi
+
+    return 1
+}
+
 parse_node_version_components() {
-    if ! command -v node &> /dev/null; then
+    local node_cmd version major minor
+    node_cmd="$(resolve_node_command || true)"
+    if [[ -z "$node_cmd" ]]; then
         return 1
     fi
-    local version major minor
-    version="$(node -v 2>/dev/null || true)"
+
+    version="$("$node_cmd" -v 2>/dev/null || true)"
     major="${version#v}"
     major="${major%%.*}"
     minor="${version#v}"
@@ -1310,12 +1343,12 @@ node_is_at_least_required() {
 }
 
 print_active_node_paths() {
-    if ! command -v node &> /dev/null; then
+    local node_path node_version npm_path npm_version
+    node_path="$(resolve_node_command || true)"
+    if [[ -z "$node_path" ]]; then
         return 1
     fi
-    local node_path node_version npm_path npm_version
-    node_path="$(command -v node 2>/dev/null || true)"
-    node_version="$(node -v 2>/dev/null || true)"
+    node_version="$("$node_path" -v 2>/dev/null || true)"
     ui_info "Active Node.js: ${node_version:-unknown} (${node_path:-unknown})"
 
     if command -v npm &> /dev/null; then
