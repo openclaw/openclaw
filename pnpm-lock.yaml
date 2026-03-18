@@ -5,6 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  jose: 6.2.1
   hono: 4.12.7
   '@hono/node-server': 1.19.10
   fast-xml-parser: 5.3.8
@@ -341,7 +342,7 @@ importers:
         version: 1.58.2
 
   extensions/discord: {}
-
+  
   extensions/elevenlabs: {}
 
   extensions/feishu:
@@ -454,7 +455,7 @@ importers:
         version: 6.29.0(ws@8.19.0)(zod@4.3.6)
 
   extensions/microsoft: {}
-
+  
   extensions/minimax: {}
 
   extensions/mistral: {}
@@ -4956,9 +4957,6 @@ packages:
   jiti@2.6.1:
     resolution: {integrity: sha512-ekilCSN1jwRvIbgeg/57YFh8qQDNbwDb9xT/qu2DAHbFFZUicIl4ygVaAvzveMhMVr3LnpSKTNnwt8PoOfmKhQ==}
     hasBin: true
-
-  jose@4.15.9:
-    resolution: {integrity: sha512-1vUQX+IdDMVPj4k8kOxgUqlcK518yluMuGZwqlr44FS1ppZB/5GWh4rZG89erpOBOJjU/OBsnCVFfapsRz6nEA==}
 
   jose@6.2.1:
     resolution: {integrity: sha512-jUaKr1yrbfaImV7R2TN/b3IcZzsw38/chqMpo2XJ7i2F8AfM/lA4G1goC3JVEwg0H7UldTmSt3P68nt31W7/mw==}
@@ -12203,8 +12201,6 @@ snapshots:
 
   jiti@2.6.1: {}
 
-  jose@4.15.9: {}
-
   jose@6.2.1: {}
 
   js-stringify@1.0.2: {}
@@ -12332,7 +12328,7 @@ snapshots:
     dependencies:
       '@types/jsonwebtoken': 9.0.10
       debug: 4.4.3
-      jose: 4.15.9
+      jose: 6.2.1
       limiter: 1.1.5
       lru-memoizer: 2.3.0
     transitivePeerDependencies:

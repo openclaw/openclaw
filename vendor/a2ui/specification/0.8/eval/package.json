@@ -32,5 +32,10 @@
     "@genkit-ai/vertexai": "^1.19.3",
     "genkit": "^1.19.2",
     "genkitx-anthropic": "^0.25.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "jose": "6.2.1"
+    }
   }
 }
