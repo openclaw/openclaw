@@ -1562,23 +1562,24 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         deliver: async (payload: ReplyPayload, info) => {
           const isFinal = info.kind === "final";
 
-          // Flush any pending partial-reply patch before final delivery.
-          if (isFinal && blockStreamingClient) {
+          // Compute reply target divergence before flushing, so we don't
+          // accidentally create a preview post in the wrong thread on flush.
+          const finalReplyToId = resolveMattermostReplyRootId({
+            threadRootId: effectiveReplyToId,
+            replyToId: payload.replyToId,
+          });
+          const replyTargetDiverged =
+            finalReplyToId !== effectiveReplyToId && payload.replyToId != null;
+
+          // Flush any pending partial-reply patch before final delivery —
+          // but only when the reply stays in the same thread as the preview post.
+          if (isFinal && blockStreamingClient && !replyTargetDiverged) {
             await flushPendingPatch();
           }
 
           // Final + streaming active: patch the streamed message with authoritative
           // complete text, or fall back to a new message (with orphan cleanup).
-          // If the final payload carries an explicit replyToId that differs from
-          // the one the streaming post was created under, skip the in-place patch
-          // and fall through to normal delivery so the reply lands in the right thread.
-          const finalReplyToId = resolveMattermostReplyRootId({
-            threadRootId: effectiveReplyToId,
-            replyToId: payload.replyToId,
-          });
-          const streamReplyToId = effectiveReplyToId;
-          const replyTargetDiverged =
-            finalReplyToId !== streamReplyToId && payload.replyToId != null;
+          // (When replyTargetDiverged the preview is cleaned up further below.)
           if (isFinal && streamMessageId && payload.text && !replyTargetDiverged) {
             const text = core.channel.text.convertMarkdownTables(payload.text, tableMode);
             try {
@@ -1630,22 +1631,39 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
           if (isFinal) {
             stopPatchInterval();
-            // If the reply target diverged and we have an orphaned stream post,
-            // attempt to delete it before normal delivery creates the correct post.
-            if (replyTargetDiverged && streamMessageId) {
-              const orphanId = streamMessageId;
-              streamMessageId = null;
-              try {
-                await deleteMattermostPost(blockStreamingClient!, orphanId);
-              } catch {
-                // Ignore — delivering to the correct thread takes priority.
-              }
-            } else {
-              streamMessageId = null;
-            }
+            // Capture and clear the stream ID so normal delivery below can proceed.
+            // If the reply target diverged we hold the orphan ID and delete it
+            // *after* the replacement message is successfully sent (see below).
+            const orphanedStreamId = replyTargetDiverged ? streamMessageId : null;
+            streamMessageId = null;
             pendingPatchText = "";
             lastSentText = "";
             patchSending = false;
+
+            if (!orphanedStreamId) {
+              // No divergence — fall through to normal delivery.
+            } else {
+              // Divergent target: deliver to the correct thread first, then clean
+              // up the orphan. If delivery fails the user keeps the partial preview.
+              await deliverMattermostReplyPayload({
+                core,
+                cfg,
+                payload,
+                to,
+                accountId: account.accountId,
+                agentId: route.agentId,
+                replyToId: finalReplyToId,
+                textLimit,
+                tableMode,
+                sendMessage: sendMessageMattermost,
+              });
+              try {
+                await deleteMattermostPost(blockStreamingClient!, orphanedStreamId);
+              } catch {
+                // Ignore — the complete message was already delivered.
+              }
+              return;
+            }
           }
 
           // Normal delivery — streaming not active or non-final partial.
@@ -1698,7 +1716,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               ? true
               : typeof account.blockStreaming === "boolean"
                 ? !account.blockStreaming
-                : false,
+                : undefined,
             onModelSelected,
           },
         }),
