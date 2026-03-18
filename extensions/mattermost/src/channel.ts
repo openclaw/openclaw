@@ -4,10 +4,7 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
-import {
-  createLegacyMessageToolDiscoveryMethods,
-  createMessageToolButtonsSchema,
-} from "openclaw/plugin-sdk/channel-runtime";
+import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-runtime";
 import type { ChannelMessageToolDiscovery } from "openclaw/plugin-sdk/channel-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { MattermostConfigSchema } from "./config-schema.js";
@@ -88,7 +85,6 @@ function describeMattermostMessageTool({
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeMattermostMessageTool,
-  ...createLegacyMessageToolDiscoveryMethods(describeMattermostMessageTool),
   supportsAction: ({ action }) => {
     return action === "send" || action === "react";
   },

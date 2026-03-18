@@ -1,9 +1,6 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
-import {
-  createLegacyMessageToolDiscoveryMethods,
-  createMessageToolCardSchema,
-} from "openclaw/plugin-sdk/channel-runtime";
+import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
@@ -398,7 +395,6 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   },
   actions: {
     describeMessageTool: describeMSTeamsMessageTool,
-    ...createLegacyMessageToolDiscoveryMethods(describeMSTeamsMessageTool),
     handleAction: async (ctx) => {
       // Handle send action with card parameter
       if (ctx.action === "send" && ctx.params.card) {
