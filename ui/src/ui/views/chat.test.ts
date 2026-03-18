@@ -706,6 +706,46 @@ describe("chat view", () => {
     vi.unstubAllGlobals();
   });
 
+  it("preserves OpenRouter-prefixed model refs from the chat header picker", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state, request } = createChatHeaderState({
+      models: [
+        {
+          id: "anthropic/claude-opus-4.6",
+          name: "Claude Opus 4.6",
+          provider: "openrouter",
+        },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(
+      Array.from(modelSelect?.querySelectorAll("option") ?? []).map((option) => option.value),
+    ).toContain("openrouter/anthropic/claude-opus-4.6");
+
+    modelSelect!.value = "openrouter/anthropic/claude-opus-4.6";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "openrouter/anthropic/claude-opus-4.6",
+    });
+    expect(state.sessionsResult?.sessions[0]?.model).toBe("anthropic/claude-opus-4.6");
+    expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openrouter");
+    vi.unstubAllGlobals();
+  });
+
   it("clears the session model override back to the default model", async () => {
     vi.stubGlobal(
       "fetch",

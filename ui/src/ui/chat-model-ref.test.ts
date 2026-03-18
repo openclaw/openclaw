@@ -21,6 +21,19 @@ describe("chat-model-ref helpers", () => {
     });
   });
 
+  it("preserves nested OpenRouter model ids in option values", () => {
+    expect(
+      buildChatModelOption({
+        id: "anthropic/claude-opus-4.6",
+        name: "Claude Opus 4.6",
+        provider: "openrouter",
+      }),
+    ).toEqual({
+      value: "openrouter/anthropic/claude-opus-4.6",
+      label: "anthropic/claude-opus-4.6 · openrouter",
+    });
+  });
+
   it("normalizes raw overrides when the catalog match is unique", () => {
     expect(normalizeChatModelOverrideValue(createChatModelOverride("gpt-5-mini"), catalog)).toBe(
       "openai/gpt-5-mini",
@@ -45,6 +58,9 @@ describe("chat-model-ref helpers", () => {
 
   it("resolves server session data to qualified option values", () => {
     expect(resolveServerChatModelValue("gpt-5-mini", "openai")).toBe("openai/gpt-5-mini");
+    expect(resolveServerChatModelValue("anthropic/claude-opus-4.6", "openrouter")).toBe(
+      "openrouter/anthropic/claude-opus-4.6",
+    );
     expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");
   });
 });
