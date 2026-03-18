@@ -16,6 +16,7 @@ import {
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
+  ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-runtime";
 import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -61,6 +62,63 @@ function resolveTelegramActionDiscovery(cfg: Parameters<typeof listEnabledTelegr
       unionGate(key, defaultValue),
     pollEnabled,
     buttonsEnabled,
+  };
+}
+
+function describeTelegramMessageTool({
+  cfg,
+}: Parameters<
+  NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
+>[0]): ChannelMessageToolDiscovery {
+  const discovery = resolveTelegramActionDiscovery(cfg);
+  if (!discovery) {
+    return {
+      actions: [],
+      capabilities: [],
+      schema: null,
+    };
+  }
+  const actions = new Set<ChannelMessageActionName>(["send"]);
+  if (discovery.pollEnabled) {
+    actions.add("poll");
+  }
+  if (discovery.isEnabled("reactions")) {
+    actions.add("react");
+  }
+  if (discovery.isEnabled("deleteMessage")) {
+    actions.add("delete");
+  }
+  if (discovery.isEnabled("editMessage")) {
+    actions.add("edit");
+  }
+  if (discovery.isEnabled("sticker", false)) {
+    actions.add("sticker");
+    actions.add("sticker-search");
+  }
+  if (discovery.isEnabled("createForumTopic")) {
+    actions.add("topic-create");
+  }
+  if (discovery.isEnabled("editForumTopic")) {
+    actions.add("topic-edit");
+  }
+  const schema: ChannelMessageToolSchemaContribution[] = [];
+  if (discovery.buttonsEnabled) {
+    schema.push({
+      properties: {
+        buttons: createMessageToolButtonsSchema(),
+      },
+    });
+  }
+  if (discovery.pollEnabled) {
+    schema.push({
+      properties: createTelegramPollExtraToolSchemas(),
+      visibility: "all-configured",
+    });
+  }
+  return {
+    actions: Array.from(actions),
+    capabilities: discovery.buttonsEnabled ? ["interactive", "buttons"] : [],
+    schema,
   };
 }
 
@@ -118,64 +176,7 @@ function readTelegramMessageIdParam(params: Record<string, unknown>): number {
 }
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
-    const discovery = resolveTelegramActionDiscovery(cfg);
-    if (!discovery) {
-      return [];
-    }
-    const actions = new Set<ChannelMessageActionName>(["send"]);
-    if (discovery.pollEnabled) {
-      actions.add("poll");
-    }
-    if (discovery.isEnabled("reactions")) {
-      actions.add("react");
-    }
-    if (discovery.isEnabled("deleteMessage")) {
-      actions.add("delete");
-    }
-    if (discovery.isEnabled("editMessage")) {
-      actions.add("edit");
-    }
-    if (discovery.isEnabled("sticker", false)) {
-      actions.add("sticker");
-      actions.add("sticker-search");
-    }
-    if (discovery.isEnabled("createForumTopic")) {
-      actions.add("topic-create");
-    }
-    if (discovery.isEnabled("editForumTopic")) {
-      actions.add("topic-edit");
-    }
-    return Array.from(actions);
-  },
-  getCapabilities: ({ cfg }) => {
-    const discovery = resolveTelegramActionDiscovery(cfg);
-    if (!discovery) {
-      return [];
-    }
-    return discovery.buttonsEnabled ? (["interactive", "buttons"] as const) : [];
-  },
-  getToolSchema: ({ cfg }) => {
-    const discovery = resolveTelegramActionDiscovery(cfg);
-    if (!discovery) {
-      return null;
-    }
-    const entries: ChannelMessageToolSchemaContribution[] = [];
-    if (discovery.buttonsEnabled) {
-      entries.push({
-        properties: {
-          buttons: createMessageToolButtonsSchema(),
-        },
-      });
-    }
-    if (discovery.pollEnabled) {
-      entries.push({
-        properties: createTelegramPollExtraToolSchemas(),
-        visibility: "all-configured" as const,
-      });
-    }
-    return entries.length > 0 ? entries : null;
-  },
+  describeMessageTool: describeTelegramMessageTool,
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
