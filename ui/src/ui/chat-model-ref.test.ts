@@ -29,6 +29,12 @@ describe("chat-model-ref helpers", () => {
     });
   });
 
+  it("preserves already-qualified model refs without prepending provider", () => {
+    expect(resolveServerChatModelValue("ollama/qwen3:30b", "openai-codex")).toBe(
+      "ollama/qwen3:30b",
+    );
+  });
+
   it("normalizes raw overrides when the catalog match is unique", () => {
     expect(normalizeChatModelOverrideValue(createChatModelOverride("gpt-5-mini"), catalog)).toBe(
       "openai/gpt-5-mini",
