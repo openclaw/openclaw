@@ -49,6 +49,9 @@ export function resolveTelegramToken(
   // return empty immediately — do NOT fall through to channel-level defaults,
   // which would silently route the message via the wrong bot's token.
   if (accountId !== DEFAULT_ACCOUNT_ID && !accountCfg) {
+    opts.logMissingFile?.(
+      `channels.telegram.accounts: unknown accountId "${accountId}" — not found in config, refusing channel-level fallback`,
+    );
     return { token: "", source: "none" };
   }
 
