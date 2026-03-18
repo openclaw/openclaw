@@ -8,10 +8,28 @@ title: "Plugin Manifest"
 
 # Plugin manifest (openclaw.plugin.json)
 
-Every plugin **must** ship a `openclaw.plugin.json` file in the **plugin root**.
-OpenClaw uses this manifest to validate configuration **without executing plugin
-code**. Missing or invalid manifests are treated as plugin errors and block
-config validation.
+This page is for the **native OpenClaw plugin manifest** only.
+
+For compatible bundle layouts, see [Plugin bundles](/plugins/bundles).
+
+Compatible bundle formats use different manifest files:
+
+- Codex bundle: `.codex-plugin/plugin.json`
+- Claude bundle: `.claude-plugin/plugin.json` or the default Claude component
+  layout without a manifest
+- Cursor bundle: `.cursor-plugin/plugin.json`
+
+OpenClaw auto-detects those bundle layouts too, but they are not validated
+against the `openclaw.plugin.json` schema described here.
+
+For compatible bundles, OpenClaw currently reads bundle metadata plus declared
+skill roots, Claude command roots, Claude bundle `settings.json` defaults, and
+supported hook packs when the layout matches OpenClaw runtime expectations.
+
+Every native OpenClaw plugin **must** ship a `openclaw.plugin.json` file in the
+**plugin root**. OpenClaw uses this manifest to validate configuration
+**without executing plugin code**. Missing or invalid manifests are treated as
+plugin errors and block config validation.
 
 See the full plugin system guide: [Plugins](/tools/plugin).
 
@@ -38,11 +56,51 @@ Optional keys:
 - `kind` (string): plugin kind (examples: `"memory"`, `"context-engine"`).
 - `channels` (array): channel ids registered by this plugin (example: `["matrix"]`).
 - `providers` (array): provider ids registered by this plugin.
+- `providerAuthEnvVars` (object): auth env vars keyed by provider id. Use this
+  when OpenClaw should resolve provider credentials from env without loading
+  plugin runtime first.
+- `providerAuthChoices` (array): cheap onboarding/auth-choice metadata keyed by
+  provider + auth method. Use this when OpenClaw should show a provider in
+  auth-choice pickers, preferred-provider resolution, and CLI help without
+  loading plugin runtime first.
 - `skills` (array): skill directories to load (relative to the plugin root).
 - `name` (string): display name for the plugin.
 - `description` (string): short plugin summary.
 - `uiHints` (object): config field labels/placeholders/sensitive flags for UI rendering.
 - `version` (string): plugin version (informational).
+
+### `providerAuthChoices` shape
+
+Each entry can declare:
+
+- `provider`: provider id
+- `method`: auth method id
+- `choiceId`: stable onboarding/auth-choice id
+- `choiceLabel` / `choiceHint`: picker label + short hint
+- `groupId` / `groupLabel` / `groupHint`: grouped onboarding bucket metadata
+- `optionKey` / `cliFlag` / `cliOption` / `cliDescription`: optional one-flag
+  CLI wiring for simple auth flows such as API keys
+
+Example:
+
+```json
+{
+  "providerAuthChoices": [
+    {
+      "provider": "openrouter",
+      "method": "api-key",
+      "choiceId": "openrouter-api-key",
+      "choiceLabel": "OpenRouter API key",
+      "groupId": "openrouter",
+      "groupLabel": "OpenRouter",
+      "optionKey": "openrouterApiKey",
+      "cliFlag": "--openrouter-api-key",
+      "cliOption": "--openrouter-api-key <key>",
+      "cliDescription": "OpenRouter API key"
+    }
+  ]
+}
+```
 
 ## JSON Schema requirements
 
@@ -63,9 +121,15 @@ Optional keys:
 
 ## Notes
 
-- The manifest is **required for all plugins**, including local filesystem loads.
+- The manifest is **required for native OpenClaw plugins**, including local filesystem loads.
 - Runtime still loads the plugin module separately; the manifest is only for
   discovery + validation.
+- `providerAuthEnvVars` is the cheap metadata path for auth probes, env-marker
+  validation, and similar provider-auth surfaces that should not boot plugin
+  runtime just to inspect env names.
+- `providerAuthChoices` is the cheap metadata path for auth-choice pickers,
+  `--auth-choice` resolution, preferred-provider mapping, and simple onboarding
+  CLI flag registration before provider runtime loads.
 - Exclusive plugin kinds are selected through `plugins.slots.*`.
   - `kind: "memory"` is selected by `plugins.slots.memory`.
   - `kind: "context-engine"` is selected by `plugins.slots.contextEngine`

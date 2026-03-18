@@ -1,32 +1,47 @@
-import { createWhatsAppLoginTool } from "../../channels/plugins/agent-tools/whatsapp-login.js";
-import { getActiveWebListener } from "../../web/active-listener.js";
+import { getActiveWebListener } from "../../../extensions/whatsapp/src/active-listener.js";
 import {
   getWebAuthAgeMs,
   logoutWeb,
   logWebSelfId,
   readWebSelfId,
   webAuthExists,
-} from "../../web/auth-store.js";
+} from "../../../extensions/whatsapp/src/auth-store.js";
+import { createLazyRuntimeMethod, createLazyRuntimeSurface } from "../../shared/lazy-runtime.js";
+import { createRuntimeWhatsAppLoginTool } from "./runtime-whatsapp-login-tool.js";
 import type { PluginRuntime } from "./types.js";
 
-const sendMessageWhatsAppLazy: PluginRuntime["channel"]["whatsapp"]["sendMessageWhatsApp"] = async (
-  ...args
-) => {
-  const { sendMessageWhatsApp } = await loadWebOutbound();
-  return sendMessageWhatsApp(...args);
-};
+type RuntimeWhatsAppOutbound =
+  typeof import("./runtime-whatsapp-outbound.runtime.js").runtimeWhatsAppOutbound;
+type RuntimeWhatsAppLogin =
+  typeof import("./runtime-whatsapp-login.runtime.js").runtimeWhatsAppLogin;
 
-const sendPollWhatsAppLazy: PluginRuntime["channel"]["whatsapp"]["sendPollWhatsApp"] = async (
-  ...args
-) => {
-  const { sendPollWhatsApp } = await loadWebOutbound();
-  return sendPollWhatsApp(...args);
-};
+const loadWebOutbound = createLazyRuntimeSurface(
+  () => import("./runtime-whatsapp-outbound.runtime.js"),
+  ({ runtimeWhatsAppOutbound }) => runtimeWhatsAppOutbound,
+);
 
-const loginWebLazy: PluginRuntime["channel"]["whatsapp"]["loginWeb"] = async (...args) => {
-  const { loginWeb } = await loadWebLogin();
-  return loginWeb(...args);
-};
+const loadWebLogin = createLazyRuntimeSurface(
+  () => import("./runtime-whatsapp-login.runtime.js"),
+  ({ runtimeWhatsAppLogin }) => runtimeWhatsAppLogin,
+);
+
+const sendMessageWhatsAppLazy = createLazyRuntimeMethod<
+  RuntimeWhatsAppOutbound,
+  Parameters<PluginRuntime["channel"]["whatsapp"]["sendMessageWhatsApp"]>,
+  ReturnType<PluginRuntime["channel"]["whatsapp"]["sendMessageWhatsApp"]>
+>(loadWebOutbound, (runtimeWhatsAppOutbound) => runtimeWhatsAppOutbound.sendMessageWhatsApp);
+
+const sendPollWhatsAppLazy = createLazyRuntimeMethod<
+  RuntimeWhatsAppOutbound,
+  Parameters<PluginRuntime["channel"]["whatsapp"]["sendPollWhatsApp"]>,
+  ReturnType<PluginRuntime["channel"]["whatsapp"]["sendPollWhatsApp"]>
+>(loadWebOutbound, (runtimeWhatsAppOutbound) => runtimeWhatsAppOutbound.sendPollWhatsApp);
+
+const loginWebLazy = createLazyRuntimeMethod<
+  RuntimeWhatsAppLogin,
+  Parameters<PluginRuntime["channel"]["whatsapp"]["loginWeb"]>,
+  ReturnType<PluginRuntime["channel"]["whatsapp"]["loginWeb"]>
+>(loadWebLogin, (runtimeWhatsAppLogin) => runtimeWhatsAppLogin.loginWeb);
 
 const startWebLoginWithQrLazy: PluginRuntime["channel"]["whatsapp"]["startWebLoginWithQr"] = async (
   ...args
@@ -55,27 +70,16 @@ const handleWhatsAppActionLazy: PluginRuntime["channel"]["whatsapp"]["handleWhat
     return handleWhatsAppAction(...args);
   };
 
-let webLoginQrPromise: Promise<typeof import("../../web/login-qr.js")> | null = null;
+let webLoginQrPromise: Promise<
+  typeof import("../../../extensions/whatsapp/src/login-qr.js")
+> | null = null;
 let webChannelPromise: Promise<typeof import("../../channels/web/index.js")> | null = null;
-let webOutboundPromise: Promise<typeof import("./runtime-whatsapp-outbound.runtime.js")> | null =
-  null;
-let webLoginPromise: Promise<typeof import("./runtime-whatsapp-login.runtime.js")> | null = null;
 let whatsappActionsPromise: Promise<
   typeof import("../../agents/tools/whatsapp-actions.js")
 > | null = null;
 
-function loadWebOutbound() {
-  webOutboundPromise ??= import("./runtime-whatsapp-outbound.runtime.js");
-  return webOutboundPromise;
-}
-
-function loadWebLogin() {
-  webLoginPromise ??= import("./runtime-whatsapp-login.runtime.js");
-  return webLoginPromise;
-}
-
 function loadWebLoginQr() {
-  webLoginQrPromise ??= import("../../web/login-qr.js");
+  webLoginQrPromise ??= import("../../../extensions/whatsapp/src/login-qr.js");
   return webLoginQrPromise;
 }
 
@@ -104,6 +108,6 @@ export function createRuntimeWhatsApp(): PluginRuntime["channel"]["whatsapp"] {
     waitForWebLogin: waitForWebLoginLazy,
     monitorWebChannel: monitorWebChannelLazy,
     handleWhatsAppAction: handleWhatsAppActionLazy,
-    createLoginTool: createWhatsAppLoginTool,
+    createLoginTool: createRuntimeWhatsAppLoginTool,
   };
 }

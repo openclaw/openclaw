@@ -538,8 +538,6 @@ public struct AgentParams: Codable, Sendable {
     public let inputprovenance: [String: AnyCodable]?
     public let idempotencykey: String
     public let label: String?
-    public let spawnedby: String?
-    public let workspacedir: String?
 
     public init(
         message: String,
@@ -566,9 +564,7 @@ public struct AgentParams: Codable, Sendable {
         internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
-        label: String?,
-        spawnedby: String?,
-        workspacedir: String?)
+        label: String?)
     {
         self.message = message
         self.agentid = agentid
@@ -595,8 +591,6 @@ public struct AgentParams: Codable, Sendable {
         self.inputprovenance = inputprovenance
         self.idempotencykey = idempotencykey
         self.label = label
-        self.spawnedby = spawnedby
-        self.workspacedir = workspacedir
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -625,8 +619,6 @@ public struct AgentParams: Codable, Sendable {
         case inputprovenance = "inputProvenance"
         case idempotencykey = "idempotencyKey"
         case label
-        case spawnedby = "spawnedBy"
-        case workspacedir = "workspaceDir"
     }
 }
 
@@ -1114,6 +1106,7 @@ public struct PushTestResult: Codable, Sendable {
     public let tokensuffix: String
     public let topic: String
     public let environment: String
+    public let transport: String
 
     public init(
         ok: Bool,
@@ -1122,7 +1115,8 @@ public struct PushTestResult: Codable, Sendable {
         reason: String?,
         tokensuffix: String,
         topic: String,
-        environment: String)
+        environment: String,
+        transport: String)
     {
         self.ok = ok
         self.status = status
@@ -1131,6 +1125,7 @@ public struct PushTestResult: Codable, Sendable {
         self.tokensuffix = tokensuffix
         self.topic = topic
         self.environment = environment
+        self.transport = transport
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1141,6 +1136,7 @@ public struct PushTestResult: Codable, Sendable {
         case tokensuffix = "tokenSuffix"
         case topic
         case environment
+        case transport
     }
 }
 
@@ -1326,6 +1322,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let label: AnyCodable?
     public let thinkinglevel: AnyCodable?
+    public let fastmode: AnyCodable?
     public let verboselevel: AnyCodable?
     public let reasoninglevel: AnyCodable?
     public let responseusage: AnyCodable?
@@ -1336,7 +1333,10 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execnode: AnyCodable?
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
+    public let spawnedworkspacedir: AnyCodable?
     public let spawndepth: AnyCodable?
+    public let subagentrole: AnyCodable?
+    public let subagentcontrolscope: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
 
@@ -1344,6 +1344,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         key: String,
         label: AnyCodable?,
         thinkinglevel: AnyCodable?,
+        fastmode: AnyCodable?,
         verboselevel: AnyCodable?,
         reasoninglevel: AnyCodable?,
         responseusage: AnyCodable?,
@@ -1354,13 +1355,17 @@ public struct SessionsPatchParams: Codable, Sendable {
         execnode: AnyCodable?,
         model: AnyCodable?,
         spawnedby: AnyCodable?,
+        spawnedworkspacedir: AnyCodable?,
         spawndepth: AnyCodable?,
+        subagentrole: AnyCodable?,
+        subagentcontrolscope: AnyCodable?,
         sendpolicy: AnyCodable?,
         groupactivation: AnyCodable?)
     {
         self.key = key
         self.label = label
         self.thinkinglevel = thinkinglevel
+        self.fastmode = fastmode
         self.verboselevel = verboselevel
         self.reasoninglevel = reasoninglevel
         self.responseusage = responseusage
@@ -1371,7 +1376,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execnode = execnode
         self.model = model
         self.spawnedby = spawnedby
+        self.spawnedworkspacedir = spawnedworkspacedir
         self.spawndepth = spawndepth
+        self.subagentrole = subagentrole
+        self.subagentcontrolscope = subagentcontrolscope
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
     }
@@ -1380,6 +1388,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case key
         case label
         case thinkinglevel = "thinkingLevel"
+        case fastmode = "fastMode"
         case verboselevel = "verboseLevel"
         case reasoninglevel = "reasoningLevel"
         case responseusage = "responseUsage"
@@ -1390,7 +1399,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execnode = "execNode"
         case model
         case spawnedby = "spawnedBy"
+        case spawnedworkspacedir = "spawnedWorkspaceDir"
         case spawndepth = "spawnDepth"
+        case subagentrole = "subagentRole"
+        case subagentcontrolscope = "subagentControlScope"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
     }
@@ -3046,7 +3058,7 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
 
 public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
-    public let command: String
+    public let command: String?
     public let commandargv: [String]?
     public let systemrunplan: [String: AnyCodable]?
     public let env: [String: AnyCodable]?
@@ -3067,7 +3079,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
 
     public init(
         id: String?,
-        command: String,
+        command: String?,
         commandargv: [String]?,
         systemrunplan: [String: AnyCodable]?,
         env: [String: AnyCodable]?,

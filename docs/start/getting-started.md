@@ -19,7 +19,7 @@ Docs: [Dashboard](/web/dashboard) and [Control UI](/web/control-ui).
 
 ## Prereqs
 
-- Node 22 or newer
+- Node 24 recommended (Node 22 LTS, currently `22.16+`, still supported for compatibility)
 
 <Tip>
 Check your Node version with `node --version` if you are unsure.
@@ -52,13 +52,13 @@ Check your Node version with `node --version` if you are unsure.
     </Note>
 
   </Step>
-  <Step title="Run the onboarding wizard">
+  <Step title="Run onboarding">
     ```bash
     openclaw onboard --install-daemon
     ```
 
-    The wizard configures auth, gateway settings, and optional channels.
-    See [Onboarding Wizard](/start/wizard) for details.
+    Onboarding configures auth, gateway settings, and optional channels.
+    See [Onboarding (CLI)](/start/wizard) for details.
 
   </Step>
   <Step title="Check the Gateway">
@@ -114,8 +114,8 @@ Full environment variable reference: [Environment vars](/help/environment).
 ## Go deeper
 
 <Columns>
-  <Card title="Onboarding Wizard (details)" href="/start/wizard">
-    Full CLI wizard reference and advanced options.
+  <Card title="Onboarding (CLI)" href="/start/wizard">
+    Full CLI onboarding reference and advanced options.
   </Card>
   <Card title="macOS app onboarding" href="/start/onboarding">
     First run flow for the macOS app.

@@ -3,8 +3,8 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
+import type { StickerMetadata } from "../plugin-sdk/telegram.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
-import type { StickerMetadata } from "../telegram/bot/types.js";
 import type { InternalMessageChannel } from "../utils/message-channel.js";
 import type { CommandArgs } from "./commands-registry.types.js";
 
@@ -132,6 +132,8 @@ export type MsgContext = {
   Provider?: string;
   /** Provider surface label (e.g. discord, slack). Prefer this over `Provider` when available. */
   Surface?: string;
+  /** Platform bot username when command mentions should be normalized. */
+  BotUsername?: string;
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";

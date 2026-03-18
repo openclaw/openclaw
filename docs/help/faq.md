@@ -36,7 +36,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I install OpenClaw on a VPS?](#how-do-i-install-openclaw-on-a-vps)
   - [Where are the cloud/VPS install guides?](#where-are-the-cloudvps-install-guides)
   - [Can I ask OpenClaw to update itself?](#can-i-ask-openclaw-to-update-itself)
-  - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
+  - [What does onboarding actually do?](#what-does-onboarding-actually-do)
   - [Do I need a Claude or OpenAI subscription to run this?](#do-i-need-a-claude-or-openai-subscription-to-run-this)
   - [Can I use Claude Max subscription without an API key](#can-i-use-claude-max-subscription-without-an-api-key)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setuptoken-auth-work)
@@ -80,7 +80,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can OpenClaw run tasks on a schedule or continuously in the background?](#can-openclaw-run-tasks-on-a-schedule-or-continuously-in-the-background)
   - [Can I run Apple macOS-only skills from Linux?](#can-i-run-apple-macos-only-skills-from-linux)
   - [Do you have a Notion or HeyGen integration?](#do-you-have-a-notion-or-heygen-integration)
-  - [How do I install the Chrome extension for browser takeover?](#how-do-i-install-the-chrome-extension-for-browser-takeover)
+  - [How do I use my existing signed-in Chrome with OpenClaw?](#how-do-i-use-my-existing-signed-in-chrome-with-openclaw)
 - [Sandboxing and memory](#sandboxing-and-memory)
   - [Is there a dedicated sandboxing doc?](#is-there-a-dedicated-sandboxing-doc)
   - [How do I bind a host folder into the sandbox?](#how-do-i-bind-a-host-folder-into-the-sandbox)
@@ -179,7 +179,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I closed my terminal on Windows - how do I restart OpenClaw?](#i-closed-my-terminal-on-windows-how-do-i-restart-openclaw)
   - [The Gateway is up but replies never arrive. What should I check?](#the-gateway-is-up-but-replies-never-arrive-what-should-i-check)
   - ["Disconnected from gateway: no reason" - what now?](#disconnected-from-gateway-no-reason-what-now)
-  - [Telegram setMyCommands fails with network errors. What should I check?](#telegram-setmycommands-fails-with-network-errors-what-should-i-check)
+  - [Telegram setMyCommands fails. What should I check?](#telegram-setmycommands-fails-what-should-i-check)
   - [TUI shows no output. What should I check?](#tui-shows-no-output-what-should-i-check)
   - [How do I completely stop then start the Gateway?](#how-do-i-completely-stop-then-start-the-gateway)
   - [ELI5: `openclaw gateway restart` vs `openclaw gateway`](#eli5-openclaw-gateway-restart-vs-openclaw-gateway)
@@ -317,7 +317,7 @@ Install docs: [Install](/install), [Installer flags](/install/installer), [Updat
 
 ### What's the recommended way to install and set up OpenClaw
 
-The repo recommends running from source and using the onboarding wizard:
+The repo recommends running from source and using onboarding:
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -627,7 +627,7 @@ More detail: [Install](/install) and [Installer flags](/install/installer).
 
 ### How do I install OpenClaw on Linux
 
-Short answer: follow the Linux guide, then run the onboarding wizard.
+Short answer: follow the Linux guide, then run onboarding.
 
 - Linux quick path + service install: [Linux](/platforms/linux).
 - Full walkthrough: [Getting Started](/start/getting-started).
@@ -685,7 +685,7 @@ openclaw gateway restart
 
 Docs: [Update](/cli/update), [Updating](/install/updating).
 
-### What does the onboarding wizard actually do
+### What does onboarding actually do
 
 `openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
 
@@ -723,7 +723,7 @@ If you want the clearest and safest supported path for production, use an Anthro
 
 ### How does Anthropic setuptoken auth work
 
-`claude setup-token` generates a **token string** via the Claude Code CLI (it is not available in the web console). You can run it on **any machine**. Choose **Anthropic token (paste setup-token)** in the wizard or paste it with `openclaw models auth paste-token --provider anthropic`. The token is stored as an auth profile for the **anthropic** provider and used like an API key (no auto-refresh). More detail: [OAuth](/concepts/oauth).
+`claude setup-token` generates a **token string** via the Claude Code CLI (it is not available in the web console). You can run it on **any machine**. Choose **Anthropic token (paste setup-token)** in onboarding or paste it with `openclaw models auth paste-token --provider anthropic`. The token is stored as an auth profile for the **anthropic** provider and used like an API key (no auto-refresh). More detail: [OAuth](/concepts/oauth).
 
 ### Where do I find an Anthropic setuptoken
 
@@ -733,7 +733,7 @@ It is **not** in the Anthropic Console. The setup-token is generated by the **Cl
 claude setup-token
 ```
 
-Copy the token it prints, then choose **Anthropic token (paste setup-token)** in the wizard. If you want to run it on the gateway host, use `openclaw models auth setup-token --provider anthropic`. If you ran `claude setup-token` elsewhere, paste it on the gateway host with `openclaw models auth paste-token --provider anthropic`. See [Anthropic](/providers/anthropic).
+Copy the token it prints, then choose **Anthropic token (paste setup-token)** in onboarding. If you want to run it on the gateway host, use `openclaw models auth setup-token --provider anthropic`. If you ran `claude setup-token` elsewhere, paste it on the gateway host with `openclaw models auth paste-token --provider anthropic`. See [Anthropic](/providers/anthropic).
 
 ### Do you support Claude subscription auth (Claude Pro or Max)
 
@@ -767,15 +767,15 @@ Yes - via pi-ai's **Amazon Bedrock (Converse)** provider with **manual config**.
 
 ### How does Codex auth work
 
-OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). The wizard can run the OAuth flow and will set the default model to `openai-codex/gpt-5.4` when appropriate. See [Model providers](/concepts/model-providers) and [Wizard](/start/wizard).
+OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Onboarding can run the OAuth flow and will set the default model to `openai-codex/gpt-5.4` when appropriate. See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
 
 ### Do you support OpenAI subscription auth Codex OAuth
 
 Yes. OpenClaw fully supports **OpenAI Code (Codex) subscription OAuth**.
 OpenAI explicitly allows subscription OAuth usage in external tools/workflows
-like OpenClaw. The onboarding wizard can run the OAuth flow for you.
+like OpenClaw. Onboarding can run the OAuth flow for you.
 
-See [OAuth](/concepts/oauth), [Model providers](/concepts/model-providers), and [Wizard](/start/wizard).
+See [OAuth](/concepts/oauth), [Model providers](/concepts/model-providers), and [Onboarding (CLI)](/start/wizard).
 
 ### How do I set up Gemini CLI OAuth
 
@@ -783,7 +783,7 @@ Gemini CLI uses a **plugin auth flow**, not a client id or secret in `openclaw.j
 
 Steps:
 
-1. Enable the plugin: `openclaw plugins enable google-gemini-cli-auth`
+1. Enable the plugin: `openclaw plugins enable google`
 2. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
 
 This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
@@ -844,7 +844,7 @@ without WhatsApp/Telegram.
 
 `channels.telegram.allowFrom` is **the human sender's Telegram user ID** (numeric). It is not the bot username.
 
-The onboarding wizard accepts `@username` input and resolves it to a numeric ID, but OpenClaw authorization uses numeric IDs only.
+Onboarding accepts `@username` input and resolves it to a numeric ID, but OpenClaw authorization uses numeric IDs only.
 
 Safer (no third-party bot):
 
@@ -1214,22 +1214,23 @@ clawhub update --all
 
 ClawHub installs into `./skills` under your current directory (or falls back to your configured OpenClaw workspace); OpenClaw treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawHub](/tools/clawhub).
 
-### How do I install the Chrome extension for browser takeover
+### How do I use my existing signed-in Chrome with OpenClaw
 
-Use the built-in installer, then load the unpacked extension in Chrome:
+Use the built-in `user` browser profile, which attaches through Chrome DevTools MCP:
 
 ```bash
-openclaw browser extension install
-openclaw browser extension path
+openclaw browser --browser-profile user tabs
+openclaw browser --browser-profile user snapshot
 ```
 
-Then Chrome → `chrome://extensions` → enable "Developer mode" → "Load unpacked" → pick that folder.
+If you want a custom name, create an explicit MCP profile:
 
-Full guide (including remote Gateway + security notes): [Chrome extension](/tools/chrome-extension)
+```bash
+openclaw browser create-profile --name chrome-live --driver existing-session
+openclaw browser --browser-profile chrome-live tabs
+```
 
-If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need anything extra.
-If the Gateway runs elsewhere, run a node host on the browser machine so the Gateway can proxy browser actions.
-You still need to click the extension button on the tab you want to control (it doesn't auto-attach).
+This path is host-local. If the Gateway runs elsewhere, either run a node host on the browser machine or use remote CDP instead.
 
 ## Sandboxing and memory
 
@@ -1358,7 +1359,8 @@ Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and confi
 These files live in the **agent workspace**, not `~/.openclaw`.
 
 - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
-  `MEMORY.md` (or `memory.md`), `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+  `MEMORY.md` (or legacy fallback `memory.md` when `MEMORY.md` is absent),
+  `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
 - **State dir (`~/.openclaw`)**: config, credentials, auth profiles, sessions, logs,
   and shared skills (`~/.openclaw/skills`).
 
@@ -1452,7 +1454,8 @@ Non-loopback binds **require auth**. Configure `gateway.auth.mode` + `gateway.au
 Notes:
 
 - `gateway.remote.token` / `.password` do **not** enable local gateway auth by themselves.
-- Local call paths can use `gateway.remote.*` as fallback when `gateway.auth.*` is unset.
+- Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
+- If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - The Control UI authenticates via `connect.params.auth.token` (stored in app/UI settings). Avoid putting tokens in URLs.
 
 ### Why do I need a token on localhost now
@@ -1489,10 +1492,16 @@ Set `cli.banner.taglineMode` in config:
 
 ### How do I enable web search and web fetch
 
-`web_fetch` works without an API key. `web_search` requires a Brave Search API
-key. **Recommended:** run `openclaw configure --section web` to store it in
-`tools.web.search.apiKey`. Environment alternative: set `BRAVE_API_KEY` for the
-Gateway process.
+`web_fetch` works without an API key. `web_search` requires a key for your
+selected provider (Brave, Gemini, Grok, Kimi, or Perplexity).
+**Recommended:** run `openclaw configure --section web` and choose a provider.
+Environment alternatives:
+
+- Brave: `BRAVE_API_KEY`
+- Gemini: `GEMINI_API_KEY`
+- Grok: `XAI_API_KEY`
+- Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
+- Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
 
 ```json5
 {
@@ -1500,6 +1509,7 @@ Gateway process.
     web: {
       search: {
         enabled: true,
+        provider: "brave",
         apiKey: "BRAVE_API_KEY_HERE",
         maxResults: 5,
       },
@@ -1656,13 +1666,12 @@ setup is an always-on host plus your laptop as a node.
 - **No inbound SSH required.** Nodes connect out to the Gateway WebSocket and use device pairing.
 - **Safer execution controls.** `system.run` is gated by node allowlists/approvals on that laptop.
 - **More device tools.** Nodes expose `canvas`, `camera`, and `screen` in addition to `system.run`.
-- **Local browser automation.** Keep the Gateway on a VPS, but run Chrome locally and relay control
-  with the Chrome extension + a node host on the laptop.
+- **Local browser automation.** Keep the Gateway on a VPS, but run Chrome locally through a node host on the laptop, or attach to local Chrome on the host via Chrome MCP.
 
 SSH is fine for ad-hoc shell access, but nodes are simpler for ongoing agent workflows and
 device automation.
 
-Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Chrome extension](/tools/chrome-extension).
+Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Browser](/tools/browser).
 
 ### Should I install on a second laptop or just add a node
 
@@ -1892,7 +1901,7 @@ Non-interactive full reset:
 openclaw reset --scope full --yes --non-interactive
 ```
 
-Then re-run onboarding:
+Then re-run setup:
 
 ```bash
 openclaw onboard --install-daemon
@@ -1900,7 +1909,7 @@ openclaw onboard --install-daemon
 
 Notes:
 
-- The onboarding wizard also offers **Reset** if it sees an existing config. See [Wizard](/start/wizard).
+- Onboarding also offers **Reset** if it sees an existing config. See [Onboarding (CLI)](/start/wizard).
 - If you used profiles (`--profile` / `OPENCLAW_PROFILE`), reset each state dir (defaults are `~/.openclaw-<profile>`).
 - Dev reset: `openclaw gateway --dev --reset` (dev-only; wipes dev config + credentials + sessions + workspace).
 
@@ -2030,18 +2039,18 @@ Yes. Use **Multi-Agent Routing** to run multiple isolated agents and route inbou
 channel/account/peer. Slack is supported as a channel and can be bound to specific agents.
 
 Browser access is powerful but not "do anything a human can" - anti-bot, CAPTCHAs, and MFA can
-still block automation. For the most reliable browser control, use the Chrome extension relay
-on the machine that runs the browser (and keep the Gateway anywhere).
+still block automation. For the most reliable browser control, use local Chrome MCP on the host,
+or use CDP on the machine that actually runs the browser.
 
 Best-practice setup:
 
 - Always-on Gateway host (VPS/Mac mini).
 - One agent per role (bindings).
 - Slack channel(s) bound to those agents.
-- Local browser via extension relay (or a node) when needed.
+- Local browser via Chrome MCP or a node when needed.
 
 Docs: [Multi-Agent Routing](/concepts/multi-agent), [Slack](/channels/slack),
-[Browser](/tools/browser), [Chrome extension](/tools/chrome-extension), [Nodes](/nodes).
+[Browser](/tools/browser), [Nodes](/nodes).
 
 ## Models: defaults, selection, aliases, switching
 
@@ -2076,8 +2085,21 @@ More context: [Models](/concepts/models).
 
 ### Can I use selfhosted models llamacpp vLLM Ollama
 
-Yes. If your local server exposes an OpenAI-compatible API, you can point a
-custom provider at it. Ollama is supported directly and is the easiest path.
+Yes. Ollama is the easiest path for local models.
+
+Quickest setup:
+
+1. Install Ollama from `https://ollama.com/download`
+2. Pull a local model such as `ollama pull glm-4.7-flash`
+3. If you want Ollama Cloud too, run `ollama signin`
+4. Run `openclaw onboard` and choose `Ollama`
+5. Pick `Local` or `Cloud + Local`
+
+Notes:
+
+- `Cloud + Local` gives you Ollama Cloud models plus your local Ollama models
+- cloud models such as `kimi-k2.5:cloud` do not need a local pull
+- for manual switching, use `openclaw models list` and `openclaw models set ollama/<model>`
 
 Security note: smaller or heavily quantized models are more vulnerable to prompt
 injection. We strongly recommend **large models** for any bot that can use tools.
@@ -2505,6 +2527,7 @@ Your gateway is running with auth enabled (`gateway.auth.*`), but the UI is not 
 Facts (from code):
 
 - The Control UI keeps the token in `sessionStorage` for the current browser tab session and selected gateway URL, so same-tab refreshes keep working without restoring long-lived localStorage token persistence.
+- On `AUTH_TOKEN_MISMATCH`, trusted clients can attempt one bounded retry with a cached device token when the gateway returns retry hints (`canRetryWithDeviceToken=true`, `recommendedNextStep=retry_with_device_token`).
 
 Fix:
 
@@ -2513,6 +2536,9 @@ Fix:
 - If remote, tunnel first: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`.
 - Set `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) on the gateway host.
 - In the Control UI settings, paste the same token.
+- If mismatch persists after the one retry, rotate/re-approve the paired device token:
+  - `openclaw devices list`
+  - `openclaw devices rotate --device <id> --role operator`
 - Still stuck? Run `openclaw status --all` and follow [Troubleshooting](/gateway/troubleshooting). See [Dashboard](/web/dashboard) for auth details.
 
 ### I set gatewaybind tailnet but it can't bind nothing listens
@@ -2685,7 +2711,7 @@ openclaw logs --follow
 
 Docs: [Dashboard](/web/dashboard), [Remote access](/gateway/remote), [Troubleshooting](/gateway/troubleshooting).
 
-### Telegram setMyCommands fails with network errors What should I check
+### Telegram setMyCommands fails What should I check
 
 Start with logs and channel status:
 
@@ -2694,7 +2720,11 @@ openclaw channels status
 openclaw channels logs --channel telegram
 ```
 
-If you are on a VPS or behind a proxy, confirm outbound HTTPS is allowed and DNS works.
+Then match the error:
+
+- `BOT_COMMANDS_TOO_MUCH`: the Telegram menu has too many entries. OpenClaw already trims to the Telegram limit and retries with fewer commands, but some menu entries still need to be dropped. Reduce plugin/skill/custom commands, or disable `channels.telegram.commands.native` if you do not need the menu.
+- `TypeError: fetch failed`, `Network request for 'setMyCommands' failed!`, or similar network errors: if you are on a VPS or behind a proxy, confirm outbound HTTPS is allowed and DNS works for `api.telegram.org`.
+
 If the Gateway is remote, make sure you are looking at logs on the Gateway host.
 
 Docs: [Telegram](/channels/telegram), [Channel troubleshooting](/channels/troubleshooting).

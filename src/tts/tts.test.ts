@@ -2,25 +2,31 @@ import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
-import { resolveModel } from "../agents/pi-embedded-runner/model.js";
+import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
-vi.mock("@mariozechner/pi-ai", () => ({
-  completeSimple: vi.fn(),
-  // Some auth helpers import oauth provider metadata at module load time.
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  return {
+    ...original,
+    completeSimple: vi.fn(),
+  };
+});
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthProviders: () => [],
   getOAuthApiKey: vi.fn(async () => null),
 }));
 
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModel: vi.fn((provider: string, modelId: string) => ({
+function createResolvedModel(provider: string, modelId: string, api = "openai-completions") {
+  return {
     model: {
       provider,
       id: modelId,
       name: modelId,
-      api: "openai-completions",
+      api,
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -29,7 +35,16 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
     },
     authStorage: { profiles: {} },
     modelRegistry: { find: vi.fn() },
-  })),
+  };
+}
+
+vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+  resolveModel: vi.fn((provider: string, modelId: string) =>
+    createResolvedModel(provider, modelId),
+  ),
+  resolveModelAsync: vi.fn(async (provider: string, modelId: string) =>
+    createResolvedModel(provider, modelId),
+  ),
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -54,6 +69,7 @@ const {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   parseTtsDirectives,
+  resolveOpenAITtsInstructions,
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
@@ -83,6 +99,22 @@ const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMe
   stopReason: "stop",
   timestamp: Date.now(),
 });
+
+function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawConfig {
+  return {
+    messages: {
+      tts: {
+        provider: "openai",
+        openai: {
+          apiKey: "test-key",
+          model,
+          voice: "alloy",
+          instructions: "Speak warmly",
+        },
+      },
+    },
+  };
+}
 
 describe("tts", () => {
   beforeEach(() => {
@@ -163,6 +195,20 @@ describe("tts", () => {
 
     it("treats the default endpoint with trailing slash as the default endpoint", () => {
       expect(isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/")).toBe(false);
+    });
+  });
+
+  describe("resolveOpenAITtsInstructions", () => {
+    it("keeps instructions only for gpt-4o-mini-tts variants", () => {
+      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", " Speak warmly ")).toBe(
+        "Speak warmly",
+      );
+      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts-2025-12-15", "Speak warmly")).toBe(
+        "Speak warmly",
+      );
+      expect(resolveOpenAITtsInstructions("tts-1", "Speak warmly")).toBeUndefined();
+      expect(resolveOpenAITtsInstructions("tts-1-hd", "Speak warmly")).toBeUndefined();
+      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", "   ")).toBeUndefined();
     });
   });
 
@@ -265,7 +311,7 @@ describe("tts", () => {
       expect(result.overrides.elevenlabs?.voiceSettings?.speed).toBe(1.1);
     });
 
-    it("accepts edge as provider override", () => {
+    it("accepts edge as a legacy microsoft provider override", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input = "Hello [[tts:provider=edge]] world";
       const result = parseTtsDirectives(input, policy);
@@ -316,20 +362,43 @@ describe("tts", () => {
   });
 
   describe("summarizeText", () => {
+    let summarizeTextForTest: typeof summarizeText;
+    let resolveTtsConfigForTest: typeof resolveTtsConfig;
+    let completeSimpleForTest: typeof completeSimple;
+    let getApiKeyForModelForTest: typeof getApiKeyForModel;
+    let resolveModelAsyncForTest: typeof resolveModelAsync;
+    let ensureCustomApiRegisteredForTest: typeof ensureCustomApiRegistered;
+
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
     };
-    const baseConfig = resolveTtsConfig(baseCfg);
+
+    beforeEach(async () => {
+      vi.resetModules();
+      ({ completeSimple: completeSimpleForTest } = await import("@mariozechner/pi-ai"));
+      ({ getApiKeyForModel: getApiKeyForModelForTest } = await import("../agents/model-auth.js"));
+      ({ resolveModelAsync: resolveModelAsyncForTest } =
+        await import("../agents/pi-embedded-runner/model.js"));
+      ({ ensureCustomApiRegistered: ensureCustomApiRegisteredForTest } =
+        await import("../agents/custom-api-registry.js"));
+      const ttsModule = await import("./tts.js");
+      summarizeTextForTest = ttsModule._test.summarizeText;
+      resolveTtsConfigForTest = ttsModule.resolveTtsConfig;
+      vi.mocked(completeSimpleForTest).mockResolvedValue(
+        mockAssistantMessage([{ type: "text", text: "Summary" }]),
+      );
+    });
 
     it("summarizes text and returns result with metrics", async () => {
       const mockSummary = "This is a summarized version of the text.";
-      vi.mocked(completeSimple).mockResolvedValue(
+      const baseConfig = resolveTtsConfigForTest(baseCfg);
+      vi.mocked(completeSimpleForTest).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: mockSummary }]),
       );
 
       const longText = "A".repeat(2000);
-      const result = await summarizeText({
+      const result = await summarizeTextForTest({
         text: longText,
         targetLength: 1500,
         cfg: baseCfg,
@@ -341,11 +410,12 @@ describe("tts", () => {
       expect(result.inputLength).toBe(2000);
       expect(result.outputLength).toBe(mockSummary.length);
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-      expect(completeSimple).toHaveBeenCalledTimes(1);
+      expect(completeSimpleForTest).toHaveBeenCalledTimes(1);
     });
 
     it("calls the summary model with the expected parameters", async () => {
-      await summarizeText({
+      const baseConfig = resolveTtsConfigForTest(baseCfg);
+      await summarizeTextForTest({
         text: "Long text to summarize",
         targetLength: 500,
         cfg: baseCfg,
@@ -353,11 +423,11 @@ describe("tts", () => {
         timeoutMs: 30_000,
       });
 
-      const callArgs = vi.mocked(completeSimple).mock.calls[0];
+      const callArgs = vi.mocked(completeSimpleForTest).mock.calls[0];
       expect(callArgs?.[1]?.messages?.[0]?.role).toBe("user");
       expect(callArgs?.[2]?.maxTokens).toBe(250);
       expect(callArgs?.[2]?.temperature).toBe(0.3);
-      expect(getApiKeyForModel).toHaveBeenCalledTimes(1);
+      expect(getApiKeyForModelForTest).toHaveBeenCalledTimes(1);
     });
 
     it("uses summaryModel override when configured", async () => {
@@ -365,8 +435,8 @@ describe("tts", () => {
         agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
         messages: { tts: { summaryModel: "openai/gpt-4.1-mini" } },
       };
-      const config = resolveTtsConfig(cfg);
-      await summarizeText({
+      const config = resolveTtsConfigForTest(cfg);
+      await summarizeTextForTest({
         text: "Long text to summarize",
         targetLength: 500,
         cfg,
@@ -374,28 +444,25 @@ describe("tts", () => {
         timeoutMs: 30_000,
       });
 
-      expect(resolveModel).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
+      expect(resolveModelAsyncForTest).toHaveBeenCalledWith(
+        "openai",
+        "gpt-4.1-mini",
+        undefined,
+        cfg,
+      );
     });
 
     it("registers the Ollama api before direct summarization", async () => {
-      vi.mocked(resolveModel).mockReturnValue({
+      const baseConfig = resolveTtsConfigForTest(baseCfg);
+      vi.mocked(resolveModelAsyncForTest).mockResolvedValue({
+        ...createResolvedModel("ollama", "qwen3:8b", "ollama"),
         model: {
-          provider: "ollama",
-          id: "qwen3:8b",
-          name: "qwen3:8b",
-          api: "ollama",
+          ...createResolvedModel("ollama", "qwen3:8b", "ollama").model,
           baseUrl: "http://127.0.0.1:11434",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128000,
-          maxTokens: 8192,
         },
-        authStorage: { profiles: {} } as never,
-        modelRegistry: { find: vi.fn() } as never,
       } as never);
 
-      await summarizeText({
+      await summarizeTextForTest({
         text: "Long text to summarize",
         targetLength: 500,
         cfg: baseCfg,
@@ -403,10 +470,11 @@ describe("tts", () => {
         timeoutMs: 30_000,
       });
 
-      expect(ensureCustomApiRegistered).toHaveBeenCalledWith("ollama", expect.any(Function));
+      expect(ensureCustomApiRegisteredForTest).toHaveBeenCalledWith("ollama", expect.any(Function));
     });
 
     it("validates targetLength bounds", async () => {
+      const baseConfig = resolveTtsConfigForTest(baseCfg);
       const cases = [
         { targetLength: 99, shouldThrow: true },
         { targetLength: 100, shouldThrow: false },
@@ -414,7 +482,7 @@ describe("tts", () => {
         { targetLength: 10001, shouldThrow: true },
       ] as const;
       for (const testCase of cases) {
-        const call = summarizeText({
+        const call = summarizeTextForTest({
           text: "text",
           targetLength: testCase.targetLength,
           cfg: baseCfg,
@@ -432,6 +500,7 @@ describe("tts", () => {
     });
 
     it("throws when summary output is missing or empty", async () => {
+      const baseConfig = resolveTtsConfigForTest(baseCfg);
       const cases = [
         { name: "no summary blocks", message: mockAssistantMessage([]) },
         {
@@ -440,9 +509,9 @@ describe("tts", () => {
         },
       ] as const;
       for (const testCase of cases) {
-        vi.mocked(completeSimple).mockResolvedValue(testCase.message);
+        vi.mocked(completeSimpleForTest).mockResolvedValue(testCase.message);
         await expect(
-          summarizeText({
+          summarizeTextForTest({
             text: "text",
             targetLength: 500,
             cfg: baseCfg,
@@ -487,8 +556,8 @@ describe("tts", () => {
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
           },
-          prefsPath: "/tmp/tts-prefs-edge.json",
-          expected: "edge",
+          prefsPath: "/tmp/tts-prefs-microsoft.json",
+          expected: "microsoft",
         },
       ] as const;
 
@@ -499,6 +568,25 @@ describe("tts", () => {
           expect(provider).toBe(testCase.expected);
         });
       }
+    });
+  });
+
+  describe("resolveTtsConfig provider normalization", () => {
+    it("normalizes legacy edge provider ids to microsoft", () => {
+      const config = resolveTtsConfig({
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            provider: "edge",
+            edge: {
+              enabled: true,
+            },
+          },
+        },
+      });
+
+      expect(config.provider).toBe("microsoft");
+      expect(getTtsProvider(config, "/tmp/tts-prefs-normalized.json")).toBe("microsoft");
     });
   });
 
@@ -551,6 +639,51 @@ describe("tts", () => {
         const config = resolveTtsConfig(baseCfg);
         expect(config.openai.baseUrl).toBe("http://localhost:8880/v1");
       });
+    });
+  });
+
+  describe("textToSpeechTelephony – openai instructions", () => {
+    const withMockedTelephonyFetch = async (
+      run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
+    ) => {
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(2),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      try {
+        await run(fetchMock);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    };
+
+    async function expectTelephonyInstructions(
+      model: "tts-1" | "gpt-4o-mini-tts",
+      expectedInstructions: string | undefined,
+    ) {
+      await withMockedTelephonyFetch(async (fetchMock) => {
+        const result = await tts.textToSpeechTelephony({
+          text: "Hello there, friendly caller.",
+          cfg: createOpenAiTelephonyCfg(model),
+        });
+
+        expect(result.success).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(typeof init.body).toBe("string");
+        const body = JSON.parse(init.body as string) as Record<string, unknown>;
+        expect(body.instructions).toBe(expectedInstructions);
+      });
+    }
+
+    it("omits instructions for unsupported speech models", async () => {
+      await expectTelephonyInstructions("tts-1", undefined);
+    });
+
+    it("includes instructions for gpt-4o-mini-tts", async () => {
+      await expectTelephonyInstructions("gpt-4o-mini-tts", "Speak warmly");
     });
   });
 

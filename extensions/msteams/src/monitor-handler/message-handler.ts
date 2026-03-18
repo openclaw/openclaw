@@ -9,7 +9,7 @@ import {
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
   recordPendingHistoryEntryIfEnabled,
-  resolveControlCommandGate,
+  resolveDualTextControlCommandGate,
   resolveDefaultGroupPolicy,
   isDangerousNameMatchingEnabled,
   readStoreAllowFromForDmPolicy,
@@ -175,6 +175,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       teamName,
       conversationId,
       channelName,
+      allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
     const senderGroupPolicy = resolveSenderScopedGroupPolicy({
       groupPolicy,
@@ -296,18 +297,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       senderName,
       allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
-    const hasControlCommandInMessage = core.channel.text.hasControlCommand(text, cfg);
-    const commandGate = resolveControlCommandGate({
+    const { commandAuthorized, shouldBlock } = resolveDualTextControlCommandGate({
       useAccessGroups,
-      authorizers: [
-        { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-        { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
-      ],
-      allowTextCommands: true,
-      hasControlCommand: hasControlCommandInMessage,
+      primaryConfigured: commandDmAllowFrom.length > 0,
+      primaryAllowed: ownerAllowedForCommands,
+      secondaryConfigured: effectiveGroupAllowFrom.length > 0,
+      secondaryAllowed: groupAllowedForCommands,
+      hasControlCommand: core.channel.text.hasControlCommand(text, cfg),
     });
-    const commandAuthorized = commandGate.commandAuthorized;
-    if (commandGate.shouldBlock) {
+    if (shouldBlock) {
       logInboundDrop({
         log: logVerboseMessage,
         channel: "msteams",
