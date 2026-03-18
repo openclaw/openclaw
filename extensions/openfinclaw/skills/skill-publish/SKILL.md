@@ -76,6 +76,15 @@ Configure via:
 - Plugin config: `skillApiUrl`, `skillApiKey`
 - Environment: `SKILL_API_URL`, `SKILL_API_KEY`
 
+### ⚠️ API Key Security
+
+**IMPORTANT: Never expose your Hub API Key!**
+
+- The API Key (`fch_` prefix) is **only** for hub.openfinclaw.ai API authentication
+- **DO NOT** commit API Keys to Git repositories or share publicly
+- **DO NOT** expose real API Keys in public chats, screenshots, or code examples
+- If you suspect a Key has been leaked, regenerate it immediately in Hub settings
+
 ## Response fields
 
 ### skill_publish response

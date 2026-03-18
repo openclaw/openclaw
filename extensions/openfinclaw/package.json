@@ -1,6 +1,6 @@
 {
   "name": "@openfinclaw/openfinclaw",
-  "version": "0.0.6",
+  "version": "0.0.9",
   "description": "OpenFinClaw - Financial tools for OpenClaw: strategy builder, remote backtest",
   "keywords": [
     "backtest",
@@ -31,7 +31,11 @@
     "registry": "https://registry.npmjs.org"
   },
   "dependencies": {
-    "@sinclair/typebox": "^0.34.0"
+    "@sinclair/typebox": "^0.34.0",
+    "adm-zip": "^0.5.16"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8"
   },
   "openclaw": {
     "extensions": [
