@@ -18,29 +18,17 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
@@ -54,7 +42,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -69,9 +56,10 @@ import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.node.DeviceNotificationListenerService
+import androidx.compose.ui.unit.Dp
 
 @Composable
-fun SettingsSheet(viewModel: MainViewModel) {
+fun SettingsSheet(viewModel: MainViewModel, bottomPadding: Dp) {
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
   val instanceId by viewModel.instanceId.collectAsState()
@@ -351,13 +339,13 @@ fun SettingsSheet(viewModel: MainViewModel) {
   ) {
     LazyColumn(
       state = listState,
-      modifier =
-        Modifier
-          .fillMaxWidth()
-          .fillMaxHeight()
-          .imePadding()
-          .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)),
-      contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+      modifier = Modifier.fillMaxWidth().fillMaxHeight(),
+      contentPadding = PaddingValues(
+        start = 20.dp,
+        end = 20.dp,
+        top = 16.dp,
+        bottom = bottomPadding + 16.dp,
+      ),
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       // ── Node ──
@@ -758,8 +746,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
           )
         }
       }
-
-      item { Spacer(modifier = Modifier.height(24.dp)) }
     }
   }
 }

@@ -51,7 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.ui.mobileCardSurface
+import androidx.compose.ui.unit.Dp
 
 private enum class ConnectInputMode {
   SetupCode,
@@ -59,7 +59,7 @@ private enum class ConnectInputMode {
 }
 
 @Composable
-fun ConnectTabScreen(viewModel: MainViewModel) {
+fun ConnectTabScreen(viewModel: MainViewModel, bottomPadding: Dp) {
   val statusText by viewModel.statusText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
@@ -137,7 +137,14 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   val primaryLabel = if (isConnected) "Disconnect Gateway" else "Connect Gateway"
 
   Column(
-    modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
+    modifier = Modifier
+      .verticalScroll(rememberScrollState())
+      .padding(
+        start = 20.dp,
+        end = 20.dp,
+        top = 16.dp,
+        bottom = bottomPadding + 16.dp,
+      ),
     verticalArrangement = Arrangement.spacedBy(14.dp),
   ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {

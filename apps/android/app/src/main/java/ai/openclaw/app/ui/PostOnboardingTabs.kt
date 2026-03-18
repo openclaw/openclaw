@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -42,9 +41,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import ai.openclaw.app.MainViewModel
+import androidx.compose.ui.unit.coerceAtLeast
 
 private enum class HomeTab(
   val label: String,
@@ -89,10 +95,6 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       }
     }
 
-  val density = LocalDensity.current
-  val imeVisible = WindowInsets.ime.getBottom(density) > 0
-  val hideBottomTabBar = activeTab == HomeTab.Chat && imeVisible
-
   Scaffold(
     modifier = modifier,
     containerColor = Color.Transparent,
@@ -104,35 +106,41 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       )
     },
     bottomBar = {
-      if (!hideBottomTabBar) {
-        BottomTabBar(
-          activeTab = activeTab,
-          onSelect = { activeTab = it },
-        )
-      }
+      BottomTabBar(
+        activeTab = activeTab,
+        onSelect = { activeTab = it },
+      )
     },
   ) { innerPadding ->
+    val bottomPadding = innerPadding.calculateBottomPadding()
+    val paddingValues = PaddingValues(
+      top = innerPadding.calculateTopPadding(),
+      end = innerPadding.calculateEndPadding(LocalLayoutDirection.current),
+      start = innerPadding.calculateStartPadding(LocalLayoutDirection.current),
+      bottom = 0.dp,
+    )
+
     Box(
       modifier =
         Modifier
           .fillMaxSize()
-          .padding(innerPadding)
+          .padding(paddingValues)
           .consumeWindowInsets(innerPadding)
           .background(mobileBackgroundGradient),
     ) {
       when (activeTab) {
-        HomeTab.Connect -> ConnectTabScreen(viewModel = viewModel)
-        HomeTab.Chat -> ChatSheet(viewModel = viewModel)
-        HomeTab.Voice -> VoiceTabScreen(viewModel = viewModel)
-        HomeTab.Screen -> ScreenTabScreen(viewModel = viewModel)
-        HomeTab.Settings -> SettingsSheet(viewModel = viewModel)
+        HomeTab.Connect -> ConnectTabScreen(viewModel = viewModel, bottomPadding = bottomPadding)
+        HomeTab.Chat -> ChatSheet(viewModel = viewModel, bottomPadding = bottomPadding)
+        HomeTab.Voice -> VoiceTabScreen(viewModel = viewModel, bottomPadding = bottomPadding)
+        HomeTab.Screen -> ScreenTabScreen(viewModel = viewModel, bottomPadding = bottomPadding)
+        HomeTab.Settings -> SettingsSheet(viewModel = viewModel, bottomPadding = bottomPadding)
       }
     }
   }
 }
 
 @Composable
-private fun ScreenTabScreen(viewModel: MainViewModel) {
+private fun ScreenTabScreen(viewModel: MainViewModel, bottomPadding: Dp) {
   val isConnected by viewModel.isConnected.collectAsState()
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -141,7 +149,11 @@ private fun ScreenTabScreen(viewModel: MainViewModel) {
   }
 
   Box(modifier = Modifier.fillMaxSize()) {
-    CanvasScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+    CanvasScreen(
+      viewModel = viewModel,
+      modifier = Modifier.fillMaxSize(),
+      bottomPadding = bottomPadding,
+    )
   }
 }
 
@@ -241,16 +253,24 @@ private fun BottomTabBar(
   onSelect: (HomeTab) -> Unit,
 ) {
   val safeInsets = WindowInsets.navigationBars.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
+  val density = LocalDensity.current
+  val layoutDirection = LocalLayoutDirection.current
+  val paddingValues = safeInsets.asPaddingValues(density)
 
   Box(
     modifier =
       Modifier
+        .padding(
+          start = paddingValues.calculateStartPadding(layoutDirection) + 16.dp,
+          end = paddingValues.calculateEndPadding(layoutDirection) + 16.dp,
+          bottom = paddingValues.calculateBottomPadding().coerceAtLeast(16.dp),
+        )
         .fillMaxWidth(),
   ) {
     Surface(
       modifier = Modifier.fillMaxWidth(),
       color = mobileCardSurface.copy(alpha = 0.97f),
-      shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+      shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp, bottomStart = 24.dp, bottomEnd = 24.dp),
       border = BorderStroke(1.dp, mobileBorder),
       shadowElevation = 6.dp,
     ) {
@@ -258,7 +278,6 @@ private fun BottomTabBar(
         modifier =
           Modifier
             .fillMaxWidth()
-            .windowInsetsPadding(safeInsets)
             .padding(horizontal = 10.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,

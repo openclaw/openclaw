@@ -71,10 +71,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceConversationRole
+import androidx.compose.ui.unit.Dp
 import kotlin.math.max
 
 @Composable
-fun VoiceTabScreen(viewModel: MainViewModel) {
+fun VoiceTabScreen(viewModel: MainViewModel, bottomPadding: Dp) {
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
   val activity = remember(context) { context.findActivity() }
@@ -135,7 +136,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
         .background(mobileBackgroundGradient)
         .imePadding()
         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
-        .padding(horizontal = 20.dp, vertical = 14.dp),
+        .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = bottomPadding + 12.dp),
     verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     LazyColumn(

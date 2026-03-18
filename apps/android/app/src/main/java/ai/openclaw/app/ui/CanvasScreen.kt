@@ -19,14 +19,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.padding
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import ai.openclaw.app.MainViewModel
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
+fun CanvasScreen(
+  viewModel: MainViewModel,
+  modifier: Modifier = Modifier,
+  bottomPadding: Dp,
+) {
   val context = LocalContext.current
+  val density = LocalDensity.current
   val isDebuggable = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
   val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
@@ -42,7 +51,7 @@ fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   }
 
   AndroidView(
-    modifier = modifier,
+    modifier = modifier.padding(bottom = bottomPadding + 16.dp),
     factory = {
       WebView(context).apply {
         settings.javaScriptEnabled = true
