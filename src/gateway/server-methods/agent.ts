@@ -182,12 +182,13 @@ function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
   runId: string;
   idempotencyKey: string;
+  sessionId?: string;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
 }) {
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
-      const meta = buildUsageMetaFromRunResult(result, result.entry?.sessionId);
+      const meta = buildUsageMetaFromRunResult(result, params.sessionId);
       const payload = {
         runId: params.runId,
         status: "ok" as const,
@@ -685,6 +686,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
     dispatchAgentRunFromGateway({
+      sessionId: resolvedSessionId,
       ingressOpts: {
         message,
         images,
