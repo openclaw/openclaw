@@ -69,6 +69,20 @@ def build_local_fallback_analysis(text: str) -> dict:
         "summary": cleaned[:140],
         "key_points": points,
         "suggested_next_action": "主要論点を確認し、次の担当へ引き継いでください。",
+        "analysis_style": "local_fallback",
+    }
+
+
+def build_local_fallback_heavy_task(text: str, mode: str) -> dict:
+    cleaned = _normalize_whitespace(text)
+    summary = cleaned[:160] if cleaned else "No heavy-task input was provided."
+    return {
+        "accepted": False,
+        "task_type": "heavy_task",
+        "mode": mode or "long_text_review",
+        "scope": "local_fallback",
+        "request_summary": summary,
+        "message": "Heavy task worker is unavailable. Retry later or keep the job on the local node.",
     }
 
 
@@ -122,8 +136,20 @@ def main() -> int:
         fallback_key = "draft"
         fallback_value = build_local_fallback_draft(text)
     elif args.task == "analyze_text":
-        fallback_key = "analysis"
-        fallback_value = build_local_fallback_analysis(text)
+        fallback_key = "body"
+        fallback_value = {
+            "status": "ok",
+            "result": build_local_fallback_analysis(text),
+            "meta": {"node": "local_fallback", "task": "analyze_text"},
+        }
+    elif args.task == "heavy_task":
+        mode = params.get("mode") if isinstance(params, dict) else None
+        fallback_key = "body"
+        fallback_value = {
+            "status": "ok",
+            "result": build_local_fallback_heavy_task(text, str(mode) if mode else ""),
+            "meta": {"node": "local_fallback", "task": "heavy_task"},
+        }
     else:
         fallback_key = "summary"
         fallback_value = build_local_fallback_summary(text)

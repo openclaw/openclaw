@@ -531,6 +531,7 @@
     "sense:analyze": "python3 scripts/dev/sense_summarize_workflow.py --task analyze_text",
     "sense:draft": "python3 scripts/dev/sense_summarize_workflow.py --task generate_draft",
     "sense:freeform": "node --import tsx scripts/dev/sense_freeform_embedded.ts",
+    "sense:heavy": "python3 scripts/dev/sense_summarize_workflow.py --task heavy_task --params-json '{\"mode\":\"long_text_review\"}'",
     "sense:summarize": "python3 scripts/dev/sense_summarize_workflow.py",
     "start": "node scripts/run-node.mjs",
     "test": "node scripts/test-parallel.mjs",

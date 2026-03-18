@@ -11,6 +11,7 @@ Provide a minimal OpenClaw-side workflow for offloading selected text tasks from
   - `summarize`
   - `generate_draft`
   - `analyze_text`
+  - `heavy_task` (first mode: `long_text_review`)
 - Transport: `POST http://192.168.11.11:8787/execute`
 - Auth: optional shared header `X-Sense-Worker-Token`
 - Safe default: local fallback summary when Sense is unavailable or times out
@@ -34,6 +35,13 @@ Run lightweight analysis:
 ```bash
 cd /home/deepnoa/openclaw
 pnpm sense:analyze -- --input "Identify the main themes, risks, and next action from this note."
+```
+
+Run the first heavy-task entrypoint:
+
+```bash
+cd /home/deepnoa/openclaw
+pnpm sense:heavy -- --input "Review this long note and prepare the next stage for deeper processing."
 ```
 
 You can also pass a file:
@@ -85,6 +93,28 @@ For `task=analyze_text`, fallback returns:
 }
 ```
 
+The fallback keeps the worker-style `body.result` / `body.meta` shape so downstream handling can stay close to the live worker contract.
+
+For `task=heavy_task`, success and fallback both use a structured result shape:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "accepted": true,
+    "task_type": "heavy_task",
+    "mode": "long_text_review",
+    "scope": "gpu",
+    "request_summary": "...",
+    "message": "..."
+  },
+  "meta": {
+    "node": "sense",
+    "task": "heavy_task"
+  }
+}
+```
+
 ## Logging
 
 The workflow writes a short request log to stderr:
@@ -101,10 +131,12 @@ The Sense adapter itself logs request / response / timeout details when invoked 
   - `pnpm sense:summarize -- --input "..."`
   - `pnpm sense:draft -- --input "..."`
   - `pnpm sense:analyze -- --input "..."`
+  - `pnpm sense:heavy -- --input "..."`
 - Fallback:
   - `pnpm sense:summarize -- --base-url http://192.168.11.11:9999 --input "..."`
   - `pnpm sense:draft -- --base-url http://192.168.11.11:9999 --input "..."`
   - `pnpm sense:analyze -- --base-url http://192.168.11.11:9999 --input "..."`
+  - `pnpm sense:heavy -- --base-url http://192.168.11.11:9999 --input "..."`
 
 ## Troubleshooting
 
@@ -128,3 +160,15 @@ When plugin tools are consistently exposed inside the target agent runtime, repl
   - dispatcher
   - per-task handlers (`summarize`, `generate_draft`, `analyze_text`, future heavy tasks)
   - worker-internal adapters for Ollama / NemoClaw / GPU paths
+
+## Heavy-task note
+
+- Current first mode: `long_text_review`
+- OpenClaw forwards:
+  - `task: "heavy_task"`
+  - `params.mode: "long_text_review"`
+- Current worker behavior is still placeholder-safe.
+- Future direction:
+  - richer queueing metadata
+  - GPU/NemoClaw/Ollama branching inside the worker
+  - job status polling instead of immediate inline results
