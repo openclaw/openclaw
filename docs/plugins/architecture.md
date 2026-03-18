@@ -684,7 +684,10 @@ api.registerProvider({
   live-model policy.
 - OpenRouter uses `catalog` plus `resolveDynamicModel` and
   `prepareDynamicModel` because the provider is pass-through and may expose new
-  model ids before OpenClaw's static catalog updates.
+  model ids before OpenClaw's static catalog updates; it also uses
+  `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible` to keep
+  provider-specific request headers, routing metadata, reasoning patches, and
+  prompt-cache policy out of core.
 - GitHub Copilot uses `catalog`, `auth`, `resolveDynamicModel`, and
   `capabilities` plus `prepareRuntimeAuth` and `fetchUsageSnapshot` because it
   needs provider-owned device login, model fallback behavior, Claude transcript
@@ -701,9 +704,6 @@ api.registerProvider({
   modern-model matching; Gemini CLI OAuth also uses `formatApiKey`,
   `resolveUsageAuth`, and `fetchUsageSnapshot` for token formatting, token
   parsing, and quota endpoint wiring.
-- OpenRouter uses `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible`
-  to keep provider-specific request headers, routing metadata, reasoning
-  patches, and prompt-cache policy out of core.
 - Moonshot uses `catalog` plus `wrapStreamFn` because it still uses the shared
   OpenAI transport but needs provider-owned thinking payload normalization.
 - Kilocode uses `catalog`, `capabilities`, `wrapStreamFn`, and

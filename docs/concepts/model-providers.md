@@ -34,7 +34,7 @@ For model selection rules, see [/concepts/models](/concepts/models).
   `fetchUsageSnapshot`.
 - Note: provider runtime `capabilities` is shared runner metadata (provider
   family, transcript/tooling quirks, transport/cache hints). It is not the
-  same as the [public capability model](/tools/plugin#public-capability-model)
+  same as the [public capability model](/plugins/architecture#public-capability-model)
   which describes what a plugin registers (text inference, speech, etc.).
 
 ## Plugin-owned provider behavior
