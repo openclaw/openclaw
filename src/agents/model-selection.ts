@@ -574,13 +574,16 @@ export function resolveAllowedModelRef(params: {
   // in the allowlist, try to infer the provider from configured models.
   // This handles cases like typing "gpt-4o-mini" when the allowlist only has
   // "cs-openai/gpt-4o-mini" but the session default provider is "cs-anthropic".
+  // Use the raw trimmed input for inference instead of resolved.ref.model,
+  // because provider-specific normalization (e.g. "sonnet-4.6" → "claude-sonnet-4-6"
+  // for anthropic) may have altered the model name for the wrong provider.
   if (!status.allowed && !trimmed.includes("/")) {
     const inferredProvider = inferUniqueProviderFromConfiguredModels({
       cfg: params.cfg,
-      model: resolved.ref.model,
+      model: trimmed,
     });
     if (inferredProvider) {
-      const inferredRef = normalizeModelRef(inferredProvider, resolved.ref.model);
+      const inferredRef = normalizeModelRef(inferredProvider, trimmed);
       const inferredStatus = getModelRefStatus({
         cfg: params.cfg,
         catalog: params.catalog,
