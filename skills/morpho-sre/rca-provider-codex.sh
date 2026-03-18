@@ -18,7 +18,6 @@ if RCA_PROVIDER_MODEL="${RCA_PROVIDER_MODEL:-openai-codex/gpt-5.4}" \
   exit 0
 fi
 
-# Codex failed — unset codex-specific vars and fall back to claude
+# Codex failed — fall back to claude (caller env preserved for claude config)
 printf 'codex unavailable, falling back to claude provider\n' >&2
-unset RCA_PROVIDER_MODEL RCA_PROVIDER_SESSION_PREFIX
 exec "${SCRIPT_DIR}/rca-provider-claude.sh" "$@"

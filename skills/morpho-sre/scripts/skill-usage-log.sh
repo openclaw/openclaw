@@ -16,6 +16,10 @@ mkdir -p "$DATADIR"
 
 case "${1:---help}" in
   --report)
+    if ! command -v jq >/dev/null 2>&1; then
+      printf 'skill-usage-log: jq is required but not found\n' >&2
+      exit 127
+    fi
     if [ ! -f "$LOGFILE" ]; then
       echo "No usage data yet."
       exit 0

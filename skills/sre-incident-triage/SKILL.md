@@ -79,9 +79,9 @@ Summary:
 6. Cross-check k8s state + logs + metrics + traces
 7. Clone related repo only after live evidence or clear config-driven need
 8. Name concrete follow-up PR candidate (repo, path, title, validation)
-9. Create or reuse Linear ticket; use ticket `branchName` as PR branch
-10. If confidence is high and fix is scoped, create PR via `autofix-pr.sh` and link to Linear
-11. Return evidence, hypotheses, confidence, suggested PRs, Linear ticket, PR URL (or blocked reason)
+9. For monitoring channels: create or reuse Linear ticket; use ticket `branchName` as PR branch. For `#bug-report` (investigate-only): skip Linear ticket creation — only investigate and report findings.
+10. If confidence is high and fix is scoped, create PR via `autofix-pr.sh` and link to Linear (monitoring channels) or just link existing fix PR (`#bug-report`)
+11. Return evidence, hypotheses, confidence, suggested PRs, and PR URL (or blocked reason)
 
 ## Blocked Mode Reply Contract
 
