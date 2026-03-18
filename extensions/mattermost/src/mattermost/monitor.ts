@@ -356,20 +356,6 @@ function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]):
   return `${tag} (${mediaList.length} ${suffix})`;
 }
 
-function buildMattermostReplySuffix(params: {
-  replyToId?: string;
-  replyToBody?: string;
-  replyToSender?: string;
-}): string {
-  const replyToBody = params.replyToBody?.trim();
-  if (!replyToBody) {
-    return "";
-  }
-  const sender = params.replyToSender?.trim() || "unknown";
-  const idLine = params.replyToId?.trim() ? ` id:${params.replyToId.trim()}` : "";
-  return `\n\n[Replying to ${sender}${idLine}]\n${replyToBody}\n[/Replying]`;
-}
-
 function buildMattermostWsUrl(baseUrl: string): string {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
@@ -1657,12 +1643,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       contextKey: `mattermost:message:${channelId}:${post.id ?? "unknown"}`,
     });
 
-    const replySuffix = buildMattermostReplySuffix({
-      replyToId: replyReferenceId,
-      replyToBody,
-      replyToSender,
-    });
-    const textWithId = `${bodyText}${replySuffix}\n[mattermost message id: ${post.id ?? "unknown"} channel: ${channelId}]`;
+    const textWithId = `${bodyText}\n[mattermost message id: ${post.id ?? "unknown"} channel: ${channelId}]`;
     const body = core.channel.reply.formatInboundEnvelope({
       channel: "Mattermost",
       from: fromLabel,
