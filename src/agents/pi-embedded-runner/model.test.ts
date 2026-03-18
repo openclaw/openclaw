@@ -666,6 +666,24 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
+  it("builds an openai-codex fallback for gpt-5.4-mini", () => {
+    mockDiscoveredModel({
+      provider: "openai-codex",
+      modelId: "gpt-5.1-codex-mini",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"),
+        id: "gpt-5.1-codex-mini",
+        name: "GPT-5.1 Codex Mini",
+        contextWindow: 128_000,
+      },
+    });
+
+    const result = resolveModel("openai-codex", "gpt-5.4-mini", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"));
+  });
+
   it("builds an openai-codex fallback for gpt-5.3-codex-spark", () => {
     mockOpenAICodexTemplateModel();
 

@@ -429,6 +429,40 @@ describe("provider runtime contract", () => {
     });
   });
 
+  describe("openai-codex", () => {
+    it("owns openai-codex gpt-5.4 mini forward-compat resolution", () => {
+      const provider = requireProviderContractProvider("openai-codex");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4-mini",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5.1-codex-mini"
+              ? createModel({
+                  id,
+                  provider: "openai-codex",
+                  api: "openai-codex-responses",
+                  baseUrl: "https://chatgpt.com/backend-api",
+                  input: ["text", "image"],
+                  reasoning: true,
+                  contextWindow: 272_000,
+                  maxTokens: 128_000,
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-5.4-mini",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        contextWindow: 272_000,
+        maxTokens: 128_000,
+      });
+    });
+  });
+
   describe("xai", () => {
     it("owns Grok forward-compat resolution for newer fast models", () => {
       const provider = requireProviderContractProvider("xai");

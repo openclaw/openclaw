@@ -18,6 +18,13 @@ const OPENAI_CODEX_53_MODEL = {
   name: "GPT-5.3 Codex",
 };
 
+const OPENAI_CODEX_54_MINI_MODEL = {
+  ...OPENAI_CODEX_MODEL,
+  id: "gpt-5.4-mini",
+  name: "GPT-5.4 Mini",
+  contextWindow: 128000,
+};
+
 const mocks = vi.hoisted(() => {
   const sourceConfig = {
     agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
@@ -321,6 +328,55 @@ describe("modelsListCommand forward-compat", () => {
         }),
         expect.objectContaining({
           key: "openai-codex/gpt-5.4",
+          available: true,
+        }),
+      ]);
+    });
+
+    it("includes synthetic codex gpt-5.4-mini in --all output when catalog supports it", async () => {
+      mockDiscoveredCodex53Registry();
+      mocks.loadModelCatalog.mockResolvedValueOnce([
+        {
+          provider: "openai-codex",
+          id: "gpt-5.1-codex-mini",
+          name: "GPT-5.1 Codex Mini",
+          input: ["text"],
+          contextWindow: 128000,
+        },
+        {
+          provider: "openai-codex",
+          id: "gpt-5.4-mini",
+          name: "GPT-5.4 Mini",
+          input: ["text"],
+          contextWindow: 128000,
+        },
+      ]);
+      mocks.listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>
+        provider === "openai-codex"
+          ? ([{ id: "profile-1" }] as Array<Record<string, unknown>>)
+          : [],
+      );
+      mocks.resolveModelWithRegistry.mockImplementation(
+        ({ provider, modelId }: { provider: string; modelId: string }) => {
+          if (provider !== "openai-codex") {
+            return undefined;
+          }
+          if (modelId === "gpt-5.3-codex") {
+            return { ...OPENAI_CODEX_53_MODEL };
+          }
+          if (modelId === "gpt-5.4-mini") {
+            return { ...OPENAI_CODEX_54_MINI_MODEL };
+          }
+          return undefined;
+        },
+      );
+      await runAllOpenAiCodexCommand();
+      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
+        expect.objectContaining({
+          key: "openai-codex/gpt-5.3-codex",
+        }),
+        expect.objectContaining({
+          key: "openai-codex/gpt-5.4-mini",
           available: true,
         }),
       ]);

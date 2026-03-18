@@ -6,6 +6,7 @@ export const openaiCodexCatalogEntries = [
   { provider: "openai", id: "gpt-5-mini", name: "GPT-5 mini" },
   { provider: "openai", id: "gpt-5-nano", name: "GPT-5 nano" },
   { provider: "openai-codex", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
+  { provider: "openai-codex", id: "gpt-5.1-codex-mini", name: "GPT-5.1 Codex Mini" },
 ];
 
 export const expectedAugmentedOpenaiCodexCatalogEntries = [
@@ -14,6 +15,7 @@ export const expectedAugmentedOpenaiCodexCatalogEntries = [
   { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
   { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
   { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+  { provider: "openai-codex", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
   {
     provider: "openai-codex",
     id: "gpt-5.3-codex-spark",

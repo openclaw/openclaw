@@ -205,6 +205,14 @@ describe("loadModelCatalog", () => {
         contextWindow: 272000,
         input: ["text", "image"],
       },
+      {
+        id: "gpt-5.1-codex-mini",
+        provider: "openai-codex",
+        name: "GPT-5.1 Codex Mini",
+        reasoning: true,
+        contextWindow: 272000,
+        input: ["text", "image"],
+      },
     ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
@@ -242,6 +250,13 @@ describe("loadModelCatalog", () => {
         provider: "openai-codex",
         id: "gpt-5.4",
         name: "gpt-5.4",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.4-mini",
+        name: "gpt-5.4-mini",
       }),
     );
   });

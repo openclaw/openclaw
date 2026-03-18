@@ -53,6 +53,11 @@ export function augmentBundledProviderCatalog(
     providerId: OPENAI_CODEX_PROVIDER_ID,
     templateIds: ["gpt-5.3-codex", "gpt-5.2-codex"],
   });
+  const openAiCodexGpt54MiniTemplate = findCatalogTemplate({
+    entries: context.entries,
+    providerId: OPENAI_CODEX_PROVIDER_ID,
+    templateIds: ["gpt-5.1-codex-mini"],
+  });
   const openAiCodexSparkTemplate = findCatalogTemplate({
     entries: context.entries,
     providerId: OPENAI_CODEX_PROVIDER_ID,
@@ -93,6 +98,13 @@ export function augmentBundledProviderCatalog(
           ...openAiCodexGpt54Template,
           id: "gpt-5.4",
           name: "gpt-5.4",
+        }
+      : undefined,
+    openAiCodexGpt54MiniTemplate
+      ? {
+          ...openAiCodexGpt54MiniTemplate,
+          id: "gpt-5.4-mini",
+          name: "gpt-5.4-mini",
         }
       : undefined,
     openAiCodexSparkTemplate
