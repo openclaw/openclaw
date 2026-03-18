@@ -12,8 +12,9 @@ import {
   normalizeAccountId,
   resolveAgentIdFromSessionKey,
 } from "../../../../src/routing/session-key.js";
-import { listEnabledDiscordAccounts } from "../accounts.js";
+import { resolveDiscordAccountConfig } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
+import { resolveThreadBindingsEnabled } from "./thread-bindings.config.js";
 import {
   createThreadForBinding,
   createWebhookForChannel,
@@ -115,9 +116,20 @@ function isConfiguredDiscordThreadBindingAccount(
     return false;
   }
   const normalizedAccountId = normalizeAccountId(accountId);
-  return listEnabledDiscordAccounts(cfg).some(
-    (account) => account.accountId === normalizedAccountId,
-  );
+  const account = resolveDiscordAccountConfig(cfg, normalizedAccountId);
+  if (!account) {
+    return false;
+  }
+  const providerEnabled = cfg.channels.discord.enabled !== false;
+  const accountEnabled = account?.enabled !== false;
+  if (!providerEnabled || !accountEnabled) {
+    return false;
+  }
+  return resolveThreadBindingsEnabled({
+    channelEnabledRaw:
+      account?.threadBindings?.enabled ?? cfg.channels.discord.threadBindings?.enabled,
+    sessionEnabledRaw: cfg.session?.threadBindings?.enabled,
+  });
 }
 
 function createNoopManager(accountIdRaw?: string): ThreadBindingManager {

@@ -590,6 +590,75 @@ describe("preflightDiscordMessage", () => {
     expect(result?.boundSessionKey).toBeUndefined();
   });
 
+  it("ignores stale foreign bindings when the owning account disables thread bindings", async () => {
+    const threadId = "thread-disabled-thread-bindings-foreign-owner-1";
+    const parentId = "channel-parent-disabled-thread-bindings-foreign-owner-1";
+    const message = createDiscordMessage({
+      id: "m-disabled-thread-bindings-foreign-owner-1",
+      channelId: threadId,
+      content: "hi <@openclaw-bot>",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const foreignManager = createThreadBindingManager({
+      accountId: "atlas",
+      persist: false,
+      enableSweeper: false,
+    });
+    await foreignManager.bindTarget({
+      threadId,
+      channelId: parentId,
+      targetKind: "subagent",
+      targetSessionKey: "agent:soren:subagent:child-1",
+      agentId: "soren",
+      webhookId: "wh-disabled-thread-bindings-foreign-1",
+      webhookToken: "tok-disabled-thread-bindings-foreign-1",
+    });
+    foreignManager.stop();
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          channels: {
+            discord: {
+              accounts: {
+                atlas: {
+                  enabled: true,
+                  token: "discord-token-atlas",
+                  threadBindings: {
+                    enabled: false,
+                  },
+                },
+              },
+              threadBindings: {
+                enabled: true,
+              },
+            },
+          },
+        },
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId: threadId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+        }),
+        client: createThreadClient({ threadId, parentId }),
+      }),
+      accountId: "soren",
+      threadBindings: createNoopThreadBindingManager("soren"),
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.boundSessionKey).toBeUndefined();
+  });
+
   it("uses the preflight config instead of the runtime snapshot for foreign-owner suppression", async () => {
     const threadId = "thread-runtime-snapshot-foreign-owner-1";
     const parentId = "channel-parent-runtime-snapshot-foreign-owner-1";
