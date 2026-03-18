@@ -248,10 +248,8 @@ function hasTelegramExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
 }
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) =>
-    getTelegramRuntime().channel.telegram.messageActions?.listActions?.(ctx) ?? [],
-  getCapabilities: (ctx) =>
-    getTelegramRuntime().channel.telegram.messageActions?.getCapabilities?.(ctx) ?? [],
+  describeMessageTool: (ctx) =>
+    getTelegramRuntime().channel.telegram.messageActions?.describeMessageTool?.(ctx) ?? null,
   extractToolSend: (ctx) =>
     getTelegramRuntime().channel.telegram.messageActions?.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
@@ -330,11 +328,15 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       }),
     }),
   },
-  acpBindings: {
-    normalizeConfiguredBindingTarget: ({ conversationId }) =>
+  bindings: {
+    compileConfiguredBinding: ({ conversationId }) =>
       normalizeTelegramAcpConversationId(conversationId),
-    matchConfiguredBinding: ({ bindingConversationId, conversationId, parentConversationId }) =>
-      matchTelegramAcpConversation({ bindingConversationId, conversationId, parentConversationId }),
+    matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+      matchTelegramAcpConversation({
+        bindingConversationId: compiledBinding.conversationId,
+        conversationId,
+        parentConversationId,
+      }),
   },
   security: {
     resolveDmPolicy: resolveTelegramDmPolicy,

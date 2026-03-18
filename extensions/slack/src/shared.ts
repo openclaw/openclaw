@@ -14,7 +14,7 @@ import {
   SlackConfigSchema,
   type ChannelPlugin,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/slack";
+} from "openclaw/plugin-sdk/slack-core";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,

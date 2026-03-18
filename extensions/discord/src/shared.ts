@@ -8,7 +8,7 @@ import {
   DiscordConfigSchema,
   getChatChannelMeta,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/discord";
+} from "openclaw/plugin-sdk/discord-core";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,

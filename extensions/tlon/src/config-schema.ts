@@ -1,5 +1,5 @@
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/tlon";
 import { z } from "zod";
+import { buildChannelConfigSchema } from "../api.js";
 
 const ShipSchema = z.string().min(1);
 const ChannelNestSchema = z.string().min(1);

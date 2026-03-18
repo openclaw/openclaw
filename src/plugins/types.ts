@@ -246,6 +246,18 @@ export type ProviderCatalogContext = {
     apiKey: string | undefined;
     discoveryApiKey?: string;
   };
+  resolveProviderAuth: (
+    providerId?: string,
+    options?: {
+      oauthMarker?: string;
+    },
+  ) => {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+    mode: "api_key" | "oauth" | "token" | "none";
+    source: "env" | "profile" | "none";
+    profileId?: string;
+  };
 };
 
 export type ProviderCatalogResult =
@@ -984,6 +996,8 @@ export type PluginConversationBindingRequestParams = {
   detachHint?: string;
 };
 
+export type PluginConversationBindingResolutionDecision = "allow-once" | "allow-always" | "deny";
+
 export type PluginConversationBinding = {
   bindingId: string;
   pluginId: string;
@@ -1013,6 +1027,24 @@ export type PluginConversationBindingRequestResult =
       status: "error";
       message: string;
     };
+
+export type PluginConversationBindingResolvedEvent = {
+  status: "approved" | "denied";
+  binding?: PluginConversationBinding;
+  decision: PluginConversationBindingResolutionDecision;
+  request: {
+    summary?: string;
+    detachHint?: string;
+    requestedBySenderId?: string;
+    conversation: {
+      channel: string;
+      accountId: string;
+      conversationId: string;
+      parentConversationId?: string;
+      threadId?: string | number;
+    };
+  };
+};
 
 /**
  * Result returned by a plugin command handler.
@@ -1278,6 +1310,12 @@ export type OpenClawPluginApi = {
   registrationMode: PluginRegistrationMode;
   config: OpenClawConfig;
   pluginConfig?: Record<string, unknown>;
+  /**
+   * In-process runtime helpers for trusted native plugins.
+   *
+   * This surface is broader than hooks. Prefer hooks for third-party
+   * automation/integration unless you need native registry integration.
+   */
   runtime: PluginRuntime;
   logger: PluginLogger;
   registerTool: (
@@ -1290,16 +1328,25 @@ export type OpenClawPluginApi = {
     opts?: OpenClawPluginHookOptions,
   ) => void;
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
+  /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
+  /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
+  /** Register a speech synthesis provider (speech capability). */
   registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
+  /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
+  /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
+  /** Register a web search provider (web search capability). */
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
+  onConversationBindingResolved: (
+    handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>,
+  ) => void;
   /**
    * Register a custom command that bypasses the LLM agent.
    * Plugin commands are processed before built-in commands and before agent invocation.
