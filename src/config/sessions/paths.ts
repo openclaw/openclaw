@@ -33,8 +33,9 @@ function resolveManagedSessionsSafetyChain(sessionsDir: string): string[] {
   const agentDir = path.dirname(resolved);
   const agentsDir = path.dirname(agentDir);
   if (path.basename(resolved) === "sessions" && path.basename(agentsDir) === "agents") {
-    const stateDir = path.dirname(agentsDir);
-    return [stateDir, agentsDir, agentDir, resolved];
+    // The configured state root itself may be a user-chosen symlink alias.
+    // We only reject symlinks inside the managed agents/<id>/sessions chain.
+    return [agentsDir, agentDir, resolved];
   }
   return [path.dirname(resolved), resolved];
 }

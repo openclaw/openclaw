@@ -12,6 +12,30 @@ afterEach(() => {
 });
 
 describe("ensurePrivateSessionsDir", () => {
+  it("allows a symlinked state-root alias for managed session dirs", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-root-alias-"));
+    try {
+      const realStateDir = path.join(tempDir, "real-state");
+      const aliasStateDir = path.join(tempDir, "alias-state");
+      const aliasSessionsDir = path.join(aliasStateDir, "agents", "main", "sessions");
+      fs.mkdirSync(realStateDir, { recursive: true });
+      fs.symlinkSync(realStateDir, aliasStateDir, "dir");
+
+      const { ensurePrivateSessionsDir } = await import("./paths.js");
+
+      await expect(ensurePrivateSessionsDir(aliasSessionsDir)).resolves.toBe(
+        path.resolve(aliasSessionsDir),
+      );
+      expect(fs.existsSync(path.join(realStateDir, "agents", "main", "sessions"))).toBe(true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects when a managed parent directory is a symlink", async () => {
     if (process.platform === "win32") {
       return;
