@@ -1,6 +1,10 @@
-import { AllowFromListSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
+import {
+  AllowFromListSchema,
+  DmPolicySchema,
+  buildChannelConfigSchema,
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { MarkdownConfigSchema } from "../../../src/config/zod-schema.core.js";
 import { z } from "zod";
-import { MarkdownConfigSchema, buildChannelConfigSchema } from "../api.js";
 
 /**
  * Validates https:// URLs only (no javascript:, data:, file:, etc.)
