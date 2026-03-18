@@ -1,6 +1,7 @@
 import {
   Activity,
   BarChart3,
+  Bell,
   BookOpen,
   Brain,
   Bug,
@@ -11,7 +12,9 @@ import {
   FolderOpen,
   GitBranch,
   Heart,
+  Layers,
   Link2,
+  ListTodo,
   MessageSquare,
   Monitor,
   Package,
@@ -20,6 +23,7 @@ import {
   ScrollText,
   Settings,
   Store,
+  Target,
   Timer,
   TrendingUp,
   Zap,
@@ -206,6 +210,38 @@ const navData = {
       subtitle: "Paired devices",
     },
   ],
+  orchestration: [
+    {
+      title: "Workspaces",
+      url: "/workspaces",
+      icon: Layers,
+      subtitle: "Workspace management",
+    },
+    {
+      title: "Tasks",
+      url: "/tasks",
+      icon: ListTodo,
+      subtitle: "Task board",
+    },
+    {
+      title: "Goals",
+      url: "/goals",
+      icon: Target,
+      subtitle: "Goals hierarchy",
+    },
+    {
+      title: "Approvals",
+      url: "/approvals",
+      icon: Bell,
+      subtitle: "Approval inbox",
+    },
+    {
+      title: "Activity",
+      url: "/activity",
+      icon: ScrollText,
+      subtitle: "Activity feed",
+    },
+  ],
   mcp: [
     {
       title: "MCP Servers",
@@ -321,6 +357,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <NavMain label="Chat" items={navData.chat} />
         <NavMain label="Control" items={navData.control} defaultOpen />
         <NavMain label="Agent" items={navData.agent} />
+        <NavMain label="Orchestration" items={navData.orchestration} />
         <NavMain label="MCP" items={navData.mcp} />
         <NavMain label="Docs" items={navData.docs} />
         <NavMain label="Settings" items={navData.settings} />

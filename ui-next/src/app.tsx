@@ -83,6 +83,21 @@ const ProjectsPage = lazy(() =>
 const OnboardingPage = lazy(() =>
   import("@/pages/onboarding").then((m) => ({ default: m.OnboardingPage })),
 );
+const WorkspacesPage = lazy(() =>
+  import("@/pages/orchestration/workspaces").then((m) => ({ default: m.WorkspacesPage })),
+);
+const TasksPage = lazy(() =>
+  import("@/pages/orchestration/tasks").then((m) => ({ default: m.TasksPage })),
+);
+const GoalsPage = lazy(() =>
+  import("@/pages/orchestration/goals").then((m) => ({ default: m.GoalsPage })),
+);
+const ApprovalsPage = lazy(() =>
+  import("@/pages/orchestration/approvals").then((m) => ({ default: m.ApprovalsPage })),
+);
+const ActivityPage = lazy(() =>
+  import("@/pages/orchestration/activity").then((m) => ({ default: m.ActivityPage })),
+);
 const HubPage = lazy(() => import("@/pages/hub").then((m) => ({ default: m.HubPage })));
 const DocsPage = lazy(() => import("@/pages/docs").then((m) => ({ default: m.DocsPage })));
 const OpenClawDocsPage = lazy(() =>
@@ -383,6 +398,47 @@ export function App() {
               element={
                 <Suspense fallback={<PageLoader />}>
                   <OnboardingPage />
+                </Suspense>
+              }
+            />
+            {/* Orchestration */}
+            <Route
+              path="/workspaces"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <WorkspacesPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/tasks"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <TasksPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/goals"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <GoalsPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/approvals"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <ApprovalsPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/activity"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <ActivityPage />
                 </Suspense>
               }
             />
