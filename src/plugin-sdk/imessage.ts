@@ -37,7 +37,7 @@ export {
 export {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
-} from "../channels/plugins/group-mentions.js";
+} from "../../extensions/imessage/src/group-policy.js";
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";

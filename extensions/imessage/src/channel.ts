@@ -11,14 +11,16 @@ import {
   formatTrimmedAllowFromEntries,
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
-  resolveIMessageGroupRequireMention,
-  resolveIMessageGroupToolPolicy,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/imessage";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
+import {
+  resolveIMessageGroupRequireMention,
+  resolveIMessageGroupToolPolicy,
+} from "./group-policy.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { imessageSetupAdapter } from "./setup-core.js";
 import { createIMessagePluginBase, imessageSetupWizard } from "./shared.js";
