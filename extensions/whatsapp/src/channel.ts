@@ -108,9 +108,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     listGroups: async (params) => listWhatsAppDirectoryGroupsFromConfig(params),
   },
   actions: {
-    listActions: ({ cfg }) => {
+    describeMessageTool: ({ cfg }) => {
       if (!cfg.channels?.whatsapp) {
-        return [];
+        return null;
       }
       const gate = createActionGate(cfg.channels.whatsapp.actions);
       const actions = new Set<ChannelMessageActionName>();
@@ -120,7 +120,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       if (gate("polls")) {
         actions.add("poll");
       }
-      return Array.from(actions);
+      return { actions: Array.from(actions) };
     },
     supportsAction: ({ action }) => action === "react",
     handleAction: async ({ action, params, cfg, accountId }) => {
