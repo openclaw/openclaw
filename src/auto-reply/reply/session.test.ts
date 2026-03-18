@@ -1499,7 +1499,11 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const archiveSpy = vi.spyOn(sessionUtils, "archiveSessionTranscripts");
 
     const cfg = {
-      session: { store: storePath, idleMinutes: 999 },
+      session: {
+        store: storePath,
+        idleMinutes: 999,
+        resetTriggers: ["/new", "/reset"], // test /new as explicit reset trigger (default is /reset only per #49517)
+      },
     } as OpenClawConfig;
 
     const result = await initSessionState({

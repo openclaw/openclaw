@@ -272,8 +272,8 @@ describe("gateway server agent", () => {
     expectAgentRoutingCall({ channel: "webchat", deliver: false });
   });
 
-  test("agent routes bare /new through session reset before running greeting prompt", async () => {
-    await writeMainSessionEntry({ sessionId: "sess-main-before-reset" });
+  test("agent routes bare /new to a new session (no reset) and runs greeting prompt", async () => {
+    await writeMainSessionEntry({ sessionId: "sess-main-before-new" });
     const spy = vi.mocked(agentCommand);
     const calls = spy.mock.calls as unknown[][];
     const callsBefore = calls.length;
@@ -289,8 +289,9 @@ describe("gateway server agent", () => {
     expect(call.message).toBeTypeOf("string");
     expect(call.message).toContain("Run your Session Startup sequence");
     expect(call.message).toContain("Current time:");
-    expect(typeof call.sessionId).toBe("string");
-    expect(call.sessionId).not.toBe("sess-main-before-reset");
+    // /new spawns a new session key; old session is left intact (#49517).
+    expect(typeof call.sessionKey).toBe("string");
+    expect((call.sessionKey as string).startsWith("agent:main:main-")).toBe(true);
   });
 
   test("write-scoped callers cannot use sessions.reset directly but can still reset conversations via agent", async () => {

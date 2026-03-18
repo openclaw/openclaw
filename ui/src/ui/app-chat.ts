@@ -1,3 +1,7 @@
+import {
+  buildAgentMainSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../../src/routing/session-key.js";
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
@@ -36,6 +40,8 @@ export type ChatHost = {
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void;
+  /** Callback to switch to another session (e.g. after /new creates a new session). */
+  onSwitchToSession?: (sessionKey: string) => void;
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
@@ -275,13 +281,24 @@ async function dispatchSlashCommand(
     case "stop":
       await handleAbortChat(host);
       return;
-    case "new":
-      await sendChatMessageNow(host, "/new", {
-        refreshSessions: true,
-        previousDraft: sendOpts?.previousDraft,
-        restoreDraft: sendOpts?.restoreDraft,
+    case "new": {
+      // /new spawns a new session without resetting the old one (#49517).
+      if (!host.client || !host.connected) {
+        return;
+      }
+      const agentId = resolveAgentIdFromSessionKey(host.sessionKey);
+      const newKey = buildAgentMainSessionKey({
+        agentId,
+        mainKey: `main-${generateUUID()}`,
       });
+      try {
+        await host.client.request("sessions.patch", { key: newKey });
+        host.onSwitchToSession?.(newKey);
+      } catch (err) {
+        host.lastError = String(err);
+      }
       return;
+    }
     case "reset":
       await sendChatMessageNow(host, "/reset", {
         refreshSessions: true,

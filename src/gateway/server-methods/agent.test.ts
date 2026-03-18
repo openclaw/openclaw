@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentHandlers } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -192,10 +191,11 @@ function readLastAgentCommandCall():
   | {
       message?: string;
       sessionId?: string;
+      sessionKey?: string;
     }
   | undefined {
   return mocks.agentCommand.mock.calls.at(-1)?.[0] as
-    | { message?: string; sessionId?: string }
+    | { message?: string; sessionId?: string; sessionKey?: string }
     | undefined;
 }
 
@@ -665,10 +665,23 @@ describe("gateway agent handler", () => {
     expect(capturedStore?.["agent:main:MAIN"]).toBeUndefined();
   });
 
-  it("handles bare /new by resetting the same session and sending reset greeting prompt", async () => {
-    mockSessionResetSuccess({ reason: "new" });
-
-    primeMainAgentRun({ sessionId: "reset-session-id" });
+  it("handles bare /new by spawning a new session (no reset) and sending greeting prompt", async () => {
+    // /new creates a new session key; it does not reset the current session (#49517).
+    mocks.performGatewaySessionReset.mockClear();
+    mocks.loadSessionEntry.mockImplementation((key: string) => ({
+      cfg: mocks.loadConfigReturn,
+      storePath: "/tmp/sessions.json",
+      entry:
+        key === "agent:main:main"
+          ? { sessionId: "old-session-id", updatedAt: Date.now() }
+          : undefined,
+      canonicalKey: key,
+    }));
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
 
     await invokeAgent(
       {
@@ -680,13 +693,12 @@ describe("gateway agent handler", () => {
     );
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
+    expect(mocks.performGatewaySessionReset).not.toHaveBeenCalled();
     const call = readLastAgentCommandCall();
-    // Message is now dynamically built with current date — check key substrings
     expect(call?.message).toContain("Run your Session Startup sequence");
     expect(call?.message).toContain("Current time:");
-    expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
-    expect(call?.sessionId).toBe("reset-session-id");
+    // /new spawns a new session key (old session is not reset).
+    expect(call?.sessionKey).toMatch(/^agent:main:main-[0-9a-f-]+$/);
   });
 
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {

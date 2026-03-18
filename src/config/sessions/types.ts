@@ -377,6 +377,7 @@ export type SessionSystemPromptReport = {
   };
 };
 
-export const DEFAULT_RESET_TRIGGER = "/new";
-export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
+// Only /reset clears the current session; /new spawns a new session without resetting the old one (#49517).
+export const DEFAULT_RESET_TRIGGER = "/reset";
+export const DEFAULT_RESET_TRIGGERS = ["/reset"];
 export const DEFAULT_IDLE_MINUTES = 60;

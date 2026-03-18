@@ -22,7 +22,11 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  classifySessionKeyShape,
+  normalizeAgentId,
+} from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -64,7 +68,8 @@ import {
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
-const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+const RESET_COMMAND_RE = /^\/(reset)(?:\s+([\s\S]*))?$/i;
+const NEW_SESSION_COMMAND_RE = /^\/(new)(?:\s+([\s\S]*))?$/i;
 
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -336,12 +341,12 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedSessionKey = requestedSessionKey;
     let skipTimestampInjection = false;
 
+    // Only /reset clears the current session; /new spawns a new session without resetting the old one (#49517).
     const resetCommandMatch = message.match(RESET_COMMAND_RE);
     if (resetCommandMatch && requestedSessionKey) {
-      const resetReason = resetCommandMatch[1]?.toLowerCase() === "new" ? "new" : "reset";
       const resetResult = await runSessionResetFromAgent({
         key: requestedSessionKey,
-        reason: resetReason,
+        reason: "reset",
       });
       if (!resetResult.ok) {
         respond(false, undefined, resetResult.error);
@@ -353,12 +358,25 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (postResetMessage) {
         message = postResetMessage;
       } else {
-        // Keep bare /new and /reset behavior aligned with chat.send:
-        // reset first, then run a fresh-session greeting prompt in-place.
-        // Date is embedded in the prompt so agents read the correct daily
-        // memory files; skip further timestamp injection to avoid duplication.
         message = buildBareSessionResetPrompt(cfg);
         skipTimestampInjection = true;
+      }
+    } else {
+      const newSessionMatch = message.match(NEW_SESSION_COMMAND_RE);
+      if (newSessionMatch && requestedSessionKey) {
+        // Spawn a new session (old one is left intact); run greeting or trailing text in the new session.
+        const agentId = resolveAgentIdFromSessionKey(requestedSessionKey);
+        requestedSessionKey = buildAgentMainSessionKey({
+          agentId,
+          mainKey: `main-${randomUUID()}`,
+        });
+        const postNewMessage = newSessionMatch[2]?.trim() ?? "";
+        if (postNewMessage) {
+          message = postNewMessage;
+        } else {
+          message = buildBareSessionResetPrompt(cfg);
+          skipTimestampInjection = true;
+        }
       }
     }
 
