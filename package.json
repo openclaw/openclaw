@@ -658,7 +658,7 @@
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
-    "@mariozechner/pi-agent-core": "0.60.0",
+    "@mariozechner/pi-agent-core": "0.58.0",
     "@mariozechner/pi-ai": "0.60.0",
     "@mariozechner/pi-coding-agent": "0.60.0",
     "@mariozechner/pi-tui": "0.60.0",
@@ -743,6 +743,8 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
+      "@mariozechner/pi-coding-agent>@mariozechner/pi-agent-core": "0.58.0",
+      "@mariozechner/pi-agent-core>@mariozechner/pi-ai": "0.60.0",
       "hono": "4.12.8",
       "@hono/node-server": "1.19.10",
       "fast-xml-parser": "5.5.6",
