@@ -7,13 +7,13 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/config-runtime";
-import type { SlackAccountConfig } from "openclaw/plugin-sdk/slack";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import {
   mergeSlackAccountConfig,
   resolveDefaultSlackAccountId,
   type SlackTokenSource,
 } from "./accounts.js";
+import type { SlackAccountConfig } from "./runtime-api.js";
 
 export type SlackCredentialStatus = "available" | "configured_unavailable" | "missing";
 
