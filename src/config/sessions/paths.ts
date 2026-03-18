@@ -5,6 +5,29 @@ import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.j
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
 
+/**
+ * Detect Windows-style absolute paths (e.g. "C:\..." or "C:/...") when running
+ * on POSIX, where `path.isAbsolute` would incorrectly return false for them.
+ * Returns true only on POSIX when the candidate looks like a Windows absolute path.
+ */
+function isWindowsAbsoluteOnPosix(candidate: string): boolean {
+  if (path.sep === "\\") {
+    // Already on Windows — path.isAbsolute handles it natively.
+    return false;
+  }
+  return /^[A-Za-z]:[/\\]/.test(candidate);
+}
+
+/**
+ * Extract the leaf filename from a potentially Windows-style path when running
+ * on POSIX. Handles both forward and backward slashes.
+ */
+function extractBasename(candidate: string): string {
+  // Split on both separators to handle Windows paths on POSIX.
+  const parts = candidate.split(/[/\\]/);
+  return parts[parts.length - 1] ?? candidate;
+}
+
 function resolveAgentSessionsDir(
   agentId?: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -177,6 +200,18 @@ function resolvePathWithinSessionsDir(
   if (!trimmed) {
     throw new Error("Session file path must not be empty");
   }
+
+  // Guard: if running on POSIX but the candidate is a Windows-style absolute
+  // path (e.g. stored in sessions.json by a Windows host and read inside a
+  // Docker container), extract the leaf filename to avoid creating paths like
+  // "/home/node/.openclaw/.../C:\Users\...".
+  if (isWindowsAbsoluteOnPosix(trimmed)) {
+    const basename = extractBasename(trimmed);
+    if (basename && basename !== "." && basename !== "..") {
+      return path.resolve(path.resolve(sessionsDir), basename);
+    }
+  }
+
   const resolvedBase = path.resolve(sessionsDir);
   const realBase = safeRealpathSync(resolvedBase) ?? resolvedBase;
   // Normalize absolute paths that are within the sessions directory.
