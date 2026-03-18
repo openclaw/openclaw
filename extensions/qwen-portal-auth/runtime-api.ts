@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/qwen-portal-auth";
+export * from "../../src/plugin-sdk/qwen-portal-auth.js";
