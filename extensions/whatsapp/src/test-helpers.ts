@@ -34,8 +34,19 @@ export function resetLoadConfigMock() {
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  // sessions/store.ts → gateway/session-utils.fs.ts → config/sessions.ts creates a circular
+  // dependency that can leave updateLastRoute/resolveStorePath/loadSessionStore/
+  // recordSessionMetaFromInbound undefined in the importOriginal snapshot. Import directly from
+  // the source sub-modules to guarantee the real implementations are present.
+  const { updateLastRoute, loadSessionStore, recordSessionMetaFromInbound } =
+    await import("../../../src/config/sessions/store.js");
+  const { resolveStorePath } = await import("../../../src/config/sessions/paths.js");
   return {
     ...actual,
+    updateLastRoute,
+    loadSessionStore,
+    recordSessionMetaFromInbound,
+    resolveStorePath,
     loadConfig: () => {
       const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
       if (typeof getter === "function") {

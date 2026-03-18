@@ -22,22 +22,21 @@ const state = vi.hoisted(() => ({
   heartbeatWarnLogs: [] as string[],
 }));
 
-vi.mock("../../../../src/agents/current-time.js", () => ({
+// Perf: agent-runtime otherwise pulls a large dependency graph (pi-embedded-helpers →
+// auto-reply/thinking → plugins/providers → plugin-auto-enable → plugin-sdk/whatsapp →
+// extensions/whatsapp/src/directory-config → accounts → auth-store) that is not needed here.
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   appendCronStyleCurrentTimeLine: (body: string) =>
     `${body}\nCurrent time: 2026-02-15T00:00:00Z (mock)`,
 }));
 
-// Perf: this module otherwise pulls a large dependency graph that we don't need
+// Perf: channel-runtime otherwise pulls a large dependency graph that we don't need
 // for these unit tests.
-vi.mock("../../../../src/auto-reply/reply.js", () => ({
-  getReplyFromConfig: vi.fn(async () => undefined),
+vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
+  resolveWhatsAppHeartbeatRecipients: () => ({ recipients: [], source: "config" }),
 }));
 
-vi.mock("../../../../src/channels/plugins/whatsapp-heartbeat.js", () => ({
-  resolveWhatsAppHeartbeatRecipients: () => [],
-}));
-
-vi.mock("../../../../src/config/config.js", () => ({
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   loadConfig: () => ({ agents: { defaults: {} }, session: {} }),
 }));
 
@@ -62,16 +61,29 @@ vi.mock("../../../../src/config/sessions.js", () => ({
   },
 }));
 
-vi.mock("./session-snapshot.js", () => ({
-  getSessionSnapshot: () => state.snapshot,
-}));
-
-vi.mock("../../../../src/infra/heartbeat-events.js", () => ({
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+  resolveHeartbeatVisibility: () => state.visibility,
   emitHeartbeatEvent: (event: unknown) => state.events.push(event),
   resolveIndicatorType: (status: string) => `indicator:${status}`,
 }));
 
-vi.mock("../../../../src/logging.js", () => ({
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
+  getReplyFromConfig: vi.fn(async () => undefined),
+  resolveHeartbeatReplyPayload: (result: unknown) => result,
+  DEFAULT_HEARTBEAT_ACK_MAX_CHARS: 160,
+  resolveHeartbeatPrompt: (prompt?: string) => prompt ?? "",
+  stripHeartbeatToken: (text: string | undefined, _opts: unknown) => ({
+    text: text === "HEARTBEAT_OK" ? "" : (text ?? ""),
+    shouldSkip: text === "HEARTBEAT_OK",
+  }),
+  HEARTBEAT_TOKEN: "HEARTBEAT_OK",
+}));
+
+vi.mock("openclaw/plugin-sdk/routing", () => ({
+  normalizeMainKey: () => null,
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   getChildLogger: () => ({
     info: (...args: unknown[]) => state.loggerInfoCalls.push(args),
     warn: (...args: unknown[]) => state.loggerWarnCalls.push(args),
