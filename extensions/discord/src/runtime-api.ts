@@ -1,8 +1,6 @@
 export {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
@@ -20,6 +18,10 @@ export {
 } from "openclaw/plugin-sdk/discord-core";
 export { DiscordConfigSchema } from "openclaw/plugin-sdk/discord-core";
 export { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+export {
+  listDiscordDirectoryGroupsFromConfig,
+  listDiscordDirectoryPeersFromConfig,
+} from "./directory-config.js";
 export {
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
