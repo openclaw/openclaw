@@ -112,8 +112,11 @@ function toDiscordSendResult(
   result: DiscordChannelMessageResult,
   fallbackChannelId: string,
 ): DiscordSendResult {
+  if (!result.id) {
+    throw new Error("Discord send result missing message ID");
+  }
   return {
-    messageId: result.id ? String(result.id) : "unknown",
+    messageId: String(result.id),
     channelId: String(result.channel_id ?? fallbackChannelId),
   };
 }
