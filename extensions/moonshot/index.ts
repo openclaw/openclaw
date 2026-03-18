@@ -1,6 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/core";
-import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
