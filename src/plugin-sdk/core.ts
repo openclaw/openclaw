@@ -1,4 +1,5 @@
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { getChatChannelMeta } from "../channels/registry.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type {
@@ -130,6 +131,42 @@ type DefinedPluginEntry = {
   register: NonNullable<OpenClawPluginDefinition["register"]>;
 } & Pick<OpenClawPluginDefinition, "kind">;
 
+type CreateChannelPluginBaseOptions<TResolvedAccount> = {
+  id: ChannelPlugin<TResolvedAccount>["id"];
+  meta?: Partial<NonNullable<ChannelPlugin<TResolvedAccount>["meta"]>>;
+  setupWizard?: NonNullable<ChannelPlugin<TResolvedAccount>["setupWizard"]>;
+  capabilities?: ChannelPlugin<TResolvedAccount>["capabilities"];
+  agentPrompt?: ChannelPlugin<TResolvedAccount>["agentPrompt"];
+  streaming?: ChannelPlugin<TResolvedAccount>["streaming"];
+  reload?: ChannelPlugin<TResolvedAccount>["reload"];
+  gatewayMethods?: ChannelPlugin<TResolvedAccount>["gatewayMethods"];
+  configSchema?: ChannelPlugin<TResolvedAccount>["configSchema"];
+  config?: ChannelPlugin<TResolvedAccount>["config"];
+  security?: ChannelPlugin<TResolvedAccount>["security"];
+  setup: NonNullable<ChannelPlugin<TResolvedAccount>["setup"]>;
+  groups?: ChannelPlugin<TResolvedAccount>["groups"];
+};
+
+type CreatedChannelPluginBase<TResolvedAccount> = Pick<
+  ChannelPlugin<TResolvedAccount>,
+  "id" | "meta" | "setup"
+> &
+  Partial<
+    Pick<
+      ChannelPlugin<TResolvedAccount>,
+      | "setupWizard"
+      | "capabilities"
+      | "agentPrompt"
+      | "streaming"
+      | "reload"
+      | "gatewayMethods"
+      | "configSchema"
+      | "config"
+      | "security"
+      | "groups"
+    >
+  >;
+
 function resolvePluginConfigSchema(
   configSchema: DefinePluginEntryOptions["configSchema"] = emptyPluginConfigSchema,
 ): OpenClawPluginConfigSchema {
@@ -184,4 +221,28 @@ export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({
 // Shared setup-entry shape so bundled channels do not duplicate `{ plugin }`.
 export function defineSetupPluginEntry<TPlugin>(plugin: TPlugin) {
   return { plugin };
+}
+
+// Shared base object for channel plugins that only need to override a few optional surfaces.
+export function createChannelPluginBase<TResolvedAccount>(
+  params: CreateChannelPluginBaseOptions<TResolvedAccount>,
+): CreatedChannelPluginBase<TResolvedAccount> {
+  return {
+    id: params.id,
+    meta: {
+      ...getChatChannelMeta(params.id as Parameters<typeof getChatChannelMeta>[0]),
+      ...params.meta,
+    },
+    ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
+    ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+    ...(params.agentPrompt ? { agentPrompt: params.agentPrompt } : {}),
+    ...(params.streaming ? { streaming: params.streaming } : {}),
+    ...(params.reload ? { reload: params.reload } : {}),
+    ...(params.gatewayMethods ? { gatewayMethods: params.gatewayMethods } : {}),
+    ...(params.configSchema ? { configSchema: params.configSchema } : {}),
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.security ? { security: params.security } : {}),
+    ...(params.groups ? { groups: params.groups } : {}),
+    setup: params.setup,
+  } as CreatedChannelPluginBase<TResolvedAccount>;
 }
