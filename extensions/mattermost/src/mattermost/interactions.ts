@@ -4,7 +4,7 @@ import {
   isTrustedProxyAddress,
   resolveClientIp,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/mattermost";
+} from "../runtime-api.js";
 import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 
