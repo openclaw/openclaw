@@ -9,6 +9,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -793,7 +794,8 @@ export async function maybeApplyTtsToPayload(params: {
     return params.payload;
   }
 
-  const text = params.payload.text ?? "";
+  const reply = resolveSendableOutboundReplyParts(params.payload);
+  const text = reply.text;
   const directives = parseTtsDirectives(text, config.modelOverrides, config.openai.baseUrl);
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
@@ -827,7 +829,7 @@ export async function maybeApplyTtsToPayload(params: {
   if (!ttsText.trim()) {
     return nextPayload;
   }
-  if (params.payload.mediaUrl || (params.payload.mediaUrls?.length ?? 0) > 0) {
+  if (reply.hasMedia) {
     return nextPayload;
   }
   if (text.includes("MEDIA:")) {

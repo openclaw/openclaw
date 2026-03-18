@@ -1,7 +1,8 @@
-import fs from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import type { ChannelPlugin } from "../channels/plugins/index.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -25,6 +26,20 @@ type JsonSchemaObject = JsonSchemaNode & {
   anyOf?: JsonSchemaObject[];
   allOf?: JsonSchemaObject[];
   oneOf?: JsonSchemaObject[];
+};
+
+type PackageChannelMetadata = {
+  id: string;
+  label: string;
+  blurb?: string;
+};
+
+type ChannelSurfaceMetadata = {
+  id: string;
+  label: string;
+  description?: string;
+  configSchema?: Record<string, unknown>;
+  configUiHints?: ConfigSchemaResponse["uiHints"];
 };
 
 export type ConfigDocBaselineKind = "core" | "channel" | "plugin";
@@ -65,6 +80,13 @@ export type ConfigDocBaselineStatefileWriteResult = {
 const GENERATED_BY = "scripts/generate-config-doc-baseline.ts" as const;
 const DEFAULT_JSON_OUTPUT = "docs/.generated/config-baseline.json";
 const DEFAULT_STATEFILE_OUTPUT = "docs/.generated/config-baseline.jsonl";
+
+function logConfigDocBaselineDebug(message: string): void {
+  if (process.env.OPENCLAW_CONFIG_DOC_BASELINE_DEBUG === "1") {
+    console.error(`[config-doc-baseline] ${message}`);
+  }
+}
+
 function resolveRepoRoot(): string {
   const fromPackage = resolveOpenClawPackageRootSync({
     cwd: path.dirname(fileURLToPath(import.meta.url)),
@@ -242,16 +264,49 @@ function resolveEntryKind(configPath: string): ConfigDocBaselineKind {
   return "core";
 }
 
-async function resolveFirstExistingPath(candidates: string[]): Promise<string | null> {
+function resolveFirstExistingPath(candidates: string[]): string | null {
   for (const candidate of candidates) {
     try {
-      await fs.access(candidate);
+      fsSync.accessSync(candidate);
       return candidate;
     } catch {
       // Keep scanning for other source file variants.
     }
   }
   return null;
+}
+
+function loadPackageChannelMetadata(rootDir: string): PackageChannelMetadata | null {
+  try {
+    const packageJson = JSON.parse(
+      fsSync.readFileSync(path.join(rootDir, "package.json"), "utf8"),
+    ) as {
+      openclaw?: {
+        channel?: {
+          id?: unknown;
+          label?: unknown;
+          blurb?: unknown;
+        };
+      };
+    };
+    const channel = packageJson.openclaw?.channel;
+    if (!channel) {
+      return null;
+    }
+    const id = typeof channel.id === "string" ? channel.id.trim() : "";
+    const label = typeof channel.label === "string" ? channel.label.trim() : "";
+    const blurb = typeof channel.blurb === "string" ? channel.blurb.trim() : "";
+    if (!id || !label) {
+      return null;
+    }
+    return {
+      id,
+      label,
+      ...(blurb ? { blurb } : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function isChannelPlugin(value: unknown): value is ChannelPlugin {
@@ -262,8 +317,21 @@ function isChannelPlugin(value: unknown): value is ChannelPlugin {
   return typeof candidate.id === "string" && typeof candidate.meta === "object";
 }
 
+function resolveSetupChannelPlugin(value: unknown): ChannelPlugin | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as { plugin?: unknown };
+  return isChannelPlugin(candidate.plugin) ? candidate.plugin : null;
+}
+
 async function importChannelPluginModule(rootDir: string): Promise<ChannelPlugin> {
-  const modulePath = await resolveFirstExistingPath([
+  logConfigDocBaselineDebug(`resolve channel module ${rootDir}`);
+  const modulePath = resolveFirstExistingPath([
+    path.join(rootDir, "setup-entry.ts"),
+    path.join(rootDir, "setup-entry.js"),
+    path.join(rootDir, "setup-entry.mts"),
+    path.join(rootDir, "setup-entry.mjs"),
     path.join(rootDir, "src", "channel.ts"),
     path.join(rootDir, "src", "channel.js"),
     path.join(rootDir, "src", "plugin.ts"),
@@ -279,20 +347,117 @@ async function importChannelPluginModule(rootDir: string): Promise<ChannelPlugin
     throw new Error(`channel source not found under ${rootDir}`);
   }
 
-  const imported = (await import(pathToFileURL(modulePath).href)) as Record<string, unknown>;
+  logConfigDocBaselineDebug(`import channel module ${modulePath}`);
+  const imported = (await import(modulePath)) as Record<string, unknown>;
+  logConfigDocBaselineDebug(`imported channel module ${modulePath}`);
   for (const value of Object.values(imported)) {
     if (isChannelPlugin(value)) {
+      logConfigDocBaselineDebug(`resolved channel export ${modulePath}`);
       return value;
+    }
+    const setupPlugin = resolveSetupChannelPlugin(value);
+    if (setupPlugin) {
+      logConfigDocBaselineDebug(`resolved setup channel export ${modulePath}`);
+      return setupPlugin;
     }
     if (typeof value === "function" && value.length === 0) {
       const resolved = value();
       if (isChannelPlugin(resolved)) {
+        logConfigDocBaselineDebug(`resolved channel factory ${modulePath}`);
         return resolved;
       }
     }
   }
 
   throw new Error(`channel plugin export not found in ${modulePath}`);
+}
+
+async function importChannelSurfaceMetadata(
+  rootDir: string,
+  repoRoot: string,
+  env: NodeJS.ProcessEnv,
+): Promise<ChannelSurfaceMetadata | null> {
+  logConfigDocBaselineDebug(`resolve channel config surface ${rootDir}`);
+  const packageMetadata = loadPackageChannelMetadata(rootDir);
+  if (!packageMetadata) {
+    logConfigDocBaselineDebug(`missing package channel metadata ${rootDir}`);
+    return null;
+  }
+
+  const modulePath = resolveFirstExistingPath([
+    path.join(rootDir, "src", "config-schema.ts"),
+    path.join(rootDir, "src", "config-schema.js"),
+    path.join(rootDir, "src", "config-schema.mts"),
+    path.join(rootDir, "src", "config-schema.mjs"),
+  ]);
+  if (!modulePath) {
+    logConfigDocBaselineDebug(`missing channel config schema module ${rootDir}`);
+    return null;
+  }
+
+  logConfigDocBaselineDebug(`import channel config schema ${modulePath}`);
+  try {
+    logConfigDocBaselineDebug(`spawn channel config schema subprocess ${modulePath}`);
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.join(repoRoot, "scripts", "load-channel-config-surface.ts"),
+        modulePath,
+      ],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env,
+        timeout: 15_000,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+    if (result.status !== 0 || result.error) {
+      throw result.error ?? new Error(result.stderr || `child exited with status ${result.status}`);
+    }
+    logConfigDocBaselineDebug(`completed channel config schema subprocess ${modulePath}`);
+    const configSchema = JSON.parse(result.stdout) as {
+      schema: Record<string, unknown>;
+      uiHints?: ConfigSchemaResponse["uiHints"];
+    };
+    return {
+      id: packageMetadata.id,
+      label: packageMetadata.label,
+      description: packageMetadata.blurb,
+      configSchema: configSchema.schema,
+      configUiHints: configSchema.uiHints,
+    };
+  } catch (error) {
+    logConfigDocBaselineDebug(
+      `channel config schema subprocess failed for ${modulePath}: ${String(error)}`,
+    );
+    return null;
+  }
+}
+
+async function loadChannelSurfaceMetadata(
+  rootDir: string,
+  repoRoot: string,
+  env: NodeJS.ProcessEnv,
+): Promise<ChannelSurfaceMetadata> {
+  logConfigDocBaselineDebug(`load channel surface ${rootDir}`);
+  const configSurface = await importChannelSurfaceMetadata(rootDir, repoRoot, env);
+  if (configSurface) {
+    logConfigDocBaselineDebug(`resolved channel config surface ${rootDir}`);
+    return configSurface;
+  }
+
+  logConfigDocBaselineDebug(`fallback to channel plugin import ${rootDir}`);
+  const plugin = await importChannelPluginModule(rootDir);
+  return {
+    id: plugin.id,
+    label: plugin.meta.label,
+    description: plugin.meta.blurb,
+    configSchema: plugin.configSchema?.schema,
+    configUiHints: plugin.configSchema?.uiHints,
+  };
 }
 
 async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> {
@@ -309,14 +474,26 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     env,
     config: {},
   });
-  const channelPlugins = await Promise.all(
-    manifestRegistry.plugins
-      .filter((plugin) => plugin.origin === "bundled" && plugin.channels.length > 0)
-      .map(async (plugin) => ({
-        id: plugin.id,
-        channel: await importChannelPluginModule(plugin.rootDir),
-      })),
+  logConfigDocBaselineDebug(`loaded ${manifestRegistry.plugins.length} bundled plugin manifests`);
+  const bundledChannelPlugins = manifestRegistry.plugins.filter(
+    (plugin) => plugin.origin === "bundled" && plugin.channels.length > 0,
   );
+  const loadChannelsSequentiallyForDebug = process.env.OPENCLAW_CONFIG_DOC_BASELINE_DEBUG === "1";
+  const channelPlugins = loadChannelsSequentiallyForDebug
+    ? await bundledChannelPlugins.reduce<Promise<ChannelSurfaceMetadata[]>>(
+        async (promise, plugin) => {
+          const loaded = await promise;
+          loaded.push(await loadChannelSurfaceMetadata(plugin.rootDir, repoRoot, env));
+          return loaded;
+        },
+        Promise.resolve([]),
+      )
+    : await Promise.all(
+        bundledChannelPlugins.map(
+          async (plugin) => await loadChannelSurfaceMetadata(plugin.rootDir, repoRoot, env),
+        ),
+      );
+  logConfigDocBaselineDebug(`imported ${channelPlugins.length} bundled channel plugins`);
 
   return buildConfigSchema({
     plugins: manifestRegistry.plugins
@@ -329,11 +506,11 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
         configSchema: plugin.configSchema,
       })),
     channels: channelPlugins.map((entry) => ({
-      id: entry.channel.id,
-      label: entry.channel.meta.label,
-      description: entry.channel.meta.blurb,
-      configSchema: entry.channel.configSchema?.schema,
-      configUiHints: entry.channel.configSchema?.uiHints,
+      id: entry.id,
+      label: entry.label,
+      description: entry.description,
+      configSchema: entry.configSchema,
+      configUiHints: entry.configUiHints,
     })),
   });
 }
@@ -344,8 +521,20 @@ export function collectConfigDocBaselineEntries(
   pathPrefix = "",
   required = false,
   entries: ConfigDocBaselineEntry[] = [],
+  visited = new WeakMap<JsonSchemaObject, Set<string>>(),
 ): ConfigDocBaselineEntry[] {
   const normalizedPath = normalizeBaselinePath(pathPrefix);
+  const visitKey = `${normalizedPath}|${required ? "1" : "0"}`;
+  const visitedPaths = visited.get(schema);
+  if (visitedPaths?.has(visitKey)) {
+    return entries;
+  }
+  if (visitedPaths) {
+    visitedPaths.add(visitKey);
+  } else {
+    visited.set(schema, new Set([visitKey]));
+  }
+
   if (normalizedPath) {
     const hint = resolveUiHintMatch(uiHints, normalizedPath);
     entries.push({
@@ -373,14 +562,21 @@ export function collectConfigDocBaselineEntries(
       continue;
     }
     const childPath = normalizedPath ? `${normalizedPath}.${key}` : key;
-    collectConfigDocBaselineEntries(child, uiHints, childPath, requiredKeys.has(key), entries);
+    collectConfigDocBaselineEntries(
+      child,
+      uiHints,
+      childPath,
+      requiredKeys.has(key),
+      entries,
+      visited,
+    );
   }
 
   if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
     const wildcard = asSchemaObject(schema.additionalProperties);
     if (wildcard) {
       const wildcardPath = normalizedPath ? `${normalizedPath}.*` : "*";
-      collectConfigDocBaselineEntries(wildcard, uiHints, wildcardPath, false, entries);
+      collectConfigDocBaselineEntries(wildcard, uiHints, wildcardPath, false, entries, visited);
     }
   }
 
@@ -391,13 +587,13 @@ export function collectConfigDocBaselineEntries(
         continue;
       }
       const itemPath = normalizedPath ? `${normalizedPath}.*` : "*";
-      collectConfigDocBaselineEntries(child, uiHints, itemPath, false, entries);
+      collectConfigDocBaselineEntries(child, uiHints, itemPath, false, entries, visited);
     }
   } else if (schema.items && typeof schema.items === "object") {
     const itemSchema = asSchemaObject(schema.items);
     if (itemSchema) {
       const itemPath = normalizedPath ? `${normalizedPath}.*` : "*";
-      collectConfigDocBaselineEntries(itemSchema, uiHints, itemPath, false, entries);
+      collectConfigDocBaselineEntries(itemSchema, uiHints, itemPath, false, entries, visited);
     }
   }
 
@@ -407,7 +603,7 @@ export function collectConfigDocBaselineEntries(
       if (!child) {
         continue;
       }
-      collectConfigDocBaselineEntries(child, uiHints, normalizedPath, required, entries);
+      collectConfigDocBaselineEntries(child, uiHints, normalizedPath, required, entries, visited);
     }
   }
 
@@ -426,14 +622,22 @@ export function dedupeConfigDocBaselineEntries(
 }
 
 export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
+  const start = Date.now();
+  logConfigDocBaselineDebug("build baseline start");
   const response = await loadBundledConfigSchemaResponse();
   const schemaRoot = asSchemaObject(response.schema);
   if (!schemaRoot) {
     throw new Error("config schema root is not an object");
   }
+  const collectStart = Date.now();
+  logConfigDocBaselineDebug("collect baseline entries start");
   const entries = dedupeConfigDocBaselineEntries(
     collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
   );
+  logConfigDocBaselineDebug(
+    `collect baseline entries done count=${entries.length} elapsedMs=${Date.now() - collectStart}`,
+  );
+  logConfigDocBaselineDebug(`build baseline done elapsedMs=${Date.now() - start}`);
   return {
     generatedBy: GENERATED_BY,
     entries,
@@ -443,6 +647,8 @@ export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
 export async function renderConfigDocBaselineStatefile(
   baseline?: ConfigDocBaseline,
 ): Promise<ConfigDocBaselineStatefileRender> {
+  const start = Date.now();
+  logConfigDocBaselineDebug("render statefile start");
   const resolvedBaseline = baseline ?? (await buildConfigDocBaseline());
   const json = `${JSON.stringify(resolvedBaseline, null, 2)}\n`;
   const metadataLine = JSON.stringify({
@@ -456,6 +662,7 @@ export async function renderConfigDocBaselineStatefile(
       ...entry,
     }),
   );
+  logConfigDocBaselineDebug(`render statefile done elapsedMs=${Date.now() - start}`);
   return {
     json,
     jsonl: `${[metadataLine, ...entryLines].join("\n")}\n`,
@@ -465,7 +672,7 @@ export async function renderConfigDocBaselineStatefile(
 
 async function readIfExists(filePath: string): Promise<string | null> {
   try {
-    return await fs.readFile(filePath, "utf8");
+    return fsSync.readFileSync(filePath, "utf8");
   } catch {
     return null;
   }
@@ -476,8 +683,8 @@ async function writeIfChanged(filePath: string, next: string): Promise<boolean> 
   if (current === next) {
     return false;
   }
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, next, "utf8");
+  fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
+  fsSync.writeFileSync(filePath, next, "utf8");
   return true;
 }
 
@@ -487,13 +694,23 @@ export async function writeConfigDocBaselineStatefile(params?: {
   jsonPath?: string;
   statefilePath?: string;
 }): Promise<ConfigDocBaselineStatefileWriteResult> {
+  const start = Date.now();
+  logConfigDocBaselineDebug("write statefile start");
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
   const jsonPath = path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT);
   const statefilePath = path.resolve(repoRoot, params?.statefilePath ?? DEFAULT_STATEFILE_OUTPUT);
   const rendered = await renderConfigDocBaselineStatefile();
+  logConfigDocBaselineDebug(`render statefile done elapsedMs=${Date.now() - start}`);
+  logConfigDocBaselineDebug(`read current json start ${jsonPath}`);
   const currentJson = await readIfExists(jsonPath);
+  logConfigDocBaselineDebug(`read current json done elapsedMs=${Date.now() - start}`);
+  logConfigDocBaselineDebug(`read current statefile start ${statefilePath}`);
   const currentStatefile = await readIfExists(statefilePath);
+  logConfigDocBaselineDebug(`read current statefile done elapsedMs=${Date.now() - start}`);
   const changed = currentJson !== rendered.json || currentStatefile !== rendered.jsonl;
+  logConfigDocBaselineDebug(
+    `compare statefile done changed=${changed} elapsedMs=${Date.now() - start}`,
+  );
 
   if (params?.check) {
     return {

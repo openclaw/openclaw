@@ -121,6 +121,7 @@ export function stageBundledPluginRuntime(params = {}) {
     stagePluginRuntimeOverlay(distPluginDir, runtimePluginDir);
     linkPluginNodeModules({
       runtimePluginDir,
+      distPluginDir,
       sourcePluginNodeModulesDir,
     });
   }

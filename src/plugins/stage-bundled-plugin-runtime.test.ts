@@ -49,6 +49,7 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.realpathSync(path.join(runtimePluginDir, "node_modules"))).toBe(
       fs.realpathSync(sourcePluginNodeModulesDir),
     );
+    expect(fs.existsSync(path.join(distPluginDir, "node_modules"))).toBe(false);
   });
 
   it("writes wrappers that forward plugin entry imports into canonical dist files", async () => {

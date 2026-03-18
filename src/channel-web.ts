@@ -7,11 +7,15 @@ export {
   monitorWebChannel,
   resolveHeartbeatRecipients,
   runWebHeartbeatOnce,
-} from "./plugin-sdk/whatsapp.js";
-export { extractMediaPlaceholder, extractText, monitorWebInbox } from "./plugin-sdk/whatsapp.js";
-export { loginWeb } from "./plugin-sdk/whatsapp.js";
-export { loadWebMedia, optimizeImageToJpeg } from "./plugin-sdk/whatsapp.js";
-export { sendMessageWhatsApp } from "./plugin-sdk/whatsapp.js";
+} from "openclaw/plugin-sdk/whatsapp";
+export {
+  extractMediaPlaceholder,
+  extractText,
+  monitorWebInbox,
+} from "openclaw/plugin-sdk/whatsapp";
+export { loginWeb } from "openclaw/plugin-sdk/whatsapp";
+export { loadWebMedia, optimizeImageToJpeg } from "./media/web-media.js";
+export { sendMessageWhatsApp } from "openclaw/plugin-sdk/whatsapp";
 export {
   createWaSocket,
   formatError,
@@ -22,4 +26,4 @@ export {
   WA_WEB_AUTH_DIR,
   waitForWaConnection,
   webAuthExists,
-} from "./plugin-sdk/whatsapp.js";
+} from "openclaw/plugin-sdk/whatsapp";

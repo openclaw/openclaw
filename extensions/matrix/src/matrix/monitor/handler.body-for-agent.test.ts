@@ -8,6 +8,22 @@ import {
 } from "./handler.js";
 import { EventType, type MatrixRawEvent } from "./types.js";
 
+const dispatchReplyFromConfigWithSettledDispatcherMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    queuedFinal: false,
+    counts: { final: 0, partial: 0, tool: 0 },
+  }),
+);
+
+vi.mock("../../../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../runtime-api.js")>();
+  return {
+    ...actual,
+    dispatchReplyFromConfigWithSettledDispatcher: (...args: unknown[]) =>
+      dispatchReplyFromConfigWithSettledDispatcherMock(...args),
+  };
+});
+
 describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
   it("stores sender-labeled BodyForAgent for group thread messages", async () => {
     const recordInboundSession = vi.fn().mockResolvedValue(undefined);
@@ -149,6 +165,7 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
         }),
       }),
     );
+    expect(dispatchReplyFromConfigWithSettledDispatcherMock).toHaveBeenCalled();
   });
 
   it("uses room-scoped session keys for DM rooms matched via parentPeer binding", () => {

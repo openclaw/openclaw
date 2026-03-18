@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -687,9 +688,9 @@ export async function runCronIsolatedAgentTurn(params: {
       const interimPayloads = interimRunResult.payloads ?? [];
       const interimDeliveryPayload = pickLastDeliverablePayload(interimPayloads);
       const interimPayloadHasStructuredContent =
-        Boolean(interimDeliveryPayload?.mediaUrl) ||
-        (interimDeliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
-        Object.keys(interimDeliveryPayload?.channelData ?? {}).length > 0;
+        (interimDeliveryPayload
+          ? resolveSendableOutboundReplyParts(interimDeliveryPayload).hasMedia
+          : false) || Object.keys(interimDeliveryPayload?.channelData ?? {}).length > 0;
       const interimText = pickLastNonEmptyTextFromPayloads(interimPayloads)?.trim() ?? "";
       const hasDescendantsSinceRunStart = listDescendantRunsForRequester(agentSessionKey).some(
         (entry) => {
@@ -809,8 +810,7 @@ export async function runCronIsolatedAgentTurn(params: {
         ? [{ text: synthesizedText }]
         : [];
   const deliveryPayloadHasStructuredContent =
-    Boolean(deliveryPayload?.mediaUrl) ||
-    (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
+    (deliveryPayload ? resolveSendableOutboundReplyParts(deliveryPayload).hasMedia : false) ||
     Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
   const hasErrorPayload = payloads.some((payload) => payload?.isError === true);

@@ -1,6 +1,7 @@
 export type { OpenClawConfig } from "../config/config.js";
 export type { LineConfig } from "../line/types.js";
 export {
+  createTopLevelChannelDmPolicy,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   setSetupChannelEnabled,
@@ -14,5 +15,6 @@ export {
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../line/accounts.js";
+export { resolveExactLineGroupConfigKey } from "../line/group-keys.js";
 export type { ResolvedLineAccount } from "../line/types.js";
 export { LineConfigSchema } from "../line/config-schema.js";

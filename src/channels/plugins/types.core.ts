@@ -392,6 +392,10 @@ export type ChannelMessagingAdapter = {
     threadId?: string | number;
     chatType?: ChatType;
   } | null;
+  /**
+   * Lightweight chat-type inference used before directory lookup so plugins can
+   * steer peer-vs-group resolution without reimplementing host search flow.
+   */
   inferTargetChatType?: (params: { to: string }) => ChatType | undefined;
   buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
   enableInteractiveReplies?: (params: {
@@ -402,6 +406,10 @@ export type ChannelMessagingAdapter = {
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
+    /**
+     * Plugin-owned fallback for explicit/native targets or post-directory-miss
+     * resolution. This should complement directory lookup, not duplicate it.
+     */
     resolveTarget?: (params: {
       cfg: OpenClawConfig;
       accountId?: string | null;
@@ -420,6 +428,10 @@ export type ChannelMessagingAdapter = {
     display?: string;
     kind?: ChannelDirectoryEntryKind;
   }) => string;
+  /**
+   * Provider-specific session-route builder used after target resolution.
+   * Keep session-key orchestration in core and channel-native routing rules here.
+   */
   resolveOutboundSessionRoute?: (params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -489,38 +501,14 @@ export type ChannelToolSend = {
 
 export type ChannelMessageActionAdapter = {
   /**
-   * Preferred unified discovery surface for the shared `message` tool.
-   * When provided, this is authoritative and should return the scoped actions,
+   * Unified discovery surface for the shared `message` tool.
+   * This returns the scoped actions,
    * capabilities, and schema fragments together so they cannot drift.
    */
-  describeMessageTool?: (
+  describeMessageTool: (
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
-  /**
-   * Advertise agent-discoverable actions for this channel.
-   * Legacy fallback used when `describeMessageTool` is not implemented.
-   * Keep this aligned with any gated capability checks. Poll discovery is
-   * not inferred from `outbound.sendPoll`, so channels that want agents to
-   * create polls should include `"poll"` here when enabled.
-   */
-  listActions?: (params: ChannelMessageActionDiscoveryContext) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
-  getCapabilities?: (
-    params: ChannelMessageActionDiscoveryContext,
-  ) => readonly ChannelMessageCapability[];
-  /**
-   * Extend the shared `message` tool schema with channel-owned fields.
-   * Legacy fallback used when `describeMessageTool` is not implemented.
-   * Keep this aligned with `listActions` and `getCapabilities` so the exposed
-   * schema matches what the channel can actually execute in the current scope.
-   */
-  getToolSchema?: (
-    params: ChannelMessageActionDiscoveryContext,
-  ) =>
-    | ChannelMessageToolSchemaContribution
-    | ChannelMessageToolSchemaContribution[]
-    | null
-    | undefined;
   requiresTrustedRequesterSender?: (params: {
     action: ChannelMessageActionName;
     toolContext?: ChannelThreadingToolContext;

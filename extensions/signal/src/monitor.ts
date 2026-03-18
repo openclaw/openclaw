@@ -10,6 +10,10 @@ import type { BackoffPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import {
+  deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
+import {
   chunkTextWithMode,
   resolveChunkMode,
   resolveTextChunkLimit,
@@ -296,35 +300,32 @@ async function deliverReplies(params: {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
   for (const payload of replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const text = payload.text ?? "";
-    if (!text && mediaList.length === 0) {
-      continue;
-    }
-    if (mediaList.length === 0) {
-      for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
+    const reply = resolveSendableOutboundReplyParts(payload);
+    const delivered = await deliverTextOrMediaReply({
+      payload,
+      text: reply.text,
+      chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
+      sendText: async (chunk) => {
         await sendMessageSignal(target, chunk, {
           baseUrl,
           account,
           maxBytes,
           accountId,
         });
-      }
-    } else {
-      let first = true;
-      for (const url of mediaList) {
-        const caption = first ? text : "";
-        first = false;
-        await sendMessageSignal(target, caption, {
+      },
+      sendMedia: async ({ mediaUrl, caption }) => {
+        await sendMessageSignal(target, caption ?? "", {
           baseUrl,
           account,
-          mediaUrl: url,
+          mediaUrl,
           maxBytes,
           accountId,
         });
-      }
+      },
+    });
+    if (delivered !== "empty") {
+      runtime.log?.(`delivered reply to ${target}`);
     }
-    runtime.log?.(`delivered reply to ${target}`);
   }
 }
 
