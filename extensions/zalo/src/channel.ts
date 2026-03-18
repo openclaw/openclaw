@@ -9,11 +9,6 @@ import {
   collectOpenProviderGroupPolicyWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type {
-  ChannelAccountSnapshot,
-  ChannelPlugin,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/zalo";
 import {
   buildBaseAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -25,7 +20,10 @@ import {
   listDirectoryUserEntriesFromAllowFrom,
   isNumericTargetId,
   sendPayloadWithChunkedTextAndMedia,
-} from "openclaw/plugin-sdk/zalo";
+  type ChannelAccountSnapshot,
+  type ChannelPlugin,
+  type OpenClawConfig,
+} from "./runtime-api.js";
 import {
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
