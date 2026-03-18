@@ -36,6 +36,7 @@ import {
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
+import { resolveTelegramApiBase } from "./api-base.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
@@ -230,11 +231,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
       : undefined;
+  const apiRoot = resolveTelegramApiBase();
+  const useCustomApiRoot = apiRoot !== "https://api.telegram.org";
   const client: ApiClientOptions | undefined =
-    finalFetch || timeoutSeconds
+    finalFetch || timeoutSeconds || useCustomApiRoot
       ? {
           ...(finalFetch ? { fetch: finalFetch } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
+          ...(useCustomApiRoot ? { apiRoot } : {}),
         }
       : undefined;
 
