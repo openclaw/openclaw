@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import { captureEnv } from "../../test-utils/env.js";
-import { handleTelegramAction, readTelegramButtons } from "./telegram-actions.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { captureEnv } from "../../../test/helpers/extensions/env.js";
+import {
+  handleTelegramAction,
+  readTelegramButtons,
+  telegramActionRuntime,
+} from "./action-runtime.js";
 
+const originalTelegramActionRuntime = { ...telegramActionRuntime };
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
 const sendMessageTelegram = vi.fn(async () => ({
   messageId: "789",
@@ -35,24 +40,6 @@ const createForumTopicTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 let envSnapshot: ReturnType<typeof captureEnv>;
-
-vi.mock("../../../extensions/telegram/src/send.js", () => ({
-  reactMessageTelegram: (...args: Parameters<typeof reactMessageTelegram>) =>
-    reactMessageTelegram(...args),
-  sendMessageTelegram: (...args: Parameters<typeof sendMessageTelegram>) =>
-    sendMessageTelegram(...args),
-  sendPollTelegram: (...args: Parameters<typeof sendPollTelegram>) => sendPollTelegram(...args),
-  sendStickerTelegram: (...args: Parameters<typeof sendStickerTelegram>) =>
-    sendStickerTelegram(...args),
-  deleteMessageTelegram: (...args: Parameters<typeof deleteMessageTelegram>) =>
-    deleteMessageTelegram(...args),
-  editMessageTelegram: (...args: Parameters<typeof editMessageTelegram>) =>
-    editMessageTelegram(...args),
-  editForumTopicTelegram: (...args: Parameters<typeof editForumTopicTelegram>) =>
-    editForumTopicTelegram(...args),
-  createForumTopicTelegram: (...args: Parameters<typeof createForumTopicTelegram>) =>
-    createForumTopicTelegram(...args),
-}));
 
 describe("handleTelegramAction", () => {
   const defaultReactionAction = {
@@ -107,6 +94,16 @@ describe("handleTelegramAction", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN"]);
+    Object.assign(telegramActionRuntime, originalTelegramActionRuntime, {
+      reactMessageTelegram,
+      sendMessageTelegram,
+      sendPollTelegram,
+      sendStickerTelegram,
+      deleteMessageTelegram,
+      editMessageTelegram,
+      editForumTopicTelegram,
+      createForumTopicTelegram,
+    });
     reactMessageTelegram.mockClear();
     sendMessageTelegram.mockClear();
     sendPollTelegram.mockClear();

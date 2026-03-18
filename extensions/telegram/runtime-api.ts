@@ -1,4 +1,5 @@
 export * from "./src/audit.js";
+export * from "./src/action-runtime.js";
 export * from "./src/channel-actions.js";
 export * from "./src/monitor.js";
 export * from "./src/probe.js";
