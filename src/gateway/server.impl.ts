@@ -664,6 +664,7 @@ export async function startGatewayServer(
     openAiChatCompletionsConfig,
     openResponsesEnabled,
     openResponsesConfig,
+    staticFilesConfig: cfgAtStart.gateway?.staticFiles,
     strictTransportSecurityHeader,
     resolvedAuth,
     rateLimiter: authRateLimiter,

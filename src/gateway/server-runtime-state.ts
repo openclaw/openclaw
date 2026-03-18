@@ -56,6 +56,7 @@ export async function createGatewayRuntimeState(params: {
   openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
+  staticFilesConfig?: import("../config/types.gateway.js").GatewayStaticFilesConfig;
   strictTransportSecurityHeader?: string;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
@@ -169,6 +170,7 @@ export async function createGatewayRuntimeState(params: {
         openAiChatCompletionsConfig: params.openAiChatCompletionsConfig,
         openResponsesEnabled: params.openResponsesEnabled,
         openResponsesConfig: params.openResponsesConfig,
+        staticFilesConfig: params.staticFilesConfig,
         strictTransportSecurityHeader: params.strictTransportSecurityHeader,
         handleHooksRequest,
         handlePluginRequest,

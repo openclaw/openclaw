@@ -390,6 +390,17 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type GatewayStaticFilesConfig = {
+  /** Enable static file serving (default: false). */
+  enabled?: boolean;
+  /** Directory to serve files from (default: workspace). */
+  root?: string;
+  /** URL path prefix (default: /files). */
+  basePath?: string;
+  /** Allowed file extensions (default: common image/doc types). */
+  allowedExtensions?: string[];
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -432,6 +443,8 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /** Static file serving configuration. */
+  staticFiles?: GatewayStaticFilesConfig;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.

@@ -71,6 +71,7 @@ import {
 } from "./server/plugins-http.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { createStaticFilesHandler, type StaticFilesConfig } from "./server-static-files.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -731,6 +732,7 @@ export function createGatewayHttpServer(opts: {
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
   tlsOptions?: TlsOptions;
+  staticFilesConfig?: StaticFilesConfig;
 }): HttpServer {
   const {
     canvasHost,
@@ -749,7 +751,13 @@ export function createGatewayHttpServer(opts: {
     resolvedAuth,
     rateLimiter,
     getReadiness,
+    staticFilesConfig,
   } = opts;
+
+  // Create static files handler if configured
+  const handleStaticFiles = staticFilesConfig
+    ? createStaticFilesHandler(staticFilesConfig)
+    : null;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
         void handleRequest(req, res);
@@ -789,6 +797,10 @@ export function createGatewayHttpServer(opts: {
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
+        },
+        {
+          name: "static-files",
+          run: () => (handleStaticFiles ? handleStaticFiles(req, res) : false),
         },
         {
           name: "tools-invoke",
