@@ -30,10 +30,12 @@ function humanizeCompactionReason(reason: string | undefined): string | undefine
     return undefined;
   }
   const lower = trimmed.toLowerCase();
-  // SDK cancellation with no further detail — the most common case when
-  // safeguard mode decides there's not enough context to justify compaction.
+  // "Compaction cancelled" is the generic SDK surface for any extension
+  // { cancel: true } — including low-context skips, missing model/API key,
+  // and summarization failures. We can't distinguish them here, so keep the
+  // original wording but make it less alarming.
   if (lower === "compaction cancelled" || lower === "compaction canceled") {
-    return "context usage is below the compaction threshold — no summarization needed yet";
+    return "compaction was not needed or could not run — check /status for details";
   }
   if (lower === "no real conversation messages") {
     return "no conversation messages to summarize";
