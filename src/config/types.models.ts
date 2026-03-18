@@ -1,3 +1,4 @@
+import type { OpenAICompletionsCompat } from "@mariozechner/pi-ai";
 import type { SecretInput } from "./types.secrets.js";
 
 export const MODEL_APIS = [
@@ -13,21 +14,25 @@ export const MODEL_APIS = [
 
 export type ModelApi = (typeof MODEL_APIS)[number];
 
-export type ModelCompatConfig = {
-  supportsStore?: boolean;
-  supportsDeveloperRole?: boolean;
-  supportsReasoningEffort?: boolean;
-  supportsUsageInStreaming?: boolean;
+type SupportedOpenAICompatFields = Pick<
+  OpenAICompletionsCompat,
+  | "supportsStore"
+  | "supportsDeveloperRole"
+  | "supportsReasoningEffort"
+  | "supportsUsageInStreaming"
+  | "supportsStrictMode"
+  | "maxTokensField"
+  | "thinkingFormat"
+  | "requiresToolResultName"
+  | "requiresAssistantAfterToolResult"
+  | "requiresThinkingAsText"
+>;
+
+export type ModelCompatConfig = SupportedOpenAICompatFields & {
   supportsTools?: boolean;
-  supportsStrictMode?: boolean;
   toolSchemaProfile?: "xai";
   nativeWebSearchTool?: boolean;
   toolCallArgumentsEncoding?: "html-entities";
-  maxTokensField?: "max_completion_tokens" | "max_tokens";
-  thinkingFormat?: "openai" | "zai" | "qwen";
-  requiresToolResultName?: boolean;
-  requiresAssistantAfterToolResult?: boolean;
-  requiresThinkingAsText?: boolean;
   requiresMistralToolIds?: boolean;
   requiresOpenAiAnthropicToolPayload?: boolean;
 };
