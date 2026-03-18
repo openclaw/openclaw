@@ -3,6 +3,7 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
@@ -12,7 +13,7 @@ import {
   setAccountEnabledInConfigSection,
   SignalConfigSchema,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/signal";
+} from "openclaw/plugin-sdk/signal-core";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -59,7 +60,7 @@ export function createSignalPluginBase(params: {
   | "security"
   | "setup"
 > {
-  return {
+  return createChannelPluginBase({
     id: SIGNAL_CHANNEL,
     meta: {
       ...getChatChannelMeta(SIGNAL_CHANNEL),
@@ -129,5 +130,17 @@ export function createSignalPluginBase(params: {
         }),
     },
     setup: params.setup,
-  };
+  }) as Pick<
+    ChannelPlugin<ResolvedSignalAccount>,
+    | "id"
+    | "meta"
+    | "setupWizard"
+    | "capabilities"
+    | "streaming"
+    | "reload"
+    | "configSchema"
+    | "config"
+    | "security"
+    | "setup"
+  >;
 }

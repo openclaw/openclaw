@@ -1,4 +1,6 @@
-import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk/tlon";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import {
   applyTlonSetupConfig,
@@ -17,12 +19,7 @@ import { validateUrbitBaseUrl } from "./urbit/base-url.js";
 
 const TLON_CHANNEL_ID = "tlon" as const;
 
-let tlonChannelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
-
-async function loadTlonChannelRuntime() {
-  tlonChannelRuntimePromise ??= import("./channel.runtime.js");
-  return tlonChannelRuntimePromise;
-}
+const loadTlonChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
 const tlonSetupWizardProxy = createTlonSetupWizardBase({
   resolveConfigured: async ({ cfg }) =>
@@ -218,7 +215,7 @@ export const tlonPlugin: ChannelPlugin = {
         lastError: runtime?.lastError ?? null,
         probe,
       };
-      return snapshot as import("openclaw/plugin-sdk/tlon").ChannelAccountSnapshot;
+      return snapshot as ChannelAccountSnapshot;
     },
   },
   gateway: {

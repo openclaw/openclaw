@@ -27,7 +27,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/googlechat";
 import { GoogleChatConfigSchema } from "openclaw/plugin-sdk/googlechat";
-import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   listGoogleChatAccountIds,
@@ -48,11 +48,9 @@ import {
 
 const meta = getChatChannelMeta("googlechat");
 
-type GoogleChatChannelRuntime = typeof import("./channel.runtime.js").googleChatChannelRuntime;
-
-const loadGoogleChatChannelRuntime = createLazyRuntimeSurface(
+const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
-  ({ googleChatChannelRuntime }) => googleChatChannelRuntime,
+  "googleChatChannelRuntime",
 );
 
 const formatAllowFromEntry = (entry: string) =>
@@ -100,7 +98,7 @@ const resolveGoogleChatDmPolicy = createScopedDmSecurityResolver<ResolvedGoogleC
 });
 
 const googlechatActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => googlechatMessageActions.listActions?.(ctx) ?? [],
+  describeMessageTool: (ctx) => googlechatMessageActions.describeMessageTool?.(ctx) ?? null,
   extractToolSend: (ctx) => googlechatMessageActions.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
     if (!googlechatMessageActions.handleAction) {

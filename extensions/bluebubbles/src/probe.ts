@@ -73,7 +73,7 @@ export async function fetchBlueBubblesServerInfo(params: {
 }
 
 /**
- * Get cached server info synchronously (for use in listActions).
+ * Get cached server info synchronously (for use in describeMessageTool).
  * Returns null if not cached or expired.
  */
 export function getCachedBlueBubblesServerInfo(accountId?: string): BlueBubblesServerInfo | null {

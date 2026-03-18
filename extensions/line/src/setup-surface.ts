@@ -1,13 +1,13 @@
-import { resolveLineAccount } from "openclaw/plugin-sdk/line";
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
+  resolveLineAccount,
   setSetupChannelEnabled,
   setTopLevelChannelDmPolicyWithAllowFrom,
   splitSetupEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-} from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/line-core";
 import {
   isLineConfigured,
   listLineAccountIds,

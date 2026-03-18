@@ -3,9 +3,9 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveStateDir as resolvePluginStateDir } from "openclaw/plugin-sdk/state-paths";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/zalouser";
 import { normalizeZaloReactionIcon } from "./reaction.js";
-import { getZalouserRuntime } from "./runtime.js";
 import type {
   ZaloAuthStatus,
   ZaloEventMessage,
@@ -85,7 +85,7 @@ type StoredZaloCredentials = {
 };
 
 function resolveStateDir(env: NodeJS.ProcessEnv = process.env): string {
-  return getZalouserRuntime().state.resolveStateDir(env, os.homedir);
+  return resolvePluginStateDir(env, os.homedir);
 }
 
 function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
