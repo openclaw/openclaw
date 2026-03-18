@@ -341,10 +341,12 @@ async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
   config: OpenClawConfig;
-  dayBucketMode: DayBucketMode;
-  interpretationCacheKey: string;
+  dayBucketMode?: DayBucketMode;
+  interpretationCacheKey?: string;
 }): Promise<CostUsageSummary> {
-  const cacheKey = `${params.startMs}-${params.endMs}-${params.interpretationCacheKey}`;
+  const dayBucketMode = params.dayBucketMode ?? { type: "utc" };
+  const interpretationCacheKey = params.interpretationCacheKey ?? "utc";
+  const cacheKey = `${params.startMs}-${params.endMs}-${interpretationCacheKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
@@ -363,7 +365,7 @@ async function loadCostUsageSummaryCached(params: {
     startMs: params.startMs,
     endMs: params.endMs,
     config: params.config,
-    dayBucketMode: params.dayBucketMode,
+    dayBucketMode,
   })
     .then((summary) => {
       setCostUsageCache(cacheKey, { summary, updatedAt: Date.now() });
