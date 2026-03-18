@@ -63,10 +63,32 @@ export function normalizeReplyPayload(
     }
     text = "";
   }
-  // Strip NO_REPLY from mixed-content messages (e.g. "😄 NO_REPLY") so the
-  // token never leaks to end users.  If stripping leaves nothing, treat it as
-  // silent just like the exact-match path above.  (#30916, #30955)
+  // Handle messages that contain NO_REPLY but aren't an exact match.
+  // (#30916, #30955, #XXXXX)
+  //
+  // Two sub-cases:
+  //
+  // 1. Text-only (no media / interactive / channelData): the agent intended
+  //    full silence. Any text preceding NO_REPLY is internal reasoning that
+  //    must not be posted. Suppress the entire message.
+  //
+  // 2. Non-text content present (media, interactive, channelData): the agent
+  //    wants to send the attachment/reaction but suppress the text portion
+  //    (e.g. "😄 NO_REPLY" alongside a channel reaction). Strip the token
+  //    from the text and let the non-text content through.
   if (text && text.includes(silentToken) && !isSilentReplyText(text, silentToken)) {
+    const hasNonTextContent = hasReplyContent({
+      mediaUrl: payload.mediaUrl,
+      mediaUrls: payload.mediaUrls,
+      interactive: payload.interactive,
+      hasChannelData,
+    });
+    if (!hasNonTextContent) {
+      // Text-only: suppress entirely — never post reasoning preamble.
+      opts.onSkip?.("silent");
+      return null;
+    }
+    // Non-text content exists: strip token from text, send other content.
     text = stripSilentToken(text, silentToken);
     if (
       !hasReplyContent({
