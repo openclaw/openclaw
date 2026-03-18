@@ -24,6 +24,7 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createOpenAICompletionsUsageNormalizationWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
@@ -210,6 +211,12 @@ export function applyExtraParamsToAgent(
         thinkingLevel,
       },
     }) ?? merged;
+
+  // Normalize usage field names (input_tokens/output_tokens →
+  // prompt_tokens/completion_tokens) for OpenAI-compatible servers like
+  // mlx-vlm and vLLM that use non-standard field names.  Applied first so
+  // the SSE data is normalized before pi-ai's parseChunkUsage reads it.
+  agent.streamFn = createOpenAICompletionsUsageNormalizationWrapper(agent.streamFn);
 
   const wrappedStreamFn = createStreamFnWithExtraParams(
     agent.streamFn,

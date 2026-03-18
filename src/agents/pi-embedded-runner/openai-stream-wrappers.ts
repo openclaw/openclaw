@@ -411,3 +411,193 @@ export function createOpenAIAttributionHeadersWrapper(
     });
   };
 }
+
+/**
+ * Normalize usage field names in an SSE JSON data line.
+ *
+ * Some OpenAI-compatible servers (mlx-vlm, vLLM) return `input_tokens` /
+ * `output_tokens` instead of the standard `prompt_tokens` / `completion_tokens`.
+ * The upstream pi-ai `parseChunkUsage` only reads the standard field names, so
+ * usage ends up as zero.  This function adds the standard field names when they
+ * are absent but the alternatives are present, so pi-ai can read them.
+ */
+function normalizeUsageFieldsInSseJson(json: string): string {
+  // Fast-path: skip lines that don't contain a usage object.
+  if (!json.includes('"usage"')) {
+    return json;
+  }
+
+  try {
+    const obj = JSON.parse(json);
+    const usage = obj?.usage;
+    if (!usage || typeof usage !== "object") {
+      return json;
+    }
+
+    let patched = false;
+
+    // Add prompt_tokens from input_tokens when prompt_tokens is absent.
+    if (
+      usage.prompt_tokens === undefined &&
+      typeof usage.input_tokens === "number" &&
+      Number.isFinite(usage.input_tokens)
+    ) {
+      usage.prompt_tokens = usage.input_tokens;
+      patched = true;
+    }
+
+    // Add completion_tokens from output_tokens when completion_tokens is absent.
+    if (
+      usage.completion_tokens === undefined &&
+      typeof usage.output_tokens === "number" &&
+      Number.isFinite(usage.output_tokens)
+    ) {
+      usage.completion_tokens = usage.output_tokens;
+      patched = true;
+    }
+
+    if (!patched) {
+      return json;
+    }
+
+    return JSON.stringify(obj);
+  } catch {
+    // Not valid JSON — pass through unchanged.
+    return json;
+  }
+}
+
+/**
+ * Wrap a fetch Response so that SSE `data:` lines have their usage field names
+ * normalized before the OpenAI SDK parses them.
+ */
+function wrapSseResponse(original: Response): Response {
+  const body = original.body;
+  if (!body) {
+    return original;
+  }
+
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = "";
+
+  const transform = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split("\n");
+      // Keep the last (possibly incomplete) line in the buffer.
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (line.startsWith("data: ") && !line.startsWith("data: [DONE]")) {
+          const jsonPart = line.slice(6);
+          const normalized = normalizeUsageFieldsInSseJson(jsonPart);
+          controller.enqueue(encoder.encode(`data: ${normalized}\n`));
+        } else {
+          controller.enqueue(encoder.encode(`${line}\n`));
+        }
+      }
+    },
+    flush(controller) {
+      if (buffer.length > 0) {
+        if (buffer.startsWith("data: ") && !buffer.startsWith("data: [DONE]")) {
+          const jsonPart = buffer.slice(6);
+          const normalized = normalizeUsageFieldsInSseJson(jsonPart);
+          controller.enqueue(encoder.encode(`data: ${normalized}\n`));
+        } else {
+          controller.enqueue(encoder.encode(`${buffer}\n`));
+        }
+      }
+    },
+  });
+
+  const transformedBody = body.pipeThrough(transform);
+
+  return new Response(transformedBody, {
+    status: original.status,
+    statusText: original.statusText,
+    headers: original.headers,
+  });
+}
+
+/**
+ * Number of active callers that need the normalizing fetch wrapper installed.
+ * When it drops to zero, we restore the original fetch.
+ */
+let normalizingFetchRefCount = 0;
+let originalFetch: typeof globalThis.fetch | undefined;
+
+function installNormalizingFetch(): void {
+  normalizingFetchRefCount += 1;
+  if (normalizingFetchRefCount === 1) {
+    originalFetch = globalThis.fetch;
+    const savedFetch = originalFetch;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await savedFetch(input, init);
+      const contentType = response.headers.get("content-type") ?? "";
+      // Only wrap SSE streaming responses from chat completion endpoints.
+      if (contentType.includes("text/event-stream")) {
+        return wrapSseResponse(response);
+      }
+      return response;
+    };
+  }
+}
+
+function uninstallNormalizingFetch(): void {
+  normalizingFetchRefCount -= 1;
+  if (normalizingFetchRefCount <= 0) {
+    normalizingFetchRefCount = 0;
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+      originalFetch = undefined;
+    }
+  }
+}
+
+/**
+ * StreamFn wrapper that normalizes `input_tokens`/`output_tokens` →
+ * `prompt_tokens`/`completion_tokens` in SSE streaming responses from
+ * OpenAI-compatible servers (mlx-vlm, vLLM, etc.).
+ *
+ * The upstream pi-ai openai-completions provider only reads the standard
+ * OpenAI field names, so alternative servers that use Anthropic-style names
+ * report zero usage.  This wrapper intercepts the HTTP response via a scoped
+ * globalThis.fetch override and adds the missing standard field names before
+ * the OpenAI SDK and pi-ai parse the SSE data.
+ */
+export function createOpenAICompletionsUsageNormalizationWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    // Only apply to openai-completions API which uses the OpenAI SDK streaming.
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+
+    installNormalizingFetch();
+
+    const maybeStream = underlying(model, context, options);
+
+    // The underlying StreamFn may return a Promise or the stream directly.
+    // In either case, hook into the stream's result() to uninstall when done.
+    const hookCleanup = (stream: ReturnType<typeof streamSimple>) => {
+      const originalResult = stream.result.bind(stream);
+      stream.result = async () => {
+        try {
+          return await originalResult();
+        } finally {
+          uninstallNormalizingFetch();
+        }
+      };
+      return stream;
+    };
+
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) => hookCleanup(stream));
+    }
+
+    return hookCleanup(maybeStream);
+  };
+}
