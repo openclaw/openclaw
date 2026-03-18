@@ -3,7 +3,7 @@ import {
   resolveChannelGroupToolsPolicy,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/imessage";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 
 type IMessageGroupContext = {
   cfg: OpenClawConfig;
