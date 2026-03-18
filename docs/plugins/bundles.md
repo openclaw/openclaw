@@ -114,6 +114,65 @@ loader. Cursor command markdown works through the same path.
 - project-local Pi settings still apply after bundle defaults, so workspace
   settings can override bundle MCP entries when needed
 
+##### Transports
+
+MCP servers can use stdio or HTTP transport:
+
+**Stdio** (existing) — launches a child process:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "command": "node",
+        "args": ["server.js"],
+        "env": { "PORT": "3000" }
+      }
+    }
+  }
+}
+```
+
+**StreamableHTTP** or **SSE** — connects to a running HTTP server:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "my-server": {
+        "url": "http://localhost:3100/mcp",
+        "transport": "streamable-http",
+        "headers": {
+          "Authorization": "Bearer ${MY_SECRET_TOKEN}"
+        }
+      }
+    }
+  }
+}
+```
+
+- `transport` must be `"streamable-http"` or `"sse"` — there is no auto-detection
+- `headers` values support `${ENV_VAR}` interpolation
+- a server entry with both `command` and `url` is rejected
+- URL credentials (userinfo, query params) are redacted from tool descriptions
+  and log output
+
+##### Tool namespacing
+
+All MCP tools are prefixed with the server name: `serverName:toolName`. For
+example, a server keyed `"vigil-harbor"` exposing a `memory_search` tool
+registers as `vigil-harbor:memory_search`.
+
+Server name sanitization:
+
+- characters outside `A-Za-z0-9_.-` are replaced with `-`
+- names are capped at 30 characters
+- empty names fall back to `mcp`
+
+The transcript validator (`TOOL_CALL_NAME_RE`) accepts `A-Za-z0-9_:.-` so
+namespaced tool calls survive session replay.
+
 #### Embedded Pi settings
 
 - Claude `settings.json` is imported as default embedded Pi settings when the
