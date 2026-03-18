@@ -21,6 +21,7 @@ import {
   resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
+import { appendCommsLog } from "./sessions-send-comms-log.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
@@ -283,10 +284,26 @@ export function createSessionsSendTool(opts?: {
           sessionKey: displayKey,
         });
         if (!start.ok) {
+          appendCommsLog({
+            type: "MESSAGE",
+            from: effectiveRequesterKey,
+            to: displayKey,
+            ts: new Date().toISOString(),
+            status: "error",
+            messagePreview: message,
+          });
           return start.result;
         }
         runId = start.runId;
         startA2AFlow(undefined, runId);
+        appendCommsLog({
+          type: "MESSAGE",
+          from: effectiveRequesterKey,
+          to: displayKey,
+          ts: new Date().toISOString(),
+          status: "accepted",
+          messagePreview: message,
+        });
         return jsonResult({
           runId,
           status: "accepted",
@@ -301,6 +318,14 @@ export function createSessionsSendTool(opts?: {
         sessionKey: displayKey,
       });
       if (!start.ok) {
+        appendCommsLog({
+          type: "MESSAGE",
+          from: effectiveRequesterKey,
+          to: displayKey,
+          ts: new Date().toISOString(),
+          status: "error",
+          messagePreview: message,
+        });
         return start.result;
       }
       runId = start.runId;
@@ -321,15 +346,32 @@ export function createSessionsSendTool(opts?: {
       } catch (err) {
         const messageText =
           err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+        const failStatus = messageText.includes("gateway timeout") ? "timeout" : "error";
+        appendCommsLog({
+          type: "MESSAGE",
+          from: effectiveRequesterKey,
+          to: displayKey,
+          ts: new Date().toISOString(),
+          status: failStatus,
+          messagePreview: message,
+        });
         return jsonResult({
           runId,
-          status: messageText.includes("gateway timeout") ? "timeout" : "error",
+          status: failStatus,
           error: messageText,
           sessionKey: displayKey,
         });
       }
 
       if (waitStatus === "timeout") {
+        appendCommsLog({
+          type: "MESSAGE",
+          from: effectiveRequesterKey,
+          to: displayKey,
+          ts: new Date().toISOString(),
+          status: "timeout",
+          messagePreview: message,
+        });
         return jsonResult({
           runId,
           status: "timeout",
@@ -338,6 +380,14 @@ export function createSessionsSendTool(opts?: {
         });
       }
       if (waitStatus === "error") {
+        appendCommsLog({
+          type: "MESSAGE",
+          from: effectiveRequesterKey,
+          to: displayKey,
+          ts: new Date().toISOString(),
+          status: "error",
+          messagePreview: message,
+        });
         return jsonResult({
           runId,
           status: "error",
@@ -354,6 +404,16 @@ export function createSessionsSendTool(opts?: {
       const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
       const reply = last ? extractAssistantText(last) : undefined;
       startA2AFlow(reply ?? undefined);
+
+      appendCommsLog({
+        type: "MESSAGE",
+        from: effectiveRequesterKey,
+        to: displayKey,
+        ts: new Date().toISOString(),
+        status: "ok",
+        messagePreview: message,
+        replyPreview: reply,
+      });
 
       return jsonResult({
         runId,
