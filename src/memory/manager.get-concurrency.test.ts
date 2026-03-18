@@ -118,4 +118,30 @@ describe("memory manager cache hydration", () => {
 
     await secondManager?.close?.();
   });
+
+  it("does not reuse cache entry when batch timeout override provenance changes", async () => {
+    const indexPath = path.join(workspaceDir, "index.sqlite");
+    const cfgInherited = createMemoryConcurrencyConfig(indexPath);
+    const cfgExplicit = createMemoryConcurrencyConfig(indexPath);
+    cfgExplicit.agents = cfgExplicit.agents ?? {};
+    cfgExplicit.agents.defaults = cfgExplicit.agents.defaults ?? {};
+    cfgExplicit.agents.defaults.memorySearch = cfgExplicit.agents.defaults.memorySearch ?? {};
+    cfgExplicit.agents.defaults.memorySearch.remote = {
+      ...cfgExplicit.agents.defaults.memorySearch.remote,
+      batch: {
+        ...cfgExplicit.agents.defaults.memorySearch.remote?.batch,
+        timeoutMinutes: 60,
+      },
+    };
+
+    const first = await RawMemoryIndexManager.get({ cfg: cfgInherited, agentId: "main" });
+    const second = await RawMemoryIndexManager.get({ cfg: cfgExplicit, agentId: "main" });
+
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(Object.is(second, first)).toBe(false);
+
+    await first?.close?.();
+    await second?.close?.();
+  });
 });

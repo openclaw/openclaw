@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -41,6 +45,20 @@ const log = createSubsystemLogger("memory");
 
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
+
+function resolveExplicitRemoteBatchTimeoutMinutes(
+  cfg: OpenClawConfig,
+  agentId: string,
+): number | null {
+  const defaultsTimeoutMinutes = cfg.agents?.defaults?.memorySearch?.remote?.batch?.timeoutMinutes;
+  const overrideTimeoutMinutes = resolveAgentConfig(cfg, agentId)?.memorySearch?.remote?.batch
+    ?.timeoutMinutes;
+  const resolvedTimeoutMinutes =
+    typeof overrideTimeoutMinutes === "number" ? overrideTimeoutMinutes : defaultsTimeoutMinutes;
+  return typeof resolvedTimeoutMinutes === "number" && Number.isFinite(resolvedTimeoutMinutes)
+    ? resolvedTimeoutMinutes
+    : null;
+}
 
 export async function closeAllMemoryIndexManagers(): Promise<void> {
   const pending = Array.from(INDEX_CACHE_PENDING.values());
@@ -144,7 +162,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return null;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}`;
+    const explicitRemoteBatchTimeoutMinutes = resolveExplicitRemoteBatchTimeoutMinutes(
+      cfg,
+      agentId,
+    );
+    const explicitTimeoutKey =
+      explicitRemoteBatchTimeoutMinutes === null
+        ? "none"
+        : String(explicitRemoteBatchTimeoutMinutes);
+    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:batch-timeout-override:${explicitTimeoutKey}`;
     const existing = INDEX_CACHE.get(key);
     if (existing) {
       return existing;
