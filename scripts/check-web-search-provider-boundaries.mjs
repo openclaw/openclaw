@@ -214,7 +214,14 @@ export async function collectWebSearchProviderBoundaryInventory() {
 }
 
 export async function readExpectedInventory() {
-  return JSON.parse(await fs.readFile(baselinePath, "utf8"));
+  try {
+    return JSON.parse(await fs.readFile(baselinePath, "utf8"));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
 }
 
 export function diffInventory(expected, actual) {

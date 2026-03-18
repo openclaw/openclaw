@@ -43,6 +43,7 @@ function isCodeFile(fileName) {
 function isTestLikeFile(relativePath) {
   return (
     /(^|\/)(__tests__|fixtures)\//.test(relativePath) ||
+    /(^|\/)[^/]*test-support\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath) ||
     /\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath)
   );
 }
@@ -190,7 +191,20 @@ export async function collectExtensionPluginSdkBoundaryInventory(mode) {
 }
 
 export async function readExpectedInventory(mode) {
-  return JSON.parse(await fs.readFile(baselinePathByMode[mode], "utf8"));
+  try {
+    return JSON.parse(await fs.readFile(baselinePathByMode[mode], "utf8"));
+  } catch (error) {
+    if (
+      (mode === "plugin-sdk-internal" || mode === "src-outside-plugin-sdk") &&
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 export function diffInventory(expected, actual) {
