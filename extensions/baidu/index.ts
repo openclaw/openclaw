@@ -1,3 +1,4 @@
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import {
   createPluginBackedWebSearchProvider,
   getScopedCredentialValue,
@@ -6,7 +7,7 @@ import {
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
 
-const baiduPlugin = {
+export default definePluginEntry({
   id: "baidu",
   name: "Baidu Plugin",
   description: "Bundled Baidu plugin",
@@ -28,6 +29,4 @@ const baiduPlugin = {
       }),
     );
   },
-};
-
-export default baiduPlugin;
+});
