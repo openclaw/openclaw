@@ -19,7 +19,7 @@
 </p>
 
 **OpenClaw** is a _personal AI assistant_ you run on your own devices.
-It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant. OpenClaw can also plug into Cortex for local, inspectable memory, previewable context, conflict handling, and coding sync.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
@@ -128,11 +128,41 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - **[Local-first Gateway](https://docs.openclaw.ai/gateway)** — single control plane for sessions, channels, tools, and events.
 - **[Multi-channel inbox](https://docs.openclaw.ai/channels)** — WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, BlueBubbles (iMessage), iMessage (legacy), IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat, macOS, iOS/Android.
 - **[Multi-agent routing](https://docs.openclaw.ai/gateway/configuration)** — route inbound channels/accounts/peers to isolated agents (workspaces + per-agent sessions).
+- **Cortex memory** — local, inspectable memory with preview, conflicts, coding sync, and status visibility.
 - **[Voice Wake](https://docs.openclaw.ai/nodes/voicewake) + [Talk Mode](https://docs.openclaw.ai/nodes/talk)** — wake words on macOS/iOS and continuous voice on Android (ElevenLabs + system TTS fallback).
 - **[Live Canvas](https://docs.openclaw.ai/platforms/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.openclaw.ai/platforms/mac/canvas#canvas-a2ui).
 - **[First-class tools](https://docs.openclaw.ai/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
 - **[Companion apps](https://docs.openclaw.ai/platforms/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.openclaw.ai/nodes).
 - **[Onboarding](https://docs.openclaw.ai/start/wizard) + [skills](https://docs.openclaw.ai/tools/skills)** — wizard-driven setup with bundled/managed/workspace skills.
+
+## Cortex Memory
+
+OpenClaw can use Cortex as a local memory graph, which makes the assistant feel less like a blank chat and more like a teammate with a notebook it can inspect.
+
+That means you can:
+
+- preview the memory before it changes the answer
+- inspect conflicts when two memories disagree
+- ask why the assistant answered a certain way
+- sync coding context into the tools you already use
+- keep the memory file local and versionable in `.cortex/context.json`
+
+Common commands:
+
+```bash
+openclaw memory cortex enable
+/cortex preview
+/cortex conflicts
+/cortex sync coding
+```
+
+```mermaid
+flowchart LR
+  You[You] -->|chat / /cortex commands| OpenClaw[OpenClaw]
+  OpenClaw -->|reads and writes| Cortex["Cortex local memory graph"]
+  Cortex -->|preview / why / conflicts / sync| OpenClaw
+  OpenClaw -->|answers with memory| Assistant[Assistant]
+```
 
 ## Star History
 
