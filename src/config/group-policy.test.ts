@@ -110,6 +110,63 @@ describe("resolveChannelGroupPolicy", () => {
     expect(policy.allowed).toBe(true);
   });
 
+  it("allows unlisted groups when groupPolicy=open with explicit group entries", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-1001234567890": { requireMention: false },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    // The listed group should be allowed and carry its config
+    const listed = resolveChannelGroupPolicy({
+      cfg,
+      channel: "telegram",
+      groupId: "-1001234567890",
+    });
+    expect(listed.allowed).toBe(true);
+    expect(listed.groupConfig).toBeDefined();
+
+    // An unlisted group should ALSO be allowed (groupPolicy is "open")
+    const unlisted = resolveChannelGroupPolicy({
+      cfg,
+      channel: "telegram",
+      groupId: "-1009999999999",
+    });
+    expect(unlisted.allowed).toBe(true);
+    expect(unlisted.allowlistEnabled).toBe(false);
+  });
+
+  it("allows unlisted groups when account-level groupPolicy=open with group entries", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              groupPolicy: "open",
+              groups: {
+                "-1001234567890": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const unlisted = resolveChannelGroupPolicy({
+      cfg,
+      channel: "telegram",
+      accountId: "default",
+      groupId: "-1009999999999",
+    });
+    expect(unlisted.allowed).toBe(true);
+    expect(unlisted.allowlistEnabled).toBe(false);
+  });
+
   it("still fails closed when groupPolicy=allowlist without groups or groupAllowFrom", () => {
     const cfg = {
       channels: {

@@ -335,7 +335,11 @@ export function resolveChannelGroupPolicy(params: {
   const groups = resolveChannelGroups(cfg, channel, params.accountId);
   const groupPolicy = resolveChannelGroupPolicyMode(cfg, channel, params.accountId);
   const hasGroups = Boolean(groups && Object.keys(groups).length > 0);
-  const allowlistEnabled = groupPolicy === "allowlist" || hasGroups;
+  // When groupPolicy is explicitly "open", group entries are config overrides
+  // (e.g. requireMention), not an allowlist. Only enable allowlist behavior
+  // when groupPolicy is "allowlist" or when groups exist without an explicit
+  // "open" policy (backwards-compatible implicit allowlist).
+  const allowlistEnabled = groupPolicy === "allowlist" || (groupPolicy !== "open" && hasGroups);
   const normalizedId = params.groupId?.trim();
   const groupConfig = normalizedId
     ? resolveChannelGroupConfig(groups, normalizedId, params.groupIdCaseInsensitive)
