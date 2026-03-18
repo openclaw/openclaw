@@ -331,6 +331,7 @@ function isSystemdUnavailable(detail: string): boolean {
   return (
     isSystemctlMissing(normalized) ||
     normalized.includes("not been booted") ||
+    normalized.includes("not booted") ||
     normalized.includes("not supported")
   );
 }
@@ -675,6 +676,9 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
       }
       const systemActiveDetail = readSystemctlDetail(systemActive);
       if (isSystemctlMissing(systemActiveDetail) || isSystemdUnitMissing(systemActiveDetail)) {
+        return false;
+      }
+      if (isSystemdUnavailable(systemActiveDetail)) {
         return false;
       }
       const activeState = systemActive.stdout.trim().toLowerCase();
