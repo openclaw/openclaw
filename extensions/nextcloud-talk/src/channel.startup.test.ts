@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../test-utils/start-account-context.js";
+import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
-} from "../../test-utils/start-account-lifecycle.js";
+} from "../../../test/helpers/extensions/start-account-lifecycle.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({

@@ -47,7 +47,7 @@ Welcome to the lobster tank! 🦞
 - **Christoph Nakazawa** - JS Infra
   - GitHub: [@cpojer](https://github.com/cpojer) · X: [@cnakazawa](https://x.com/cnakazawa)
 
-- **Gustavo Madeira Santana** - Multi-agents, CLI, web UI
+- **Gustavo Madeira Santana** - Multi-agents, CLI, Performance, Plugins, Matrix
   - GitHub: [@gumadeiras](https://github.com/gumadeiras) · X: [@gumadeiras](https://x.com/gumadeiras)
 
 - **Onur Solmaz** - Agents, dev workflows, ACP integrations, MS Teams
@@ -83,7 +83,8 @@ Welcome to the lobster tank! 🦞
 
 1. **Bugs & small fixes** → Open a PR!
 2. **New features / architecture** → Start a [GitHub Discussion](https://github.com/openclaw/openclaw/discussions) or ask in Discord first
-3. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
+3. **Test/CI-only PRs for known `main` failures** → Don't open a PR, the Maintainer team is already tracking it and such PRs will be closed automatically. If you've spotted a _new_ regression not yet shown in main CI, report it as an issue first.
+4. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
 
 ## Before You PR
 
@@ -91,8 +92,12 @@ Welcome to the lobster tank! 🦞
 - Run tests: `pnpm build && pnpm check && pnpm test`
 - For extension/plugin changes, run the fast local lane first:
   - `pnpm test:extension <extension-name>`
-  - If you changed shared plugin or channel surfaces, still run the broader relevant lanes (`pnpm test:extensions`, `pnpm test:channels`, or `pnpm test`) before asking for review
+  - `pnpm test:extension --list` to see valid extension ids
+  - If you changed shared plugin or channel surfaces, run `pnpm test:contracts`
+  - For targeted shared-surface work, use `pnpm test:contracts:channels` or `pnpm test:contracts:plugins`
+  - If you changed broader runtime behavior, still run the relevant wider lanes (`pnpm test:extensions`, `pnpm test:channels`, or `pnpm test`) before asking for review
 - If you have access to Codex, run `codex review --base origin/main` locally before opening or updating your PR. Treat this as the current highest standard of AI review, even if GitHub Codex review also runs.
+- Do not submit test or CI-config fixes for failures already red on `main` CI. If a failure is already visible in the [main branch CI runs](https://github.com/openclaw/openclaw/actions), it's a known issue the Maintainer team is tracking, and a PR that only addresses those failures will be closed automatically. If you spot a _new_ regression not yet shown in main CI, report it as an issue first.
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why

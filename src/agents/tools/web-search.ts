@@ -1,36 +1,18 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
+import type { PluginWebSearchProviderEntry } from "../../plugins/types.js";
 import { resolvePluginWebSearchProviders } from "../../plugins/web-search-providers.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
-import { __testing as coreTesting } from "./web-search-core.js";
-
-type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { search?: infer Search }
-    ? Search
-    : undefined
-  : undefined;
-
-function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
-  const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
-    return undefined;
-  }
-  return search as WebSearchConfig;
-}
-
-function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: boolean }): boolean {
-  if (typeof params.search?.enabled === "boolean") {
-    return params.search.enabled;
-  }
-  if (params.sandboxed) {
-    return true;
-  }
-  return true;
-}
+import { SEARCH_CACHE } from "./web-search-provider-common.js";
+import {
+  resolveSearchConfig,
+  resolveSearchEnabled,
+  type WebSearchConfig,
+} from "./web-search-provider-config.js";
 
 function readProviderEnvValue(envVars: string[]): string | undefined {
   for (const envVar of envVars) {
@@ -42,22 +24,15 @@ function readProviderEnvValue(envVars: string[]): string | undefined {
   return undefined;
 }
 
-function hasProviderCredential(providerId: string, search: WebSearchConfig | undefined): boolean {
-  const providers = resolvePluginWebSearchProviders({
-    bundledAllowlistCompat: true,
-  });
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    return false;
-  }
+function hasProviderCredential(
+  provider: PluginWebSearchProviderEntry,
+  search: WebSearchConfig | undefined,
+): boolean {
   const rawValue = provider.getCredentialValue(search as Record<string, unknown> | undefined);
   const fromConfig = normalizeSecretInput(
     normalizeResolvedSecretInputString({
       value: rawValue,
-      path:
-        providerId === "brave"
-          ? "tools.web.search.apiKey"
-          : `tools.web.search.${providerId}.apiKey`,
+      path: provider.credentialPath,
     }),
   );
   return Boolean(fromConfig || readProviderEnvValue(provider.envVars));
@@ -81,7 +56,7 @@ function resolveSearchProvider(search?: WebSearchConfig): string {
 
   if (!raw) {
     for (const provider of providers) {
-      if (!hasProviderCredential(provider.id, search)) {
+      if (!hasProviderCredential(provider, search)) {
         continue;
       }
       logVerbose(
@@ -91,7 +66,7 @@ function resolveSearchProvider(search?: WebSearchConfig): string {
     }
   }
 
-  return providers[0]?.id ?? "brave";
+  return providers[0]?.id ?? "";
 }
 
 export function createWebSearchTool(options?: {
@@ -143,6 +118,6 @@ export function createWebSearchTool(options?: {
 }
 
 export const __testing = {
-  ...coreTesting,
+  SEARCH_CACHE,
   resolveSearchProvider,
 };
