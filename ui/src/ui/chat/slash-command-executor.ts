@@ -16,7 +16,7 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
-import { createChatModelOverride, resolveServerChatModelValue } from "../chat-model-ref.ts";
+import { createChatModelOverride } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   AgentsListResult,
@@ -151,18 +151,14 @@ async function executeModel(
   }
 
   try {
-    const patched = await client.request<SessionsPatchResult>("sessions.patch", {
+    await client.request<SessionsPatchResult>("sessions.patch", {
       key: sessionKey,
       model: args.trim(),
     });
-    const resolvedValue = resolveServerChatModelValue(
-      patched.resolved?.model ?? args.trim(),
-      patched.resolved?.modelProvider,
-    );
     return {
       content: `Model set to \`${args.trim()}\`.`,
       action: "refresh",
-      sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
+      sessionPatch: { modelOverride: createChatModelOverride(args.trim()) },
     };
   } catch (err) {
     return { content: `Failed to set model: ${String(err)}` };

@@ -25,12 +25,14 @@ function createSessions(): SessionsListResult {
 function createChatHeaderState(
   overrides: {
     model?: string | null;
+    modelProvider?: string | null;
     models?: ModelCatalogEntry[];
     omitSessionFromList?: boolean;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
-  let currentModelProvider = currentModel ? "openai" : null;
+  let currentModelProvider =
+    overrides.modelProvider ?? (currentModel ? "openai" : null);
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
   const catalog = overrides.models ?? [
     { id: "gpt-5", name: "GPT-5", provider: "openai" },
@@ -795,6 +797,33 @@ describe("chat view", () => {
     );
     expect(optionValues).toContain("openai/gpt-5-mini");
     expect(optionValues).not.toContain("gpt-5-mini");
+  });
+
+  it("keeps bare session aliases instead of prefixing the active provider", () => {
+    const { state } = createChatHeaderState({
+      model: "glm-5",
+      modelProvider: "astroncodingplan",
+      models: [
+        { id: "claude-sonnet", name: "Claude Sonnet", provider: "astroncodingplan" },
+        { id: "glm-5", name: "GLM-5", provider: "zai" },
+        { id: "glm-5", name: "GLM-5", provider: "modelstudio" },
+      ],
+    });
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("glm-5");
+
+    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+    expect(optionValues).toContain("glm-5");
+    expect(optionValues).not.toContain("astroncodingplan/glm-5");
   });
 
   it("prefers the session label over displayName in the grouped chat session selector", () => {

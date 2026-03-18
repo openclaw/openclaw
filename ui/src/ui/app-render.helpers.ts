@@ -536,17 +536,26 @@ function resolveModelOverrideValue(state: AppViewState): string {
     return "";
   }
   // No local override recorded yet — fall back to server data.
-  // Include provider prefix so the value matches option keys (provider/model).
+  // Only qualify provider/model pairs that exist in the loaded catalog so
+  // raw aliases stay untouched.
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow && typeof activeRow.model === "string" && activeRow.model.trim()) {
-    return resolveServerChatModelValue(activeRow.model, activeRow.modelProvider);
+    return resolveServerChatModelValue(
+      activeRow.model,
+      activeRow.modelProvider,
+      state.chatModelCatalog ?? [],
+    );
   }
   return "";
 }
 
 function resolveDefaultModelValue(state: AppViewState): string {
   const defaults = state.sessionsResult?.defaults;
-  return resolveServerChatModelValue(defaults?.model, defaults?.modelProvider);
+  return resolveServerChatModelValue(
+    defaults?.model,
+    defaults?.modelProvider,
+    state.chatModelCatalog ?? [],
+  );
 }
 
 function buildChatModelOptions(

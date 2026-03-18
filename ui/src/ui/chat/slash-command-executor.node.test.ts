@@ -265,7 +265,7 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
   });
 
-  it("mirrors resolved provider-qualified model refs after /model changes", async () => {
+  it("keeps bare /model arguments raw after successful changes", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.patch") {
         return {
@@ -290,6 +290,38 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
       model: "gpt-5-mini",
+    });
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "raw",
+      value: "gpt-5-mini",
+    });
+  });
+
+  it("preserves explicit provider/model refs after successful /model changes", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          key: "main",
+          resolved: {
+            modelProvider: "openai",
+            model: "gpt-5-mini",
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "openai/gpt-5-mini",
+    );
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "openai/gpt-5-mini",
     });
     expect(result.sessionPatch?.modelOverride).toEqual({
       kind: "qualified",

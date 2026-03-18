@@ -65,11 +65,30 @@ export function normalizeChatModelOverrideValue(
 export function resolveServerChatModelValue(
   model?: string | null,
   provider?: string | null,
+  catalog: ModelCatalogEntry[] = [],
 ): string {
   if (typeof model !== "string") {
     return "";
   }
-  return buildQualifiedChatModelValue(model, provider);
+  const trimmedModel = model.trim();
+  if (!trimmedModel) {
+    return "";
+  }
+  if (trimmedModel.includes("/")) {
+    return trimmedModel;
+  }
+  const trimmedProvider = provider?.trim();
+  if (!trimmedProvider) {
+    return trimmedModel;
+  }
+  const hasExactCatalogMatch = catalog.some(
+    (entry) =>
+      entry.id.trim().toLowerCase() === trimmedModel.toLowerCase() &&
+      entry.provider?.trim().toLowerCase() === trimmedProvider.toLowerCase(),
+  );
+  return hasExactCatalogMatch
+    ? buildQualifiedChatModelValue(trimmedModel, trimmedProvider)
+    : trimmedModel;
 }
 
 export function formatChatModelDisplay(value: string): string {
