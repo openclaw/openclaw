@@ -63,7 +63,7 @@
   background: transparent;
 }
 
-.chat-thread-inner> :first-child {
+.chat-thread-inner > :first-child {
   margin-top: 0 !important;
 }
 
@@ -320,7 +320,7 @@
 }
 
 /* Hide the "Message" label - keep textarea only */
-.chat-compose__field>span {
+.chat-compose__field > span {
   display: none;
 }
 
@@ -391,7 +391,7 @@
   }
 }
 
-.agent-chat__input>textarea {
+.agent-chat__input > textarea {
   width: 100%;
   min-height: 40px;
   max-height: 150px;
@@ -407,7 +407,7 @@
   box-sizing: border-box;
 }
 
-.agent-chat__input>textarea::placeholder {
+.agent-chat__input > textarea::placeholder {
   color: var(--muted);
 }
 
@@ -549,7 +549,7 @@
   scrollbar-width: thin;
 }
 
-.slash-menu-group+.slash-menu-group {
+.slash-menu-group + .slash-menu-group {
   margin-top: 4px;
   padding-top: 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);

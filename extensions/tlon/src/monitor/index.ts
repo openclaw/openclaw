@@ -24,6 +24,7 @@ import {
   formatBlockedList,
   formatPendingList,
 } from "./approval.js";
+import { resolveChannelAuthorization } from "./authorization.js";
 import { fetchAllChannels, fetchInitData } from "./discovery.js";
 import { cacheMessage, getChannelHistory, fetchThreadHistory } from "./history.js";
 import { downloadMessageImages } from "./media.js";
@@ -45,40 +46,6 @@ export type MonitorTlonOpts = {
   abortSignal?: AbortSignal;
   accountId?: string | null;
 };
-
-type ChannelAuthorization = {
-  mode?: "restricted" | "open";
-  allowedShips?: string[];
-};
-
-/**
- * Resolve channel authorization by merging file config with settings store.
- * Settings store takes precedence for fields it defines.
- */
-function resolveChannelAuthorization(
-  cfg: OpenClawConfig,
-  channelNest: string,
-  settings?: TlonSettingsStore,
-): { mode: "restricted" | "open"; allowedShips: string[] } {
-  const tlonConfig = cfg.channels?.tlon as
-    | {
-        authorization?: { channelRules?: Record<string, ChannelAuthorization> };
-        defaultAuthorizedShips?: string[];
-      }
-    | undefined;
-
-  // Merge channel rules: settings override file config
-  const fileRules = tlonConfig?.authorization?.channelRules ?? {};
-  const settingsRules = settings?.channelRules ?? {};
-  const rule = settingsRules[channelNest] ?? fileRules[channelNest];
-
-  // Merge default authorized ships: settings override file config
-  const defaultShips = settings?.defaultAuthorizedShips ?? tlonConfig?.defaultAuthorizedShips ?? [];
-
-  const allowedShips = rule?.allowedShips ?? defaultShips;
-  const mode = rule?.mode ?? "restricted";
-  return { mode, allowedShips };
-}
 
 export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<void> {
   const core = getTlonRuntime();
