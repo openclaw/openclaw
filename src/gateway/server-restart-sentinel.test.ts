@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeliveryContext } from "../utils/delivery-context.js";
 
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
@@ -78,6 +79,8 @@ vi.mock("../infra/system-events.js", () => ({
 
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
+const delivery = (value: DeliveryContext) => value;
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.consumeRestartSentinel.mockResolvedValue({
@@ -115,44 +118,50 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.consumeRestartSentinel.mockResolvedValueOnce({
       payload: {
         sessionKey: "agent:main:slack:channel:C0AL50GP89M:thread:1773827207.576549",
-        deliveryContext: {
+        deliveryContext: delivery({
           channel: "slack",
-        },
+        }),
       },
     });
     mocks.parseSessionThreadInfo.mockReturnValueOnce({
       baseSessionKey: "agent:main:slack:channel:C0ALZAZ6ZBK",
       threadId: "1773827207.576549",
     });
-    mocks.resolveAnnounceTargetFromKey.mockReturnValueOnce({
-      channel: "slack",
-      to: "channel:C0AL50GP89M",
-      threadId: "1773827207.576549",
-    });
+    mocks.resolveAnnounceTargetFromKey.mockReturnValueOnce(
+      delivery({
+        channel: "slack",
+        to: "channel:C0AL50GP89M",
+        threadId: "1773827207.576549",
+      }),
+    );
     mocks.loadSessionEntry
       .mockReturnValueOnce({
         cfg: {},
         entry: {
-          deliveryContext: {
+          deliveryContext: delivery({
             channel: "slack",
-          },
+          }),
         },
       })
       .mockReturnValueOnce({
         cfg: {},
         entry: {
-          deliveryContext: {
+          deliveryContext: delivery({
             channel: "slack",
             to: "channel:C0ALZAZ6ZBK",
             accountId: "default",
-          },
+          }),
         },
       });
-    mocks.deliveryContextFromSession.mockReturnValueOnce({ channel: "slack" }).mockReturnValueOnce({
-      channel: "slack",
-      to: "channel:C0ALZAZ6ZBK",
-      accountId: "default",
-    });
+    mocks.deliveryContextFromSession
+      .mockReturnValueOnce(delivery({ channel: "slack" }))
+      .mockReturnValueOnce(
+        delivery({
+          channel: "slack",
+          to: "channel:C0ALZAZ6ZBK",
+          accountId: "default",
+        }),
+      );
     mocks.resolveOutboundTarget.mockReturnValueOnce({
       ok: true as const,
       to: "channel:C0AL50GP89M",
@@ -172,10 +181,10 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.consumeRestartSentinel.mockResolvedValueOnce({
       payload: {
         sessionKey: "agent:main:slack:channel:C0AL50GP89M:thread:1773827207.576549",
-        deliveryContext: {
+        deliveryContext: delivery({
           channel: "slack",
           accountId: "acct-2",
-        },
+        }),
       },
     });
     mocks.parseSessionThreadInfo.mockReturnValueOnce({
@@ -185,16 +194,18 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.loadSessionEntry.mockReturnValueOnce({
       cfg: {},
       entry: {
-        deliveryContext: {
+        deliveryContext: delivery({
           channel: "slack",
           to: "channel:C0AL50GP89M",
-        },
+        }),
       },
     });
-    mocks.deliveryContextFromSession.mockReturnValueOnce({
-      channel: "slack",
-      to: "channel:C0AL50GP89M",
-    });
+    mocks.deliveryContextFromSession.mockReturnValueOnce(
+      delivery({
+        channel: "slack",
+        to: "channel:C0AL50GP89M",
+      }),
+    );
     mocks.resolveOutboundTarget.mockReturnValueOnce({
       ok: true as const,
       to: "channel:C0AL50GP89M",
