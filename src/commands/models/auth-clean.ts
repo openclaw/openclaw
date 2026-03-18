@@ -262,7 +262,14 @@ export async function modelsAuthCleanCommand(
   // accidentally nuking a store-only setup. Require --dry-run to inspect.
   // Gate on configOnlyProfileIds (config-derived IDs only) so that store.order
   // IDs cannot inflate the count and bypass the guard.
-  if (configOnlyProfileIds.size === 0 && storeProfileIds.length > 0) {
+  // When providers are explicitly disabled via `auth.order.<provider>: []`,
+  // there IS clear intent to clean up — the guard should not fire even if
+  // no configured profile IDs exist (#2950578522).
+  if (
+    configOnlyProfileIds.size === 0 &&
+    explicitlyDisabledProviders.size === 0 &&
+    storeProfileIds.length > 0
+  ) {
     if (opts.dryRun) {
       if (opts.json) {
         runtime.log(
