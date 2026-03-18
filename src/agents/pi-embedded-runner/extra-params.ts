@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { SettingsManager } from "@mariozechner/pi-coding-agent";
@@ -10,6 +10,7 @@ import {
 } from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
+import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import { log } from "./logger.js";
 import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
 import {
@@ -478,6 +479,113 @@ export function createTurnIdWrapper(
   };
 }
 
+export type DonutRuntimeAnalyticsContext = {
+  threadRunId?: string;
+  sessionKey?: string;
+  threadId?: string;
+  toolCallId?: string;
+};
+
+function normalizeNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function extractLegacyToolCallId(message: Record<string, unknown>): string | undefined {
+  return (
+    normalizeNonEmptyString(message.tool_call_id) ??
+    normalizeNonEmptyString(message.toolCallId) ??
+    normalizeNonEmptyString(message.toolUseId)
+  );
+}
+
+function resolveLatestToolCallId(messages: unknown): string | undefined {
+  if (!Array.isArray(messages)) {
+    return undefined;
+  }
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+
+    const typedMessage = message as AgentMessage;
+    if (typedMessage.role === "toolResult") {
+      const toolCallId = extractToolResultId(typedMessage);
+      if (toolCallId) {
+        return toolCallId;
+      }
+      continue;
+    }
+
+    if (typedMessage.role === "assistant") {
+      const toolCalls = extractToolCallsFromAssistant(typedMessage);
+      const latestToolCallId = normalizeNonEmptyString(toolCalls[toolCalls.length - 1]?.id);
+      if (latestToolCallId) {
+        return latestToolCallId;
+      }
+      continue;
+    }
+
+    const legacyToolCallId = extractLegacyToolCallId(message as Record<string, unknown>);
+    if (legacyToolCallId) {
+      return legacyToolCallId;
+    }
+  }
+
+  return undefined;
+}
+
+export function createDonutAnalyticsContextWrapper(
+  baseStreamFn: StreamFn | undefined,
+  runtimeContext?: DonutRuntimeAnalyticsContext,
+): StreamFn | undefined {
+  const threadRunId = normalizeNonEmptyString(runtimeContext?.threadRunId);
+  const sessionKey = normalizeNonEmptyString(runtimeContext?.sessionKey);
+  const threadId = normalizeNonEmptyString(runtimeContext?.threadId);
+  const explicitToolCallId = normalizeNonEmptyString(runtimeContext?.toolCallId);
+
+  if (!threadRunId && !sessionKey && !threadId && !explicitToolCallId) {
+    return undefined;
+  }
+
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const inferredToolCallId =
+      explicitToolCallId ??
+      resolveLatestToolCallId((context as { messages?: unknown } | undefined)?.messages);
+    const nextHeaders = {
+      ...options?.headers,
+      ...(sessionKey ? { "X-Session-Key": sessionKey } : {}),
+      ...(threadId ? { "X-Thread-Id": threadId } : {}),
+    };
+    const onPayload = options?.onPayload;
+
+    return underlying(model, context, {
+      ...options,
+      headers: nextHeaders,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (threadRunId) {
+            payloadObj.thread_run_id = threadRunId;
+          }
+          if (sessionKey) {
+            payloadObj.session_key = sessionKey;
+          }
+          if (threadId) {
+            payloadObj.thread_id = threadId;
+          }
+          if (inferredToolCallId) {
+            payloadObj.tool_call_id = inferredToolCallId;
+          }
+        }
+        onPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Wraps the stream function to inject `skill_names` into every outgoing
  * LLM request via the `X-Skill-Names` HTTP header. The donut-backend LLM
@@ -526,6 +634,7 @@ export function applyExtraParamsToAgent(
   model?: ProviderRuntimeModel,
   agentDir?: string,
   skillNames?: string[],
+  runtimeContext?: DonutRuntimeAnalyticsContext,
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -590,6 +699,13 @@ export function applyExtraParamsToAgent(
   // Inject skill_names into every LLM request payload so the donut-backend
   // LLM proxy can attribute token usage per skill.
   agent.streamFn = createSkillNamesWrapper(agent.streamFn, skillNames);
+
+  // Inject donut runtime analytics context (session key, thread ID, tool call ID)
+  // into every LLM request for per-session/thread token attribution.
+  const analyticsWrapper = createDonutAnalyticsContextWrapper(agent.streamFn, runtimeContext);
+  if (analyticsWrapper) {
+    agent.streamFn = analyticsWrapper;
+  }
 
   return { effectiveExtraParams };
 }

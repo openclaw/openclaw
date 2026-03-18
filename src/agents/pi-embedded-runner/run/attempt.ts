@@ -1093,6 +1093,11 @@ export async function runEmbeddedAttempt(
         params.model,
         agentDir,
         activeSkillNames.length > 0 ? activeSkillNames : undefined,
+        {
+          threadRunId: params.runId,
+          sessionKey: params.sessionKey,
+          threadId: params.sessionId,
+        },
       );
       const effectivePromptCacheRetention = resolveCacheRetention(
         effectiveExtraParams,
