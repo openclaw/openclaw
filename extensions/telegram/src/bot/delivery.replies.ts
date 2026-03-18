@@ -135,6 +135,7 @@ async function deliverTextReply(params: {
         textMode: "html",
         plainText: chunk.text,
         linkPreview: params.linkPreview,
+        silent: params.silent,
         replyMarkup: shouldAttachButtons ? params.replyMarkup : undefined,
       },
     );
@@ -188,6 +189,7 @@ async function sendPendingFollowUpText(params: {
         textMode: "html",
         plainText: chunk.text,
         linkPreview: params.linkPreview,
+        silent: params.silent,
         replyMarkup: !sentAnyChunk ? params.replyMarkup : undefined,
       },
     );
@@ -244,6 +246,7 @@ async function sendTelegramVoiceFallbackText(opts: {
       textMode: "html",
       plainText: chunk.text,
       linkPreview: opts.linkPreview,
+      silent: opts.silent,
       replyMarkup: !sentAnyChunk ? opts.replyMarkup : undefined,
     });
     if (messageId != null) {
