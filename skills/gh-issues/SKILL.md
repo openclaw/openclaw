@@ -59,5 +59,3 @@ For detailed phase instructions and sub-agent prompt templates, read `references
 ## Sub-agent Confidence Gate
 
 Sub-agents self-assess before implementing. If confidence < 7/10, they skip and report why (vague requirements, can't locate code, scope too large, no clear fix).
-
-Read `references/phases.md` for the full phase instructions and sub-agent prompt templates.

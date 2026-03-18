@@ -87,6 +87,7 @@ gh pr create --repo user/repo --head fix/issue-78 --title "fix: ..." --body "...
 
 # Cleanup
 git worktree remove /tmp/issue-78
+git worktree remove /tmp/issue-99
 ```
 
 ## Auto-Notify on Completion
