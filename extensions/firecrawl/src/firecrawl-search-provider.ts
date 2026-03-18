@@ -1,10 +1,10 @@
 import { Type } from "@sinclair/typebox";
 import {
+  enablePluginInConfig,
   resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
-} from "../../../src/agents/tools/web-search-provider-config.js";
-import { enablePluginInConfig } from "../../../src/plugins/enable.js";
-import type { WebSearchProviderPlugin } from "../../../src/plugins/types.js";
+  type WebSearchProviderPlugin,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { runFirecrawlSearch } from "./firecrawl-client.js";
 
 const GenericFirecrawlSearchSchema = Type.Object(

@@ -1,29 +1,26 @@
 import { Type } from "@sinclair/typebox";
-import { readNumberParam, readStringParam } from "../../../src/agents/tools/common.js";
-import type { SearchConfigRecord } from "../../../src/agents/tools/web-search-provider-common.js";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
   readCachedSearchPayload,
   readConfiguredSecretString,
+  readNumberParam,
   readProviderEnvValue,
+  readStringParam,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
-  withTrustedWebSearchEndpoint,
-  writeCachedSearchPayload,
-} from "../../../src/agents/tools/web-search-provider-common.js";
-import {
   resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
-} from "../../../src/agents/tools/web-search-provider-config.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type {
-  WebSearchProviderPlugin,
-  WebSearchProviderToolDefinition,
-} from "../../../src/plugins/types.js";
-import { wrapWebContent } from "../../../src/security/external-content.js";
+  type OpenClawConfig,
+  type SearchConfigRecord,
+  type WebSearchProviderPlugin,
+  type WebSearchProviderToolDefinition,
+  withTrustedWebSearchEndpoint,
+  wrapWebContent,
+  writeCachedSearchPayload,
+} from "openclaw/plugin-sdk/provider-web-search";
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";

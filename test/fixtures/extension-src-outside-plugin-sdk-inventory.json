@@ -1,362 +1,418 @@
 [
   {
-    "file": "extensions/brave/src/brave-web-search-provider.ts",
-    "line": 2,
+    "file": "extensions/discord/src/directory-config.ts",
+    "line": 7,
     "kind": "import",
-    "specifier": "../../../src/agents/tools/common.js",
+    "specifier": "../../../src/channels/read-only-account-inspect.discord.runtime.js",
+    "resolvedPath": "src/channels/read-only-account-inspect.discord.runtime.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/discord/src/directory-config.ts",
+    "line": 8,
+    "kind": "import",
+    "specifier": "../../../src/channels/read-only-account-inspect.js",
+    "resolvedPath": "src/channels/read-only-account-inspect.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 10,
+    "kind": "export",
+    "specifier": "../../src/agents/tools/common.js",
     "resolvedPath": "src/agents/tools/common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
   },
   {
-    "file": "extensions/brave/src/brave-web-search-provider.ts",
-    "line": 3,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/brave/src/brave-web-search-provider.ts",
-    "line": 19,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/brave/src/brave-web-search-provider.ts",
+    "file": "extensions/googlechat/runtime-api.ts",
     "line": 23,
+    "kind": "export",
+    "specifier": "../../src/channels/mention-gating.js",
+    "resolvedPath": "src/channels/mention-gating.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 30,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/config-schema.js",
+    "resolvedPath": "src/channels/plugins/config-schema.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 34,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/config-helpers.js",
+    "resolvedPath": "src/channels/plugins/config-helpers.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 38,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/directory-config-helpers.js",
+    "resolvedPath": "src/channels/plugins/directory-config-helpers.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 39,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/helpers.js",
+    "resolvedPath": "src/channels/plugins/helpers.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 40,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/media-limits.js",
+    "resolvedPath": "src/channels/plugins/media-limits.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 46,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/setup-wizard-helpers.js",
+    "resolvedPath": "src/channels/plugins/setup-wizard-helpers.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 47,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/pairing-message.js",
+    "resolvedPath": "src/channels/plugins/pairing-message.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 52,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/setup-helpers.js",
+    "resolvedPath": "src/channels/plugins/setup-helpers.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 53,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/account-helpers.js",
+    "resolvedPath": "src/channels/plugins/account-helpers.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 59,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/types.js",
+    "resolvedPath": "src/channels/plugins/types.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 60,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/types.plugin.js",
+    "resolvedPath": "src/channels/plugins/types.plugin.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 61,
+    "kind": "export",
+    "specifier": "../../src/channels/registry.js",
+    "resolvedPath": "src/channels/registry.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 62,
+    "kind": "export",
+    "specifier": "../../src/channels/reply-prefix.js",
+    "resolvedPath": "src/channels/reply-prefix.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 63,
+    "kind": "export",
+    "specifier": "../../src/config/config.js",
+    "resolvedPath": "src/config/config.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 64,
+    "kind": "export",
+    "specifier": "../../src/config/dangerous-name-matching.js",
+    "resolvedPath": "src/config/dangerous-name-matching.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 70,
+    "kind": "export",
+    "specifier": "../../src/config/runtime-group-policy.js",
+    "resolvedPath": "src/config/runtime-group-policy.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 75,
+    "kind": "export",
+    "specifier": "../../src/config/types.js",
+    "resolvedPath": "src/config/types.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 76,
+    "kind": "export",
+    "specifier": "../../src/config/types.secrets.js",
+    "resolvedPath": "src/config/types.secrets.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 77,
+    "kind": "export",
+    "specifier": "../../src/config/zod-schema.providers-core.js",
+    "resolvedPath": "src/config/zod-schema.providers-core.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 78,
+    "kind": "export",
+    "specifier": "../../src/infra/net/fetch-guard.js",
+    "resolvedPath": "src/infra/net/fetch-guard.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 79,
+    "kind": "export",
+    "specifier": "../../src/infra/outbound/target-errors.js",
+    "resolvedPath": "src/infra/outbound/target-errors.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 80,
+    "kind": "export",
+    "specifier": "../../src/plugins/config-schema.js",
+    "resolvedPath": "src/plugins/config-schema.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 81,
+    "kind": "export",
+    "specifier": "../../src/plugins/runtime/types.js",
+    "resolvedPath": "src/plugins/runtime/types.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 82,
+    "kind": "export",
+    "specifier": "../../src/plugins/types.js",
+    "resolvedPath": "src/plugins/types.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 83,
+    "kind": "export",
+    "specifier": "../../src/routing/session-key.js",
+    "resolvedPath": "src/routing/session-key.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 84,
+    "kind": "export",
+    "specifier": "../../src/security/dm-policy-shared.js",
+    "resolvedPath": "src/security/dm-policy-shared.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 85,
+    "kind": "export",
+    "specifier": "../../src/terminal/links.js",
+    "resolvedPath": "src/terminal/links.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 86,
+    "kind": "export",
+    "specifier": "../../src/wizard/prompts.js",
+    "resolvedPath": "src/wizard/prompts.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/googlechat/runtime-api.ts",
+    "line": 89,
+    "kind": "export",
+    "specifier": "../../src/pairing/pairing-challenge.js",
+    "resolvedPath": "src/pairing/pairing-challenge.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/imessage/runtime-api.ts",
+    "line": 1,
+    "kind": "export",
+    "specifier": "../../src/config/types.imessage.js",
+    "resolvedPath": "src/config/types.imessage.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/imessage/runtime-api.ts",
+    "line": 2,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/types.plugin.js",
+    "resolvedPath": "src/channels/plugins/types.plugin.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/imessage/runtime-api.ts",
+    "line": 15,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/media-limits.js",
+    "resolvedPath": "src/channels/plugins/media-limits.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/imessage/runtime-api.ts",
+    "line": 19,
+    "kind": "export",
+    "specifier": "../../src/channels/plugins/normalize/imessage.js",
+    "resolvedPath": "src/channels/plugins/normalize/imessage.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/imessage/runtime-api.ts",
+    "line": 20,
+    "kind": "export",
+    "specifier": "../../src/config/zod-schema.providers-core.js",
+    "resolvedPath": "src/config/zod-schema.providers-core.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/slack/src/directory-config.ts",
+    "line": 8,
     "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-config.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-config.js",
+    "specifier": "../../../src/channels/plugins/normalize/slack.js",
+    "resolvedPath": "src/channels/plugins/normalize/slack.js",
     "reason": "imports core src path outside plugin-sdk from an extension"
   },
   {
-    "file": "extensions/brave/src/brave-web-search-provider.ts",
-    "line": 24,
+    "file": "extensions/slack/src/directory-config.ts",
+    "line": 9,
     "kind": "import",
-    "specifier": "../../../src/cli/command-format.js",
-    "resolvedPath": "src/cli/command-format.js",
+    "specifier": "../../../src/channels/read-only-account-inspect.js",
+    "resolvedPath": "src/channels/read-only-account-inspect.js",
     "reason": "imports core src path outside plugin-sdk from an extension"
   },
   {
-    "file": "extensions/brave/src/brave-web-search-provider.ts",
-    "line": 25,
+    "file": "extensions/slack/src/directory-config.ts",
+    "line": 10,
     "kind": "import",
+    "specifier": "../../../src/channels/read-only-account-inspect.slack.runtime.js",
+    "resolvedPath": "src/channels/read-only-account-inspect.slack.runtime.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/slack/src/runtime-api.ts",
+    "line": 1,
+    "kind": "export",
     "specifier": "../../../src/config/config.js",
     "resolvedPath": "src/config/config.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
   },
   {
-    "file": "extensions/brave/src/brave-web-search-provider.ts",
-    "line": 29,
-    "kind": "import",
-    "specifier": "../../../src/plugins/types.js",
-    "resolvedPath": "src/plugins/types.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
+    "file": "extensions/slack/src/runtime-api.ts",
+    "line": 2,
+    "kind": "export",
+    "specifier": "../../../src/config/types.slack.js",
+    "resolvedPath": "src/config/types.slack.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
   },
   {
-    "file": "extensions/brave/src/brave-web-search-provider.ts",
-    "line": 30,
-    "kind": "import",
-    "specifier": "../../../src/security/external-content.js",
-    "resolvedPath": "src/security/external-content.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
+    "file": "extensions/slack/src/runtime-api.ts",
+    "line": 3,
+    "kind": "export",
+    "specifier": "../../../src/channels/plugins/types.js",
+    "resolvedPath": "src/channels/plugins/types.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
   },
   {
-    "file": "extensions/discord/src/runtime-api.ts",
-    "line": 38,
+    "file": "extensions/slack/src/runtime-api.ts",
+    "line": 19,
+    "kind": "export",
+    "specifier": "../../../src/channels/plugins/normalize/slack.js",
+    "resolvedPath": "src/channels/plugins/normalize/slack.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/slack/src/runtime-api.ts",
+    "line": 23,
+    "kind": "export",
+    "specifier": "../../../src/channels/account-snapshot-fields.js",
+    "resolvedPath": "src/channels/account-snapshot-fields.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/slack/src/runtime-api.ts",
+    "line": 24,
+    "kind": "export",
+    "specifier": "../../../src/config/zod-schema.providers-core.js",
+    "resolvedPath": "src/config/zod-schema.providers-core.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/slack/src/runtime-api.ts",
+    "line": 32,
+    "kind": "export",
+    "specifier": "../../../src/agents/tools/common.js",
+    "resolvedPath": "src/agents/tools/common.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/slack/src/runtime-api.ts",
+    "line": 33,
     "kind": "export",
     "specifier": "../../../src/agents/date-time.js",
     "resolvedPath": "src/agents/date-time.js",
     "reason": "re-exports core src path outside plugin-sdk from an extension"
   },
   {
-    "file": "extensions/discord/src/runtime-api.ts",
-    "line": 39,
-    "kind": "export",
-    "specifier": "../../../src/agents/sandbox-paths.js",
-    "resolvedPath": "src/agents/sandbox-paths.js",
-    "reason": "re-exports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/discord/src/runtime-api.ts",
-    "line": 41,
-    "kind": "export",
-    "specifier": "../../../src/polls.js",
-    "resolvedPath": "src/polls.js",
-    "reason": "re-exports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/discord/src/runtime-api.ts",
-    "line": 42,
-    "kind": "export",
-    "specifier": "../../../src/config/types.js",
-    "resolvedPath": "src/config/types.js",
-    "reason": "re-exports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/discord/src/runtime-api.ts",
-    "line": 47,
-    "kind": "export",
-    "specifier": "../../../src/config/types.secrets.js",
-    "resolvedPath": "src/config/types.secrets.js",
-    "reason": "re-exports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/firecrawl/src/firecrawl-search-provider.ts",
-    "line": 5,
+    "file": "extensions/telegram/src/directory-config.ts",
+    "line": 9,
     "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-config.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-config.js",
+    "specifier": "../../../src/channels/read-only-account-inspect.js",
+    "resolvedPath": "src/channels/read-only-account-inspect.js",
     "reason": "imports core src path outside plugin-sdk from an extension"
   },
   {
-    "file": "extensions/firecrawl/src/firecrawl-search-provider.ts",
+    "file": "extensions/telegram/src/directory-config.ts",
+    "line": 10,
+    "kind": "import",
+    "specifier": "../../../src/channels/read-only-account-inspect.telegram.runtime.js",
+    "resolvedPath": "src/channels/read-only-account-inspect.telegram.runtime.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/whatsapp/src/directory-config.ts",
     "line": 6,
     "kind": "import",
-    "specifier": "../../../src/plugins/enable.js",
-    "resolvedPath": "src/plugins/enable.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/firecrawl/src/firecrawl-search-provider.ts",
-    "line": 7,
-    "kind": "import",
-    "specifier": "../../../src/plugins/types.js",
-    "resolvedPath": "src/plugins/types.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/google/src/gemini-web-search-provider.ts",
-    "line": 2,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/common.js",
-    "resolvedPath": "src/agents/tools/common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/google/src/gemini-web-search-provider.ts",
-    "line": 3,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-citation-redirect.js",
-    "resolvedPath": "src/agents/tools/web-search-citation-redirect.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/google/src/gemini-web-search-provider.ts",
-    "line": 4,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/google/src/gemini-web-search-provider.ts",
-    "line": 17,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/google/src/gemini-web-search-provider.ts",
-    "line": 21,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-config.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-config.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/google/src/gemini-web-search-provider.ts",
-    "line": 22,
-    "kind": "import",
-    "specifier": "../../../src/config/config.js",
-    "resolvedPath": "src/config/config.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/google/src/gemini-web-search-provider.ts",
-    "line": 26,
-    "kind": "import",
-    "specifier": "../../../src/plugins/types.js",
-    "resolvedPath": "src/plugins/types.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/google/src/gemini-web-search-provider.ts",
-    "line": 27,
-    "kind": "import",
-    "specifier": "../../../src/security/external-content.js",
-    "resolvedPath": "src/security/external-content.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
-    "line": 2,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/common.js",
-    "resolvedPath": "src/agents/tools/common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
-    "line": 3,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
-    "line": 16,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
-    "line": 20,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-config.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-config.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
-    "line": 21,
-    "kind": "import",
-    "specifier": "../../../src/config/config.js",
-    "resolvedPath": "src/config/config.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
-    "line": 25,
-    "kind": "import",
-    "specifier": "../../../src/plugins/types.js",
-    "resolvedPath": "src/plugins/types.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
-    "line": 26,
-    "kind": "import",
-    "specifier": "../../../src/security/external-content.js",
-    "resolvedPath": "src/security/external-content.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
-    "line": 6,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/common.js",
-    "resolvedPath": "src/agents/tools/common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
-    "line": 7,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
-    "line": 25,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
-    "line": 29,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-config.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-config.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
-    "line": 30,
-    "kind": "import",
-    "specifier": "../../../src/config/config.js",
-    "resolvedPath": "src/config/config.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
-    "line": 35,
-    "kind": "import",
-    "specifier": "../../../src/plugins/types.js",
-    "resolvedPath": "src/plugins/types.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
-    "line": 36,
-    "kind": "import",
-    "specifier": "../../../src/security/external-content.js",
-    "resolvedPath": "src/security/external-content.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/xai/src/grok-web-search-provider.ts",
-    "line": 2,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/common.js",
-    "resolvedPath": "src/agents/tools/common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/xai/src/grok-web-search-provider.ts",
-    "line": 3,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/xai/src/grok-web-search-provider.ts",
-    "line": 16,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/xai/src/grok-web-search-provider.ts",
-    "line": 20,
-    "kind": "import",
-    "specifier": "../../../src/agents/tools/web-search-provider-config.js",
-    "resolvedPath": "src/agents/tools/web-search-provider-config.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/xai/src/grok-web-search-provider.ts",
-    "line": 21,
-    "kind": "import",
-    "specifier": "../../../src/config/config.js",
-    "resolvedPath": "src/config/config.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/xai/src/grok-web-search-provider.ts",
-    "line": 25,
-    "kind": "import",
-    "specifier": "../../../src/plugins/types.js",
-    "resolvedPath": "src/plugins/types.js",
-    "reason": "imports core src path outside plugin-sdk from an extension"
-  },
-  {
-    "file": "extensions/xai/src/grok-web-search-provider.ts",
-    "line": 26,
-    "kind": "import",
-    "specifier": "../../../src/security/external-content.js",
-    "resolvedPath": "src/security/external-content.js",
+    "specifier": "../../../src/whatsapp/normalize.js",
+    "resolvedPath": "src/whatsapp/normalize.js",
     "reason": "imports core src path outside plugin-sdk from an extension"
   }
 ]
