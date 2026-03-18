@@ -1,11 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
-} from "../../agents/auth-profiles/store.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QWEN_OAUTH_MARKER } from "../../agents/model-auth-markers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import { runProviderCatalog } from "../provider-discovery.js";
 import { registerProviders, requireProvider } from "./testkit.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
@@ -13,66 +8,18 @@ const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
 const buildVllmProviderMock = vi.hoisted(() => vi.fn());
 const buildSglangProviderMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../extensions/github-copilot/token.js", async () => {
-  const actual = await vi.importActual<object>("../../../extensions/github-copilot/token.js");
-  return {
-    ...actual,
-    resolveCopilotApiToken: resolveCopilotApiTokenMock,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/provider-setup", async () => {
-  const actual = await vi.importActual<object>("openclaw/plugin-sdk/provider-setup");
-  return {
-    ...actual,
-    buildOllamaProvider: (...args: unknown[]) => buildOllamaProviderMock(...args),
-    buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
-    buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/self-hosted-provider-setup", async () => {
-  const actual = await vi.importActual<object>("openclaw/plugin-sdk/self-hosted-provider-setup");
-  return {
-    ...actual,
-    buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
-    buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/ollama-setup", async () => {
-  const actual = await vi.importActual<object>("openclaw/plugin-sdk/ollama-setup");
-  return {
-    ...actual,
-    buildOllamaProvider: (...args: unknown[]) => buildOllamaProviderMock(...args),
-  };
-});
-
-const qwenPortalPlugin = (await import("../../../extensions/qwen-portal-auth/index.js")).default;
-const githubCopilotPlugin = (await import("../../../extensions/github-copilot/index.js")).default;
-const ollamaPlugin = (await import("../../../extensions/ollama/index.js")).default;
-const vllmPlugin = (await import("../../../extensions/vllm/index.js")).default;
-const sglangPlugin = (await import("../../../extensions/sglang/index.js")).default;
-const minimaxPlugin = (await import("../../../extensions/minimax/index.js")).default;
-const modelStudioPlugin = (await import("../../../extensions/modelstudio/index.js")).default;
-const cloudflareAiGatewayPlugin = (
-  await import("../../../extensions/cloudflare-ai-gateway/index.js")
-).default;
-const qwenPortalProvider = requireProvider(registerProviders(qwenPortalPlugin), "qwen-portal");
-const githubCopilotProvider = requireProvider(
-  registerProviders(githubCopilotPlugin),
-  "github-copilot",
-);
-const ollamaProvider = requireProvider(registerProviders(ollamaPlugin), "ollama");
-const vllmProvider = requireProvider(registerProviders(vllmPlugin), "vllm");
-const sglangProvider = requireProvider(registerProviders(sglangPlugin), "sglang");
-const minimaxProvider = requireProvider(registerProviders(minimaxPlugin), "minimax");
-const minimaxPortalProvider = requireProvider(registerProviders(minimaxPlugin), "minimax-portal");
-const modelStudioProvider = requireProvider(registerProviders(modelStudioPlugin), "modelstudio");
-const cloudflareAiGatewayProvider = requireProvider(
-  registerProviders(cloudflareAiGatewayPlugin),
-  "cloudflare-ai-gateway",
-);
+let runProviderCatalog: typeof import("../provider-discovery.js").runProviderCatalog;
+let qwenPortalProvider: Awaited<ReturnType<typeof requireProvider>>;
+let githubCopilotProvider: Awaited<ReturnType<typeof requireProvider>>;
+let ollamaProvider: Awaited<ReturnType<typeof requireProvider>>;
+let vllmProvider: Awaited<ReturnType<typeof requireProvider>>;
+let sglangProvider: Awaited<ReturnType<typeof requireProvider>>;
+let minimaxProvider: Awaited<ReturnType<typeof requireProvider>>;
+let minimaxPortalProvider: Awaited<ReturnType<typeof requireProvider>>;
+let modelStudioProvider: Awaited<ReturnType<typeof requireProvider>>;
+let cloudflareAiGatewayProvider: Awaited<ReturnType<typeof requireProvider>>;
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("../../agents/auth-profiles/store.js").clearRuntimeAuthProfileStoreSnapshots;
+let replaceRuntimeAuthProfileStoreSnapshots: typeof import("../../agents/auth-profiles/store.js").replaceRuntimeAuthProfileStoreSnapshots;
 
 function createModelConfig(id: string, name = id): ModelDefinitionConfig {
   return {
@@ -159,7 +106,83 @@ function runCatalog(params: {
 }
 
 describe("provider discovery contract", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("../../../extensions/github-copilot/token.js", async () => {
+      const actual = await vi.importActual<object>("../../../extensions/github-copilot/token.js");
+      return {
+        ...actual,
+        resolveCopilotApiToken: resolveCopilotApiTokenMock,
+      };
+    });
+    vi.doMock("openclaw/plugin-sdk/provider-setup", async () => {
+      const actual = await vi.importActual<object>("openclaw/plugin-sdk/provider-setup");
+      return {
+        ...actual,
+        buildOllamaProvider: (...args: unknown[]) => buildOllamaProviderMock(...args),
+        buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
+        buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
+      };
+    });
+    vi.doMock("openclaw/plugin-sdk/self-hosted-provider-setup", async () => {
+      const actual = await vi.importActual<object>(
+        "openclaw/plugin-sdk/self-hosted-provider-setup",
+      );
+      return {
+        ...actual,
+        buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
+        buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
+      };
+    });
+    vi.doMock("openclaw/plugin-sdk/ollama-setup", async () => {
+      const actual = await vi.importActual<object>("openclaw/plugin-sdk/ollama-setup");
+      return {
+        ...actual,
+        buildOllamaProvider: (...args: unknown[]) => buildOllamaProviderMock(...args),
+      };
+    });
+
+    ({ clearRuntimeAuthProfileStoreSnapshots, replaceRuntimeAuthProfileStoreSnapshots } =
+      await import("../../agents/auth-profiles/store.js"));
+    ({ runProviderCatalog } = await import("../provider-discovery.js"));
+    const [
+      { default: qwenPortalPlugin },
+      { default: githubCopilotPlugin },
+      { default: ollamaPlugin },
+      { default: vllmPlugin },
+      { default: sglangPlugin },
+      { default: minimaxPlugin },
+      { default: modelStudioPlugin },
+      { default: cloudflareAiGatewayPlugin },
+    ] = await Promise.all([
+      import("../../../extensions/qwen-portal-auth/index.js"),
+      import("../../../extensions/github-copilot/index.js"),
+      import("../../../extensions/ollama/index.js"),
+      import("../../../extensions/vllm/index.js"),
+      import("../../../extensions/sglang/index.js"),
+      import("../../../extensions/minimax/index.js"),
+      import("../../../extensions/modelstudio/index.js"),
+      import("../../../extensions/cloudflare-ai-gateway/index.js"),
+    ]);
+    qwenPortalProvider = requireProvider(registerProviders(qwenPortalPlugin), "qwen-portal");
+    githubCopilotProvider = requireProvider(
+      registerProviders(githubCopilotPlugin),
+      "github-copilot",
+    );
+    ollamaProvider = requireProvider(registerProviders(ollamaPlugin), "ollama");
+    vllmProvider = requireProvider(registerProviders(vllmPlugin), "vllm");
+    sglangProvider = requireProvider(registerProviders(sglangPlugin), "sglang");
+    minimaxProvider = requireProvider(registerProviders(minimaxPlugin), "minimax");
+    minimaxPortalProvider = requireProvider(registerProviders(minimaxPlugin), "minimax-portal");
+    modelStudioProvider = requireProvider(registerProviders(modelStudioPlugin), "modelstudio");
+    cloudflareAiGatewayProvider = requireProvider(
+      registerProviders(cloudflareAiGatewayPlugin),
+      "cloudflare-ai-gateway",
+    );
+  });
+
   afterEach(() => {
+    vi.restoreAllMocks();
     resolveCopilotApiTokenMock.mockReset();
     buildOllamaProviderMock.mockReset();
     buildVllmProviderMock.mockReset();

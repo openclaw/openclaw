@@ -12,6 +12,8 @@ function isSourceFile(filePath: string): boolean {
 
 function isProductionExtensionFile(filePath: string): boolean {
   return !(
+    filePath.endsWith("/runtime-api.ts") ||
+    filePath.endsWith("\\runtime-api.ts") ||
     filePath.includes(".test.") ||
     filePath.includes(".spec.") ||
     filePath.includes(".fixture.") ||
