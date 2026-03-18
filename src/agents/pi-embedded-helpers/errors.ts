@@ -734,6 +734,18 @@ export function formatAssistantErrorText(
     );
   }
 
+  // Catch Anthropic thinking blocks error specifically
+  if (
+    raw.includes("thinking") &&
+    raw.includes("redacted_thinking") &&
+    raw.includes("cannot be modified")
+  ) {
+    return (
+      "Context compaction encountered an issue with Anthropic's thinking blocks. " +
+      "Try running /compact again, or use /new to start a fresh session."
+    );
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;

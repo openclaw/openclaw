@@ -243,6 +243,79 @@ function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessag
   };
 }
 
+/**
+ * Extract thinking and redacted_thinking blocks from the latest assistant message.
+ * Anthropic's API requires these blocks to remain unmodified in the latest assistant message.
+ */
+function extractThinkingBlocksFromLatestAssistant(
+  messages: AgentMessage[],
+): { blocks: unknown[]; messageIndex: number } | null {
+  // Find the latest assistant message
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (
+      msg &&
+      typeof msg === "object" &&
+      msg.role === "assistant" &&
+      Array.isArray((msg as { content?: unknown }).content)
+    ) {
+      const content = (msg as { content: unknown[] }).content;
+      const thinkingBlocks = content.filter(
+        (block) =>
+          block &&
+          typeof block === "object" &&
+          ((block as { type?: unknown }).type === "thinking" ||
+            (block as { type?: unknown }).type === "redacted_thinking"),
+      );
+      if (thinkingBlocks.length > 0) {
+        return { blocks: thinkingBlocks, messageIndex: i };
+      }
+      // Found latest assistant message but it has no thinking blocks
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Restore thinking blocks to the latest assistant message after compaction.
+ * This ensures Anthropic's API requirement is met.
+ */
+function restoreThinkingBlocksToLatestAssistant(
+  messages: AgentMessage[],
+  preserved: { blocks: unknown[]; messageIndex: number } | null,
+): void {
+  if (!preserved || preserved.blocks.length === 0) {
+    return;
+  }
+
+  // Find the latest assistant message after compaction
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (
+      msg &&
+      typeof msg === "object" &&
+      msg.role === "assistant" &&
+      Array.isArray((msg as { content?: unknown }).content)
+    ) {
+      const content = (msg as { content: unknown[] }).content;
+      // Remove any existing thinking blocks that may have been added during compaction
+      const nonThinkingContent = content.filter(
+        (block) =>
+          !(
+            block &&
+            typeof block === "object" &&
+            ((block as { type?: unknown }).type === "thinking" ||
+              (block as { type?: unknown }).type === "redacted_thinking")
+          ),
+      );
+      // Prepend the preserved thinking blocks (they should come first)
+      (msg as { content: unknown[] }).content = [...preserved.blocks, ...nonThinkingContent];
+      return;
+    }
+  }
+}
+
 function classifyCompactionReason(reason?: string): string {
   const text = (reason ?? "").trim().toLowerCase();
   if (!text) {
@@ -986,6 +1059,11 @@ export async function compactEmbeddedPiSessionDirect(
           // If token estimation throws on a malformed message, fall back to 0 so
           // the sanity check below becomes a no-op instead of crashing compaction.
         }
+
+        // ANTHROPIC FIX: Preserve thinking/redacted_thinking blocks from latest assistant message.
+        // Anthropic's API strictly requires these blocks to remain unmodified.
+        const preservedThinkingBlocks = extractThinkingBlocksFromLatestAssistant(session.messages);
+
         const result = await compactWithSafetyTimeout(
           () => session.compact(params.customInstructions),
           compactionTimeoutMs,
@@ -1001,6 +1079,9 @@ export async function compactEmbeddedPiSessionDirect(
           sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
         });
+
+        // ANTHROPIC FIX: Restore preserved thinking blocks to latest assistant message.
+        restoreThinkingBlocksToLatestAssistant(session.messages, preservedThinkingBlocks);
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
         try {
