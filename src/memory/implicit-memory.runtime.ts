@@ -18,12 +18,14 @@ export function resolveImplicitMemoryScopeKey(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
   messageProvider?: string | null;
+  agentAccountId?: string | null;
   senderId?: string | null;
 }): string {
   const senderId = params.senderId?.trim();
   if (senderId) {
     const channel = params.messageChannel?.trim() || params.messageProvider?.trim() || "unknown";
-    return `sender:${channel}:${senderId}`;
+    const accountId = params.agentAccountId?.trim() || "default";
+    return `sender:${channel}:${accountId}:${senderId}`;
   }
 
   const sessionKey = params.sessionKey?.trim();

@@ -46,9 +46,10 @@ describe("implicit memory runtime", () => {
         sessionId: "session-1",
         sessionKey: "agent:main:discord:channel:abc",
         messageChannel: "discord",
+        agentAccountId: "acct-1",
         senderId: "user-42",
       }),
-    ).toBe("sender:discord:user-42");
+    ).toBe("sender:discord:acct-1:user-42");
   });
 
   it("falls back to session scoping when sender metadata is unavailable", () => {
@@ -58,6 +59,24 @@ describe("implicit memory runtime", () => {
         sessionKey: "agent:main:discord:channel:abc",
       }),
     ).toBe("session:agent:main:discord:channel:abc");
+  });
+
+  it("keeps sender-scoped keys isolated across channel accounts", () => {
+    expect(
+      resolveImplicitMemoryScopeKey({
+        sessionId: "session-1",
+        messageChannel: "discord",
+        agentAccountId: "acct-a",
+        senderId: "user-42",
+      }),
+    ).not.toBe(
+      resolveImplicitMemoryScopeKey({
+        sessionId: "session-2",
+        messageChannel: "discord",
+        agentAccountId: "acct-b",
+        senderId: "user-42",
+      }),
+    );
   });
 
   it("builds a writeback payload from the user input and assistant output", () => {
@@ -170,5 +189,29 @@ describe("implicit memory runtime", () => {
     await expect(
       retrieveImplicitContext("Can you help me deploy this container?", "sender:discord:user-help"),
     ).resolves.toBeNull();
+  });
+
+  it("filters overlap after scoring a wider FTS candidate set", async () => {
+    for (let index = 0; index < 8; index += 1) {
+      await saveImplicitExperience({
+        scopeKey: "sender:discord:user-deploy",
+        intent: `deploy noise ${index}`,
+        rules: "deploy",
+      });
+    }
+
+    await saveImplicitExperience({
+      scopeKey: "sender:discord:user-deploy",
+      intent: "deploy container rollout",
+      rules: "Prefer blue-green deployment for container workloads in production environments.",
+    });
+
+    const context = await retrieveImplicitContext(
+      "deploy container production",
+      "sender:discord:user-deploy",
+    );
+
+    expect(context).toContain("deploy container rollout");
+    expect(context).toContain("blue-green deployment");
   });
 });

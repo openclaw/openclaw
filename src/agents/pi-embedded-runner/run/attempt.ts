@@ -2428,6 +2428,7 @@ export async function runEmbeddedAttempt(
           sessionKey: params.sessionKey,
           messageChannel: params.messageChannel,
           messageProvider: params.messageProvider,
+          agentAccountId: params.agentAccountId,
           senderId: params.senderId,
         });
       }

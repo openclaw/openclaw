@@ -17,6 +17,7 @@ LOGGER: Final[logging.Logger] = logging.getLogger(__name__)
 DEFAULT_DB_PATH: Final[Path] = Path.home() / ".openclaw" / "implicit_memory.db"
 FTS_TABLE_NAME: Final[str] = "user_experiences_fts"
 MAX_CONTEXT_RESULTS: Final[int] = 3
+MAX_CONTEXT_CANDIDATES: Final[int] = 25
 DB_PATH_ENV_VAR: Final[str] = "OPENCLAW_IMPLICIT_MEMORY_DB_PATH"
 MIN_OVERLAP_FOR_STRICT_MATCH: Final[int] = 2
 MIN_STRICT_TOKEN_COUNT: Final[int] = 3
@@ -224,10 +225,10 @@ class MemoryManager:
                 ORDER BY score ASC, ue.created_at DESC
                 LIMIT ?
                 """,
-                (match_query, normalized_scope_key, MAX_CONTEXT_RESULTS),
+                (match_query, normalized_scope_key, MAX_CONTEXT_CANDIDATES),
             ).fetchall()
 
-        rows = self._filter_rows_by_token_overlap(candidate_rows, query_tokens)
+        rows = self._filter_rows_by_token_overlap(candidate_rows, query_tokens)[:MAX_CONTEXT_RESULTS]
         if not rows:
             self._logger.debug("No implicit context match found for query=%r", normalized_query)
             return None
