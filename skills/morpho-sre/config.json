@@ -1,0 +1,54 @@
+{
+  "environments": {
+    "dev": {
+      "namespace": "dev-morpho",
+      "monitoring_namespace": "monitoring",
+      "grafana_host": "monitoring-dev.morpho.dev"
+    },
+    "prd": {
+      "namespace": "morpho-prd",
+      "monitoring_namespace": "monitoring",
+      "grafana_host": "monitoring.morpho.dev"
+    }
+  },
+  "defaults": {
+    "rca_mode": "single",
+    "auto_pr_min_confidence": 85,
+    "alert_cooldown_seconds": 600,
+    "alert_min_interval_seconds": 300,
+    "ci_repo_limit": 5,
+    "ci_run_limit": 3,
+    "log_snippet_pods_limit": 5,
+    "log_snippet_lines": 200,
+    "log_snippet_errors_per_container": 3,
+    "linear_memory_limit": 20
+  },
+  "severity_scores": {
+    "critical": 90,
+    "high": 70,
+    "medium": 50,
+    "low": 30
+  },
+  "primary_namespaces": ["morpho-prd", "production"],
+  "notification_targets": {
+    "critical": "#platform-monitoring",
+    "high": "#public-api-monitoring",
+    "medium": "#staging-infra-monitoring",
+    "low": "#staging-infra-monitoring"
+  },
+  "monitored_channels": {
+    "staging-infra-monitoring": { "env": "dev" },
+    "public-api-monitoring": { "env": "prd" },
+    "platform-monitoring": { "env": "prd" },
+    "bug-report": { "env": "all", "mode": "investigate-only" }
+  },
+  "auto_pr": {
+    "enabled": true,
+    "min_confidence": 85,
+    "allowed_repos": "morpho-org/*",
+    "branch_prefix": "openclaw/sre-auto",
+    "tracking_label": "openclaw-sre",
+    "linear_team": "Platform",
+    "linear_project": "[PLATFORM] Backlog"
+  }
+}

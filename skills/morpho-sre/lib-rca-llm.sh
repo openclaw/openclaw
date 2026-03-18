@@ -133,7 +133,7 @@ run_step_11() {
   local rc=0
   local provider_name
   local fallback_note
-  provider_name="$(printf '%s' "${provider_override:-codex}" | tr '[:upper:]' '[:lower:]')"
+  provider_name="$(printf '%s' "${provider_override:-claude}" | tr '[:upper:]' '[:lower:]')"
   case "$provider_name" in
     claude)
       fallback_note="Claude unavailable — heuristic fallback"

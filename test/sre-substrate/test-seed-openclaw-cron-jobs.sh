@@ -16,7 +16,14 @@ for bundled_skill in \
   foundry-evm-debug \
   grafana-metrics-best-practices \
   go-memory-profiling \
-  terraform-ci-review; do
+  terraform-ci-review \
+  sre-incident-triage \
+  sre-db-evidence \
+  sre-api-wrappers \
+  sre-auto-remediation \
+  sre-consumer-frontend \
+  sre-sentinel \
+  sre-verify; do
   mkdir -p "$RUNTIME_REPO/skills/$bundled_skill"
   cp -R "$REPO_ROOT/skills/$bundled_skill/." "$RUNTIME_REPO/skills/$bundled_skill/"
 done

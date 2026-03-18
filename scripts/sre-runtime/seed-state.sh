@@ -475,6 +475,13 @@ required_bundled_skills=(
   grafana-metrics-best-practices
   go-memory-profiling
   terraform-ci-review
+  sre-incident-triage
+  sre-db-evidence
+  sre-api-wrappers
+  sre-auto-remediation
+  sre-consumer-frontend
+  sre-sentinel
+  sre-verify
 )
 
 for skill_name in "${required_bundled_skills[@]}"; do

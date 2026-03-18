@@ -25,7 +25,14 @@ setup_runtime_repo() {
     foundry-evm-debug \
     grafana-metrics-best-practices \
     go-memory-profiling \
-    terraform-ci-review; do
+    terraform-ci-review \
+    sre-incident-triage \
+    sre-db-evidence \
+    sre-api-wrappers \
+    sre-auto-remediation \
+    sre-consumer-frontend \
+    sre-sentinel \
+    sre-verify; do
     mkdir -p "$runtime_repo/skills/$bundled_skill"
     cp -R "$REPO_ROOT/skills/$bundled_skill/." "$runtime_repo/skills/$bundled_skill/"
   done
