@@ -39,11 +39,10 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain('loading="lazy"');
   });
 
-  it("renders remote http markdown images as <img> elements", () => {
+  it("flattens plain http markdown images to alt text (CSP: img-src allows https only)", () => {
     const html = toSanitizedMarkdownHtml("![Photo](http://example.com/photo.jpg)");
-    expect(html).toContain("<img");
-    expect(html).toContain("http://example.com/photo.jpg");
-    expect(html).toContain('loading="lazy"');
+    expect(html).not.toContain("<img");
+    expect(html).toContain("Photo");
   });
 
   it("preserves base64 data URI images (#15437)", () => {
