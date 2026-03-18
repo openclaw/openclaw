@@ -235,25 +235,29 @@ export function resolveBudgetIncident(id: string): BudgetIncident {
   return getBudgetIncident(id)!;
 }
 
-export function listBudgetIncidents(filters: {
-  workspaceId: string;
+export function listBudgetIncidents(filters?: {
+  workspaceId?: string;
   policyId?: string;
   agentId?: string;
   type?: BudgetIncidentType;
 }): BudgetIncident[] {
   const db = getStateDb();
-  let query = "SELECT * FROM op1_budget_incidents WHERE workspace_id = ?";
-  const params: Array<string | number | bigint | null> = [filters.workspaceId];
+  let query = "SELECT * FROM op1_budget_incidents WHERE 1=1";
+  const params: Array<string | number | bigint | null> = [];
 
-  if (filters.policyId) {
+  if (filters?.workspaceId) {
+    query += " AND workspace_id = ?";
+    params.push(filters.workspaceId);
+  }
+  if (filters?.policyId) {
     query += " AND policy_id = ?";
     params.push(filters.policyId);
   }
-  if (filters.agentId) {
+  if (filters?.agentId) {
     query += " AND agent_id = ?";
     params.push(filters.agentId);
   }
-  if (filters.type) {
+  if (filters?.type) {
     query += " AND type = ?";
     params.push(filters.type);
   }

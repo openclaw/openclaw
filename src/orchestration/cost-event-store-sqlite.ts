@@ -84,8 +84,8 @@ export function recordCostEvent(params: {
   };
 }
 
-export function listCostEvents(filters: {
-  workspaceId: string;
+export function listCostEvents(filters?: {
+  workspaceId?: string;
   agentId?: string;
   projectId?: string;
   taskId?: string;
@@ -93,26 +93,30 @@ export function listCostEvents(filters: {
   untilUtc?: number;
 }): CostEvent[] {
   const db = getStateDb();
-  let query = "SELECT * FROM op1_cost_events WHERE workspace_id = ?";
-  const params: Array<string | number | bigint | null> = [filters.workspaceId];
+  let query = "SELECT * FROM op1_cost_events WHERE 1=1";
+  const params: Array<string | number | bigint | null> = [];
 
-  if (filters.agentId) {
+  if (filters?.workspaceId) {
+    query += " AND workspace_id = ?";
+    params.push(filters.workspaceId);
+  }
+  if (filters?.agentId) {
     query += " AND agent_id = ?";
     params.push(filters.agentId);
   }
-  if (filters.projectId) {
+  if (filters?.projectId) {
     query += " AND project_id = ?";
     params.push(filters.projectId);
   }
-  if (filters.taskId) {
+  if (filters?.taskId) {
     query += " AND task_id = ?";
     params.push(filters.taskId);
   }
-  if (filters.sinceUtc) {
+  if (filters?.sinceUtc) {
     query += " AND occurred_at >= ?";
     params.push(filters.sinceUtc);
   }
-  if (filters.untilUtc) {
+  if (filters?.untilUtc) {
     query += " AND occurred_at <= ?";
     params.push(filters.untilUtc);
   }
@@ -147,19 +151,19 @@ export function getAggregateCost(filters: {
     query += " AND agent_id = ?";
     params.push(filters.agentId);
   }
-  if (filters.projectId) {
+  if (filters?.projectId) {
     query += " AND project_id = ?";
     params.push(filters.projectId);
   }
-  if (filters.taskId) {
+  if (filters?.taskId) {
     query += " AND task_id = ?";
     params.push(filters.taskId);
   }
-  if (filters.sinceUtc) {
+  if (filters?.sinceUtc) {
     query += " AND occurred_at >= ?";
     params.push(filters.sinceUtc);
   }
-  if (filters.untilUtc) {
+  if (filters?.untilUtc) {
     query += " AND occurred_at <= ?";
     params.push(filters.untilUtc);
   }

@@ -79,14 +79,18 @@ export function getApproval(id: string): Approval | null {
 }
 
 export function listApprovals(filters: {
-  workspaceId: string;
+  workspaceId?: string;
   status?: ApprovalStatus;
   type?: ApprovalType;
 }): Approval[] {
   const db = getStateDb();
-  let query = "SELECT * FROM op1_approvals WHERE workspace_id = ?";
-  const params: Array<string | number | bigint | null> = [filters.workspaceId];
+  let query = "SELECT * FROM op1_approvals WHERE 1=1";
+  const params: Array<string | number | bigint | null> = [];
 
+  if (filters.workspaceId) {
+    query += " AND workspace_id = ?";
+    params.push(filters.workspaceId);
+  }
   if (filters.status) {
     query += " AND status = ?";
     params.push(filters.status);

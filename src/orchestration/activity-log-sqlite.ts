@@ -62,7 +62,7 @@ export function logActivity(params: {
 }
 
 export function listActivityLogs(filters: {
-  workspaceId: string;
+  workspaceId?: string;
   entityType?: string;
   entityId?: string;
   actorId?: string;
@@ -70,8 +70,13 @@ export function listActivityLogs(filters: {
   offset?: number;
 }): ActivityLogEntry[] {
   const db = getStateDb();
-  let query = "SELECT * FROM op1_activity_log WHERE workspace_id = ?";
-  const params: Array<string | number | bigint | null> = [filters.workspaceId];
+  let query = "SELECT * FROM op1_activity_log WHERE 1=1";
+  const params: Array<string | number | bigint | null> = [];
+
+  if (filters.workspaceId) {
+    query += " AND workspace_id = ?";
+    params.push(filters.workspaceId);
+  }
 
   if (filters.entityType) {
     query += " AND entity_type = ?";
