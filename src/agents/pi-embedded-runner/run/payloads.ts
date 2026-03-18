@@ -56,27 +56,33 @@ const FAILURE_REASON_MAX_LENGTH = 120;
  * Takes the first non-empty line and caps at {@link FAILURE_REASON_MAX_LENGTH} chars.
  */
 function truncateErrorReason(error: string): string {
+  // Strip external-content security wrappers and SECURITY NOTICE banners
+  // BEFORE selecting the first line, so web_fetch failures surface the actual
+  // HTTP error instead of internal security markers (#46592).
+  let stripped = error.replace(/<<<\s*(?:END_)?EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>/g, "");
+  stripped = stripped.replace(/SECURITY NOTICE:[\s\S]*?(?=\n\n|\n(?=[^\s-]))/g, "");
   const firstLine =
-    error
+    stripped
       .split("\n")
       .map((l) => l.trim())
       .find((l) => l.length > 0) ?? "";
   // Strip internal tool-context prefixes (e.g. "agent=… node=… gateway=… action=…: ")
   // to avoid leaking implementation details into user-facing warnings (#46592).
   let cleaned = firstLine.replace(/^(?:\w+=\S+\s+)*\w+=\S+:\s*/, "");
-  // Strip external-content security wrappers that leak internal marker IDs
-  // when tool errors include wrapped content (e.g. web_fetch failures).
-  cleaned = cleaned.replace(/<<<\s*(?:END_)?EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>/g, "");
   // Scrub absolute filesystem paths — Unix (/home, /tmp, /var, /root, /Users,
-  // /workspace) and Windows drive-letter roots (C:\...) — to avoid leaking
-  // sandbox/host directory structure in non-verbose mode (#46592).
-  cleaned = cleaned.replace(/\/(?:home|tmp|var|root|Users|workspace)\/\S+/g, "<path>");
+  // /workspace, /private) and Windows drive-letter roots (C:\...) — to avoid
+  // leaking sandbox/host directory structure in non-verbose mode (#46592).
+  // Consume to end-of-string so paths with embedded spaces (e.g.
+  // "/home/user/My Documents/file.txt") are fully redacted.  Over-redacting
+  // trailing text is preferable to leaking directory structure.
+  cleaned = cleaned.replace(/\/(?:home|tmp|var|root|Users|workspace|private)\/[^\n]*/g, "<path>");
   // Windows paths may contain spaces (e.g. "C:\Users\Jane Doe\...") and parens
   // ("C:\Program Files (x86)\..."), so consume until end-of-string or a
   // delimiter that cannot appear in a path context.
   cleaned = cleaned.replace(/[A-Z]:\\[\w\\. ()+-]+(?:\\[\w\\. ()+-]+)*/g, "<path>");
-  // Scrub signed / tokenized URLs to avoid leaking credentials such as
-  // presigned S3/Blob Storage query-string tokens (#46592).
+  // Scrub data: URIs which may embed raw file content (e.g. base64 PDFs)
+  // and http(s) URLs which may contain signed tokens / credentials (#46592).
+  cleaned = cleaned.replace(/data:[a-zA-Z0-9/+._-]*[;,]\S*/g, "<data-uri>");
   cleaned = cleaned.replace(/https?:\/\/\S+/g, "<url>");
   // Scrub session keys that may embed channel-specific PII such as phone
   // numbers or chat IDs (e.g. "agent:main:whatsapp:direct:+15555550123").
