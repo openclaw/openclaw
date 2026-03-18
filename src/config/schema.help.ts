@@ -667,33 +667,10 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
   "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
   "tools.web.search.provider":
-    'Search provider ("brave", "firecrawl", "gemini", "grok", "kimi", or "perplexity"). Auto-detected from available API keys if omitted.',
-  "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
+    "Search provider id. Auto-detected from available API keys if omitted.",
   "tools.web.search.maxResults": "Number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
-  "tools.web.search.brave.mode":
-    'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
-  "tools.web.search.firecrawl.apiKey":
-    "Firecrawl API key for web search (fallback: FIRECRAWL_API_KEY env var).",
-  "tools.web.search.firecrawl.baseUrl":
-    'Firecrawl Search base URL override (default: "https://api.firecrawl.dev").',
-  "tools.web.search.gemini.apiKey":
-    "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
-  "tools.web.search.gemini.model": 'Gemini model override (default: "gemini-2.5-flash").',
-  "tools.web.search.grok.apiKey": "Grok (xAI) API key (fallback: XAI_API_KEY env var).", // pragma: allowlist secret
-  "tools.web.search.grok.model": 'Grok model override (default: "grok-4-1-fast").',
-  "tools.web.search.kimi.apiKey":
-    "Moonshot/Kimi API key (fallback: KIMI_API_KEY or MOONSHOT_API_KEY env var).",
-  "tools.web.search.kimi.baseUrl":
-    'Kimi base URL override (default: "https://api.moonshot.ai/v1").',
-  "tools.web.search.kimi.model": 'Kimi model override (default: "moonshot-v1-128k").',
-  "tools.web.search.perplexity.apiKey":
-    "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). Direct Perplexity keys default to the Search API; OpenRouter keys use Sonar chat completions.",
-  "tools.web.search.perplexity.baseUrl":
-    "Optional Perplexity/OpenRouter chat-completions base URL override. Setting this opts Perplexity into the legacy Sonar/OpenRouter compatibility path.",
-  "tools.web.search.perplexity.model":
-    'Optional Sonar/OpenRouter model override (default: "perplexity/sonar-pro"). Setting this opts Perplexity into the legacy chat-completions compatibility path.',
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
