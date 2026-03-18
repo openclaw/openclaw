@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
+  BROWSER_SEARCH_CRITICAL_THRESHOLD,
+  BROWSER_SEARCH_WARNING_THRESHOLD,
   CRITICAL_THRESHOLD,
   GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
   TOOL_CALL_HISTORY_SIZE,
@@ -92,6 +94,46 @@ function createPingPongFixture() {
     readParams: { path: "/a.txt" },
     listParams: { dir: "/workspace" },
   };
+}
+
+function createBrowserSearchFixture(
+  query: string,
+  host = "www.google.com",
+  options?: { path?: string; queryParam?: string },
+) {
+  const path = options?.path ?? "/search";
+  const queryParam = options?.queryParam ?? "q";
+  const url = `https://${host}${path}?${queryParam}=${encodeURIComponent(query)}`;
+  return {
+    toolName: "browser",
+    params: { action: "open", url },
+    result: {
+      content: [{ type: "text", text: `results for ${query}` }],
+      details: { url },
+    },
+  } as const;
+}
+
+function recordSuccessfulBrowserSearchCalls(params: {
+  state: SessionState;
+  queries: string[];
+  hostAtIndex?: (index: number) => string;
+  startIndex?: number;
+}) {
+  const startIndex = params.startIndex ?? 0;
+  for (let i = 0; i < params.queries.length; i += 1) {
+    const fixture = createBrowserSearchFixture(
+      params.queries[i] ?? `query-${i}`,
+      params.hostAtIndex?.(i) ?? "www.google.com",
+    );
+    recordSuccessfulCall(
+      params.state,
+      fixture.toolName,
+      fixture.params,
+      fixture.result,
+      startIndex + i,
+    );
+  }
 }
 
 function detectLoopAfterRepeatedCalls(params: {
@@ -425,6 +467,152 @@ describe("tool-loop-detection", () => {
       }
 
       const loopResult = detectToolCallLoop(state, "process", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("warns on browser search storms across changing queries", () => {
+      const state = createState();
+      recordSuccessfulBrowserSearchCalls({
+        state,
+        queries: Array.from(
+          { length: BROWSER_SEARCH_WARNING_THRESHOLD },
+          (_, index) => `openclaw issue ${index}`,
+        ),
+      });
+
+      const current = createBrowserSearchFixture("openclaw issue next");
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("browser_search_storm");
+        expect(loopResult.count).toBe(BROWSER_SEARCH_WARNING_THRESHOLD);
+        expect(loopResult.message).toContain("Browser search pages have been opened");
+      }
+    });
+
+    it("blocks browser search storms at critical threshold", () => {
+      const state = createState();
+      recordSuccessfulBrowserSearchCalls({
+        state,
+        queries: Array.from(
+          { length: BROWSER_SEARCH_CRITICAL_THRESHOLD },
+          (_, index) => `openclaw loop detection ${index}`,
+        ),
+        hostAtIndex: (index) => (index % 2 === 0 ? "www.google.com" : "www.bing.com"),
+      });
+
+      const current = createBrowserSearchFixture("openclaw loop detection next", "www.bing.com");
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("browser_search_storm");
+        expect(loopResult.count).toBe(BROWSER_SEARCH_CRITICAL_THRESHOLD);
+        expect(loopResult.message).toContain("CRITICAL");
+      }
+    });
+
+    it("matches Yandex search pages with a trailing slash", () => {
+      const state = createState();
+      for (let i = 0; i < BROWSER_SEARCH_WARNING_THRESHOLD; i += 1) {
+        const fixture = createBrowserSearchFixture(`yandex issue ${i}`, "yandex.com", {
+          path: "/search/",
+          queryParam: "text",
+        });
+        recordSuccessfulCall(state, fixture.toolName, fixture.params, fixture.result, i);
+      }
+
+      const current = createBrowserSearchFixture("yandex issue next", "yandex.com", {
+        path: "/search/",
+        queryParam: "text",
+      });
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.detector).toBe("browser_search_storm");
+        expect(loopResult.count).toBe(BROWSER_SEARCH_WARNING_THRESHOLD);
+      }
+    });
+
+    it("does not treat google.evil.com search pages as Google search hops", () => {
+      const state = createState();
+      for (let i = 0; i < BROWSER_SEARCH_CRITICAL_THRESHOLD + 2; i += 1) {
+        const fixture = createBrowserSearchFixture(`evil google issue ${i}`, "google.evil.com");
+        recordSuccessfulCall(state, fixture.toolName, fixture.params, fixture.result, i);
+      }
+
+      const current = createBrowserSearchFixture("evil google issue next", "google.evil.com");
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("does not treat yandex.evil.com search pages as Yandex search hops", () => {
+      const state = createState();
+      for (let i = 0; i < BROWSER_SEARCH_CRITICAL_THRESHOLD + 2; i += 1) {
+        const fixture = createBrowserSearchFixture(`evil yandex issue ${i}`, "yandex.evil.com", {
+          path: "/search/",
+          queryParam: "text",
+        });
+        recordSuccessfulCall(state, fixture.toolName, fixture.params, fixture.result, i);
+      }
+
+      const current = createBrowserSearchFixture("evil yandex issue next", "yandex.evil.com", {
+        path: "/search/",
+        queryParam: "text",
+      });
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("does not flag normal browser page opens as a browser search storm", () => {
+      const state = createState();
+      for (let i = 0; i < BROWSER_SEARCH_CRITICAL_THRESHOLD + 2; i += 1) {
+        recordSuccessfulCall(
+          state,
+          "browser",
+          { action: "open", url: `https://example.com/page-${i}` },
+          { content: [{ type: "text", text: `page ${i}` }], details: { ok: true } },
+          i,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "browser",
+        { action: "open", url: "https://example.com/final" },
+        enabledLoopDetectionConfig,
+      );
       expect(loopResult.stuck).toBe(false);
     });
 

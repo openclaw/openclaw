@@ -141,7 +141,12 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   toolName: string;
   level: "warning" | "critical";
   action: "warn" | "block";
-  detector: "generic_repeat" | "known_poll_no_progress" | "global_circuit_breaker" | "ping_pong";
+  detector:
+    | "generic_repeat"
+    | "known_poll_no_progress"
+    | "global_circuit_breaker"
+    | "ping_pong"
+    | "browser_search_storm";
   count: number;
   message: string;
   pairedToolName?: string;
