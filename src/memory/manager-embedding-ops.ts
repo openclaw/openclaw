@@ -609,6 +609,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (kind === "query") {
       return isLocal ? EMBEDDING_QUERY_TIMEOUT_LOCAL_MS : EMBEDDING_QUERY_TIMEOUT_REMOTE_MS;
     }
+    if (!isLocal && Number.isFinite(this.batch.timeoutMs) && this.batch.timeoutMs > 0) {
+      return this.batch.timeoutMs;
+    }
     return isLocal ? EMBEDDING_BATCH_TIMEOUT_LOCAL_MS : EMBEDDING_BATCH_TIMEOUT_REMOTE_MS;
   }
 

@@ -129,6 +129,16 @@ describe("memory embedding batches", () => {
     expect(calls).toBe(2);
   }, 10000);
 
+  it("uses configured remote batch timeout for builtin embedding batches", async () => {
+    const managerSmall = fx.getManagerSmall();
+    const manager = managerSmall as unknown as {
+      batch: { timeoutMs: number };
+      resolveEmbeddingTimeout: (kind: "query" | "batch") => number;
+    };
+    manager.batch.timeoutMs = 987_000;
+    expect(manager.resolveEmbeddingTimeout("batch")).toBe(987_000);
+  });
+
   it("skips empty chunks so embeddings input stays valid", async () => {
     const memoryDir = fx.getMemoryDir();
     const managerSmall = fx.getManagerSmall();
