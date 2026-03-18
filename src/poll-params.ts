@@ -4,22 +4,37 @@ export type PollCreationParamKind = "string" | "stringArray" | "number" | "boole
 
 export type PollCreationParamDef = {
   kind: PollCreationParamKind;
-  telegramOnly?: boolean;
 };
 
-export const POLL_CREATION_PARAM_DEFS: Record<string, PollCreationParamDef> = {
+const SHARED_POLL_CREATION_PARAM_DEFS = {
   pollQuestion: { kind: "string" },
   pollOption: { kind: "stringArray" },
   pollDurationHours: { kind: "number" },
   pollMulti: { kind: "boolean" },
-  pollDurationSeconds: { kind: "number", telegramOnly: true },
-  pollAnonymous: { kind: "boolean", telegramOnly: true },
-  pollPublic: { kind: "boolean", telegramOnly: true },
+} satisfies Record<string, PollCreationParamDef>;
+
+const TELEGRAM_POLL_CREATION_PARAM_DEFS = {
+  pollDurationSeconds: { kind: "number" },
+  pollAnonymous: { kind: "boolean" },
+  pollPublic: { kind: "boolean" },
+} satisfies Record<string, PollCreationParamDef>;
+
+export const POLL_CREATION_PARAM_DEFS: Record<string, PollCreationParamDef> = {
+  ...SHARED_POLL_CREATION_PARAM_DEFS,
+  ...TELEGRAM_POLL_CREATION_PARAM_DEFS,
 };
 
+export type SharedPollCreationParamName = keyof typeof SHARED_POLL_CREATION_PARAM_DEFS;
+export type TelegramPollCreationParamName = keyof typeof TELEGRAM_POLL_CREATION_PARAM_DEFS;
 export type PollCreationParamName = keyof typeof POLL_CREATION_PARAM_DEFS;
 
 export const POLL_CREATION_PARAM_NAMES = Object.keys(POLL_CREATION_PARAM_DEFS);
+export const SHARED_POLL_CREATION_PARAM_NAMES = Object.keys(
+  SHARED_POLL_CREATION_PARAM_DEFS,
+) as SharedPollCreationParamName[];
+export const TELEGRAM_POLL_CREATION_PARAM_NAMES = Object.keys(
+  TELEGRAM_POLL_CREATION_PARAM_DEFS,
+) as TelegramPollCreationParamName[];
 
 function readPollParamRaw(params: Record<string, unknown>, key: string): unknown {
   return readSnakeCaseParamRaw(params, key);
