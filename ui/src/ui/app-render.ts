@@ -673,6 +673,7 @@ export function renderApp(state: AppViewState) {
                   whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
                   whatsappConnected: state.whatsappLoginConnected,
                   whatsappBusy: state.whatsappBusy,
+                  whatsappWebLoginAvailable: state.channelsSnapshot?.webLoginProviderAvailable ?? false,
                   configSchema: state.configSchema,
                   configSchemaLoading: state.configSchemaLoading,
                   configForm: state.configForm,
