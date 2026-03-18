@@ -1,6 +1,6 @@
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 

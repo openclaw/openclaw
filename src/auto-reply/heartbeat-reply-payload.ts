@@ -1,4 +1,4 @@
-import { hasOutboundReplyContent } from "../plugin-sdk/reply-payload.js";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "./types.js";
 
 export function resolveHeartbeatReplyPayload(
