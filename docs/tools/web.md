@@ -98,6 +98,7 @@ See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quicks
 - Gemini: `plugins.entries.google.config.webSearch.apiKey`
 - Grok: `plugins.entries.xai.config.webSearch.apiKey`
 - Kimi: `plugins.entries.moonshot.config.webSearch.apiKey`
+- Parallel: `plugins.entries.parallel.config.webSearch.apiKey`
 - Perplexity: `plugins.entries.perplexity.config.webSearch.apiKey`
 
 All of these fields also support SecretRef objects.
@@ -109,6 +110,7 @@ All of these fields also support SecretRef objects.
 - Gemini: `GEMINI_API_KEY`
 - Grok: `XAI_API_KEY`
 - Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
+- Parallel: `PARALLEL_API_KEY`
 - Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
 
 For a gateway install, put these in `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).

@@ -344,9 +344,17 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.apiKey).toBe("BSA-plain");
   });
 
-  it("exports all 6 providers in SEARCH_PROVIDER_OPTIONS", () => {
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(6);
+  it("exports all 7 providers in SEARCH_PROVIDER_OPTIONS", () => {
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(7);
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
-    expect(values).toEqual(["brave", "gemini", "grok", "kimi", "perplexity", "firecrawl"]);
+    expect(values).toEqual([
+      "brave",
+      "gemini",
+      "grok",
+      "kimi",
+      "parallel",
+      "perplexity",
+      "firecrawl",
+    ]);
   });
 });

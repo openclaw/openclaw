@@ -553,16 +553,16 @@ export async function runSetupWizard(
     await prompter.note("Skipping search setup.", "Search");
   } else {
     const { setupSearch } = await import("../commands/onboard-search.js");
+    const preSearchConfig = nextConfig;
     nextConfig = await setupSearch(nextConfig, runtime, prompter, {
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
     });
 
-    // Ensure web_search and web_fetch are in the tool allowlist so the agent
-    // can use them.  When tools.allow is set, only listed tools are permitted;
-    // without this, search setup would configure the provider but the tool
-    // would still be blocked by the policy pipeline.
-    const selectedProvider = nextConfig.tools?.web?.search?.provider;
+    // Only mutate policy/fetch when the user actually selected a provider
+    // (not when they chose "Skip for now", which returns the original config).
+    const searchChanged = nextConfig !== preSearchConfig;
+    const selectedProvider = searchChanged ? nextConfig.tools?.web?.search?.provider : undefined;
     if (selectedProvider) {
       const toolsAllow = nextConfig.tools?.allow;
       const hasExplicitAllow = Array.isArray(toolsAllow);
