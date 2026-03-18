@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
 const extraArgs = process.argv.slice(2);
 const INEFFECTIVE_DYNAMIC_IMPORT_RE = /\[INEFFECTIVE_DYNAMIC_IMPORT\]/;
+const UNRESOLVED_IMPORT_RE = /\[UNRESOLVED_IMPORT\]/;
 const result = spawnSync(
   "pnpm",
   ["exec", "tsdown", "--config-loader", "unrun", "--logLevel", logLevel, ...extraArgs],
@@ -27,6 +28,13 @@ if (stderr) {
 if (result.status === 0 && INEFFECTIVE_DYNAMIC_IMPORT_RE.test(`${stdout}\n${stderr}`)) {
   console.error(
     "Build emitted [INEFFECTIVE_DYNAMIC_IMPORT]. Replace transparent runtime re-export facades with real runtime boundaries.",
+  );
+  process.exit(1);
+}
+
+if (result.status === 0 && UNRESOLVED_IMPORT_RE.test(`${stdout}\n${stderr}`)) {
+  console.error(
+    "Build emitted [UNRESOLVED_IMPORT]. Declare or bundle the missing dependency instead of silently externalizing it.",
   );
   process.exit(1);
 }
