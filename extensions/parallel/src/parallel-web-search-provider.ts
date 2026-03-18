@@ -200,9 +200,19 @@ export function createParallelWebSearchProvider(): WebSearchProviderPlugin {
     autoDetectOrder: 45,
     credentialPath: "plugins.entries.parallel.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.parallel.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => searchConfig?.apiKey,
+    getCredentialValue: (searchConfig) => {
+      const parallel = searchConfig?.parallel;
+      return parallel && typeof parallel === "object" && !Array.isArray(parallel)
+        ? (parallel as Record<string, unknown>).apiKey
+        : undefined;
+    },
     setCredentialValue: (searchConfigTarget, value) => {
-      searchConfigTarget.apiKey = value;
+      const scoped = searchConfigTarget.parallel;
+      if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
+        searchConfigTarget.parallel = { apiKey: value };
+        return;
+      }
+      (scoped as Record<string, unknown>).apiKey = value;
     },
     getConfiguredCredentialValue: (config) =>
       resolveProviderWebSearchPluginConfig(config, "parallel")?.apiKey,

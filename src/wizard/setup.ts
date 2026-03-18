@@ -577,16 +577,24 @@ export async function runSetupWizard(
 
       // When Parallel is the search provider, also enable Parallel extract for
       // web_fetch (same API key, better extraction for JS-heavy sites).
-      // Auto-enable parallel extract when parallel search is selected.
       // Don't disable it when switching away — fetch preference is independent.
       const fetch = nextConfig.tools?.web?.fetch;
-      const updatedFetch =
-        selectedProvider === "parallel"
-          ? {
-              ...fetch,
-              parallel: { ...(fetch?.parallel as Record<string, unknown>), enabled: true },
-            }
-          : fetch;
+      const updatedFetch = (() => {
+        if (selectedProvider !== "parallel") {
+          return fetch;
+        }
+        const searchParallel = (nextConfig.tools?.web?.search as Record<string, unknown>)
+          ?.parallel as Record<string, unknown> | undefined;
+        const searchApiKey = searchParallel?.apiKey;
+        return {
+          ...fetch,
+          parallel: {
+            ...(fetch?.parallel as Record<string, unknown>),
+            enabled: true,
+            ...(searchApiKey ? { apiKey: searchApiKey } : {}),
+          },
+        } as typeof fetch;
+      })();
 
       nextConfig = {
         ...nextConfig,
