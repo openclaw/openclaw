@@ -3,27 +3,80 @@ Deep Research Pipeline for OpenClaw.
 Multi-step iterative research with parallel search, fact verification,
 cumulative context, self-critique, and source citation.
 
-Flow:
-1. Estimate complexity → set adaptive depth
-2. Decompose question into sub-queries
-3. Parallel search (web + memory) for all sub-queries
-4. Verify key claims via cross-search
-5. Synthesize report with source citations [N]
-6. Self-critique → revise report
-7. Gap analysis → targeted follow-up searches → refine
-8. Final fact-check pass before delivery
+Enhanced flow (v2 — with deep research improvements):
+ 1. Estimate complexity → set adaptive depth
+ 2. Decompose question into sub-queries
+ 2a. **Multi-perspective reformulation** — rephrase each sub-query from 2-3 angles
+ 3. Parallel search (web + memory + **academic**) for all sub-queries
+ 3a. **Evidence scoring** — weight each evidence piece by relevance & source diversity
+ 4. **Contradiction detection** across gathered evidence
+ 5. Verify key claims via cross-search
+ 6. Synthesize report with source citations [N]
+ 7. Self-critique → revise report
+ 8. Gap analysis → targeted follow-up searches → refine
+ 8a. **Adaptive stopping** — stop when confidence threshold is met
+ 9. **Confidence calibration** — compute overall confidence score
+10. Final fact-check pass before delivery
 
 Triggered by /research command or when Planner detects complex factual questions.
 """
 
 import asyncio
 import json
-from typing import Any, Dict, List
+import re
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 import aiohttp
 import structlog
 
 logger = structlog.get_logger("DeepResearch")
+
+# ---------------------------------------------------------------------------
+# Evidence tracking (improvement: structured evidence chain)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EvidencePiece:
+    """A single piece of evidence with provenance and confidence."""
+    query: str
+    source_type: str  # "web", "memory", "academic"
+    content: str
+    confidence: float = 0.5  # 0.0–1.0
+    perspective: str = "default"
+
+    def summary(self, max_len: int = 500) -> str:
+        return self.content[:max_len]
+
+
+@dataclass
+class ResearchState:
+    """Tracks the full state of a research session."""
+    question: str
+    complexity: str = "medium"
+    evidence: List[EvidencePiece] = field(default_factory=list)
+    contradictions: List[str] = field(default_factory=list)
+    verified_facts: List[str] = field(default_factory=list)
+    refuted_facts: List[str] = field(default_factory=list)
+    confidence_score: float = 0.0  # overall 0.0–1.0
+    iterations: int = 0
+    sources: List[str] = field(default_factory=list)
+
+    @property
+    def evidence_count(self) -> int:
+        return len(self.evidence)
+
+    @property
+    def source_diversity(self) -> int:
+        """Number of distinct source types used."""
+        return len({e.source_type for e in self.evidence})
+
+    def add_evidence(self, piece: EvidencePiece):
+        self.evidence.append(piece)
+        if piece.source_type == "web" and piece.content and piece.content != "No results found.":
+            if piece.query not in self.sources:
+                self.sources.append(piece.query)
+
 
 # Depth profiles keyed by complexity level
 _DEPTH_PROFILES = {
@@ -32,9 +85,23 @@ _DEPTH_PROFILES = {
     "complex": {"max_iterations": 5, "max_sub_queries": 6, "max_gap_queries": 3},
 }
 
+# Confidence threshold for adaptive stopping
+_CONFIDENCE_THRESHOLD = 0.75
+
 
 class DeepResearchPipeline:
-    """Iterative research pipeline with parallel search, fact verification and self-critique."""
+    """Iterative research pipeline with parallel search, fact verification and self-critique.
+
+    V2 improvements:
+    - Multi-perspective query reformulation
+    - Evidence scoring & weighting
+    - Contradiction detection
+    - Source diversity tracking
+    - Academic paper search integration (via research_paper_parser)
+    - Adaptive stopping based on confidence threshold
+    - Structured evidence chain (EvidencePiece / ResearchState)
+    - Confidence calibration
+    """
 
     def __init__(self, vllm_url: str, model: str, mcp_client):
         self.vllm_url = vllm_url.rstrip("/")
@@ -42,6 +109,8 @@ class DeepResearchPipeline:
         self.mcp_client = mcp_client
         # Cumulative context carried across all LLM calls within one research session
         self._research_context: List[str] = []
+        # Academic search integration (lazy-loaded)
+        self._academic_search_enabled = True
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -50,14 +119,17 @@ class DeepResearchPipeline:
         self, question: str, status_callback=None
     ) -> Dict[str, Any]:
         """
-        Returns {report, sources, iterations, verified_facts, refuted_facts}.
+        Returns {report, sources, iterations, verified_facts, refuted_facts,
+                 confidence_score, evidence_count, source_diversity, contradictions}.
         """
         self._research_context = []
+        state = ResearchState(question=question)
 
         # Step 0: Adaptive depth
         if status_callback:
             await status_callback("DeepResearch", self.model, "🔍 Оценка сложности...")
         complexity = await self._estimate_complexity(question)
+        state.complexity = complexity
         profile = _DEPTH_PROFILES.get(complexity, _DEPTH_PROFILES["medium"])
         max_iterations = profile["max_iterations"]
         max_sub_queries = profile["max_sub_queries"]
@@ -71,14 +143,22 @@ class DeepResearchPipeline:
         sub_queries = sub_queries[:max_sub_queries]
         logger.info("Research decomposed", sub_queries=sub_queries)
 
-        # Step 2: Parallel search for all sub-queries
+        # Step 1a: Multi-perspective reformulation (v2 improvement)
+        if status_callback:
+            await status_callback("DeepResearch", self.model, "🔄 Мульти-перспективная переформулировка...")
+        reformulated = await self._reformulate_queries(question, sub_queries)
+        all_queries = list(dict.fromkeys(sub_queries + reformulated))  # deduplicate preserving order
+        all_queries = all_queries[:max_sub_queries + 3]  # allow a few extra
+        logger.info("Queries after reformulation", total=len(all_queries), added=len(reformulated))
+
+        # Step 2: Parallel search for all sub-queries (web + memory + academic)
         if status_callback:
             await status_callback(
                 "DeepResearch", self.model,
-                f"🔎 Параллельный поиск по {len(sub_queries)} запросам..."
+                f"🔎 Параллельный поиск по {len(all_queries)} запросам..."
             )
         search_results = await asyncio.gather(
-            *[self._search_sub_query(sq) for sq in sub_queries]
+            *[self._search_sub_query(sq) for sq in all_queries]
         )
 
         all_evidence: List[str] = []
@@ -90,13 +170,42 @@ class DeepResearchPipeline:
                 f"Memory: {res['memory']}"
             )
             all_evidence.append(evidence)
+            # Track evidence pieces
+            state.add_evidence(EvidencePiece(
+                query=res["query"], source_type="web", content=res["web"],
+                perspective=res.get("perspective", "default"),
+            ))
+            state.add_evidence(EvidencePiece(
+                query=res["query"], source_type="memory", content=res["memory"],
+                perspective=res.get("perspective", "default"),
+            ))
             if res["web"] and res["web"] != "No results found.":
                 sources.append(res["query"])
 
+            # Include academic results if available
+            if res.get("academic"):
+                all_evidence.append(f"[Academic: {res['query']}]\n{res['academic']}")
+                state.add_evidence(EvidencePiece(
+                    query=res["query"], source_type="academic",
+                    content=res["academic"], confidence=0.8,
+                ))
+
         self._research_context.append(
-            f"Собраны данные по {len(sub_queries)} подзапросам, "
-            f"найдено {len(sources)} результатов с веб-источниками."
+            f"Собраны данные по {len(all_queries)} подзапросам, "
+            f"найдено {len(sources)} результатов с веб-источниками, "
+            f"всего {state.evidence_count} блоков доказательств."
         )
+
+        # Step 2a: Evidence scoring (v2 improvement)
+        if status_callback:
+            await status_callback("DeepResearch", self.model, "⚖️ Оценка релевантности доказательств...")
+        scored_evidence = await self._score_evidence(question, all_evidence)
+
+        # Step 2b: Contradiction detection (v2 improvement)
+        if status_callback:
+            await status_callback("DeepResearch", self.model, "⚡ Обнаружение противоречий...")
+        contradictions = await self._detect_contradictions(question, all_evidence)
+        state.contradictions = contradictions
 
         # Step 3: Verify key facts from gathered evidence
         if status_callback:
@@ -115,13 +224,23 @@ class DeepResearchPipeline:
         if critique and critique.strip().lower() not in ("none", "нет", "no issues"):
             report = await self._revise_report(report, critique)
 
-        # Step 6: Iterative gap-filling
+        # Step 6: Iterative gap-filling with adaptive stopping
         iteration = 0
         for iteration in range(max_iterations - 1):
+            # Adaptive stopping: compute confidence
+            confidence = await self._estimate_confidence(question, report, all_evidence)
+            state.confidence_score = confidence
+            if confidence >= _CONFIDENCE_THRESHOLD:
+                logger.info("Adaptive stop: confidence threshold met", confidence=confidence)
+                self._research_context.append(
+                    f"Адаптивная остановка: уверенность {confidence:.0%} ≥ порога {_CONFIDENCE_THRESHOLD:.0%}."
+                )
+                break
+
             if status_callback:
                 await status_callback(
                     "DeepResearch", self.model,
-                    f"🔄 Проверка #{iteration + 1}: ищу пробелы..."
+                    f"🔄 Проверка #{iteration + 1}: ищу пробелы (уверенность {confidence:.0%})..."
                 )
 
             gaps = await self._find_gaps(question, report)
@@ -139,16 +258,34 @@ class DeepResearchPipeline:
             for r in gap_results:
                 if r["web"] and r["web"] != "No results found.":
                     sources.append(r["query"])
+                state.add_evidence(EvidencePiece(
+                    query=r["query"], source_type="web", content=r["web"],
+                ))
 
             report = await self._refine(question, report, gap_evidence)
 
-        # Step 7: Final fact-check pass
+        # Step 7: Final confidence calibration
+        state.confidence_score = await self._estimate_confidence(question, report, all_evidence)
+
+        # Step 8: Final fact-check pass
         if status_callback:
             await status_callback("DeepResearch", self.model, "🔒 Финальная проверка фактов...")
         final_check = await self._final_fact_check(question, report, all_evidence)
 
         total_iterations = iteration + 1 if sub_queries else 0
-        logger.info("Research complete", iterations=total_iterations, complexity=complexity)
+        state.iterations = total_iterations
+        state.verified_facts = final_check.get("verified", [])
+        state.refuted_facts = final_check.get("refuted", [])
+        state.sources = sources
+        logger.info(
+            "Research complete",
+            iterations=total_iterations,
+            complexity=complexity,
+            confidence=state.confidence_score,
+            evidence_count=state.evidence_count,
+            source_diversity=state.source_diversity,
+            contradictions=len(state.contradictions),
+        )
 
         return {
             "report": final_check.get("report", report),
@@ -156,6 +293,10 @@ class DeepResearchPipeline:
             "iterations": total_iterations,
             "verified_facts": final_check.get("verified", []),
             "refuted_facts": final_check.get("refuted", []),
+            "confidence_score": state.confidence_score,
+            "evidence_count": state.evidence_count,
+            "source_diversity": state.source_diversity,
+            "contradictions": state.contradictions,
         }
 
     # ------------------------------------------------------------------
@@ -246,12 +387,21 @@ class DeepResearchPipeline:
     # Parallel search helper
     # ------------------------------------------------------------------
     async def _search_sub_query(self, query: str) -> Dict[str, str]:
-        """Search web + memory for a single sub-query in parallel."""
-        web, mem = await asyncio.gather(
+        """Search web + memory + academic for a single sub-query in parallel."""
+        tasks = [
             self._web_search(query),
             self._memory_search(query),
-        )
-        return {"query": query, "web": web, "memory": mem}
+        ]
+        if self._academic_search_enabled:
+            tasks.append(self._academic_search(query))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        web = results[0] if not isinstance(results[0], Exception) else ""
+        mem = results[1] if not isinstance(results[1], Exception) else ""
+        academic = ""
+        if len(results) > 2 and not isinstance(results[2], Exception):
+            academic = results[2]
+        return {"query": query, "web": web, "memory": mem, "academic": academic}
 
     async def _web_search(self, query: str) -> str:
         """Execute web search via MCP tool."""
@@ -273,6 +423,173 @@ class DeepResearchPipeline:
             return result if result else "No memory results."
         except Exception as e:
             return ""
+
+    # ------------------------------------------------------------------
+    # Academic paper search (v2: connects deep research with parser)
+    # ------------------------------------------------------------------
+    async def _academic_search(self, query: str) -> str:
+        """Search academic papers via the research_paper_parser APIs.
+
+        This bridges DeepResearch with the existing paper parser for deeper
+        evidence. Runs synchronously in a thread to avoid blocking the event loop.
+        """
+        if not self._academic_search_enabled:
+            return ""
+        try:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, self._academic_search_sync, query)
+            return result
+        except Exception as e:
+            logger.debug("Academic search skipped", error=str(e))
+            return ""
+
+    @staticmethod
+    def _academic_search_sync(query: str) -> str:
+        """Synchronous academic paper search — wraps research_paper_parser."""
+        try:
+            import sys
+            import os
+            scripts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts")
+            if scripts_dir not in sys.path:
+                sys.path.insert(0, scripts_dir)
+            from research_paper_parser import Paper, fetch_semantic_scholar
+            papers = fetch_semantic_scholar(query, limit=3)
+            if not papers:
+                return ""
+            lines = []
+            for p in papers[:3]:
+                lines.append(f"- {p.title} ({p.published or 'n.d.'}) [{p.citations} citations]")
+                if p.abstract:
+                    lines.append(f"  {p.abstract[:200]}")
+            return "\n".join(lines)
+        except Exception:
+            return ""
+
+    # ------------------------------------------------------------------
+    # Multi-perspective query reformulation (v2 improvement)
+    # ------------------------------------------------------------------
+    async def _reformulate_queries(
+        self, question: str, sub_queries: List[str]
+    ) -> List[str]:
+        """Reformulate sub-queries from different perspectives for broader coverage."""
+        if not sub_queries:
+            return []
+        queries_text = "\n".join(f"- {q}" for q in sub_queries)
+        result = await self._llm_call(
+            system=(
+                "Ты — планировщик исследований. Для каждого запроса создай 1 альтернативную "
+                "формулировку, которая ищет ту же информацию с другой стороны. "
+                "Например: 'причины X' → 'последствия X', 'X vs Y' → 'преимущества Y над X'. "
+                "Каждый запрос на отдельной строке. Без нумерации, без пояснений."
+            ),
+            user=f"ОСНОВНОЙ ВОПРОС: {question}\n\nПОДЗАПРОСЫ:\n{queries_text}",
+            max_tokens=256,
+        )
+        reformulated = [line.strip() for line in result.split("\n") if line.strip()]
+        # Deduplicate against originals
+        original_set = {q.lower() for q in sub_queries}
+        unique = [q for q in reformulated if q.lower() not in original_set]
+        return unique[:len(sub_queries)]  # at most same count as originals
+
+    # ------------------------------------------------------------------
+    # Evidence scoring (v2 improvement)
+    # ------------------------------------------------------------------
+    async def _score_evidence(
+        self, question: str, evidence: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Score evidence pieces by relevance and reliability."""
+        if not evidence:
+            return []
+        evidence_text = "\n---\n".join(e[:300] for e in evidence[:10])
+        result = await self._llm_call(
+            system=(
+                "Оцени каждый блок доказательств по шкале 1-10 по релевантности к вопросу. "
+                "Ответь в формате: по одной строке на блок: НОМЕР|ОЦЕНКА|ПРИЧИНА\n"
+                "Например: 1|8|Прямо отвечает на вопрос"
+            ),
+            user=f"ВОПРОС: {question}\n\nДОКАЗАТЕЛЬСТВА:\n{evidence_text}",
+            max_tokens=512,
+        )
+        scored = []
+        for line in result.split("\n"):
+            parts = line.strip().split("|")
+            if len(parts) >= 2:
+                try:
+                    idx = int(parts[0].strip()) - 1
+                    score = float(parts[1].strip())
+                    reason = parts[2].strip() if len(parts) > 2 else ""
+                    scored.append({"index": idx, "score": score, "reason": reason})
+                except (ValueError, IndexError):
+                    continue
+        self._research_context.append(
+            f"Оценено {len(scored)} блоков доказательств по релевантности."
+        )
+        return scored
+
+    # ------------------------------------------------------------------
+    # Contradiction detection (v2 improvement)
+    # ------------------------------------------------------------------
+    async def _detect_contradictions(
+        self, question: str, evidence: List[str]
+    ) -> List[str]:
+        """Detect contradictions between evidence pieces."""
+        if len(evidence) < 2:
+            return []
+        evidence_text = "\n---\n".join(e[:400] for e in evidence[:10])
+        result = await self._llm_call(
+            system=(
+                "Ты — детектор противоречий. Проанализируй все доказательства и "
+                "найди утверждения которые ПРОТИВОРЕЧАТ друг другу. "
+                "Для каждого противоречия напиши:\n"
+                "ПРОТИВОРЕЧИЕ: <источник A> утверждает X, а <источник B> утверждает Y\n"
+                "Если противоречий нет — ответь 'none'."
+            ),
+            user=f"ВОПРОС: {question}\n\nДОКАЗАТЕЛЬСТВА:\n{evidence_text}",
+            max_tokens=512,
+        )
+        if result.strip().lower() in ("none", "нет"):
+            return []
+        contradictions = [
+            line.strip() for line in result.split("\n")
+            if line.strip() and "ПРОТИВОРЕЧИЕ" in line.upper()
+        ]
+        if contradictions:
+            self._research_context.append(
+                f"Обнаружено {len(contradictions)} противоречий в доказательствах."
+            )
+        return contradictions
+
+    # ------------------------------------------------------------------
+    # Confidence estimation (v2 improvement — adaptive stopping)
+    # ------------------------------------------------------------------
+    async def _estimate_confidence(
+        self, question: str, report: str, evidence: List[str]
+    ) -> float:
+        """Estimate confidence in the current report (0.0-1.0)."""
+        result = await self._llm_call(
+            system=(
+                "Оцени уверенность в корректности исследовательского отчёта "
+                "по шкале от 0.0 до 1.0, где 1.0 = полностью подтверждён фактами, "
+                "0.0 = не подтверждён. Учитывай: количество доказательств, "
+                "наличие противоречий, полноту ответа на вопрос. "
+                "Ответь ОДНИМ числом, например: 0.85"
+            ),
+            user=(
+                f"ВОПРОС: {question}\n"
+                f"ОТЧЁТ (первые 500 символов): {report[:500]}\n"
+                f"ДОКАЗАТЕЛЬСТВ: {len(evidence)}"
+            ),
+            max_tokens=10,
+            retries=1,
+        )
+        try:
+            # Extract float from response
+            numbers = re.findall(r"0?\.\d+|1\.0|0\.0", result.strip())
+            if numbers:
+                return min(1.0, max(0.0, float(numbers[0])))
+        except (ValueError, IndexError):
+            pass
+        return 0.5  # default medium confidence
 
     # ------------------------------------------------------------------
     # Fact verification (cross-search confirmation)

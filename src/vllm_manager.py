@@ -7,10 +7,12 @@ Since 16GB VRAM can hold only one model at a time, this manager:
   2. Swaps models by stopping/restarting the vLLM server in WSL
   3. Exposes health checks and a ready-state signal
   4. Integrates with the existing task_queue which batches by model
+  5. Supports LoRA adapter hot-swap for fine-tuned models
 
 The OpenAI-compatible API is served at http://localhost:{port}/v1
 Models are stored at /mnt/d/vllm_models (HF_HOME).
 vLLM venv is at /mnt/d/vllm_env.
+LoRA adapters are stored at /mnt/d/lora_adapters.
 """
 
 import asyncio
@@ -27,12 +29,14 @@ logger = structlog.get_logger("VLLMManager")
 WSL_DISTRO = "Ubuntu"
 WSL_VENV_PYTHON = "/mnt/d/vllm_env/bin/python3"
 WSL_HF_HOME = "/mnt/d/vllm_models"
+WSL_LORA_DIR = "/mnt/d/lora_adapters"
 
 
 class VLLMModelManager:
     """
     Manages a local vLLM OpenAI-compatible server process.
     Supports automatic model swapping on a single GPU.
+    Supports LoRA adapter loading for fine-tuned models.
     """
 
     def __init__(
@@ -51,6 +55,7 @@ class VLLMModelManager:
         self.base_url = f"http://localhost:{port}/v1"
 
         self.current_model: Optional[str] = None
+        self.current_lora_adapter: Optional[str] = None  # Path to loaded LoRA adapter
         self._process: Optional[asyncio.subprocess.Process] = None
         self._lock = asyncio.Lock()
         self._startup_timeout = 600  # seconds to wait for vLLM to start (14B AWQ needs ~5 min)
@@ -309,3 +314,130 @@ class VLLMModelManager:
                 pass
         await self._stop_server()
         logger.info("VLLMModelManager shut down")
+
+    # --- LoRA Adapter Support (arXiv:2503.16219, Unsloth) ---
+
+    async def ensure_model_with_lora(
+        self, model_name: str, lora_adapter_path: Optional[str] = None
+    ) -> None:
+        """
+        Ensure model is loaded, optionally with a LoRA adapter.
+
+        If a LoRA adapter path is provided, the server is started with
+        --enable-lora and --lora-modules flags.
+
+        Args:
+            model_name: Base model name (e.g., Qwen/Qwen2.5-Coder-7B-Instruct-AWQ)
+            lora_adapter_path: WSL path to LoRA adapter directory (e.g., /mnt/d/lora_adapters/qwen-coder-7b/)
+        """
+        async with self._lock:
+            needs_restart = (
+                self.current_model != model_name
+                or self.current_lora_adapter != lora_adapter_path
+                or not self.is_running
+                or not self._healthy
+            )
+
+            if not needs_restart:
+                return
+
+            logger.info(
+                "Model+LoRA swap requested",
+                current_model=self.current_model,
+                current_lora=self.current_lora_adapter,
+                target_model=model_name,
+                target_lora=lora_adapter_path,
+            )
+            await self._stop_server()
+            await self._start_server_with_lora(model_name, lora_adapter_path)
+            self.current_model = model_name
+            self.current_lora_adapter = lora_adapter_path
+
+    async def _start_server_with_lora(
+        self, model_name: str, lora_adapter_path: Optional[str] = None
+    ) -> None:
+        """Start vLLM server with optional LoRA adapter support."""
+        vllm_args = [
+            WSL_VENV_PYTHON,
+            "-m", "vllm.entrypoints.openai.api_server",
+            "--model", model_name,
+            "--host", "0.0.0.0",
+            "--port", str(self.port),
+            "--max-model-len", str(self.max_model_len),
+            "--gpu-memory-utilization", str(self.gpu_memory_utilization),
+            "--dtype", "auto",
+            "--trust-remote-code",
+        ]
+
+        if self.quantization:
+            vllm_args.extend(["--quantization", self.quantization])
+
+        # LoRA adapter support
+        if lora_adapter_path:
+            adapter_name = os.path.basename(lora_adapter_path.rstrip("/"))
+            vllm_args.extend([
+                "--enable-lora",
+                "--lora-modules", f"{adapter_name}={lora_adapter_path}",
+                "--max-lora-rank", "64",  # Support up to rank 64
+            ])
+            logger.info(
+                "LoRA adapter configured",
+                adapter_name=adapter_name,
+                adapter_path=lora_adapter_path,
+            )
+
+        vllm_args.extend(self.vllm_extra_args)
+
+        args_str = " ".join(vllm_args)
+        log_path = f"{WSL_HF_HOME}/vllm_server.log"
+        bash_cmd = f"export HF_HOME={WSL_HF_HOME} && {args_str} > {log_path} 2>&1"
+
+        logger.info(
+            "Starting vLLM server with LoRA",
+            model=model_name,
+            lora=lora_adapter_path,
+            port=self.port,
+        )
+        self._healthy = False
+
+        self._process = await asyncio.create_subprocess_exec(
+            "wsl", "-d", WSL_DISTRO, "--", "bash", "-c", bash_cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+
+        await self._wait_for_ready(model_name)
+        logger.info(
+            "vLLM server ready with LoRA",
+            model=model_name,
+            lora=lora_adapter_path,
+            pid=self._process.pid,
+        )
+
+    def list_available_lora_adapters(self) -> list:
+        """
+        List LoRA adapters available in the adapters directory.
+
+        Returns list of adapter directory names.
+        """
+        adapters = []
+        lora_dir = WSL_LORA_DIR
+        # In WSL, we check via the local filesystem equivalent
+        local_lora_dir = lora_dir.replace("/mnt/d/", "D:/").replace("/mnt/c/", "C:/")
+
+        for candidate in [lora_dir, local_lora_dir]:
+            if os.path.isdir(candidate):
+                for entry in os.listdir(candidate):
+                    full_path = os.path.join(candidate, entry)
+                    # A valid adapter has adapter_config.json
+                    if os.path.isdir(full_path) and os.path.exists(
+                        os.path.join(full_path, "adapter_config.json")
+                    ):
+                        adapters.append({
+                            "name": entry,
+                            "path": os.path.join(lora_dir, entry),
+                            "local_path": full_path,
+                        })
+                break  # Use first found path
+
+        return adapters
