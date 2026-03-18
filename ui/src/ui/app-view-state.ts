@@ -311,6 +311,7 @@ export type AppViewState = {
     setTab: (tab: Tab) => void;
     setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
     setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+    setBorderRadius: (value: number) => void;
     applySettings: (next: UiSettings) => void;
     loadOverview: () => Promise<void>;
     loadAssistantIdentity: () => Promise<void>;
