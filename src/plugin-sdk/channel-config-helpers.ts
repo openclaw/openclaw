@@ -161,7 +161,10 @@ export function createScopedChannelConfigAdapter<
       allowTopLevel: params.allowTopLevel,
     }),
     ...createScopedAccountConfigAccessors<AccessorAccount>({
-      resolveAccount: resolveAccessorAccount,
+      resolveAccount: resolveAccessorAccount as (params: {
+        cfg: OpenClawConfig;
+        accountId?: string | null;
+      }) => AccessorAccount,
       resolveAllowFrom: params.resolveAllowFrom,
       formatAllowFrom: params.formatAllowFrom,
       resolveDefaultTo: params.resolveDefaultTo,
@@ -317,7 +320,10 @@ export function createTopLevelChannelConfigAdapter<
       clearBaseFields: params.clearBaseFields,
     }),
     ...createScopedAccountConfigAccessors<AccessorAccount>({
-      resolveAccount: resolveAccessorAccount,
+      resolveAccount: resolveAccessorAccount as (params: {
+        cfg: OpenClawConfig;
+        accountId?: string | null;
+      }) => AccessorAccount,
       resolveAllowFrom: params.resolveAllowFrom,
       formatAllowFrom: params.formatAllowFrom,
       resolveDefaultTo: params.resolveDefaultTo,
@@ -439,7 +445,10 @@ export function createHybridChannelConfigAdapter<
       preserveSectionOnDefaultDelete: params.preserveSectionOnDefaultDelete,
     }),
     ...createScopedAccountConfigAccessors<AccessorAccount>({
-      resolveAccount: resolveAccessorAccount,
+      resolveAccount: resolveAccessorAccount as (params: {
+        cfg: OpenClawConfig;
+        accountId?: string | null;
+      }) => AccessorAccount,
       resolveAllowFrom: params.resolveAllowFrom,
       formatAllowFrom: params.formatAllowFrom,
       resolveDefaultTo: params.resolveDefaultTo,

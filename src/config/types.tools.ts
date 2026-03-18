@@ -465,6 +465,8 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
+      /** Provider-specific config written at runtime by plugin setCredentialValue. */
+      [key: string]: unknown;
     };
     fetch?: {
       /** Enable web fetch tool (default: true). */

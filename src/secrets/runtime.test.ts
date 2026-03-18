@@ -17,6 +17,11 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+type SearchConfig = Record<string, unknown>;
+function searchOf(cfg: OpenClawConfig): SearchConfig | undefined {
+  return cfg.tools?.web?.search as SearchConfig | undefined;
+}
+
 const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
 
 function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
@@ -400,8 +405,8 @@ describe("secrets runtime snapshot", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.config.tools?.web?.search?.grok?.apiKey).toEqual({
+    expect(searchOf(snapshot.config)?.apiKey).toBe("web-search-ref");
+    expect((searchOf(snapshot.config)?.grok as SearchConfig)?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "MISSING_GROK_API_KEY",
@@ -439,8 +444,8 @@ describe("secrets runtime snapshot", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toEqual({
+    expect(searchOf(snapshot.config)?.apiKey).toBe("web-search-ref");
+    expect((searchOf(snapshot.config)?.gemini as SearchConfig)?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "WEB_SEARCH_GEMINI_API_KEY",
@@ -479,7 +484,9 @@ describe("secrets runtime snapshot", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
+    expect((searchOf(snapshot.config)?.gemini as SearchConfig)?.apiKey).toBe(
+      "web-search-gemini-ref",
+    );
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "tools.web.search.gemini.apiKey",
     );
@@ -919,8 +926,10 @@ describe("secrets runtime snapshot", () => {
 
       const activeAfterFailure = getActiveSecretsRuntimeSnapshot();
       expect(activeAfterFailure).not.toBeNull();
-      expect(loadConfig().tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-runtime-key");
-      expect(activeAfterFailure?.sourceConfig.tools?.web?.search?.gemini?.apiKey).toEqual({
+      expect((searchOf(loadConfig())?.gemini as SearchConfig)?.apiKey).toBe(
+        "web-search-gemini-runtime-key",
+      );
+      expect((searchOf(activeAfterFailure!.sourceConfig)?.gemini as SearchConfig)?.apiKey).toEqual({
         source: "env",
         provider: "default",
         id: "WEB_SEARCH_GEMINI_API_KEY",
@@ -930,7 +939,7 @@ describe("secrets runtime snapshot", () => {
       const persistedConfig = JSON.parse(
         await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
       ) as OpenClawConfig;
-      expect(persistedConfig.tools?.web?.search?.gemini?.apiKey).toEqual({
+      expect((searchOf(persistedConfig)?.gemini as SearchConfig)?.apiKey).toEqual({
         source: "env",
         provider: "default",
         id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",

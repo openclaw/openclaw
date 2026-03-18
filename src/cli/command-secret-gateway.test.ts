@@ -283,9 +283,10 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         targetIds: new Set(["tools.web.search.gemini.apiKey"]),
       });
 
-      expect(result.resolvedConfig.tools?.web?.search?.gemini?.apiKey).toBe(
-        "gemini-local-fallback-key",
-      );
+      expect(
+        (result.resolvedConfig.tools?.web?.search?.gemini as Record<string, unknown> | undefined)
+          ?.apiKey,
+      ).toBe("gemini-local-fallback-key");
       expect(result.targetStatesByPath["tools.web.search.gemini.apiKey"]).toBe("resolved_local");
       expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
