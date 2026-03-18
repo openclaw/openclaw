@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { ChannelMessageActionAdapter } from "../types.js";
 
 const handleDiscordAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 const handleTelegramAction = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
@@ -29,6 +30,13 @@ let handleDiscordMessageAction: typeof import("./discord/handle-action.js").hand
 let telegramMessageActions: typeof import("./telegram.js").telegramMessageActions;
 let signalMessageActions: typeof import("./signal.js").signalMessageActions;
 let createSlackActions: typeof import("../slack.actions.js").createSlackActions;
+
+function getDescribedActions(params: {
+  describeMessageTool?: ChannelMessageActionAdapter["describeMessageTool"];
+  cfg: OpenClawConfig;
+}) {
+  return [...(params.describeMessageTool?.({ cfg: params.cfg })?.actions ?? [])];
+}
 
 function telegramCfg(): OpenClawConfig {
   return { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
@@ -284,7 +292,10 @@ describe("discord message actions", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const actions = discordMessageActions.listActions?.({ cfg: testCase.cfg }) ?? [];
+      const actions = getDescribedActions({
+        describeMessageTool: discordMessageActions.describeMessageTool,
+        cfg: testCase.cfg,
+      });
       if (testCase.expectUploads) {
         expect(actions, testCase.name).toContain("emoji-upload");
         expect(actions, testCase.name).toContain("sticker-upload");
@@ -629,7 +640,10 @@ describe("telegramMessageActions", () => {
         expectTopicEdit: true,
       },
     ]) {
-      const actions = telegramMessageActions.listActions?.({ cfg: testCase.cfg }) ?? [];
+      const actions = getDescribedActions({
+        describeMessageTool: telegramMessageActions.describeMessageTool,
+        cfg: testCase.cfg,
+      });
       if (testCase.expectPoll) {
         expect(actions, testCase.name).toContain("poll");
       } else {
@@ -680,7 +694,10 @@ describe("telegramMessageActions", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const actions = telegramMessageActions.listActions?.({ cfg: testCase.cfg }) ?? [];
+      const actions = getDescribedActions({
+        describeMessageTool: telegramMessageActions.describeMessageTool,
+        cfg: testCase.cfg,
+      });
       if (testCase.expectSticker) {
         expect(actions, testCase.name).toContain("sticker");
         expect(actions, testCase.name).toContain("sticker-search");
@@ -903,7 +920,10 @@ describe("telegramMessageActions", () => {
         },
       },
     } as OpenClawConfig;
-    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+    const actions = getDescribedActions({
+      describeMessageTool: telegramMessageActions.describeMessageTool,
+      cfg,
+    });
 
     expect(actions).toContain("sticker");
     expect(actions).toContain("sticker-search");

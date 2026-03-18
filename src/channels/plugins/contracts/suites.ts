@@ -32,6 +32,30 @@ function sortStrings(values: readonly string[]) {
   return [...values].toSorted((left, right) => left.localeCompare(right));
 }
 
+function resolveContractMessageDiscovery(params: {
+  plugin: Pick<ChannelPlugin, "actions">;
+  cfg: OpenClawConfig;
+}) {
+  const actions = params.plugin.actions;
+  if (!actions) {
+    return {
+      actions: [] as ChannelMessageActionName[],
+      capabilities: [] as readonly ChannelMessageCapability[],
+    };
+  }
+  if (actions.describeMessageTool) {
+    const discovery = actions.describeMessageTool({ cfg: params.cfg }) ?? null;
+    return {
+      actions: Array.isArray(discovery?.actions) ? [...discovery.actions] : [],
+      capabilities: Array.isArray(discovery?.capabilities) ? discovery.capabilities : [],
+    };
+  }
+  return {
+    actions: actions.listActions?.({ cfg: params.cfg }) ?? [],
+    capabilities: actions.getCapabilities?.({ cfg: params.cfg }) ?? [],
+  };
+}
+
 const contractRuntime = createNonExitingRuntime();
 function expectDirectoryEntryShape(entry: ChannelDirectoryEntry) {
   expect(["user", "group", "channel"]).toContain(entry.kind);
@@ -132,15 +156,22 @@ export function installChannelActionsContractSuite(params: {
 }) {
   it("exposes the base message actions contract", () => {
     expect(params.plugin.actions).toBeDefined();
-    expect(typeof params.plugin.actions?.listActions).toBe("function");
+    expect(
+      typeof params.plugin.actions?.describeMessageTool === "function" ||
+        typeof params.plugin.actions?.listActions === "function",
+    ).toBe(true);
   });
 
   for (const testCase of params.cases) {
     it(`actions contract: ${testCase.name}`, () => {
       testCase.beforeTest?.();
 
-      const actions = params.plugin.actions?.listActions?.({ cfg: testCase.cfg }) ?? [];
-      const capabilities = params.plugin.actions?.getCapabilities?.({ cfg: testCase.cfg }) ?? [];
+      const discovery = resolveContractMessageDiscovery({
+        plugin: params.plugin,
+        cfg: testCase.cfg,
+      });
+      const actions = discovery.actions;
+      const capabilities = discovery.capabilities;
 
       expect(actions).toEqual([...new Set(actions)]);
       expect(capabilities).toEqual([...new Set(capabilities)]);
@@ -192,7 +223,10 @@ export function installChannelSurfaceContractSuite(params: {
   it(`exposes the ${surface} surface contract`, () => {
     if (surface === "actions") {
       expect(plugin.actions).toBeDefined();
-      expect(typeof plugin.actions?.listActions).toBe("function");
+      expect(
+        typeof plugin.actions?.describeMessageTool === "function" ||
+          typeof plugin.actions?.listActions === "function",
+      ).toBe(true);
       return;
     }
 
