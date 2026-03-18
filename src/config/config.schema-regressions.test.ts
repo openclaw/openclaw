@@ -175,6 +175,22 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.defaults.sandbox.browser.evaluateEnabled", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            browser: {
+              evaluateEnabled: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects browser.extraArgs with non-array value", () => {
     const res = validateConfigObject({
       browser: {
