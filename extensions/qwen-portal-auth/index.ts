@@ -3,10 +3,10 @@ import { QWEN_OAUTH_MARKER } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildOauthProviderAuthResult,
   definePluginEntry,
+  refreshQwenPortalCredentials,
   type ProviderAuthContext,
   type ProviderCatalogContext,
-} from "openclaw/plugin-sdk/qwen-portal-auth";
-import { refreshQwenPortalCredentials } from "openclaw/plugin-sdk/qwen-portal-auth";
+} from "./runtime-api.js";
 import { loginQwenPortalOAuth } from "./oauth.js";
 import { buildQwenPortalProvider, QWEN_PORTAL_BASE_URL } from "./provider-catalog.js";
 
