@@ -314,3 +314,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/xiaomi/**"
+"extensions: fal":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/fal/**"
