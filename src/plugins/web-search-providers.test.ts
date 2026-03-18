@@ -23,12 +23,12 @@ describe("resolvePluginWebSearchProviders", () => {
       "firecrawl:firecrawl",
     ]);
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
-      "tools.web.search.apiKey",
-      "tools.web.search.gemini.apiKey",
-      "tools.web.search.grok.apiKey",
-      "tools.web.search.kimi.apiKey",
-      "tools.web.search.perplexity.apiKey",
-      "tools.web.search.firecrawl.apiKey",
+      "plugins.entries.brave.config.webSearch.apiKey",
+      "plugins.entries.google.config.webSearch.apiKey",
+      "plugins.entries.xai.config.webSearch.apiKey",
+      "plugins.entries.moonshot.config.webSearch.apiKey",
+      "plugins.entries.perplexity.config.webSearch.apiKey",
+      "plugins.entries.firecrawl.config.webSearch.apiKey",
     ]);
     expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
       expect.any(Function),
