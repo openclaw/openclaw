@@ -8,6 +8,8 @@ import {
   setupAuthTestEnv,
 } from "../../../test/helpers/auth-wizard.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
+import { resolvePreferredProviderForAuthChoice } from "../../plugins/provider-auth-choice-preference.js";
+import { runProviderPluginAuthMethod } from "../../plugins/provider-auth-choice.js";
 import { buildProviderPluginMethodChoice } from "../provider-wizard.js";
 import { requireProviderContractProvider, uniqueProviderContractProviders } from "./registry.js";
 import { registerProviders, requireProvider } from "./testkit.js";
@@ -18,7 +20,6 @@ type ResolveProviderPluginChoice =
   typeof import("../../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
 type RunProviderModelSelectedHook =
   typeof import("../../plugins/provider-auth-choice.runtime.js").runProviderModelSelectedHook;
-
 const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn());
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn());
 const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
@@ -26,6 +27,19 @@ const resolveProviderPluginChoiceMock = vi.hoisted(() => vi.fn<ResolveProviderPl
 const runProviderModelSelectedHookMock = vi.hoisted(() =>
   vi.fn<RunProviderModelSelectedHook>(async () => {}),
 );
+import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
+
+vi.mock("../../../extensions/qwen-portal-auth/oauth.js", () => ({
+  loginQwenPortalOAuth: loginQwenPortalOAuthMock,
+}));
+vi.mock("../../providers/github-copilot-auth.js", () => ({
+  githubCopilotLoginCommand: githubCopilotLoginCommandMock,
+}));
+vi.mock("../../plugins/provider-auth-choice.runtime.js", () => ({
+  resolvePluginProviders: resolvePluginProvidersMock,
+  resolveProviderPluginChoice: resolveProviderPluginChoiceMock,
+  runProviderModelSelectedHook: runProviderModelSelectedHookMock,
+}));
 
 type StoredAuthProfile = {
   type?: string;
@@ -35,10 +49,6 @@ type StoredAuthProfile = {
   key?: string;
   token?: string;
 };
-
-let applyAuthChoiceLoadedPluginProvider: typeof import("../../plugins/provider-auth-choice.js").applyAuthChoiceLoadedPluginProvider;
-let resolvePreferredProviderForAuthChoice: typeof import("../../plugins/provider-auth-choice-preference.js").resolvePreferredProviderForAuthChoice;
-let qwenPortalPlugin: (typeof import("../../../extensions/qwen-portal-auth/index.js"))["default"];
 
 describe("provider auth-choice contract", () => {
   const lifecycle = createAuthTestLifecycle([
@@ -57,24 +67,7 @@ describe("provider auth-choice contract", () => {
     lifecycle.setStateDir(env.stateDir);
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("../../../extensions/qwen-portal-auth/oauth.js", () => ({
-      loginQwenPortalOAuth: loginQwenPortalOAuthMock,
-    }));
-    vi.doMock("../../providers/github-copilot-auth.js", () => ({
-      githubCopilotLoginCommand: githubCopilotLoginCommandMock,
-    }));
-    vi.doMock("../../plugins/provider-auth-choice.runtime.js", () => ({
-      resolvePluginProviders: resolvePluginProvidersMock,
-      resolveProviderPluginChoice: resolveProviderPluginChoiceMock,
-      runProviderModelSelectedHook: runProviderModelSelectedHookMock,
-    }));
-    ({ applyAuthChoiceLoadedPluginProvider } =
-      await import("../../plugins/provider-auth-choice.js"));
-    ({ resolvePreferredProviderForAuthChoice } =
-      await import("../../plugins/provider-auth-choice-preference.js"));
-    ({ default: qwenPortalPlugin } = await import("../../../extensions/qwen-portal-auth/index.js"));
+  beforeEach(() => {
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue(uniqueProviderContractProviders);
     resolveProviderPluginChoiceMock.mockReset();
@@ -139,14 +132,9 @@ describe("provider auth-choice contract", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalled();
   });
 
-  it("applies qwen portal auth choices through the shared plugin-provider path", async () => {
+  it("runs qwen portal auth through the shared plugin auth-method helper", async () => {
     await setupTempState();
     const qwenProvider = requireProvider(registerProviders(qwenPortalPlugin), "qwen-portal");
-    resolvePluginProvidersMock.mockReturnValue([qwenProvider]);
-    resolveProviderPluginChoiceMock.mockReturnValue({
-      provider: qwenProvider,
-      method: qwenProvider.auth[0],
-    });
     loginQwenPortalOAuthMock.mockResolvedValueOnce({
       access: "access-token",
       refresh: "refresh-token",
@@ -155,28 +143,30 @@ describe("provider auth-choice contract", () => {
     });
 
     const note = vi.fn(async () => {});
-    const result = await applyAuthChoiceLoadedPluginProvider({
-      authChoice: "qwen-portal",
+    const result = await runProviderPluginAuthMethod({
       config: {},
       prompter: createWizardPrompter({ note }),
       runtime: createExitThrowingRuntime(),
-      setDefaultModel: true,
+      method: qwenProvider.auth[0],
+      allowSecretRefPrompt: false,
     });
 
-    expect(result?.config.agents?.defaults?.model).toEqual({
-      primary: "qwen-portal/coder-model",
-    });
-    expect(result?.config.auth?.profiles?.["qwen-portal:default"]).toMatchObject({
+    expect(result.config.auth?.profiles?.["qwen-portal:default"]).toMatchObject({
       provider: "qwen-portal",
       mode: "oauth",
     });
-    expect(result?.config.models?.providers?.["qwen-portal"]).toMatchObject({
+    expect(result.config.models?.providers?.["qwen-portal"]).toMatchObject({
       baseUrl: "https://portal.qwen.ai/v1",
       models: [],
     });
+    expect(result.config.agents?.defaults?.models).toMatchObject({
+      "qwen-portal/coder-model": { alias: "qwen" },
+      "qwen-portal/vision-model": {},
+    });
+    expect(result.defaultModel).toBe("qwen-portal/coder-model");
     expect(note).toHaveBeenCalledWith(
-      "Default model set to qwen-portal/coder-model",
-      "Model configured",
+      expect.stringContaining("Qwen OAuth tokens auto-refresh."),
+      "Provider notes",
     );
 
     const stored = await readAuthProfilesForAgent<{ profiles?: Record<string, StoredAuthProfile> }>(
@@ -190,14 +180,9 @@ describe("provider auth-choice contract", () => {
     });
   });
 
-  it("returns provider agent overrides when default-model application is deferred", async () => {
+  it("returns qwen portal default-model overrides for deferred callers", async () => {
     await setupTempState();
     const qwenProvider = requireProvider(registerProviders(qwenPortalPlugin), "qwen-portal");
-    resolvePluginProvidersMock.mockReturnValue([qwenProvider]);
-    resolveProviderPluginChoiceMock.mockReturnValue({
-      provider: qwenProvider,
-      method: qwenProvider.auth[0],
-    });
     loginQwenPortalOAuthMock.mockResolvedValueOnce({
       access: "access-token",
       refresh: "refresh-token",
@@ -205,12 +190,12 @@ describe("provider auth-choice contract", () => {
       resourceUrl: "portal.qwen.ai",
     });
 
-    const result = await applyAuthChoiceLoadedPluginProvider({
-      authChoice: "qwen-portal",
+    const result = await runProviderPluginAuthMethod({
       config: {},
       prompter: createWizardPrompter({}),
       runtime: createExitThrowingRuntime(),
-      setDefaultModel: false,
+      method: qwenProvider.auth[0],
+      allowSecretRefPrompt: false,
     });
 
     expect(githubCopilotLoginCommandMock).not.toHaveBeenCalled();
@@ -243,7 +228,7 @@ describe("provider auth-choice contract", () => {
           },
         },
       },
-      agentModelOverride: "qwen-portal/coder-model",
+      defaultModel: "qwen-portal/coder-model",
     });
 
     const stored = await readAuthProfilesForAgent<{
