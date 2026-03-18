@@ -53,7 +53,7 @@ import {
 import { getDiscordRuntime } from "./runtime.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
 import { discordSetupAdapter } from "./setup-core.js";
-import { createDiscordPluginBase, discordConfigAccessors } from "./shared.js";
+import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./targets.js";
 import { DiscordUiContainer } from "./ui.js";
@@ -307,7 +307,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
       channelId: "discord",
       normalize: ({ cfg, accountId, values }) =>
-        discordConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+        discordConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
       resolvePaths: resolveLegacyDmAllowlistConfigPaths,
     }),
   },
