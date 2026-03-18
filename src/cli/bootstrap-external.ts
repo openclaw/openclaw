@@ -717,8 +717,15 @@ function stagePreOnboardConfig(
   );
 }
 
-async function ensureSubagentDefaults(openclawCommand: string, profile: string): Promise<void> {
+async function ensureAgentDefaults(openclawCommand: string, profile: string): Promise<void> {
   const settings: Array<[string, string]> = [
+    // Set agent timeout to 24 hours to prevent long-running agent runs from
+    // being terminated prematurely.  OpenClaw's default is 600s (10 min) which
+    // consistently kills complex multi-tool-call responses and triggers retry
+    // storms + silently dropped follow-up messages.
+    // See: https://github.com/openclaw/openclaw/issues/30487
+    //      https://github.com/openclaw/openclaw/issues/46049
+    ["agents.defaults.timeoutSeconds", "86400"],
     ["agents.defaults.subagents.maxConcurrent", "8"],
     ["agents.defaults.subagents.maxSpawnDepth", "2"],
     ["agents.defaults.subagents.maxChildrenPerAgent", "10"],
@@ -2418,8 +2425,8 @@ export async function bootstrapCommand(
     plugins: managedBundledPlugins,
   });
 
-  postOnboardSpinner?.message("Configuring subagent defaults…");
-  await ensureSubagentDefaults(openclawCommand, profile);
+  postOnboardSpinner?.message("Configuring agent defaults…");
+  await ensureAgentDefaults(openclawCommand, profile);
 
   // ── Gateway daemon restart + readiness verification ──
   // Skipped entirely in daemonless mode — the user manages the gateway process
