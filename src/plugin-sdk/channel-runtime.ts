@@ -32,7 +32,6 @@ export * from "../channels/plugins/actions/reaction-message-id.js";
 export * from "../channels/plugins/actions/shared.js";
 export type * from "../channels/plugins/types.js";
 export * from "../channels/plugins/config-writes.js";
-export * from "../channels/plugins/directory-config.js";
 export * from "../channels/plugins/media-payload.js";
 export * from "../channels/plugins/message-tool-schema.js";
 export * from "../channels/plugins/normalize/signal.js";
@@ -44,7 +43,10 @@ export * from "../channels/plugins/whatsapp-heartbeat.js";
 export * from "../infra/outbound/send-deps.js";
 export * from "../polls.js";
 export * from "../utils/message-channel.js";
+export * from "../whatsapp/normalize.js";
+export { createActionGate, jsonResult, readStringParam } from "../agents/tools/common.js";
 export * from "./channel-lifecycle.js";
+export * from "./directory-runtime.js";
 export type {
   InteractiveButtonStyle,
   InteractiveReplyButton,

@@ -70,7 +70,7 @@
   padding-top: 0;
 }
 
-.shell--chat-focus .content>*+* {
+.shell--chat-focus .content > * + * {
   margin-top: 0;
 }
 
@@ -268,7 +268,7 @@
   justify-content: center;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: calc(var(--radius-md) - 1px);
+  border-radius: 999px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -688,9 +688,11 @@
 
 .sidebar--collapsed .nav-item.active,
 .sidebar--collapsed .nav-item--active {
-  background: linear-gradient(180deg,
-      color-mix(in srgb, var(--accent) 14%, var(--bg-elevated) 86%) 0%,
-      color-mix(in srgb, var(--accent) 8%, var(--bg) 92%) 100%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 14%, var(--bg-elevated) 86%) 0%,
+    color-mix(in srgb, var(--accent) 8%, var(--bg) 92%) 100%
+  );
   border-color: color-mix(in srgb, var(--accent) 18%, var(--border) 82%);
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
@@ -800,6 +802,11 @@
   margin-left: 0;
 }
 
+/* Mode switch in sidebar — hidden on desktop, shown on mobile */
+.sidebar-mode-switch {
+  display: none;
+}
+
 .shell--nav-collapsed .shell-nav {
   width: var(--shell-nav-rail-width);
   min-width: var(--shell-nav-rail-width);
@@ -853,7 +860,7 @@
   overflow-x: hidden;
 }
 
-.content>*+* {
+.content > * + * {
   margin-top: 20px;
 }
 
@@ -869,7 +876,7 @@
   padding-bottom: 0;
 }
 
-.content--chat>*+* {
+.content--chat > * + * {
   margin-top: 0;
 }
 
@@ -928,7 +935,7 @@
   padding-bottom: 0;
 }
 
-.content--chat .content-header>div:first-child {
+.content--chat .content-header > div:first-child {
   text-align: left;
 }
 
@@ -1036,6 +1043,7 @@
 
 .chat-controls-mobile-toggle {
   display: none;
+  border-radius: var(--radius-full);
 }
 
 .chat-controls-dropdown {

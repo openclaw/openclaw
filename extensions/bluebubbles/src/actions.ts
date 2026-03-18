@@ -1,3 +1,6 @@
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveBlueBubblesAccount } from "./accounts.js";
+import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
 import {
   BLUEBUBBLES_ACTION_NAMES,
   BLUEBUBBLES_ACTIONS,
@@ -10,10 +13,7 @@ import {
   readStringParam,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
-} from "openclaw/plugin-sdk/bluebubbles";
-import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveBlueBubblesAccount } from "./accounts.js";
-import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
+} from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import {
   normalizeBlueBubblesHandle,

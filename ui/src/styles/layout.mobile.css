@@ -215,6 +215,10 @@
     padding: 0;
     justify-content: center;
   }
+
+  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-mode-switch {
+    display: none;
+  }
 }
 
 /* Mobile-specific styles */
@@ -244,7 +248,7 @@
   }
 
   .topnav-shell__content {
-    order: 3;
+    display: none;
     width: 100%;
   }
 
@@ -275,7 +279,17 @@
   }
 
   .topbar-theme-mode {
-    flex-shrink: 0;
+    display: none;
+  }
+
+  .sidebar-mode-switch {
+    display: block;
+  }
+
+  .sidebar-mode-switch .topbar-theme-mode {
+    display: inline-flex;
+    width: 100%;
+    justify-content: center;
   }
 
   .topbar-status .pill {

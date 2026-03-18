@@ -1,5 +1,6 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { captureEnv } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -205,7 +206,7 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   }),
-  buildPluginCompatibilityNotices: vi.fn(() => []),
+  buildPluginCompatibilityNotices: vi.fn((): PluginCompatibilityNotice[] => []),
 }));
 
 vi.mock("../memory/manager.js", () => ({
@@ -413,7 +414,7 @@ describe("statusCommand", () => {
         code: "legacy-before-agent-start",
         severity: "warn",
         message:
-          "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
       },
     ]);
     await statusCommand({ json: true }, runtime as never);
@@ -445,7 +446,7 @@ describe("statusCommand", () => {
           code: "legacy-before-agent-start",
           severity: "warn",
           message:
-            "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+            "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
         },
       ],
     });
@@ -483,7 +484,7 @@ describe("statusCommand", () => {
         code: "legacy-before-agent-start",
         severity: "warn",
         message:
-          "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
       },
     ]);
     const logs = await runStatusAndGetLogs();
@@ -512,7 +513,7 @@ describe("statusCommand", () => {
       expect(logs.some((line) => line.includes(token))).toBe(true);
     }
     expect(
-      logs.some((line) => line.includes("legacy-plugin still relies on legacy before_agent_start")),
+      logs.some((line) => line.includes("legacy-plugin still uses legacy before_agent_start")),
     ).toBe(true);
     expect(
       logs.some(

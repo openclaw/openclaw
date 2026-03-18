@@ -95,7 +95,7 @@ Available groups:
 - `group:nodes`: `nodes`
 - `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
 
-## Elevated: exec-only “run on host”
+## Elevated: exec-only "run on host"
 
 Elevated does **not** grant extra tools; it only affects `exec`.
 
@@ -112,9 +112,9 @@ Gates:
 
 See [Elevated Mode](/tools/elevated).
 
-## Common “sandbox jail” fixes
+## Common "sandbox jail" fixes
 
-### “Tool X blocked by sandbox tool policy”
+### "Tool X blocked by sandbox tool policy"
 
 Fix-it keys (pick one):
 
@@ -123,6 +123,6 @@ Fix-it keys (pick one):
   - remove it from `tools.sandbox.tools.deny` (or per-agent `agents.list[].tools.sandbox.tools.deny`)
   - or add it to `tools.sandbox.tools.allow` (or per-agent allow)
 
-### “I thought this was main, why is it sandboxed?”
+### "I thought this was main, why is it sandboxed?"
 
 In `"non-main"` mode, group/channel keys are _not_ main. Use the main session key (shown by `sandbox explain`) or switch mode to `"off"`.

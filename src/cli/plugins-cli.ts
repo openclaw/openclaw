@@ -25,6 +25,7 @@ import {
   buildPluginCompatibilityNotices,
   buildPluginInspectReport,
   buildPluginStatusReport,
+  formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
 import { resolveUninstallDirectoryTarget, uninstallPlugin } from "../plugins/uninstall.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
@@ -659,6 +660,8 @@ export function registerPluginsCli(program: Command) {
                   .map((entry) => (entry.severity === "warn" ? `warn:${entry.code}` : entry.code))
                   .join(", ")
               : "none",
+          Bundle:
+            inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
           Hooks: formatHookSummary({
             usesLegacyBeforeAgentStart: inspect.usesLegacyBeforeAgentStart,
             typedHookCount: inspect.typedHooks.length,
@@ -675,6 +678,7 @@ export function registerPluginsCli(program: Command) {
               { key: "Shape", header: "Shape", minWidth: 18 },
               { key: "Capabilities", header: "Capabilities", minWidth: 28, flex: true },
               { key: "Compatibility", header: "Compatibility", minWidth: 24, flex: true },
+              { key: "Bundle", header: "Bundle", minWidth: 14, flex: true },
               { key: "Hooks", header: "Hooks", minWidth: 20, flex: true },
             ],
             rows,
@@ -737,9 +741,9 @@ export function registerPluginsCli(program: Command) {
       lines.push(
         `${theme.muted("Legacy before_agent_start:")} ${inspect.usesLegacyBeforeAgentStart ? "yes" : "no"}`,
       );
-      if ((inspect.plugin.bundleCapabilities?.length ?? 0) > 0) {
+      if (inspect.bundleCapabilities.length > 0) {
         lines.push(
-          `${theme.muted("Bundle capabilities:")} ${inspect.plugin.bundleCapabilities?.join(", ")}`,
+          `${theme.muted("Bundle capabilities:")} ${inspect.bundleCapabilities.join(", ")}`,
         );
       }
       lines.push(
@@ -762,7 +766,7 @@ export function registerPluginsCli(program: Command) {
       lines.push(
         ...formatInspectSection(
           "Compatibility warnings",
-          inspect.compatibility.map((warning) => `${warning.pluginId} ${warning.message}`),
+          inspect.compatibility.map(formatPluginCompatibilityNotice),
         ),
       );
       lines.push(
@@ -784,6 +788,22 @@ export function registerPluginsCli(program: Command) {
       lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
       lines.push(...formatInspectSection("Services", inspect.services));
       lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods));
+      lines.push(
+        ...formatInspectSection(
+          "MCP servers",
+          inspect.mcpServers.map((entry) =>
+            entry.hasStdioTransport ? entry.name : `${entry.name} (unsupported transport)`,
+          ),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "LSP servers",
+          inspect.lspServers.map((entry) =>
+            entry.hasStdioTransport ? entry.name : `${entry.name} (unsupported transport)`,
+          ),
+        ),
+      );
       if (inspect.httpRouteCount > 0) {
         lines.push(...formatInspectSection("HTTP routes", [String(inspect.httpRouteCount)]));
       }
@@ -1103,7 +1123,7 @@ export function registerPluginsCli(program: Command) {
         lines.push(theme.warn("Compatibility:"));
         for (const notice of compatibility) {
           const marker = notice.severity === "warn" ? theme.warn("warn") : theme.muted("info");
-          lines.push(`- ${notice.pluginId} [${marker}]: ${notice.message}`);
+          lines.push(`- ${formatPluginCompatibilityNotice(notice)} [${marker}]`);
         }
       }
       const docs = formatDocsLink("/plugin", "docs.openclaw.ai/plugin");

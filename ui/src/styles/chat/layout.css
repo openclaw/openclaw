@@ -63,7 +63,7 @@
   background: transparent;
 }
 
-.chat-thread-inner> :first-child {
+.chat-thread-inner > :first-child {
   margin-top: 0 !important;
 }
 
@@ -320,7 +320,7 @@
 }
 
 /* Hide the "Message" label - keep textarea only */
-.chat-compose__field>span {
+.chat-compose__field > span {
   display: none;
 }
 
@@ -391,7 +391,7 @@
   }
 }
 
-.agent-chat__input>textarea {
+.agent-chat__input > textarea {
   width: 100%;
   min-height: 40px;
   max-height: 150px;
@@ -407,7 +407,11 @@
   box-sizing: border-box;
 }
 
-.agent-chat__input>textarea::placeholder {
+.agent-chat__input > textarea:focus-visible {
+  box-shadow: none;
+}
+
+.agent-chat__input > textarea::placeholder {
   color: var(--muted);
 }
 
@@ -549,7 +553,7 @@
   scrollbar-width: thin;
 }
 
-.slash-menu-group+.slash-menu-group {
+.slash-menu-group + .slash-menu-group {
   margin-top: 4px;
   padding-top: 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
@@ -834,6 +838,26 @@
   border-color: rgba(16, 24, 40, 0.15);
 }
 
+@media (max-width: 768px) {
+  .chat-controls__session {
+    min-width: 120px;
+    max-width: none;
+  }
+
+  .chat-controls__model {
+    min-width: 140px;
+    max-width: none;
+  }
+
+  .chat-controls {
+    gap: 8px;
+  }
+
+  .chat-compose__field textarea {
+    min-height: 64px;
+  }
+}
+
 @media (max-width: 640px) {
   .chat-session {
     min-width: 140px;
@@ -843,20 +867,17 @@
     grid-template-columns: 1fr;
   }
 
-  /* Mobile: stack compose row vertically */
   .chat-compose__row {
     flex-direction: column;
     gap: 8px;
   }
 
-  /* Mobile: stack action buttons vertically */
   .chat-compose__actions {
     flex-direction: column;
     width: 100%;
     gap: 8px;
   }
 
-  /* Mobile: full-width buttons */
   .chat-compose .chat-compose__actions .btn {
     width: 100%;
   }

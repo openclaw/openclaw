@@ -32,11 +32,11 @@ export {
   resolveWhatsAppConfigAllowFrom,
   resolveWhatsAppConfigDefaultTo,
 } from "./channel-config-helpers.js";
+export { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";
 export {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
-} from "../channels/plugins/directory-config.js";
-export { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";
+} from "../../extensions/whatsapp/src/directory-config.js";
 export {
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
@@ -52,7 +52,7 @@ export {
 export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-} from "../channels/plugins/group-mentions.js";
+} from "../../extensions/whatsapp/src/group-policy.js";
 export {
   createWhatsAppOutboundBase,
   resolveWhatsAppGroupIntroHint,

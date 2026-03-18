@@ -13,6 +13,10 @@ import {
   resolveMemoryVectorState,
   type Tone,
 } from "../memory/status-format.js";
+import {
+  formatPluginCompatibilityNotice,
+  summarizePluginCompatibility,
+} from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
@@ -421,11 +425,12 @@ export async function statusCommand(
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
   const channelLabel = channelInfo.label;
   const gitLabel = formatGitInstallLabel(update);
+  const pluginCompatibilitySummary = summarizePluginCompatibility(pluginCompatibility);
   const pluginCompatibilityValue =
-    pluginCompatibility.length === 0
+    pluginCompatibilitySummary.noticeCount === 0
       ? ok("none")
       : warn(
-          `${pluginCompatibility.length} notice${pluginCompatibility.length === 1 ? "" : "s"} · ${new Set(pluginCompatibility.map((entry) => entry.pluginId)).size} plugin${new Set(pluginCompatibility.map((entry) => entry.pluginId)).size === 1 ? "" : "s"}`,
+          `${pluginCompatibilitySummary.noticeCount} notice${pluginCompatibilitySummary.noticeCount === 1 ? "" : "s"} · ${pluginCompatibilitySummary.pluginCount} plugin${pluginCompatibilitySummary.pluginCount === 1 ? "" : "s"}`,
         );
 
   const overviewRows = [
@@ -484,7 +489,7 @@ export async function statusCommand(
     runtime.log(theme.heading("Plugin compatibility"));
     for (const notice of pluginCompatibility.slice(0, 8)) {
       const label = notice.severity === "warn" ? theme.warn("WARN") : theme.muted("INFO");
-      runtime.log(`  ${label} ${notice.pluginId} ${notice.message}`);
+      runtime.log(`  ${label} ${formatPluginCompatibilityNotice(notice)}`);
     }
     if (pluginCompatibility.length > 8) {
       runtime.log(theme.muted(`  … +${pluginCompatibility.length - 8} more`));

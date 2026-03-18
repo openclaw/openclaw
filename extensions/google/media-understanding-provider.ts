@@ -1,7 +1,5 @@
 import {
   normalizeGeminiBaseUrl,
-  normalizeGoogleModelId,
-  parseGeminiAuth,
 } from "openclaw/plugin-sdk/google";
 import {
   assertOkOrThrowHttpError,
@@ -14,6 +12,7 @@ import {
   type VideoDescriptionRequest,
   type VideoDescriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
+import { normalizeGoogleModelId, parseGeminiAuth } from "./runtime-api.js";
 
 export const DEFAULT_GOOGLE_AUDIO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 export const DEFAULT_GOOGLE_VIDEO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";

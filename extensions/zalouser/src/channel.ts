@@ -1,5 +1,6 @@
+import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import { buildAccountScopedDmSecurityPolicy } from "openclaw/plugin-sdk/channel-policy";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
@@ -8,7 +9,7 @@ import type {
   ChannelPlugin,
   OpenClawConfig,
   GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk/zalouser";
+} from "../runtime-api.js";
 import {
   buildChannelSendResult,
   buildBaseAccountStatusSnapshot,
@@ -17,8 +18,7 @@ import {
   isNumericTargetId,
   normalizeAccountId,
   sendPayloadWithChunkedTextAndMedia,
-} from "openclaw/plugin-sdk/zalouser";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+} from "../runtime-api.js";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -33,6 +33,7 @@ import { probeZalouser } from "./probe.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
+import { resolveZalouserOutboundSessionRoute } from "./session-route.js";
 import { zalouserSetupAdapter } from "./setup-core.js";
 import { zalouserSetupWizard } from "./setup-surface.js";
 import { createZalouserPluginBase } from "./shared.js";
@@ -217,6 +218,14 @@ function resolveZalouserRequireMention(params: ChannelGroupContext): boolean {
   return true;
 }
 
+const resolveZalouserDmPolicy = createScopedDmSecurityResolver<ResolvedZalouserAccount>({
+  channelKey: "zalouser",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+  normalizeEntry: (raw) => raw.replace(/^(zalouser|zlu):/i, ""),
+});
+
 const zalouserMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg }) => {
     const accounts = listZalouserAccountIds(cfg)
@@ -292,18 +301,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     setup: zalouserSetupAdapter,
   }),
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "zalouser",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dmPolicy,
-        allowFrom: account.config.allowFrom ?? [],
-        policyPathSuffix: "dmPolicy",
-        normalizeEntry: (raw) => raw.replace(/^(zalouser|zlu):/i, ""),
-      });
-    },
+    resolveDmPolicy: resolveZalouserDmPolicy,
   },
   groups: {
     resolveRequireMention: resolveZalouserRequireMention,
@@ -315,6 +313,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
   actions: zalouserMessageActions,
   messaging: {
     normalizeTarget: (raw) => normalizePrefixedTarget(raw),
+    resolveOutboundSessionRoute: (params) => resolveZalouserOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: (raw) => {
         const normalized = normalizePrefixedTarget(raw);
