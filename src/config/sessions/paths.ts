@@ -273,9 +273,6 @@ export function isManagedSessionStorePath(
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): boolean {
   const resolvedStorePath = path.resolve(storePath);
-  if (path.basename(resolvedStorePath) !== "sessions.json") {
-    return false;
-  }
   return isManagedSessionsDir(path.dirname(resolvedStorePath), env, homedir);
 }
 

@@ -156,6 +156,21 @@ describe("session directory permissions", () => {
     });
   });
 
+  it("creates a private sessions dir for renamed managed session stores", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, ".openclaw", "agents", "main", "sessions", "custom.json");
+      await saveSessionStore(storePath, {
+        "agent:main:renamed-store": {
+          sessionId: "sess-renamed-store",
+          updatedAt: Date.now(),
+        },
+      });
+
+      const mode = fs.statSync(path.dirname(storePath)).mode & 0o777;
+      expectPrivateDirMode(mode);
+    });
+  });
+
   it("does not tighten custom session store parent directories", async () => {
     if (process.platform === "win32") {
       return;
