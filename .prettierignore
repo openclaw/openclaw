@@ -1,1 +1,4 @@
 docs/.generated/
+# Export template uses {{PLACEHOLDER}} syntax that Prettier reformats into
+# multi-line blocks, breaking the string replacement at build time (#49957).
+src/auto-reply/reply/export-html/template.html
