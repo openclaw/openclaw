@@ -236,6 +236,31 @@ describe("handleTelegramAction", () => {
     );
   });
 
+  it("accepts shared sticker action aliases", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", actions: { sticker: true } } },
+    } as OpenClawConfig;
+    await handleTelegramAction(
+      {
+        action: "sticker",
+        target: "123",
+        stickerId: ["sticker"],
+        replyTo: 9,
+        threadId: 11,
+      },
+      cfg,
+    );
+    expect(sendStickerTelegram).toHaveBeenCalledWith(
+      "123",
+      "sticker",
+      expect.objectContaining({
+        token: "tok",
+        replyToMessageId: 9,
+        messageThreadId: 11,
+      }),
+    );
+  });
+
   it("removes reactions when remove flag set", async () => {
     const cfg = reactionConfig("extensive");
     await handleTelegramAction(
@@ -320,6 +345,26 @@ describe("handleTelegramAction", () => {
     });
   });
 
+  it("accepts shared send action aliases", async () => {
+    await handleTelegramAction(
+      {
+        action: "send",
+        to: "@testchannel",
+        message: "Hello from alias",
+        media: "https://example.com/image.jpg",
+      },
+      telegramConfig(),
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "Hello from alias",
+      expect.objectContaining({
+        token: "tok",
+        mediaUrl: "https://example.com/image.jpg",
+      }),
+    );
+  });
+
   it("sends a poll", async () => {
     const result = await handleTelegramAction(
       {
@@ -355,6 +400,41 @@ describe("handleTelegramAction", () => {
       chatId: "123",
       pollId: "poll-1",
     });
+  });
+
+  it("accepts shared poll action aliases", async () => {
+    await handleTelegramAction(
+      {
+        action: "poll",
+        to: "@testchannel",
+        pollQuestion: "Ready?",
+        pollOption: ["Yes", "No"],
+        pollMulti: "true",
+        pollPublic: "true",
+        pollDurationSeconds: 60,
+        replyTo: 55,
+        threadId: 77,
+        silent: "true",
+      },
+      telegramConfig(),
+    );
+    expect(sendPollTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      {
+        question: "Ready?",
+        options: ["Yes", "No"],
+        maxSelections: 2,
+        durationSeconds: 60,
+        durationHours: undefined,
+      },
+      expect.objectContaining({
+        token: "tok",
+        isAnonymous: false,
+        replyToMessageId: 55,
+        messageThreadId: 77,
+        silent: true,
+      }),
+    );
   });
 
   it("parses string booleans for poll flags", async () => {
