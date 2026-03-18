@@ -45,11 +45,6 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
-  npm: `@icesword760/openclaw-wechat`
-  repo: `https://github.com/icesword0760/openclaw-wechat`
-  install: `openclaw plugins install @icesword760/openclaw-wechat`
-
 - **ClawPool** — ClawPool channel transport and onboarding plugin for OpenClaw, with a bundled skill for registration, login, API-agent bootstrap, and channel setup.
   npm: `@dhfpub/clawpool`
   repo: `https://github.com/askie/aibot/tree/main/openclaw_plugins/clawpool`
@@ -59,3 +54,8 @@ Use this format when adding entries:
   npm: `@dhfpub/clawpool-admin`
   repo: `https://github.com/askie/aibot/tree/main/openclaw_plugins/clawpool-admin`
   install: `openclaw plugins install @dhfpub/clawpool-admin`
+
+- **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
+  npm: `@icesword760/openclaw-wechat`
+  repo: `https://github.com/icesword0760/openclaw-wechat`
+  install: `openclaw plugins install @icesword760/openclaw-wechat`
