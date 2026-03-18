@@ -215,6 +215,10 @@
     padding: 0;
     justify-content: center;
   }
+
+  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-mode-switch {
+    display: none;
+  }
 }
 
 /* Mobile-specific styles */
@@ -244,8 +248,7 @@
   }
 
   .topnav-shell__content {
-    order: 3;
-    width: 100%;
+    display: none;
   }
 
   .topbar-nav-toggle {
@@ -275,7 +278,17 @@
   }
 
   .topbar-theme-mode {
-    flex-shrink: 0;
+    display: none;
+  }
+
+  .sidebar-mode-switch {
+    display: block;
+  }
+
+  .sidebar-mode-switch .topbar-theme-mode {
+    display: inline-flex;
+    width: 100%;
+    justify-content: center;
   }
 
   .topbar-status .pill {
@@ -635,5 +648,77 @@
     width: 24px;
     height: 24px;
     font-size: 12px;
+  }
+}
+
+/* ===========================================
+   Bottom Tabs (mobile navigation bar)
+   =========================================== */
+
+.bottom-tabs {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .bottom-tabs {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 60;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    padding: 4px 0 calc(4px + env(safe-area-inset-bottom, 0px));
+    justify-content: space-around;
+    align-items: stretch;
+  }
+
+  .bottom-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    flex: 1;
+    padding: 6px 4px;
+    border: none;
+    background: none;
+    color: var(--muted);
+    font-size: 10px;
+    cursor: pointer;
+    transition:
+      color var(--duration-fast) ease,
+      opacity var(--duration-fast) ease;
+  }
+
+  .bottom-tab__icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+  }
+
+  .bottom-tab__icon svg {
+    width: 20px;
+    height: 20px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.5px;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .bottom-tab__label {
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+
+  .bottom-tab--active {
+    color: var(--accent);
+  }
+
+  .bottom-tab:active {
+    opacity: 0.7;
   }
 }

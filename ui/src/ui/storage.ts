@@ -39,6 +39,7 @@ export type UiSettings = {
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
+  borderRadius: number; // Corner roundness (0–100, default 50)
   locale?: string;
 };
 
@@ -190,6 +191,7 @@ export function loadSettings(): UiSettings {
     navCollapsed: false,
     navWidth: 220,
     navGroupsCollapsed: {},
+    borderRadius: 50,
   };
 
   try {
@@ -247,6 +249,12 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
+      borderRadius:
+        typeof parsed.borderRadius === "number" &&
+        parsed.borderRadius >= 0 &&
+        parsed.borderRadius <= 100
+          ? parsed.borderRadius
+          : defaults.borderRadius,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
     if ("token" in parsed) {
@@ -306,6 +314,7 @@ function persistSettings(next: UiSettings) {
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     navGroupsCollapsed: next.navGroupsCollapsed,
+    borderRadius: next.borderRadius,
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),
   };

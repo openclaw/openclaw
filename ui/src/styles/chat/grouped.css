@@ -406,6 +406,7 @@ img.chat-avatar {
   border-radius: var(--radius-md, 8px);
   padding: 12px;
   min-width: 200px;
+  max-width: calc(100vw - 48px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   z-index: 100;
   animation: scale-in 0.15s ease-out;
