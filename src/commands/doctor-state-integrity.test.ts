@@ -168,6 +168,8 @@ describe("doctor state integrity oauth dir checks", () => {
     fs.rmSync(logicalStateDir, { recursive: true, force: true });
     fs.mkdirSync(realStateDir, { recursive: true });
     fs.symlinkSync(realStateDir, logicalStateDir, "dir");
+    // Let state-dir resolution go through HOME so the test exercises the logical
+    // ~/.openclaw symlink path instead of pinning everything to a real dir override.
     delete process.env.OPENCLAW_STATE_DIR;
 
     setupSessionState(cfg, process.env, process.env.HOME ?? "");

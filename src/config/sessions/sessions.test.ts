@@ -159,6 +159,36 @@ describe("session path safety", () => {
     }
   });
 
+  it("maps sibling fallback paths back to the logical symlinked sessions dir", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-symlink-sibling-session-"));
+    const realRoot = path.join(tmpDir, "real-state");
+    const aliasRoot = path.join(tmpDir, "alias-state");
+    try {
+      fs.mkdirSync(realRoot, { recursive: true });
+      fs.symlinkSync(realRoot, aliasRoot, "dir");
+      const logicalMainSessionsDir = path.join(aliasRoot, "agents", "main", "sessions");
+      const logicalWorkerSessionsDir = path.join(aliasRoot, "agents", "worker", "sessions");
+      fs.mkdirSync(logicalMainSessionsDir, { recursive: true });
+      fs.mkdirSync(logicalWorkerSessionsDir, { recursive: true });
+      const logicalWorkerTranscript = path.join(logicalWorkerSessionsDir, "sess-1.jsonl");
+      fs.writeFileSync(logicalWorkerTranscript, "");
+      const storedRealTranscript = fs.realpathSync(logicalWorkerTranscript);
+
+      const resolved = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: storedRealTranscript },
+        { sessionsDir: logicalMainSessionsDir, agentId: "worker" },
+      );
+
+      expect(resolved).toBe(logicalWorkerTranscript);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back when sessionFile is a symlink that escapes sessions dir", () => {
     if (process.platform === "win32") {
       return;
