@@ -1,0 +1,28 @@
+{
+  "name": "@openclaw/openviking-session-bridge",
+  "version": "2026.3.18",
+  "private": true,
+  "description": "Flush OpenClaw session transcripts into OpenViking at session boundaries",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

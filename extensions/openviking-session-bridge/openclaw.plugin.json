@@ -1,0 +1,61 @@
+{
+  "id": "openviking-session-bridge",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "baseUrl": { "type": "string" },
+      "apiKey": { "type": "string" },
+      "agentId": { "type": "string" },
+      "timeoutMs": { "type": "number" },
+      "flushTimeoutMs": { "type": "number" },
+      "stateDir": { "type": "string" },
+      "commitOnFlush": { "type": "boolean" }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enabled",
+      "help": "Enable or disable the OpenViking session bridge (default: false)"
+    },
+    "baseUrl": {
+      "label": "OpenViking Base URL",
+      "placeholder": "http://127.0.0.1:1933",
+      "help": "HTTP URL of the running OpenViking server"
+    },
+    "apiKey": {
+      "label": "OpenViking API Key",
+      "sensitive": true,
+      "placeholder": "${OPENVIKING_API_KEY}",
+      "help": "Optional API key for OpenViking server"
+    },
+    "agentId": {
+      "label": "Agent ID",
+      "placeholder": "default",
+      "help": "Agent identifier sent to OpenViking (X-OpenViking-Agent header)"
+    },
+    "timeoutMs": {
+      "label": "Request Timeout (ms)",
+      "placeholder": "15000",
+      "advanced": true
+    },
+    "flushTimeoutMs": {
+      "label": "Flush Timeout (ms)",
+      "placeholder": "30000",
+      "help": "Maximum time to wait for a synchronous flush (e.g. /done command)",
+      "advanced": true
+    },
+    "stateDir": {
+      "label": "State Directory",
+      "placeholder": "~/.openclaw/data/openviking-session-bridge",
+      "help": "Directory for checkpoint files",
+      "advanced": true
+    },
+    "commitOnFlush": {
+      "label": "Commit On Flush",
+      "help": "Commit (extract memories from) the OV session at session_end. Default: true",
+      "advanced": true
+    }
+  }
+}
