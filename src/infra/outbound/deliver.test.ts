@@ -1151,6 +1151,88 @@ describe("deliverOutboundPayloads", () => {
     expect(sendTelegram).toHaveBeenCalledTimes(2);
   });
 
+  it("does not dedupe mirrored outbound deliveries across different mirror transcript content", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverOutboundPayloads({
+      cfg: telegramNoChunkConfig,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "same" }],
+      deps: { sendTelegram },
+      mirror: { sessionKey: "agent:main:main", text: "mirror one" },
+    });
+    await deliverOutboundPayloads({
+      cfg: telegramNoChunkConfig,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "same" }],
+      deps: { sendTelegram },
+      mirror: { sessionKey: "agent:main:main", text: "mirror two" },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(2);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not dedupe mirrored outbound deliveries across different interactive payloads", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverOutboundPayloads({
+      cfg: telegramNoChunkConfig,
+      channel: "telegram",
+      to: "123",
+      payloads: [
+        {
+          interactive: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+          },
+        },
+      ],
+      deps: { sendTelegram },
+      mirror: { sessionKey: "agent:main:main", text: "same" },
+    });
+    await deliverOutboundPayloads({
+      cfg: telegramNoChunkConfig,
+      channel: "telegram",
+      to: "123",
+      payloads: [
+        {
+          interactive: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Reject", value: "reject" }] }],
+          },
+        },
+      ],
+      deps: { sendTelegram },
+      mirror: { sessionKey: "agent:main:main", text: "same" },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not dedupe mirrored outbound deliveries across different payload reply targets", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverOutboundPayloads({
+      cfg: telegramNoChunkConfig,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "same", replyToId: "payload-reply-1" }],
+      deps: { sendTelegram },
+      mirror: { sessionKey: "agent:main:main", text: "same" },
+    });
+    await deliverOutboundPayloads({
+      cfg: telegramNoChunkConfig,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "same", replyToId: "payload-reply-2" }],
+      deps: { sendTelegram },
+      mirror: { sessionKey: "agent:main:main", text: "same" },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(2);
+  });
+
   it("emits message_sent success for text-only deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });

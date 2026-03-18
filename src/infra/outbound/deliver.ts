@@ -34,7 +34,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
-import type { OutboundIdentity } from "./identity.js";
+import { normalizeOutboundIdentity, type OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
@@ -286,21 +286,51 @@ const DIRECT_OUTBOUND_DEDUPE_WINDOW_MS = 1_500;
 
 type RecentDeliveryEntry = { expiresAt: number; results: OutboundDeliveryResult[] };
 
+type DirectOutboundDedupePayload = {
+  text: string;
+  mediaUrl: string | null;
+  mediaUrls: string[];
+  interactive: ReplyPayload["interactive"] | null;
+  channelData: Record<string, unknown> | null;
+  replyToId: string | null;
+  replyToTag: boolean;
+  replyToCurrent: boolean;
+  audioAsVoice: boolean;
+};
+
 const inflightDirectOutboundDeliveries = new Map<string, Promise<OutboundDeliveryResult[]>>();
 const recentDirectOutboundDeliveries = new Map<string, RecentDeliveryEntry>();
 
-function normalizePayloadForDedupe(payload: ReplyPayload): ReplyPayload | null {
+function normalizePayloadForDedupe(payload: ReplyPayload): DirectOutboundDedupePayload | null {
   const normalized = normalizeReplyPayloadsForDelivery([payload])[0];
   if (!normalized) {
     return null;
   }
-  if (normalized.channelData) {
-    return normalized;
+  const hasChannelData = hasReplyChannelData(normalized.channelData);
+  if (
+    !hasReplyContent({
+      text: normalized.text,
+      mediaUrl: normalized.mediaUrl,
+      mediaUrls: normalized.mediaUrls,
+      interactive: normalized.interactive,
+      hasChannelData,
+      extraContent: normalized.audioAsVoice,
+    })
+  ) {
+    return null;
   }
-  if (typeof normalized.text === "string" || normalized.mediaUrl || normalized.mediaUrls?.length) {
-    return normalized;
-  }
-  return null;
+  const channelData = hasChannelData ? (normalized.channelData as Record<string, unknown>) : null;
+  return {
+    text: normalized.text ?? "",
+    mediaUrl: normalized.mediaUrl ?? null,
+    mediaUrls: normalized.mediaUrls ?? [],
+    interactive: normalized.interactive ?? null,
+    channelData,
+    replyToId: normalized.replyToId ?? null,
+    replyToTag: normalized.replyToTag === true,
+    replyToCurrent: normalized.replyToCurrent === true,
+    audioAsVoice: normalized.audioAsVoice === true,
+  };
 }
 
 function pruneDirectOutboundDedupe(now = Date.now()): void {
@@ -311,27 +341,27 @@ function pruneDirectOutboundDedupe(now = Date.now()): void {
   }
 }
 
-function shouldDedupeDirectOutbound(params: DeliverOutboundPayloadsParams): boolean {
-  return Boolean(params.mirror?.sessionKey || params.replyToId);
+function shouldDedupeDirectOutbound(
+  params: DeliverOutboundPayloadsParams,
+  normalizedPayloads: readonly DirectOutboundDedupePayload[],
+): boolean {
+  return Boolean(
+    params.mirror?.sessionKey || params.replyToId || normalizedPayloads.some((p) => p.replyToId),
+  );
 }
 
 function buildDirectOutboundDedupeKey(params: DeliverOutboundPayloadsParams): string | null {
-  if (!shouldDedupeDirectOutbound(params)) {
-    return null;
-  }
   const normalizedPayloads = params.payloads
     .map((payload) => normalizePayloadForDedupe(payload))
-    .filter((payload): payload is ReplyPayload => Boolean(payload))
-    .map((payload) => ({
-      text: payload.text ?? "",
-      mediaUrl: payload.mediaUrl,
-      mediaUrls: payload.mediaUrls ?? [],
-      channelData: payload.channelData,
-    }));
+    .filter((payload): payload is DirectOutboundDedupePayload => Boolean(payload));
+  if (!shouldDedupeDirectOutbound(params, normalizedPayloads)) {
+    return null;
+  }
   return JSON.stringify({
     channel: params.channel,
     to: params.to,
     accountId: params.accountId ?? null,
+    identity: normalizeOutboundIdentity(params.identity) ?? null,
     threadId: params.threadId ?? null,
     replyToId: params.replyToId ?? null,
     bestEffort: params.bestEffort ?? false,
@@ -339,7 +369,15 @@ function buildDirectOutboundDedupeKey(params: DeliverOutboundPayloadsParams): st
     forceDocument: params.forceDocument ?? false,
     silent: params.silent ?? false,
     skipQueue: params.skipQueue ?? false,
-    mirrorSessionKey: params.mirror?.sessionKey ?? null,
+    mirror: params.mirror
+      ? {
+          agentId: params.mirror.agentId ?? null,
+          sessionKey: params.mirror.sessionKey,
+          text: params.mirror.text ?? null,
+          mediaUrls: params.mirror.mediaUrls ?? [],
+          idempotencyKey: params.mirror.idempotencyKey ?? null,
+        }
+      : null,
     payloads: normalizedPayloads,
   });
 }
