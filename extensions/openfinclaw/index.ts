@@ -609,9 +609,11 @@ const openfinclawPlugin = {
                   : "回撤: --";
               const author = s.author?.displayName || "未知";
 
-              const name = s.name.length > 35 ? s.name.slice(0, 32) + "..." : s.name;
+              const truncatedName = s.name.length > 35 ? s.name.slice(0, 32) + "..." : s.name;
+              const hubUrl = `https://hub.openfinclaw.ai/strategy/${s.id}`;
+              const nameLink = `[${truncatedName}](${hubUrl})`;
               lines.push(
-                `#${String(s.rank).padStart(2)}  ${name.padEnd(35)}  ${returnStr}  ${sharpeStr}  ${ddStr}  作者: ${author}`,
+                `#${String(s.rank).padStart(2)}  ${nameLink}  ${returnStr}  ${sharpeStr}  ${ddStr}  作者: ${author}`,
               );
             }
 
