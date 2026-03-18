@@ -1,22 +1,18 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildProviderPluginMethodChoice,
+  resolveProviderModelPickerEntries,
+  resolveProviderPluginChoice,
+  resolveProviderWizardOptions,
+} from "../provider-wizard.js";
 import type { ProviderPlugin } from "../types.js";
+import { providerContractPluginIds, uniqueProviderContractProviders } from "./registry.js";
 
-const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
-type ResolvePluginProviders = typeof import("../providers.js").resolvePluginProviders;
-
-const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
+const resolvePluginProvidersMock = vi.fn();
 
 vi.mock("../providers.js", () => ({
-  resolvePluginProviders: (params?: { onlyPluginIds?: string[] }) =>
-    resolvePluginProvidersMock(params as never),
+  resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
 }));
-
-let buildProviderPluginMethodChoice: typeof import("../provider-wizard.js").buildProviderPluginMethodChoice;
-let resolveProviderModelPickerEntries: typeof import("../provider-wizard.js").resolveProviderModelPickerEntries;
-let resolveProviderPluginChoice: typeof import("../provider-wizard.js").resolveProviderPluginChoice;
-let resolveProviderWizardOptions: typeof import("../provider-wizard.js").resolveProviderWizardOptions;
-let providerContractPluginIds: typeof import("./registry.js").providerContractPluginIds;
-let uniqueProviderContractProviders: typeof import("./registry.js").uniqueProviderContractProviders;
 
 function resolveExpectedWizardChoiceValues(providers: ProviderPlugin[]) {
   const values: string[] = [];
@@ -75,25 +71,8 @@ function resolveExpectedModelPickerValues(providers: ProviderPlugin[]) {
 }
 
 describe("provider wizard contract", () => {
-  beforeAll(async () => {
-    const actualProviders =
-      await vi.importActual<typeof import("../providers.js")>("../providers.js");
-    resolvePluginProvidersMock.mockImplementation((params?: { onlyPluginIds?: string[] }) =>
-      actualProviders.resolvePluginProviders(params as never),
-    );
-    ({ providerContractPluginIds, uniqueProviderContractProviders } =
-      await import("./registry.js"));
-    resolvePluginProvidersMock.mockReturnValue(uniqueProviderContractProviders);
-    ({
-      buildProviderPluginMethodChoice,
-      resolveProviderModelPickerEntries,
-      resolveProviderPluginChoice,
-      resolveProviderWizardOptions,
-    } = await import("../provider-wizard.js"));
-  }, CONTRACT_SETUP_TIMEOUT_MS);
-
   beforeEach(() => {
-    resolvePluginProvidersMock.mockClear();
+    resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue(uniqueProviderContractProviders);
   });
 
