@@ -56,6 +56,10 @@ function normalizeTrimmedSet(
     .filter((id): id is string => Boolean(id));
 }
 
+function objectValues<T>(value: Record<string, T> | undefined): T[] {
+  return Object.values(value ?? {});
+}
+
 export async function listSlackDirectoryPeersFromConfig(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
@@ -123,9 +127,9 @@ export async function listDiscordDirectoryPeersFromConfig(
     account.config.allowFrom ?? account.config.dm?.allowFrom,
     account.config.dms,
   );
-  for (const guild of Object.values(account.config.guilds ?? {})) {
+  for (const guild of objectValues(account.config.guilds)) {
     addTrimmedEntries(ids, guild.users ?? []);
-    for (const channel of Object.values(guild.channels ?? {})) {
+    for (const channel of objectValues(guild.channels)) {
       addTrimmedEntries(ids, channel.users ?? []);
     }
   }
@@ -153,7 +157,7 @@ export async function listDiscordDirectoryGroupsFromConfig(
     return [];
   }
   const ids = new Set<string>();
-  for (const guild of Object.values(account.config.guilds ?? {})) {
+  for (const guild of objectValues(account.config.guilds)) {
     addTrimmedEntries(ids, Object.keys(guild.channels ?? {}));
   }
 
