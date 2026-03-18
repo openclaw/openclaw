@@ -7,7 +7,6 @@ import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import * as jsonFiles from "../../infra/json-files.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../config.js";
-import * as transcriptEvents from "../../sessions/transcript-events.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
