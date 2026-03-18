@@ -259,14 +259,15 @@ export async function registerSlashCommands(params: {
 
   // Fetch existing commands to avoid duplicates
   let existing: MattermostCommandResponse[] = [];
+  let listError: unknown;
   try {
     existing = await listMattermostCommands(client, teamId);
   } catch (err) {
+    listError = err;
     log?.(`mattermost: failed to list existing commands: ${String(err)}`);
-    // Fail closed: if we can't list existing commands, we should not attempt to
-    // create/update anything because we may create duplicates and end up with an
-    // empty/partial token set (causing callbacks to be rejected until restart).
-    throw err;
+    // Some Mattermost deployments allow POST /commands for bot tokens while
+    // rejecting GET /commands. Fall back to blind-create, but only activate
+    // slash callbacks if every requested trigger is created successfully.
   }
 
   const existingByTrigger = new Map<string, MattermostCommandResponse[]>();
@@ -277,15 +278,16 @@ export async function registerSlashCommands(params: {
   }
 
   const registered: MattermostRegisteredCommand[] = [];
+  const allowBlindCreate = listError != null;
 
   for (const spec of commands) {
-    const existingForTrigger = existingByTrigger.get(spec.trigger) ?? [];
-    const ownedCommands = existingForTrigger.filter(
-      (cmd) => cmd.creator_id?.trim() === normalizedCreatorUserId,
-    );
-    const foreignCommands = existingForTrigger.filter(
-      (cmd) => cmd.creator_id?.trim() !== normalizedCreatorUserId,
-    );
+    const existingForTrigger = allowBlindCreate ? [] : (existingByTrigger.get(spec.trigger) ?? []);
+    const ownedCommands = allowBlindCreate
+      ? []
+      : existingForTrigger.filter((cmd) => cmd.creator_id?.trim() === normalizedCreatorUserId);
+    const foreignCommands = allowBlindCreate
+      ? []
+      : existingForTrigger.filter((cmd) => cmd.creator_id?.trim() !== normalizedCreatorUserId);
 
     if (ownedCommands.length === 0 && foreignCommands.length > 0) {
       log?.(
@@ -382,6 +384,25 @@ export async function registerSlashCommands(params: {
     } catch (err) {
       log?.(`mattermost: failed to register command /${spec.trigger}: ${String(err)}`);
     }
+  }
+
+  if (allowBlindCreate && registered.length !== commands.length) {
+    log?.(
+      "mattermost: command listing failed and blind-create was incomplete; deleting newly created commands and keeping slash callbacks inactive",
+    );
+    for (const cmd of registered) {
+      if (!cmd.managed) {
+        continue;
+      }
+      try {
+        await deleteMattermostCommand(client, cmd.id);
+      } catch (err) {
+        log?.(
+          `mattermost: failed to delete blind-created command /${cmd.trigger} (id=${cmd.id}): ${String(err)}`,
+        );
+      }
+    }
+    throw listError;
   }
 
   return registered;

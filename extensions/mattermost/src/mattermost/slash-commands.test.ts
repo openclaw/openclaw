@@ -160,4 +160,93 @@ describe("slash-commands", () => {
     expect(result).toHaveLength(0);
     expect(request).toHaveBeenCalledTimes(1);
   });
+
+  it("falls back to create when listing existing commands is forbidden", async () => {
+    const request = vi.fn(async (path: string, init?: { method?: string }) => {
+      if (path.startsWith("/commands?team_id=")) {
+        throw new Error(
+          "Mattermost API 403 Forbidden: You do not have the appropriate permissions.",
+        );
+      }
+      if (path === "/commands" && init?.method === "POST") {
+        return {
+          id: "cmd-created-1",
+          token: "tok-created-1",
+          team_id: "team-1",
+          creator_id: "bot-user",
+          trigger: "oc_status",
+          method: "P",
+          url: "http://gateway/callback",
+          auto_complete: true,
+        };
+      }
+      throw new Error(`unexpected request path: ${path}`);
+    });
+
+    const result = await registerSingleStatusCommand(request);
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: "cmd-created-1",
+        token: "tok-created-1",
+        managed: true,
+      }),
+    ]);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("cleans up blind-created commands when listing fails and registration is incomplete", async () => {
+    const request = vi.fn(async (path: string, init?: { method?: string }) => {
+      if (path.startsWith("/commands?team_id=")) {
+        throw new Error(
+          "Mattermost API 403 Forbidden: You do not have the appropriate permissions.",
+        );
+      }
+      if (path === "/commands" && init?.method === "POST") {
+        const body = JSON.parse((init as { body?: string }).body ?? "{}") as { trigger?: string };
+        if (body.trigger === "oc_status") {
+          return {
+            id: "cmd-created-1",
+            token: "tok-created-1",
+            team_id: "team-1",
+            creator_id: "bot-user",
+            trigger: "oc_status",
+            method: "P",
+            url: "http://gateway/callback",
+            auto_complete: true,
+          };
+        }
+        throw new Error("Mattermost API 400 Bad Request: trigger already exists");
+      }
+      if (path === "/commands/cmd-created-1" && init?.method === "DELETE") {
+        return undefined;
+      }
+      throw new Error(`unexpected request path: ${path}`);
+    });
+
+    const client = { request } as unknown as MattermostClient;
+
+    await expect(
+      registerSlashCommands({
+        client,
+        teamId: "team-1",
+        creatorUserId: "bot-user",
+        callbackUrl: "http://gateway/callback",
+        commands: [
+          {
+            trigger: "oc_status",
+            description: "status",
+            autoComplete: true,
+          },
+          {
+            trigger: "oc_help",
+            description: "help",
+            autoComplete: true,
+          },
+        ],
+      }),
+    ).rejects.toThrow("Mattermost API 403 Forbidden");
+
+    expect(request).toHaveBeenCalledWith("/commands/cmd-created-1", { method: "DELETE" });
+  });
 });
