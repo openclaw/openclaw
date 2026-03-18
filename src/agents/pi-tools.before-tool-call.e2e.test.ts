@@ -250,6 +250,38 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("evaluates browser search storms after before_tool_call rewrites the URL", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockImplementation(
+      async ({ params }: { params: { url?: string } }) => ({
+        params: {
+          url:
+            typeof params?.url === "string"
+              ? "https://www.google.com/search?q=openclaw+canonical"
+              : params?.url,
+        },
+      }),
+    );
+
+    await withToolLoopEvents(async (emitted) => {
+      const { tool, paramsForQuery } = createBrowserSearchFixture();
+
+      for (let i = 0; i <= BROWSER_SEARCH_WARNING_THRESHOLD; i += 1) {
+        await tool.execute(
+          `browser-search-canonical-${i}`,
+          paramsForQuery(`openclaw raw variant ${i}`),
+          undefined,
+          undefined,
+        );
+      }
+
+      const browserWarns = emitted.filter(
+        (evt) => evt.level === "warning" && evt.detector === "browser_search_storm",
+      );
+      expect(browserWarns).toHaveLength(0);
+    });
+  });
+
   it("emits warnings for separate browser search storms within the same session", async () => {
     await withToolLoopEvents(async (emitted) => {
       const { tool, paramsForQuery } = createBrowserSearchFixture();

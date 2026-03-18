@@ -114,6 +114,17 @@ function createBrowserSearchFixture(
   } as const;
 }
 
+function createBrowserPageFixture(url: string) {
+  return {
+    toolName: "browser",
+    params: { action: "open", url },
+    result: {
+      content: [{ type: "text", text: `opened ${url}` }],
+      details: { url },
+    },
+  } as const;
+}
+
 function recordSuccessfulBrowserSearchCalls(params: {
   state: SessionState;
   queries: string[];
@@ -603,6 +614,57 @@ describe("tool-loop-detection", () => {
       });
 
       const current = createBrowserSearchFixture("openclaw varied");
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("resets the browser search storm streak after opening a non-search page", () => {
+      const state = createState();
+      recordSuccessfulBrowserSearchCalls({
+        state,
+        queries: ["openclaw issue 0", "openclaw issue 1", "openclaw issue 2", "openclaw issue 3"],
+      });
+
+      const openedResultPage = createBrowserPageFixture("https://example.com/openclaw/result");
+      recordSuccessfulCall(
+        state,
+        openedResultPage.toolName,
+        openedResultPage.params,
+        openedResultPage.result,
+        4,
+      );
+
+      recordSuccessfulBrowserSearchCalls({
+        state,
+        queries: ["openclaw follow-up 0", "openclaw follow-up 1", "openclaw follow-up 2"],
+        startIndex: 5,
+      });
+
+      const current = createBrowserSearchFixture("openclaw follow-up next");
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("only counts the non-repeating active browser-search tail", () => {
+      const state = createState();
+      recordSuccessfulBrowserSearchCalls({
+        state,
+        queries: ["openclaw issue A", "openclaw issue B", "openclaw issue A", "openclaw issue C"],
+      });
+
+      const current = createBrowserSearchFixture("openclaw issue D");
       const loopResult = detectToolCallLoop(
         state,
         current.toolName,

@@ -17,6 +17,7 @@ export type BrowserSearchLoopHint = {
 };
 
 export type ToolCallLoopHint = {
+  browserNavigation?: boolean;
   browserSearch?: BrowserSearchLoopHint;
 };
 

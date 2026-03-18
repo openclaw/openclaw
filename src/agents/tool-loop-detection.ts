@@ -201,10 +201,7 @@ function normalizeHostname(hostname: string): string {
   return lowered.startsWith("www.") ? lowered.slice(4) : lowered;
 }
 
-function extractBrowserSearchLoopHint(
-  toolName: string,
-  params: unknown,
-): BrowserSearchLoopRecord | undefined {
+function extractBrowserNavigationUrl(toolName: string, params: unknown): URL | undefined {
   if (toolName !== "browser" || !isPlainObject(params)) {
     return undefined;
   }
@@ -234,6 +231,10 @@ function extractBrowserSearchLoopHint(
     return undefined;
   }
 
+  return parsedUrl;
+}
+
+function extractBrowserSearchLoopHintFromUrl(parsedUrl: URL): BrowserSearchLoopRecord | undefined {
   const host = normalizeHostname(parsedUrl.hostname);
   const path = parsedUrl.pathname.toLowerCase();
   for (const matcher of BROWSER_SEARCH_MATCHERS) {
@@ -253,6 +254,18 @@ function extractBrowserSearchLoopHint(
   return undefined;
 }
 
+function extractBrowserSearchLoopHint(
+  toolName: string,
+  params: unknown,
+): BrowserSearchLoopRecord | undefined {
+  const parsedUrl = extractBrowserNavigationUrl(toolName, params);
+  if (!parsedUrl) {
+    return undefined;
+  }
+
+  return extractBrowserSearchLoopHintFromUrl(parsedUrl);
+}
+
 function extractToolCallLoopHint(
   toolName: string,
   params: unknown,
@@ -261,11 +274,15 @@ function extractToolCallLoopHint(
   if (options?.browserSearchStormEnabled === false) {
     return undefined;
   }
-  const browserSearch = extractBrowserSearchLoopHint(toolName, params);
-  if (browserSearch) {
-    return { browserSearch };
+  const navigationUrl = extractBrowserNavigationUrl(toolName, params);
+  if (!navigationUrl) {
+    return undefined;
   }
-  return undefined;
+  const browserSearch = extractBrowserSearchLoopHintFromUrl(navigationUrl);
+  if (browserSearch) {
+    return { browserNavigation: true, browserSearch };
+  }
+  return { browserNavigation: true };
 }
 
 function isKnownPollToolCall(toolName: string, params: unknown): boolean {
@@ -502,27 +519,30 @@ function getBrowserSearchStormStats(
   uniqueQueries: number;
   warningKey: string;
 } {
-  const recentSearches = history
-    .flatMap((record) =>
-      record.loopHint?.browserSearch
-        ? [{ ...record.loopHint.browserSearch, timestamp: record.timestamp }]
-        : [],
-    )
-    .filter((search): search is BrowserSearchHistoryEntry => Boolean(search));
-
   const activeStreak: BrowserSearchHistoryEntry[] = [];
-  let nextSignature = browserSearchSignature(currentSearch);
-  for (let i = recentSearches.length - 1; i >= 0; i -= 1) {
-    const search = recentSearches[i];
+  const seenSignatures = new Set<string>([browserSearchSignature(currentSearch)]);
+  let boundaryTimestamp: number | undefined;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const record = history[i];
+    if (!record) {
+      continue;
+    }
+    const loopHint = record.loopHint;
+    if (loopHint?.browserNavigation && !loopHint.browserSearch) {
+      boundaryTimestamp = record.timestamp;
+      break;
+    }
+    const search = loopHint?.browserSearch;
     if (!search) {
       continue;
     }
     const signature = browserSearchSignature(search);
-    if (signature === nextSignature) {
+    if (seenSignatures.has(signature)) {
+      boundaryTimestamp = record.timestamp;
       break;
     }
-    activeStreak.unshift(search);
-    nextSignature = signature;
+    seenSignatures.add(signature);
+    activeStreak.unshift({ ...search, timestamp: record.timestamp });
   }
 
   const oldestActiveSearch = activeStreak[0];
@@ -535,9 +555,11 @@ function getBrowserSearchStormStats(
     count: activeStreak.length,
     uniqueHosts: uniqueHosts.size,
     uniqueQueries: uniqueQueries.size,
-    warningKey: oldestActiveSearch
-      ? `browser-search:storm:${oldestActiveSearch.timestamp}:${oldestActiveSearch.host}:${oldestActiveSearch.queryHash}`
-      : `browser-search:storm:${currentSearch.host}:${currentSearch.queryHash}`,
+    warningKey: boundaryTimestamp
+      ? `browser-search:storm:after:${boundaryTimestamp}`
+      : oldestActiveSearch
+        ? `browser-search:storm:from:${oldestActiveSearch.timestamp}:${oldestActiveSearch.host}:${oldestActiveSearch.queryHash}`
+        : `browser-search:storm:${currentSearch.host}:${currentSearch.queryHash}`,
   };
 }
 
@@ -652,28 +674,31 @@ export function detectToolCallLoop(
   if (browserSearch) {
     const browserSearchStats = getBrowserSearchStormStats(history, browserSearch);
     // TODO: This detector only sees browser-search entries still present in the bounded history
-    // window, so interspersed non-search calls can evict older search hops before thresholds trip.
+    // window, so interspersed non-search calls can evict older search hops before thresholds trip
+    // and may eventually shift the warning-dedup boundary for a very long-lived storm.
     // Restrict this detector to the active streak of changing searches. Once the agent settles
-    // into repeating the same search again, the storm streak resets to avoid blocking follow-up
-    // work solely because older variety is still present elsewhere in the bounded history.
+    // into repeating the same search again, or opens a non-search page and starts making
+    // progress, the storm streak resets to avoid blocking follow-up work solely because older
+    // variety is still present elsewhere in the bounded history.
     const hasVariedSearches =
       browserSearchStats.uniqueQueries >= 2 || browserSearchStats.uniqueHosts >= 2;
-    // Anchor warning suppression to the first search in the active streak so separate storms in
-    // one session do not suppress each other while the same storm still warns only once per bucket.
+    // Anchor warning suppression to the streak boundary when possible so separate storms in one
+    // session do not suppress each other and bounded-history eviction is less likely to re-emit
+    // warnings for the same ongoing storm.
     const browserSearchWarningKey = browserSearchStats.warningKey;
     if (
       hasVariedSearches &&
       browserSearchStats.count >= resolvedConfig.browserSearchCriticalThreshold
     ) {
       log.error(
-        `Critical browser search storm detected: repeated search-page opens count=${browserSearchStats.count}`,
+        `Critical browser search storm detected: priorSearchCount=${browserSearchStats.count}`,
       );
       return {
         stuck: true,
         level: "critical",
         detector: "browser_search_storm",
         count: browserSearchStats.count,
-        message: `CRITICAL: Browser search pages have been opened ${browserSearchStats.count} times across changing queries or search engines. This appears to be a browser search storm. Session execution blocked to prevent runaway browsing and network amplification.`,
+        message: `CRITICAL: Detected ${browserSearchStats.count} prior browser search-page opens in the active streak across changing queries or search engines. This current call continues that browser search storm, so session execution is blocked to prevent runaway browsing and network amplification.`,
         warningKey: browserSearchWarningKey,
       };
     }
@@ -682,15 +707,13 @@ export function detectToolCallLoop(
       hasVariedSearches &&
       browserSearchStats.count >= resolvedConfig.browserSearchWarningThreshold
     ) {
-      log.warn(
-        `Browser search storm warning: repeated search-page opens count=${browserSearchStats.count}`,
-      );
+      log.warn(`Browser search storm warning: priorSearchCount=${browserSearchStats.count}`);
       return {
         stuck: true,
         level: "warning",
         detector: "browser_search_storm",
         count: browserSearchStats.count,
-        message: `WARNING: Browser search pages have been opened ${browserSearchStats.count} times across changing queries or search engines. Stop broad browser searching and either narrow the task, use web_search/web_fetch, or report failure.`,
+        message: `WARNING: Detected ${browserSearchStats.count} prior browser search-page opens in the active streak across changing queries or search engines. The current call continues that browser search storm; stop broad browser searching and either narrow the task, use web_search/web_fetch, or report failure.`,
         warningKey: browserSearchWarningKey,
       };
     }
