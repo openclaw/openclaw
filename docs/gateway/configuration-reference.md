@@ -1151,6 +1151,9 @@ Periodic heartbeat runs.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
+- `preHook`: optional shell command to run before the heartbeat turn. If the command exits non-zero, the heartbeat is skipped. Useful for lightweight pre-flight checks (e.g. "are there new emails?") without waking an LLM agent.
+  - `preHook.command`: shell command string.
+  - `preHook.timeoutSeconds`: max seconds before the command is killed (default: 30, max: 300).
 
 ### `agents.defaults.compaction`
 
@@ -3578,6 +3581,14 @@ Applies only to one-shot cron jobs. Recurring jobs use separate failure handling
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
 
 See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as [background tasks](/automation/tasks).
+
+Cron jobs also support a per-job `preHook` that runs a shell command before the agent turn. If the command exits non-zero, the run is skipped. Configure via `cron.add` or `cron.update`:
+
+- `preHook.command`: shell command string.
+- `preHook.timeoutSeconds`: max seconds before the command is killed (default: 30, max: 300).
+- Set `preHook: null` in a patch to clear a previously configured hook.
+
+See [Cron Jobs](/automation/cron-jobs).
 
 ---
 
