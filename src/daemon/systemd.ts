@@ -426,22 +426,6 @@ async function execSystemctlSystem(
   return await execSystemctl(args);
 }
 
-// Probe whether a unit is enabled/active in system scope.
-// Returns null when systemctl itself is unavailable.
-async function probeSystemScope(
-  unitName: string,
-): Promise<{ enabled: boolean; active: boolean } | null> {
-  const enabledRes = await execSystemctlSystem(["is-enabled", unitName]);
-  if (isSystemctlMissing(readSystemctlDetail(enabledRes))) {
-    return null;
-  }
-  const activeRes = await execSystemctlSystem(["is-active", unitName]);
-  return {
-    enabled: enabledRes.code === 0,
-    active: activeRes.code === 0,
-  };
-}
-
 export async function isSystemdUserServiceAvailable(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<boolean> {
@@ -638,11 +622,9 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
     await fs.access(resolveSystemdUnitPath(env));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      // User unit file missing — check system scope.
-      const serviceName = resolveSystemdServiceName(env);
-      const unitName = `${serviceName}.service`;
-      const system = await probeSystemScope(unitName);
-      return system !== null && (system.enabled || system.active);
+      // User unit file missing — keep returning false to avoid routing
+      // callers (e.g. uninstall) into paths that only handle user scope.
+      return false;
     }
     throw error;
   }
@@ -655,11 +637,6 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
   }
   const detail = readSystemctlDetail(res);
   if (isSystemctlMissing(detail) || isSystemdUnitNotEnabled(detail)) {
-    // User scope says not enabled — check system scope.
-    const system = await probeSystemScope(unitName);
-    if (system !== null && (system.enabled || system.active)) {
-      return true;
-    }
     return false;
   }
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
@@ -703,13 +680,15 @@ export async function readSystemdServiceRuntime(
   if (res.code === 0) {
     return buildRuntimeFromShow(res.stdout);
   }
-  // User-scope show failed — try system scope.
-  const systemRes = await execSystemctlSystem(showArgs);
-  if (systemRes.code === 0) {
-    return { ...buildRuntimeFromShow(systemRes.stdout), detail: "system scope" };
-  }
   const detail = (res.stderr || res.stdout).trim();
   const missing = detail.toLowerCase().includes("not found");
+  // Only fall back to system scope when user unit is missing.
+  if (missing) {
+    const systemRes = await execSystemctlSystem(showArgs);
+    if (systemRes.code === 0) {
+      return { ...buildRuntimeFromShow(systemRes.stdout), detail: "system scope" };
+    }
+  }
   return {
     status: missing ? "stopped" : "unknown",
     detail: detail || undefined,
