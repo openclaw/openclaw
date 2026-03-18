@@ -488,14 +488,24 @@ function computeNextProfileUsageStats(params: {
       now: params.now,
       recomputedUntil: params.now + backoffMs,
     });
-    // Preserve existing cooldown metadata if the cooldown window is still
-    // active; otherwise record the new reason/model.
+    // Update cooldown metadata based on whether the window is still active
+    // and whether the same or a different model is failing.
     const existingCooldownActive =
       typeof params.existing.cooldownUntil === "number" &&
       params.existing.cooldownUntil > params.now;
     if (existingCooldownActive) {
       updatedStats.cooldownReason = params.existing.cooldownReason;
-      updatedStats.cooldownModel = params.existing.cooldownModel;
+      // If a different model fails during an active window, widen the scope
+      // to all models (undefined) so neither model bypasses the cooldown.
+      if (
+        params.existing.cooldownModel &&
+        params.modelId &&
+        params.existing.cooldownModel !== params.modelId
+      ) {
+        updatedStats.cooldownModel = undefined;
+      } else {
+        updatedStats.cooldownModel = params.existing.cooldownModel;
+      }
     } else {
       updatedStats.cooldownReason = params.reason;
       updatedStats.cooldownModel = params.reason === "rate_limit" ? params.modelId : undefined;

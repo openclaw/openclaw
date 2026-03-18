@@ -680,8 +680,9 @@ export async function runAgentTurnWithFallback(params: {
       // Only classify as rate-limit when we have concrete evidence: either
       // the error message itself is a rate-limit string, or the fallback
       // chain exhaustion includes at least one rate_limit / overloaded attempt.
-      // This avoids showing misleading "Rate-limited — ready in ~Xs" messages
-      // for auth, model_not_found, or other non-rate-limit failures.
+      // Using `.some()` intentionally: when any attempt is rate-limited, the
+      // countdown message is more actionable than the generic failure text,
+      // even if other attempts failed for different reasons (auth, etc.).
       const isRateLimit =
         isRateLimitErrorMessage(message) ||
         (isFallbackSummaryError(err) &&
