@@ -65,8 +65,8 @@ Every text output you produce becomes a visible message to the user. Intermediat
   - include at most 3 next checks
   - do not include `Hypotheses:` / `Likely cause:` until at least one successful live signal exists
 - RBAC-aware fallback:
-  - if `pods/exec forbidden` or similar RBAC denial appears, stop retrying `kubectl exec`
-  - fall back to `get`, `describe`, `logs`, events, metrics, traces, repo/config inspection
+  - if a specific RBAC denial appears for a resource, stop retrying that verb
+  - fall back to alternative evidence sources: `get`, `describe`, `logs`, events, metrics, traces, repo/config inspection
 - Before broad repo/code reads, load at least one retrieval surface relevant to the incident:
   - `knowledge-index.md`
   - `runbook-map.md`
@@ -126,7 +126,7 @@ Every text output you produce becomes a visible message to the user. Intermediat
 
 - `ethereum.blocks` uses columns `number` and `time` — NOT `block_number`/`block_time` despite upstream Dune reference docs
 - Forked Anvil runs 429 on public RPCs — always use cached Morpho RPC first: `skills/foundry-evm-debug/scripts/rpc-url.sh <chainId>`
-- `kubectl exec` is RBAC-denied for the SRE serviceaccount — stop retrying, fall back to logs/describe/get/events/metrics
+- `kubectl exec` is available — use it for live container debugging (env vars, process state, filesystem, network); prefer logs/describe first to avoid unnecessary exec sessions
 - Vault KV v2 API path is `secret/data/...` not `secret/...` — wrapper scripts handle this
 - GitHub App token wrapper at `/home/node/.openclaw/bin/gh` overrides regular `gh` — check for it before declaring GitHub blocked
 - Short DB service hostnames from `db-evidence.sh` may need namespace-qualifying when the secret resolves to a cluster-local name
@@ -290,13 +290,12 @@ If `command -v` fails or PATH looks wrong, stop and reply in blocked mode instea
 
 ## RBAC / Access Fallbacks
 
-- If `kubectl exec` is forbidden:
-  - stop retrying exec on more pods
-  - use:
-    - `kubectl --context "$K8S_CONTEXT" -n <ns> get pods`
-    - `kubectl --context "$K8S_CONTEXT" -n <ns> describe pod <pod>`
-    - `kubectl --context "$K8S_CONTEXT" -n <ns> logs <pod> --since=30m`
-    - metrics / traces / repo / chart inspection
+- `kubectl exec` is available for live container debugging:
+  - `kubectl --context "$K8S_CONTEXT" -n <ns> exec <pod> -- <command>`
+  - useful for: env vars (`env | grep`), process state (`ps aux`), filesystem checks (`ls`, `cat`, `df -h`), network (`curl`, `nslookup`), config files
+  - prefer logs/describe first; use exec when logs are insufficient or you need live container state
+  - use exec responsibly: read-only debugging commands preferred, avoid modifying container state in production
+  - for multi-container pods: `kubectl --context "$K8S_CONTEXT" -n <ns> exec <pod> -c <container> -- <command>`
 - If GitHub auth fails:
   - stop retrying clone/fetch loops
   - say exact failing command and continue with local repo/chart evidence if sufficient
@@ -355,6 +354,9 @@ kubectl --context "$K8S_CONTEXT" -n <ns> get events --sort-by=.lastTimestamp | t
 kubectl --context "$K8S_CONTEXT" -n <ns> get deploy/<name> -o jsonpath='{.spec.template.spec.containers[*].image}{"\n"}'  # images
 kubectl --context "$K8S_CONTEXT" -n <ns> rollout history deploy/<name>                       # rollout
 kubectl --context "$K8S_CONTEXT" -n <ns> logs deploy/<name> --since=30m | tail -n 200        # logs
+kubectl --context "$K8S_CONTEXT" -n <ns> exec <pod> -- env | grep -i <pattern>              # live env vars
+kubectl --context "$K8S_CONTEXT" -n <ns> exec <pod> -- cat /path/to/config                  # live config file
+kubectl --context "$K8S_CONTEXT" -n <ns> exec <pod> -- df -h                                # disk usage
 curl -s 'http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090/api/v1/alerts' | jq '.data.alerts[] | select(.state=="firing")'  # firing alerts
 ```
 
