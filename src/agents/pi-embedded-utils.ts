@@ -243,7 +243,6 @@ export function extractAssistantText(msg: AssistantMessage): string {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
           stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
-          { finalText: true },
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
