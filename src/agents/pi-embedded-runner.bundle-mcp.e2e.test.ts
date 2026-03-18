@@ -36,7 +36,7 @@ vi.mock("./pi-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: async () => ({
     tools: [
       {
-        name: "bundle_probe",
+        name: "bundleProbe:bundle_probe",
         label: "bundle_probe",
         description: "Bundle MCP probe",
         parameters: { type: "object", properties: {} },
@@ -68,7 +68,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
       {
         type: "toolCall" as const,
         id: "tc-bundle-mcp-1",
-        name: "bundle_probe",
+        name: "bundleProbe:bundle_probe",
         arguments: {},
       },
     ],

@@ -1,6 +1,9 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logDebug, logWarn } from "../logger.js";
@@ -16,10 +19,13 @@ type BundleMcpToolRuntime = {
   dispose: () => Promise<void>;
 };
 
+type BundleMcpTransportType = "stdio" | "sse" | "streamable-http";
+
 type BundleMcpSession = {
   serverName: string;
   client: Client;
-  transport: StdioClientTransport;
+  transport: Transport;
+  transportType: BundleMcpTransportType;
   detachStderr?: () => void;
 };
 
@@ -86,6 +92,56 @@ function toAgentToolResult(params: {
   };
 }
 
+function resolveHeaders(headers?: Record<string, string>): Record<string, string> {
+  if (!headers) return {};
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    resolved[key] = value.replace(/\$\{(\w+)\}/g, (_, envVar: string) => {
+      const val = process.env[envVar];
+      if (!val) {
+        logWarn(`bundle-mcp: header "${key}": env var ${envVar} is not set`);
+        return "";
+      }
+      return val;
+    });
+  }
+  return resolved;
+}
+
+async function createHttpSession(
+  serverName: string,
+  config: { url: string; transport: string; headers?: Record<string, string> },
+): Promise<{ client: Client; transport: Transport; transportType: BundleMcpTransportType }> {
+  const url = new URL(config.url);
+  const headers = resolveHeaders(config.headers);
+
+  let transport: Transport;
+  let transportType: BundleMcpTransportType;
+
+  if (config.transport === "streamable-http") {
+    transport = new StreamableHTTPClientTransport(url, {
+      requestInit: { headers },
+    });
+    transportType = "streamable-http";
+  } else if (config.transport === "sse") {
+    transport = new SSEClientTransport(url, {
+      requestInit: { headers },
+    });
+    transportType = "sse";
+  } else {
+    throw new Error(
+      `unknown transport "${config.transport}" — use "streamable-http" or "sse"`,
+    );
+  }
+
+  const client = new Client(
+    { name: `openclaw-mcp-${serverName}`, version: "1.0.0" },
+    {},
+  );
+  await client.connect(transport);
+  return { client, transport, transportType };
+}
+
 function attachStderrLogging(serverName: string, transport: StdioClientTransport) {
   const stderr = transport.stderr;
   if (!stderr || typeof stderr.on !== "function") {
@@ -115,8 +171,86 @@ function attachStderrLogging(serverName: string, transport: StdioClientTransport
 
 async function disposeSession(session: BundleMcpSession) {
   session.detachStderr?.();
+  if (session.transportType === "streamable-http") {
+    await (session.transport as StreamableHTTPClientTransport)
+      .terminateSession()
+      .catch(() => {});
+  }
   await session.client.close().catch(() => {});
   await session.transport.close().catch(() => {});
+}
+
+function resolveHttpServerConfig(
+  rawServer: unknown,
+): { ok: true; url: string; transport: string; headers?: Record<string, string> } | { ok: false; reason: string } {
+  if (!isRecord(rawServer)) {
+    return { ok: false, reason: "server config must be an object" };
+  }
+  const url = rawServer.url;
+  if (typeof url !== "string" || url.trim().length === 0) {
+    return { ok: false, reason: "url is missing or empty" };
+  }
+  const transport = rawServer.transport;
+  if (typeof transport !== "string" || (transport !== "sse" && transport !== "streamable-http")) {
+    return {
+      ok: false,
+      reason: `HTTP MCP server requires explicit transport: "streamable-http" or "sse" (got ${JSON.stringify(transport)})`,
+    };
+  }
+  try {
+    new URL(url);
+  } catch {
+    return { ok: false, reason: `invalid URL: ${url}` };
+  }
+  const headers = isRecord(rawServer.headers)
+    ? Object.fromEntries(
+        Object.entries(rawServer.headers)
+          .filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+      )
+    : undefined;
+  return { ok: true, url, transport, headers };
+}
+
+function registerTools(params: {
+  serverName: string;
+  client: Client;
+  listedTools: Awaited<ReturnType<typeof listAllTools>>;
+  reservedNames: Set<string>;
+  tools: AnyAgentTool[];
+  descriptionFallback: string;
+}) {
+  for (const tool of params.listedTools) {
+    const originalName = tool.name.trim();
+    if (!originalName) {
+      continue;
+    }
+    const prefixedName = `${params.serverName}:${originalName}`;
+    const normalizedName = prefixedName.toLowerCase();
+    if (params.reservedNames.has(normalizedName)) {
+      logWarn(
+        `bundle-mcp: skipped tool "${originalName}" from server "${params.serverName}" because the name "${prefixedName}" already exists.`,
+      );
+      continue;
+    }
+    params.reservedNames.add(normalizedName);
+    params.tools.push({
+      name: prefixedName,
+      label: tool.title ?? originalName,
+      description: tool.description?.trim() || params.descriptionFallback,
+      parameters: tool.inputSchema,
+      execute: async (_toolCallId, input) => {
+        const result = (await params.client.callTool({
+          name: originalName,
+          arguments: isRecord(input) ? input : {},
+        })) as CallToolResult;
+        return toAgentToolResult({
+          serverName: params.serverName,
+          toolName: originalName,
+          result,
+        });
+      },
+    });
+  }
 }
 
 export async function createBundleMcpToolRuntime(params: {
@@ -140,6 +274,57 @@ export async function createBundleMcpToolRuntime(params: {
 
   try {
     for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
+      // Detect transport mode: command → stdio, url → HTTP
+      const hasCommand =
+        isRecord(rawServer) && typeof rawServer.command === "string" && rawServer.command.trim().length > 0;
+      const hasUrl =
+        isRecord(rawServer) && typeof rawServer.url === "string" && rawServer.url.trim().length > 0;
+
+      if (hasCommand && hasUrl) {
+        logWarn(
+          `bundle-mcp: skipped server "${serverName}" because it has both "command" and "url" — use one.`,
+        );
+        continue;
+      }
+
+      if (hasUrl) {
+        // HTTP transport path
+        const httpConfig = resolveHttpServerConfig(rawServer);
+        if (!httpConfig.ok) {
+          logWarn(`bundle-mcp: skipped server "${serverName}" because ${httpConfig.reason}.`);
+          continue;
+        }
+
+        try {
+          const { client, transport, transportType } = await createHttpSession(
+            serverName,
+            httpConfig,
+          );
+          const session: BundleMcpSession = {
+            serverName,
+            client,
+            transport,
+            transportType,
+          };
+          const listedTools = await listAllTools(client);
+          sessions.push(session);
+          registerTools({
+            serverName,
+            client,
+            listedTools,
+            reservedNames,
+            tools,
+            descriptionFallback: `Provided by MCP server "${serverName}" (${httpConfig.url}).`,
+          });
+        } catch (error) {
+          logWarn(
+            `bundle-mcp: failed to connect to server "${serverName}" (${httpConfig.url}): ${String(error)}`,
+          );
+        }
+        continue;
+      }
+
+      // Stdio transport path (existing behavior)
       const launch = resolveStdioMcpServerLaunchConfig(rawServer);
       if (!launch.ok) {
         logWarn(`bundle-mcp: skipped server "${serverName}" because ${launch.reason}.`);
@@ -165,6 +350,7 @@ export async function createBundleMcpToolRuntime(params: {
         serverName,
         client,
         transport,
+        transportType: "stdio",
         detachStderr: attachStderrLogging(serverName, transport),
       };
 
@@ -172,38 +358,14 @@ export async function createBundleMcpToolRuntime(params: {
         await client.connect(transport);
         const listedTools = await listAllTools(client);
         sessions.push(session);
-        for (const tool of listedTools) {
-          const normalizedName = tool.name.trim().toLowerCase();
-          if (!normalizedName) {
-            continue;
-          }
-          if (reservedNames.has(normalizedName)) {
-            logWarn(
-              `bundle-mcp: skipped tool "${tool.name}" from server "${serverName}" because the name already exists.`,
-            );
-            continue;
-          }
-          reservedNames.add(normalizedName);
-          tools.push({
-            name: tool.name,
-            label: tool.title ?? tool.name,
-            description:
-              tool.description?.trim() ||
-              `Provided by bundle MCP server "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}).`,
-            parameters: tool.inputSchema,
-            execute: async (_toolCallId, input) => {
-              const result = (await client.callTool({
-                name: tool.name,
-                arguments: isRecord(input) ? input : {},
-              })) as CallToolResult;
-              return toAgentToolResult({
-                serverName,
-                toolName: tool.name,
-                result,
-              });
-            },
-          });
-        }
+        registerTools({
+          serverName,
+          client,
+          listedTools,
+          reservedNames,
+          tools,
+          descriptionFallback: `Provided by bundle MCP server "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}).`,
+        });
       } catch (error) {
         logWarn(
           `bundle-mcp: failed to start server "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}): ${String(error)}`,
