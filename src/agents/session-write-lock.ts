@@ -420,9 +420,32 @@ export async function cleanStaleLockFiles(params: {
     const lockPath = path.join(sessionsDir, entry.name);
     const payload = await readLockPayload(lockPath);
     const inspected = inspectLockPayload(payload, staleMs, nowMs);
+
+    // Derive the normalized session file path for checking HELD_LOCKS.
+    // Lock files are named <session>.jsonl.lock, so strip the .lock suffix.
+    const sessionFile = lockPath.slice(0, -5); // Remove ".lock"
+    const orphanSelfLock = shouldTreatAsOrphanSelfLock({
+      payload,
+      normalizedSessionFile: sessionFile,
+    });
+
+    // Treat orphan self-locks as stale during cleanup. This handles the case
+    // where the gateway process lost in-memory HELD_LOCKS state but the lock
+    // file still references the current PID (e.g., after an API failure that
+    // didn't terminate the process but cleared module-level state).
+    const effectiveInspected = orphanSelfLock
+      ? {
+          ...inspected,
+          stale: true,
+          staleReasons: inspected.staleReasons.includes("orphan-self-pid")
+            ? inspected.staleReasons
+            : [...inspected.staleReasons, "orphan-self-pid"],
+        }
+      : inspected;
+
     const lockInfo: SessionLockInspection = {
       lockPath,
-      ...inspected,
+      ...effectiveInspected,
       removed: false,
     };
 
