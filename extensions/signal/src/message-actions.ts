@@ -1,13 +1,14 @@
-import { createActionGate, jsonResult, readStringParam } from "../../../agents/tools/common.js";
-import { resolveSignalAccount } from "../../../plugin-sdk/account-resolution.js";
 import {
-  listEnabledSignalAccounts,
-  removeReactionSignal,
-  resolveSignalReactionLevel,
-  sendReactionSignal,
-} from "../../../plugin-sdk/signal.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
-import { resolveReactionMessageId } from "./reaction-message-id.js";
+  createActionGate,
+  jsonResult,
+  readStringParam,
+  resolveReactionMessageId,
+  type ChannelMessageActionAdapter,
+  type ChannelMessageActionName,
+} from "openclaw/plugin-sdk/channel-runtime";
+import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
+import { resolveSignalReactionLevel } from "./reaction-level.js";
+import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";
@@ -103,7 +104,6 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "react") {
-      // Check reaction level first
       const reactionLevelInfo = resolveSignalReactionLevel({
         cfg,
         accountId: accountId ?? undefined,
@@ -115,7 +115,6 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         );
       }
 
-      // Also check the action gate for backward compatibility
       const actionConfig = resolveSignalAccount({ cfg, accountId }).config.actions;
       const isActionEnabled = createActionGate(actionConfig);
       if (!isActionEnabled("reactions")) {
