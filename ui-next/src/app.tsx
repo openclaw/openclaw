@@ -89,6 +89,9 @@ const WorkspacesPage = lazy(() =>
 const TasksPage = lazy(() =>
   import("@/pages/orchestration/tasks").then((m) => ({ default: m.TasksPage })),
 );
+const TaskDetailPage = lazy(() =>
+  import("@/pages/orchestration/task-detail").then((m) => ({ default: m.TaskDetailPage })),
+);
 const GoalsPage = lazy(() =>
   import("@/pages/orchestration/goals").then((m) => ({ default: m.GoalsPage })),
 );
@@ -415,6 +418,14 @@ export function App() {
               element={
                 <Suspense fallback={<PageLoader />}>
                   <TasksPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/tasks/:taskId"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <TaskDetailPage />
                 </Suspense>
               }
             />

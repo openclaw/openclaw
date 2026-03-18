@@ -1,14 +1,8 @@
 import { ListTodo, RefreshCw, Loader2 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/ui/custom/data/data-table";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { useGateway } from "@/hooks/use-gateway";
 import { cn } from "@/lib/utils";
 import { useGatewayStore } from "@/store/gateway-store";
@@ -116,97 +110,10 @@ function PriorityBadge({ priority }: { priority: string }) {
   );
 }
 
-const ALL_STATUSES: TaskStatus[] = [
-  "backlog",
-  "todo",
-  "in_progress",
-  "in_review",
-  "done",
-  "blocked",
-  "cancelled",
-];
-
-// ── Detail Dialog ─────────────────────────────────────────────────────
-
-function TaskDetailDialog({
-  task,
-  onClose,
-  onStatusChange,
-}: {
-  task: Task | null;
-  onClose: () => void;
-  onStatusChange: (id: string, status: string) => void;
-}) {
-  if (!task) {
-    return null;
-  }
-  return (
-    <Dialog
-      open={task !== null}
-      onOpenChange={(v) => {
-        if (!v) {
-          onClose();
-        }
-      }}
-    >
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>
-            <span className="font-mono text-sm text-muted-foreground">{task.identifier}</span>{" "}
-            {task.title}
-          </DialogTitle>
-        </DialogHeader>
-        <div className="grid gap-3 py-2 text-sm">
-          <div className="flex gap-4">
-            <div>
-              <span className="text-muted-foreground">Status:</span>{" "}
-              <StatusBadge status={task.status} />
-            </div>
-            <div>
-              <span className="text-muted-foreground">Priority:</span>{" "}
-              <PriorityBadge priority={task.priority} />
-            </div>
-          </div>
-          {task.assigneeAgentId && (
-            <div>
-              <span className="text-muted-foreground">Assignee:</span>{" "}
-              <span className="font-mono text-xs">{task.assigneeAgentId}</span>
-            </div>
-          )}
-          <div>
-            <span className="text-muted-foreground">Updated:</span>{" "}
-            {new Date(task.updatedAt * 1000).toLocaleString()}
-          </div>
-          <div className="grid gap-1.5">
-            <label className="text-sm font-medium text-muted-foreground">Update Status</label>
-            <div className="flex flex-wrap gap-1">
-              {ALL_STATUSES.map((s) => (
-                <Button
-                  key={s}
-                  size="sm"
-                  variant={task.status === s ? "default" : "outline"}
-                  className="h-7 px-2 text-xs"
-                  onClick={() => onStatusChange(task.id, s)}
-                >
-                  {s.replace("_", " ")}
-                </Button>
-              ))}
-            </div>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Close
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ── Main Page ──────────────────────────────────────────────────────────
 
 export function TasksPage() {
+  const navigate = useNavigate();
   const { sendRpc } = useGateway();
   const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
 
@@ -217,7 +124,6 @@ export function TasksPage() {
 
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [workspaceFilter, setWorkspaceFilter] = useState<string>("all");
-  const [detailTask, setDetailTask] = useState<Task | null>(null);
 
   const loadData = useCallback(() => {
     setLoading(true);
@@ -247,15 +153,6 @@ export function TasksPage() {
       loadData();
     }
   }, [isConnected, loadData]);
-
-  const handleStatusChange = (id: string, status: string) => {
-    sendRpc("tasks.update", { id, status })
-      .then(() => {
-        setDetailTask((prev) => (prev?.id === id ? { ...prev, status } : prev));
-        loadData();
-      })
-      .catch((err) => setError(String(err)));
-  };
 
   const columns: Column<Task>[] = [
     {
@@ -378,15 +275,9 @@ export function TasksPage() {
           emptyMessage="No tasks found."
           pageSize={25}
           compact
-          onRowClick={(row) => setDetailTask(row)}
+          onRowClick={(row) => void navigate(`/tasks/${row.id}`)}
         />
       )}
-
-      <TaskDetailDialog
-        task={detailTask}
-        onClose={() => setDetailTask(null)}
-        onStatusChange={handleStatusChange}
-      />
     </div>
   );
 }
