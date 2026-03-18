@@ -129,13 +129,21 @@ function toTextComponent(
 ) {
   return {
     type: "text" as const,
-    text: text.slice(0, 2000),
+    text,
     wrap: true,
     size: (options?.size ?? "md") as const,
     color: options?.color,
     weight: options?.bold ? ("bold" as const) : undefined,
     margin: options?.margin,
   };
+}
+
+function buildAltText(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "OpenClaw message";
+  }
+  return normalized.slice(0, 400);
 }
 
 export function markdownToNaverWorksFlexTemplate(
@@ -166,12 +174,12 @@ export function markdownToNaverWorksFlexTemplate(
 
   if (lines.length > 0) {
     contents.push(toTextComponent(lines[0], { bold: true, color: sectionTitleColor, size: "md" }));
-    for (const line of lines.slice(1, 8)) {
+    for (const line of lines.slice(1)) {
       contents.push(toTextComponent(line, { margin: "sm", color: textColor, size: "md" }));
     }
   }
 
-  for (const table of tables.slice(0, 2)) {
+  for (const table of tables) {
     if (contents.length > 0) {
       contents.push({ type: "separator", margin: "md" });
     }
@@ -184,12 +192,12 @@ export function markdownToNaverWorksFlexTemplate(
         size: "md",
       }),
     );
-    for (const line of tableLines.slice(1, 5)) {
+    for (const line of tableLines.slice(1)) {
       contents.push(toTextComponent(line, { margin: "sm", color: textColor, size: "md" }));
     }
   }
 
-  for (const codeBlock of codeBlocks.slice(0, 2)) {
+  for (const codeBlock of codeBlocks) {
     if (contents.length > 0) {
       contents.push({ type: "separator", margin: "md" });
     }
@@ -202,14 +210,14 @@ export function markdownToNaverWorksFlexTemplate(
         size: "md",
       }),
     );
-    for (const line of codeLines.slice(1, 6)) {
+    for (const line of codeLines.slice(1)) {
       contents.push(toTextComponent(line, { margin: "sm", color: textColor, size: "md" }));
     }
   }
 
   if (contents.length === 0) {
     contents.push(
-      toTextComponent(normalizedText.slice(0, 1000) || trimmed.slice(0, 1000), {
+      toTextComponent(normalizedText || trimmed, {
         color: textColor,
         size: "md",
       }),
@@ -217,7 +225,7 @@ export function markdownToNaverWorksFlexTemplate(
   }
 
   return {
-    altText: normalizedText.slice(0, 200) || "OpenClaw message",
+    altText: buildAltText(normalizedText || trimmed),
     contents: {
       type: "bubble",
       body: {

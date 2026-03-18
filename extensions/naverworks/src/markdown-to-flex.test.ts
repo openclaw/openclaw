@@ -59,4 +59,11 @@ describe("markdownToNaverWorksFlexTemplate", () => {
     expect(serialized).toContain("Code (ts)");
     expect(serialized).toContain("Key: mode | Value: auto-flex");
   });
+
+  it("limits altText to 400 characters for NAVER WORKS flex payloads", () => {
+    const payload = markdownToNaverWorksFlexTemplate(`# ${"a".repeat(500)}`);
+
+    expect(payload).toBeTruthy();
+    expect(payload?.altText.length).toBe(400);
+  });
 });
