@@ -5,6 +5,7 @@ import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
   applyGoogleGeminiModelDefault,
 } from "openclaw/plugin-sdk/provider-models";
+import { createGoogleThinkingPayloadWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import { googleMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
@@ -44,6 +45,7 @@ export default definePluginEntry({
       ],
       resolveDynamicModel: (ctx) =>
         resolveGoogle31ForwardCompatModel({ providerId: "google", ctx }),
+      wrapStreamFn: (ctx) => createGoogleThinkingPayloadWrapper(ctx.streamFn, ctx.thinkingLevel),
       isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     });
     registerGoogleGeminiCliProvider(api);
