@@ -248,6 +248,9 @@ function extractGatewayMemoryProbeUnavailableDetail(
   if (!detail) {
     return null;
   }
-  const match = /^gateway memory probe unavailable:\s*(.+)$/i.exec(detail);
-  return match?.[1]?.trim() || null;
+  const prefix = /^gateway memory probe unavailable:\s*/i;
+  if (!prefix.test(detail)) {
+    return null;
+  }
+  return detail.replace(prefix, "").trim() || null;
 }

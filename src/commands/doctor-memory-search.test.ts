@@ -121,6 +121,27 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not warn when local provider probe timeout includes multiline connection details", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: false,
+        error: [
+          "gateway memory probe unavailable: gateway timeout after 3000ms",
+          "Gateway target: ws://127.0.0.1:8765",
+        ].join("\n"),
+      },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("still warns when local provider probe is unavailable because the gateway is too old", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
