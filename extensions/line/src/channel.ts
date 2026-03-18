@@ -19,6 +19,7 @@ import {
   type LineChannelData,
   type ResolvedLineAccount,
 } from "../api.js";
+import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { getLineRuntime } from "./runtime.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
@@ -127,18 +128,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     },
   },
   groups: {
-    resolveRequireMention: ({ cfg, accountId, groupId }) => {
-      const account = getLineRuntime().channel.line.resolveLineAccount({
-        cfg,
-        accountId: accountId ?? undefined,
-      });
-      const groups = account.config.groups;
-      if (!groups || !groupId) {
-        return false;
-      }
-      const groupConfig = groups[groupId] ?? groups["*"];
-      return groupConfig?.requireMention ?? false;
-    },
+    resolveRequireMention: resolveLineGroupRequireMention,
   },
   messaging: {
     normalizeTarget: (target) => {
