@@ -3,6 +3,8 @@ import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
+} from "openclaw/plugin-sdk/provider-web-search";
+import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
@@ -19,7 +21,6 @@ import {
   resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
   throwWebSearchApiError,
-  type OpenClawConfig,
   type SearchConfigRecord,
   type WebSearchCredentialResolutionSource,
   type WebSearchProviderPlugin,
@@ -70,15 +71,8 @@ type PerplexitySearchApiResponse = {
   }>;
 };
 
-function resolvePerplexityConfig(
-  config?: OpenClawConfig,
-  searchConfig?: SearchConfigRecord,
-): PerplexityConfig {
-  const pluginConfig = resolveProviderWebSearchPluginConfig(config, "perplexity");
-  if (pluginConfig) {
-    return pluginConfig as PerplexityConfig;
-  }
-  const perplexity = (searchConfig as Record<string, unknown> | undefined)?.perplexity;
+function resolvePerplexityConfig(searchConfig?: SearchConfigRecord): PerplexityConfig {
+  const perplexity = searchConfig?.perplexity;
   return perplexity && typeof perplexity === "object" && !Array.isArray(perplexity)
     ? (perplexity as PerplexityConfig)
     : {};
@@ -104,7 +98,7 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
 } {
   const fromConfig = readConfiguredSecretString(
     perplexity?.apiKey,
-    "plugins.entries.perplexity.config.webSearch.apiKey",
+    "tools.web.search.perplexity.apiKey",
   );
   if (fromConfig) {
     return { apiKey: fromConfig, source: "config" };
@@ -319,16 +313,16 @@ async function runPerplexitySearch(params: {
 }
 
 function resolveRuntimeTransport(params: {
-  config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
   resolvedKey?: string;
   keySource: WebSearchCredentialResolutionSource;
   fallbackEnvVar?: string;
 }): PerplexityTransport | undefined {
-  const scoped = resolvePerplexityConfig(
-    params.config,
-    params.searchConfig as SearchConfigRecord | undefined,
-  );
+  const perplexity = params.searchConfig?.perplexity;
+  const scoped =
+    perplexity && typeof perplexity === "object" && !Array.isArray(perplexity)
+      ? (perplexity as { baseUrl?: string; model?: string })
+      : undefined;
   const configuredBaseUrl = typeof scoped?.baseUrl === "string" ? scoped.baseUrl.trim() : "";
   const configuredModel = typeof scoped?.model === "string" ? scoped.model.trim() : "";
   const baseUrl = (() => {
@@ -410,11 +404,10 @@ function createPerplexitySchema(transport?: PerplexityTransport) {
 }
 
 function createPerplexityToolDefinition(
-  config?: OpenClawConfig,
   searchConfig?: SearchConfigRecord,
   runtimeTransport?: PerplexityTransport,
 ): WebSearchProviderToolDefinition {
-  const perplexityConfig = resolvePerplexityConfig(config, searchConfig);
+  const perplexityConfig = resolvePerplexityConfig(searchConfig);
   const schemaTransport =
     runtimeTransport ??
     (perplexityConfig.baseUrl || perplexityConfig.model ? "chat_completions" : undefined);
@@ -431,7 +424,7 @@ function createPerplexityToolDefinition(
         return {
           error: "missing_perplexity_api_key",
           message:
-            "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure plugins.entries.perplexity.config.webSearch.apiKey.",
+            "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
@@ -686,19 +679,38 @@ export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
     },
     resolveRuntimeMetadata: (ctx) => ({
       perplexityTransport: resolveRuntimeTransport({
-        config: ctx.config,
-        searchConfig: ctx.searchConfig,
+        searchConfig: {
+          ...(ctx.searchConfig as SearchConfigRecord | undefined),
+          perplexity: {
+            ...((ctx.searchConfig as SearchConfigRecord | undefined)?.perplexity as
+              | Record<string, unknown>
+              | undefined),
+            ...(resolveProviderWebSearchPluginConfig(ctx.config, "perplexity") as
+              | Record<string, unknown>
+              | undefined),
+          },
+        },
         resolvedKey: ctx.resolvedCredential?.value,
         keySource: ctx.resolvedCredential?.source ?? "missing",
         fallbackEnvVar: ctx.resolvedCredential?.fallbackEnvVar,
       }),
     }),
-    createTool: (ctx) =>
-      createPerplexityToolDefinition(
-        ctx.config,
-        ctx.searchConfig as SearchConfigRecord | undefined,
+    createTool: (ctx) => {
+      const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "perplexity");
+      const searchConfig = {
+        ...(ctx.searchConfig as SearchConfigRecord | undefined),
+        perplexity: {
+          ...((ctx.searchConfig as SearchConfigRecord | undefined)?.perplexity as
+            | Record<string, unknown>
+            | undefined),
+          ...(pluginConfig as Record<string, unknown> | undefined),
+        },
+      } as SearchConfigRecord;
+      return createPerplexityToolDefinition(
+        searchConfig,
         ctx.runtimeMetadata?.perplexityTransport as PerplexityTransport | undefined,
-      ),
+      );
+    },
   };
 }
 
