@@ -271,6 +271,7 @@ jobs:
         with:
           install-bun: "false"
           use-sticky-disk: "false"
+          node-version: "22.x"
 
       - name: Run changed extension tests
         env:
