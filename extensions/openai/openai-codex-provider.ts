@@ -3,7 +3,7 @@ import type {
   ProviderAuthContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/plugin-entry";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import {
   CODEX_CLI_PROFILE_ID,
