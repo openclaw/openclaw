@@ -1722,7 +1722,8 @@ export async function runEmbeddedPiAgent(
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
-          // Reset overload retry counter on success.
+          // Reset overload retry counter after each successful LLM response.
+          // This gives each attempt within the run loop its full retry budget.
           overloadSameProfileRetries = 0;
           if (lastProfileId) {
             await markAuthProfileGood({
