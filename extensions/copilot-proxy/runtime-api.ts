@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/copilot-proxy";
+export * from "../../src/plugin-sdk/copilot-proxy.js";
