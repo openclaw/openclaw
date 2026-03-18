@@ -9,7 +9,7 @@ Focused workflow for diagnosing container and pod failures in Amazon EKS.
 
 ## Requirements
 
-- kubectl (configured with cluster access)
+- kubectl (configured with cluster access, including pods/exec permissions)
 - aws-cli v2 (configured)
 - jq
 
