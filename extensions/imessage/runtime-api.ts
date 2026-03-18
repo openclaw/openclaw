@@ -18,7 +18,10 @@ export {
   normalizeIMessageMessagingTarget,
 } from "../../src/channels/plugins/normalize/imessage.js";
 export { IMessageConfigSchema } from "../../src/config/zod-schema.providers-core.js";
-export { resolveIMessageGroupRequireMention, resolveIMessageGroupToolPolicy } from "./src/group-policy.js";
+export {
+  resolveIMessageGroupRequireMention,
+  resolveIMessageGroupToolPolicy,
+} from "./src/group-policy.js";
 
 export { monitorIMessageProvider } from "./src/monitor.js";
 export type { MonitorIMessageOpts } from "./src/monitor.js";

@@ -210,6 +210,8 @@ export function createXaiWebSearchProvider() {
     signupUrl: "https://console.x.ai/",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 30,
+    credentialPath: "tools.web.search.grok.apiKey",
+    inactiveSecretPaths: ["tools.web.search.grok.apiKey"],
     getCredentialValue: (searchConfig?: Record<string, unknown>) =>
       getScopedCredentialValue(searchConfig, "grok"),
     setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) =>
