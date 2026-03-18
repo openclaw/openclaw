@@ -73,20 +73,50 @@ export function wrapHostEditToolWithPostWriteRecovery(
           if (contentBefore !== undefined && content === contentBefore) {
             throw err;
           }
-          // Only recover when the replacement likely occurred: newText is present and oldText
-          // is no longer present. This avoids false success when upstream threw before writing
-          // (e.g. oldText not found) but the file already contained newText (review feedback).
+          // Use before/after occurrence counts when contentBefore is available. This is
+          // more robust than stripping newText from the content, which can produce false
+          // positives when newText pre-existed in the file (review feedback on #49639).
+          const countOccurrences = (hay: string, needle: string): number => {
+            if (needle.length === 0) {
+              return 0;
+            }
+            let count = 0;
+            let idx = 0;
+            while ((idx = hay.indexOf(needle, idx)) !== -1) {
+              count++;
+              idx += needle.length;
+            }
+            return count;
+          };
+
           const hasNew = content.includes(newText);
-          // When newText contains oldText (e.g. appending/wrapping), a successful edit will
-          // still have oldText in the file (inside the newText). Strip newText occurrences
-          // before checking so we don't get a false positive "stillHasOld" (#49363).
-          const contentForOldCheck =
+          const newTextCountAfter = countOccurrences(content, newText);
+          const newTextCountBefore =
+            contentBefore !== undefined ? countOccurrences(contentBefore, newText) : 0;
+          // Evidence the edit added at least one new occurrence of newText.
+          const editAddedNewText = newTextCountAfter > newTextCountBefore;
+
+          // For oldText checking, strip newText occurrences to handle the case where
+          // oldText is a substring of newText (e.g. appending/wrapping, #49363).
+          const stripNewText = (s: string): string =>
             oldText !== undefined && oldText.length > 0 && newText.includes(oldText)
-              ? content.replaceAll(newText, "")
-              : content;
+              ? s.replaceAll(newText, "")
+              : s;
           const stillHasOld =
-            oldText !== undefined && oldText.length > 0 && contentForOldCheck.includes(oldText);
-          if (hasNew && !stillHasOld) {
+            oldText !== undefined && oldText.length > 0 && stripNewText(content).includes(oldText);
+          // When contentBefore is available, also check that oldText count decreased.
+          const oldTextDecreasedOrAbsent =
+            !stillHasOld &&
+            (contentBefore === undefined ||
+              countOccurrences(stripNewText(content), oldText ?? "") <=
+                countOccurrences(stripNewText(contentBefore), oldText ?? ""));
+
+          // Recover only when we have evidence the edit wrote something new AND oldText
+          // is no longer present (or decreased). When contentBefore is available, require
+          // that newText count increased to avoid false positives from pre-existing newText.
+          const recovered =
+            hasNew && oldTextDecreasedOrAbsent && (contentBefore === undefined || editAddedNewText);
+          if (recovered) {
             return {
               content: [
                 {

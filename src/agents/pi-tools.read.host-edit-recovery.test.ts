@@ -150,6 +150,33 @@ describe("createHostWorkspaceEditTool post-write recovery", () => {
     ).rejects.toThrow("Simulated post-write failure");
   });
 
+  it("rethrows when file had pre-existing newText and tool partially wrote (false success edge case)", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "pre-existing-partial.md");
+    const oldText = "foo";
+    const newText = "foobar";
+    // File has pre-existing newText ("foobar") AND a standalone oldText ("foo").
+    // The mock replaces the first "foo" with "foobar" (partial write), but the
+    // pre-existing "foobar" means replaceAll(newText,"") would strip both, hiding
+    // that oldText was never fully handled. With count-based comparison this correctly
+    // detects the edit added newText occurrences, so this is actually a valid recovery.
+    // However, the second standalone "foo" also gets replaced by the mock (it replaces
+    // first occurrence only), so we test a variant where oldText remains.
+    //
+    // Scenario: file has "foobar and foo and foo" — mock replaces first "foo" → "foobar"
+    // Result: "foobarbar and foo and foo" — wait, that's wrong.
+    // Actually the mock does cur.replace(oldText, newText) which replaces first occurrence.
+    // "foobar and foo and foo" — first "foo" is inside "foobar", so replace("foo","foobar")
+    // gives "foobarbar and foo and foo". The file changed but old "foo" remains.
+    // This should rethrow.
+    await fs.writeFile(filePath, `${newText} and ${oldText} and ${oldText}`, "utf-8");
+
+    const tool = createHostWorkspaceEditTool(tmpDir);
+    await expect(
+      tool.execute("call-1", { path: filePath, oldText, newText }, undefined),
+    ).rejects.toThrow("Simulated post-write failure");
+  });
+
   it("rethrows when oldText is substring of newText and file already had newText (pre-write failure)", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
     const filePath = path.join(tmpDir, "pre-existing-new.md");
