@@ -26,6 +26,13 @@ export type PluginInspectShape =
   | "hybrid-capability"
   | "non-capability";
 
+export type PluginCompatibilityNotice = {
+  pluginId: string;
+  code: "legacy-before-agent-start" | "hook-only";
+  severity: "warn" | "info";
+  message: string;
+};
+
 export type PluginInspectReport = {
   workspaceDir?: string;
   plugin: PluginRegistry["plugins"][number];
@@ -61,7 +68,33 @@ export type PluginInspectReport = {
     hasAllowedModelsConfig: boolean;
   };
   usesLegacyBeforeAgentStart: boolean;
+  compatibility: PluginCompatibilityNotice[];
 };
+
+function buildCompatibilityNoticesForInspect(
+  inspect: Pick<PluginInspectReport, "plugin" | "shape" | "usesLegacyBeforeAgentStart">,
+): PluginCompatibilityNotice[] {
+  const warnings: PluginCompatibilityNotice[] = [];
+  if (inspect.usesLegacyBeforeAgentStart) {
+    warnings.push({
+      pluginId: inspect.plugin.id,
+      code: "legacy-before-agent-start",
+      severity: "warn",
+      message:
+        "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+    });
+  }
+  if (inspect.shape === "hook-only") {
+    warnings.push({
+      pluginId: inspect.plugin.id,
+      code: "hook-only",
+      severity: "info",
+      message:
+        "is hook-only; this remains supported for compatibility, but it has not migrated to explicit capability registration.",
+    });
+  }
+  return warnings;
+}
 
 const log = createSubsystemLogger("plugins");
 
@@ -176,21 +209,30 @@ export function buildPluginInspectReport(params: {
   const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
   const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
   const capabilityCount = capabilities.length;
+  const shape = deriveInspectShape({
+    capabilityCount,
+    typedHookCount: typedHooks.length,
+    customHookCount: customHooks.length,
+    toolCount: tools.length,
+    commandCount: plugin.commands.length,
+    cliCount: plugin.cliCommands.length,
+    serviceCount: plugin.services.length,
+    gatewayMethodCount: plugin.gatewayMethods.length,
+    httpRouteCount: plugin.httpRoutes,
+  });
 
+  const usesLegacyBeforeAgentStart = typedHooks.some(
+    (entry) => entry.name === "before_agent_start",
+  );
+  const compatibility = buildCompatibilityNoticesForInspect({
+    plugin,
+    shape,
+    usesLegacyBeforeAgentStart,
+  });
   return {
     workspaceDir: report.workspaceDir,
     plugin,
-    shape: deriveInspectShape({
-      capabilityCount,
-      typedHookCount: typedHooks.length,
-      customHookCount: customHooks.length,
-      toolCount: tools.length,
-      commandCount: plugin.commands.length,
-      cliCount: plugin.cliCommands.length,
-      serviceCount: plugin.services.length,
-      gatewayMethodCount: plugin.gatewayMethods.length,
-      httpRouteCount: plugin.httpRoutes,
-    }),
+    shape,
     capabilityMode: capabilityCount === 0 ? "none" : capabilityCount === 1 ? "plain" : "hybrid",
     capabilityCount,
     capabilities,
@@ -209,7 +251,8 @@ export function buildPluginInspectReport(params: {
       allowedModels: [...(policyEntry?.subagent?.allowedModels ?? [])],
       hasAllowedModelsConfig: policyEntry?.subagent?.hasAllowedModelsConfig === true,
     },
-    usesLegacyBeforeAgentStart: typedHooks.some((entry) => entry.name === "before_agent_start"),
+    usesLegacyBeforeAgentStart,
+    compatibility,
   };
 }
 
@@ -237,4 +280,24 @@ export function buildAllPluginInspectReports(params?: {
       }),
     )
     .filter((entry): entry is PluginInspectReport => entry !== null);
+}
+
+export function buildPluginCompatibilityWarnings(params?: {
+  config?: ReturnType<typeof loadConfig>;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  report?: PluginStatusReport;
+}): string[] {
+  return buildAllPluginInspectReports(params).flatMap((inspect) =>
+    inspect.compatibility.map((warning) => `${warning.pluginId} ${warning.message}`),
+  );
+}
+
+export function buildPluginCompatibilityNotices(params?: {
+  config?: ReturnType<typeof loadConfig>;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  report?: PluginStatusReport;
+}): PluginCompatibilityNotice[] {
+  return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
 }
