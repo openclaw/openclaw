@@ -1,5 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  fetchTelegramChatId,
+  inspectTelegramAccount,
+  isNumericTelegramUserId,
+  listTelegramAccountIds,
+  normalizeTelegramAllowFromEntry,
+} from "openclaw/plugin-sdk/telegram";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
@@ -23,13 +30,6 @@ import {
 } from "../infra/exec-safe-bin-trust.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveTelegramAccount } from "../plugin-sdk/account-resolution.js";
-import {
-  fetchTelegramChatId,
-  inspectTelegramAccount,
-  isNumericTelegramUserId,
-  listTelegramAccountIds,
-  normalizeTelegramAllowFromEntry,
-} from "../plugin-sdk/telegram.js";
 import {
   formatChannelAccountsDefaultPath,
   formatSetExplicitDefaultInstruction,
