@@ -31,6 +31,9 @@
       "localPath": "extensions/matrix",
       "defaultChoice": "npm"
     },
+    "release": {
+      "publishToNpm": true
+    },
     "releaseChecks": {
       "rootDependencyMirrorAllowlist": [
         "@matrix-org/matrix-sdk-crypto-nodejs",
