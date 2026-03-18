@@ -56,6 +56,7 @@ const matrixSdk = await import("openclaw/plugin-sdk/matrix");
 const mattermostSdk = await import("openclaw/plugin-sdk/mattermost");
 const nextcloudTalkSdk = await import("openclaw/plugin-sdk/nextcloud-talk");
 const twitchSdk = await import("openclaw/plugin-sdk/twitch");
+const accountHelpersSdk = await import("openclaw/plugin-sdk/account-helpers");
 
 describe("plugin-sdk subpath exports", () => {
   it("exports compat helpers", () => {
@@ -81,6 +82,10 @@ describe("plugin-sdk subpath exports", () => {
   it("exports routing helpers from the dedicated subpath", () => {
     expect(typeof routingSdk.buildAgentSessionKey).toBe("function");
     expect(typeof routingSdk.resolveThreadSessionKeys).toBe("function");
+  });
+
+  it("exports account helper builders from the dedicated subpath", () => {
+    expect(typeof accountHelpersSdk.createAccountListHelpers).toBe("function");
   });
 
   it("exports runtime helpers from the dedicated subpath", () => {
