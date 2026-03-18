@@ -169,6 +169,7 @@ export const MessagesSchema = z
             error: z.string().optional(),
             stallSoft: z.string().optional(),
             stallHard: z.string().optional(),
+            compacting: z.string().optional(),
           })
           .strict()
           .optional(),
@@ -199,6 +200,8 @@ export const CommandsSchema = z
     bash: z.boolean().optional(),
     bashForegroundMs: z.number().int().min(0).max(30_000).optional(),
     config: z.boolean().optional(),
+    mcp: z.boolean().optional(),
+    plugins: z.boolean().optional(),
     debug: z.boolean().optional(),
     restart: z.boolean().optional().default(true),
     useAccessGroups: z.boolean().optional(),

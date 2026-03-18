@@ -15,9 +15,43 @@ vi.mock("./runtime.js", () => ({
 
 import { slackPlugin } from "./channel.js";
 
+async function getSlackConfiguredState(cfg: OpenClawConfig) {
+  const account = slackPlugin.config.resolveAccount(cfg, "default");
+  return {
+    configured: slackPlugin.config.isConfigured?.(account, cfg),
+    snapshot: await slackPlugin.status?.buildAccountSnapshot?.({
+      account,
+      cfg,
+      runtime: undefined,
+    }),
+  };
+}
+
 describe("slackPlugin actions", () => {
   it("prefers session lookup for announce target routing", () => {
     expect(slackPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+
+  it("owns unified message tool discovery", () => {
+    const discovery = slackPlugin.actions?.describeMessageTool({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+            capabilities: { interactiveReplies: true },
+          },
+        },
+      },
+    });
+
+    expect(discovery?.actions).toContain("send");
+    expect(discovery?.capabilities).toEqual(expect.arrayContaining(["blocks", "interactive"]));
+    expect(discovery?.schema).toMatchObject({
+      properties: {
+        blocks: expect.any(Object),
+      },
+    });
   });
 
   it("forwards read threadId to Slack action handler", async () => {
@@ -137,6 +171,46 @@ describe("slackPlugin outbound", () => {
   });
 });
 
+describe("slackPlugin agentPrompt", () => {
+  it("tells agents interactive replies are disabled by default", () => {
+    const hints = slackPlugin.agentPrompt?.messageToolHints?.({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+          },
+        },
+      },
+    });
+
+    expect(hints).toEqual([
+      "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",
+    ]);
+  });
+
+  it("shows Slack interactive reply directives when enabled", () => {
+    const hints = slackPlugin.agentPrompt?.messageToolHints?.({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+            capabilities: { interactiveReplies: true },
+          },
+        },
+      },
+    });
+
+    expect(hints).toContain(
+      "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
+    );
+    expect(hints).toContain(
+      "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
+    );
+  });
+});
+
 describe("slackPlugin config", () => {
   it("treats HTTP mode accounts with bot token + signing secret as configured", async () => {
     const cfg: OpenClawConfig = {
@@ -149,13 +223,7 @@ describe("slackPlugin config", () => {
       },
     };
 
-    const account = slackPlugin.config.resolveAccount(cfg, "default");
-    const configured = slackPlugin.config.isConfigured?.(account, cfg);
-    const snapshot = await slackPlugin.status?.buildAccountSnapshot?.({
-      account,
-      cfg,
-      runtime: undefined,
-    });
+    const { configured, snapshot } = await getSlackConfiguredState(cfg);
 
     expect(configured).toBe(true);
     expect(snapshot?.configured).toBe(true);
@@ -171,13 +239,7 @@ describe("slackPlugin config", () => {
       },
     };
 
-    const account = slackPlugin.config.resolveAccount(cfg, "default");
-    const configured = slackPlugin.config.isConfigured?.(account, cfg);
-    const snapshot = await slackPlugin.status?.buildAccountSnapshot?.({
-      account,
-      cfg,
-      runtime: undefined,
-    });
+    const { configured, snapshot } = await getSlackConfiguredState(cfg);
 
     expect(configured).toBe(false);
     expect(snapshot?.configured).toBe(false);

@@ -23,6 +23,8 @@ The default workspace layout uses two memory layers:
   - Read today + yesterday at session start.
 - `MEMORY.md` (optional)
   - Curated long-term memory.
+  - If both `MEMORY.md` and `memory.md` exist at the workspace root, OpenClaw only loads `MEMORY.md`.
+  - Lowercase `memory.md` is only used as a fallback when `MEMORY.md` is absent.
   - **Only load in the main, private session** (never in group contexts).
 
 These files live under the workspace (`agents.defaults.workspace`, default

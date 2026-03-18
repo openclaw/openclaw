@@ -1,6 +1,7 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -8,27 +9,6 @@ import {
   withTempCronHome,
   writeSessionStoreEntries,
 } from "./isolated-agent.test-harness.js";
-
-function makeDeps() {
-  return {
-    sendMessageSlack: vi.fn(),
-    sendMessageWhatsApp: vi.fn(),
-    sendMessageTelegram: vi.fn(),
-    sendMessageDiscord: vi.fn(),
-    sendMessageSignal: vi.fn(),
-    sendMessageIMessage: vi.fn(),
-  };
-}
-
-function mockEmbeddedOk() {
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: {
-      durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  });
-}
 
 function lastEmbeddedLane(): string | undefined {
   const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
@@ -45,11 +25,11 @@ async function runLaneCase(home: string, lane?: string) {
       lastTo: "",
     },
   });
-  mockEmbeddedOk();
+  mockAgentPayloads([{ text: "ok" }]);
 
   await runCronIsolatedAgentTurn({
     cfg: makeCfg(home, storePath),
-    deps: makeDeps(),
+    deps: createCliDeps(),
     job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
     message: "do it",
     sessionKey: "cron:job-1",
