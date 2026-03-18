@@ -433,6 +433,119 @@ describe("buildButtonAttachments", () => {
   });
 });
 
+describe("sanitizeActionId (via buildButtonAttachments)", () => {
+  beforeEach(() => {
+    setInteractionSecret("test-bot-token");
+  });
+
+  it("strips colons from action ID", () => {
+    const result = buildButtonAttachments({
+      callbackUrl: "http://localhost/cb",
+      buttons: [{ id: "softgate:approve:0001", name: "Approve" }],
+    });
+    const action = result[0].actions![0];
+    expect(action.id).toBe("softgateapprove0001");
+    expect(action.integration.context.action_id).toBe("softgateapprove0001");
+  });
+
+  it("strips hyphens and underscores (legacy behaviour preserved)", () => {
+    const result = buildButtonAttachments({
+      callbackUrl: "http://localhost/cb",
+      buttons: [{ id: "my-action_id", name: "Do It" }],
+    });
+    const action = result[0].actions![0];
+    expect(action.id).toBe("myactionid");
+  });
+
+  it("is a no-op on alphanumeric-only IDs", () => {
+    const result = buildButtonAttachments({
+      callbackUrl: "http://localhost/cb",
+      buttons: [{ id: "alreadySafe123", name: "Go" }],
+    });
+    const action = result[0].actions![0];
+    expect(action.id).toBe("alreadySafe123");
+  });
+
+  it("sanitizes unicode/non-ascii characters", () => {
+    const result = buildButtonAttachments({
+      callbackUrl: "http://localhost/cb",
+      buttons: [{ id: "héllo", name: "Hello" }],
+    });
+    const action = result[0].actions![0];
+    // "h", "l", "l", "o" remain; "é" is stripped
+    expect(action.id).toBe("hllo");
+  });
+
+  it("generates deterministic fallback for all-punctuation ID", () => {
+    const result = buildButtonAttachments({
+      callbackUrl: "http://localhost/cb",
+      buttons: [{ id: ":::", name: "Broken" }],
+    });
+    const action = result[0].actions![0];
+    // safeId would be "" → fallback = "action" + shortHash(":::")
+    expect(action.id).toMatch(/^action[0-9a-f]{8}$/);
+    expect(action.integration.context.action_id).toBe(action.id);
+  });
+
+  it("generates deterministic fallback for empty ID", () => {
+    const result = buildButtonAttachments({
+      callbackUrl: "http://localhost/cb",
+      buttons: [{ id: "", name: "Empty" }],
+    });
+    const action = result[0].actions![0];
+    expect(action.id).toMatch(/^action[0-9a-f]{8}$/);
+    expect(action.integration.context.action_id).toBe(action.id);
+  });
+
+  it("all produced action IDs match /^[a-zA-Z0-9]+$/", () => {
+    const result = buildButtonAttachments({
+      callbackUrl: "http://localhost/cb",
+      buttons: [
+        { id: "normal", name: "N" },
+        { id: "colon:test", name: "C" },
+        { id: "---", name: "D" },
+        { id: "softgate:approve:0001-watchdog", name: "A" },
+      ],
+    });
+    for (const action of result[0].actions!) {
+      expect(action.id).toMatch(/^[a-zA-Z0-9]+$/);
+    }
+  });
+
+  it("actions[].id equals integration.context.action_id for all buttons", () => {
+    const result = buildButtonAttachments({
+      callbackUrl: "http://localhost/cb",
+      buttons: [
+        { id: "approve:softgate", name: "Approve" },
+        { id: "reject_all", name: "Reject" },
+      ],
+    });
+    for (const action of result[0].actions!) {
+      expect(action.id).toBe(action.integration.context.action_id);
+    }
+  });
+
+  it("collision case: two IDs that sanitize to same value produce unique action IDs", () => {
+    // "a:b" and "ab" both sanitize to "ab"
+    const result = buildButtonAttachments({
+      callbackUrl: "http://localhost/cb",
+      buttons: [
+        { id: "a:b", name: "First" },
+        { id: "ab", name: "Second" },
+      ],
+    });
+    const ids = result[0].actions!.map((a) => a.id);
+    // Both must be unique
+    expect(new Set(ids).size).toBe(2);
+    // Both must be alphanumeric-only
+    for (const id of ids) {
+      expect(id).toMatch(/^[a-zA-Z0-9]+$/);
+    }
+    // First must be "ab" (no collision yet when processed)
+    expect(ids[0]).toBe("ab");
+  });
+});
+
 describe("createMattermostInteractionHandler", () => {
   beforeEach(() => {
     setMattermostRuntime({

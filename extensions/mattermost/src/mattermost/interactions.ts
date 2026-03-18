@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isTrustedProxyAddress, resolveClientIp, type OpenClawConfig } from "../runtime-api.js";
 import { getMattermostRuntime } from "../runtime.js";
@@ -256,13 +256,20 @@ export type MattermostAttachment = {
  * button click (Mattermost's recommended security pattern).
  */
 /**
- * Sanitize a button ID so Mattermost's action router can match it.
- * Mattermost uses the action ID in the URL path `/api/v4/posts/{id}/actions/{actionId}`
- * and IDs containing hyphens or underscores break the server-side routing.
+ * Sanitize a button ID to alphanumeric-only for use as a Mattermost URL path segment.
+ * Mattermost uses the action ID in `/api/v4/posts/{id}/actions/{actionId}`.
+ * Colons, hyphens, underscores, and other non-alphanumeric characters break routing.
  * See: https://github.com/mattermost/mattermost/issues/25747
+ *
+ * @returns alphanumeric-only string (may be empty if input is all non-alphanumeric)
  */
 function sanitizeActionId(id: string): string {
-  return id.replace(/[-_]/g, "");
+  return id.replace(/[^a-zA-Z0-9]/g, "");
+}
+
+/** Return the first 8 hex characters of SHA-256(input). */
+function shortHash(input: string): string {
+  return createHash("sha256").update(input).digest("hex").slice(0, 8);
 }
 
 export function buildButtonAttachments(params: {
@@ -276,8 +283,32 @@ export function buildButtonAttachments(params: {
   }>;
   text?: string;
 }): MattermostAttachment[] {
+  const seenIds = new Set<string>();
+
   const actions: MattermostButton[] = params.buttons.map((btn) => {
-    const safeId = sanitizeActionId(btn.id);
+    let safeId = sanitizeActionId(btn.id);
+
+    // Guard: empty after sanitization → deterministic fallback
+    if (safeId === "") {
+      safeId = "action" + shortHash(btn.id);
+    }
+
+    // Guard: within-message collision → append hash suffix (and counter if needed)
+    if (seenIds.has(safeId)) {
+      const candidate = safeId + shortHash(btn.id);
+      if (!seenIds.has(candidate)) {
+        safeId = candidate;
+      } else {
+        // Pathological: same hash collision, use counter
+        let counter = 2;
+        while (seenIds.has(safeId + String(counter))) {
+          counter++;
+        }
+        safeId = safeId + String(counter);
+      }
+    }
+    seenIds.add(safeId);
+
     const context: Record<string, unknown> = {
       action_id: safeId,
       ...btn.context,
