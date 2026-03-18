@@ -85,7 +85,7 @@ Preferred path: use `db-evidence.sh`; use ad hoc SQL only when the wrapper canno
 Every DB-related reply must include:
 
 ```
-db=<host:port/dbname> schema_check=<ok|failed> query_check=<ok|failed> rows=<n>
+db=<host:port/dbname> schema_check=<ok|failed> query_check=<ok|failed|error_msg> rows=<n|N/A>
 ```
 
 ### If Live Query Cannot Run

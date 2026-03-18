@@ -11,6 +11,7 @@ set -eu
 
 DATADIR="${CLAUDE_PLUGIN_DATA:-${XDG_RUNTIME_DIR:-/tmp}/openclaw-sre-data}"
 LOGFILE="$DATADIR/skill-usage.jsonl"
+umask 077
 mkdir -p "$DATADIR"
 
 case "${1:---help}" in
@@ -43,14 +44,18 @@ case "${1:---help}" in
       KEY="reference"
     fi
 
-    # Build JSON safely using jq to escape special characters
+    # Build JSON safely using jq -c for compact single-line JSONL output
+    if ! command -v jq >/dev/null 2>&1; then
+      printf 'skill-usage-log: jq is required but not found\n' >&2
+      exit 127
+    fi
     if [ -n "$DURATION" ] && printf '%s' "$DURATION" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
-      ENTRY=$(jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      ENTRY=$(jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --arg key "$KEY" --arg name "$NAME" --arg ctx "$CONTEXT" \
         --argjson dur "$DURATION" \
         '{ts: $ts, ($key): $name, context: $ctx, duration_sec: $dur}')
     else
-      ENTRY=$(jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      ENTRY=$(jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --arg key "$KEY" --arg name "$NAME" --arg ctx "$CONTEXT" \
         '{ts: $ts, ($key): $name, context: $ctx}')
     fi

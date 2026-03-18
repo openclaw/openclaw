@@ -6,7 +6,7 @@ metadata: { "openclaw": { "emoji": "✅" } }
 
 # sre-verify
 
-Companion skill to **morpho-sre**. Use this skill after incident remediation,
+Companion skill to `morpho-sre`. Use this skill after incident remediation,
 post-deploy, or post-PR-merge to confirm that the fix is effective and no
 regressions have been introduced.
 

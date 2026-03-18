@@ -205,4 +205,4 @@ linear-ticket-api.sh issue add-attachment PLA-318 https://github.com/morpho-org/
 
 ## Detailed Guides
 
-Each wrapper has additional context in the parent `morpho-sre` SKILL.md under its dedicated section. For Dune specifically, see `morpho-sre/references/dune/` for comprehensive DuneSQL references.
+Each wrapper has a detailed reference file under `morpho-sre/references/` (e.g. `erpc-operations.md`, `grafana-operations.md`, `api-wrappers-guide.md`). For Dune specifically, see `morpho-sre/references/dune/` for comprehensive DuneSQL references.
