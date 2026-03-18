@@ -7,10 +7,10 @@ import {
   readStringArrayParam,
   readStringOrNumberParam,
   readStringParam,
-} from "../../../src/agents/tools/common.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { TelegramActionConfig } from "../../../src/config/types.telegram.js";
-import { resolvePollMaxSelections } from "../../../src/polls.js";
+  resolvePollMaxSelections,
+  type OpenClawConfig,
+  type TelegramActionConfig,
+} from "openclaw/plugin-sdk/telegram-core";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import type { TelegramButtonStyle, TelegramInlineButtons } from "./button-types.js";
 import {

@@ -45,6 +45,11 @@ function buildPluginInspectJson(params: {
   }
   return {
     inspect,
+    compatibilityWarnings: inspect.compatibility.map((warning) => ({
+      code: warning.code,
+      severity: warning.severity,
+      message: `${warning.pluginId} ${warning.message}`,
+    })),
     install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
   };
 }
@@ -61,6 +66,11 @@ function buildAllPluginInspectJson(params: {
     report: params.report,
   }).map((inspect) => ({
     inspect,
+    compatibilityWarnings: inspect.compatibility.map((warning) => ({
+      code: warning.code,
+      severity: warning.severity,
+      message: `${warning.pluginId} ${warning.message}`,
+    })),
     install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
   }));
 }
