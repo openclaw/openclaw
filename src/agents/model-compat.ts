@@ -86,6 +86,10 @@ function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-
   return model.api === "anthropic-messages";
 }
 
+function shouldKeepStreamingUsageOptInDisabled(model: Model<"openai-completions">): boolean {
+  return model.provider === "moonshot" || model.provider === "modelstudio";
+}
+
 /**
  * pi-ai constructs the Anthropic API endpoint as `${baseUrl}/v1/messages`.
  * If a user configures `baseUrl` with a trailing `/v1` (e.g. the previously
@@ -132,6 +136,7 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   }
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
   const hasStreamingUsageOverride = compat?.supportsUsageInStreaming !== undefined;
+  const defaultStreamingUsage = shouldKeepStreamingUsageOptInDisabled(model) ? false : true;
   const targetStrictMode = compat?.supportsStrictMode ?? false;
   if (
     compat?.supportsDeveloperRole !== undefined &&
@@ -148,12 +153,12 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
       ? {
           ...compat,
           supportsDeveloperRole: forcedDeveloperRole || false,
-          ...(hasStreamingUsageOverride ? {} : { supportsUsageInStreaming: true }),
+          ...(hasStreamingUsageOverride ? {} : { supportsUsageInStreaming: defaultStreamingUsage }),
           supportsStrictMode: targetStrictMode,
         }
       : {
           supportsDeveloperRole: false,
-          supportsUsageInStreaming: true,
+          supportsUsageInStreaming: defaultStreamingUsage,
           supportsStrictMode: false,
         },
   } as typeof model;

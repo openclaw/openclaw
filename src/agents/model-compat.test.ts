@@ -298,6 +298,28 @@ describe("normalizeModelCompat", () => {
     });
   });
 
+  it("keeps supportsUsageInStreaming off for non-native moonshot endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "moonshot",
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model as Model<Api>);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+  });
+
+  it("keeps supportsUsageInStreaming off for non-native modelstudio endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "modelstudio",
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model as Model<Api>);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+  });
+
   it("forces supportsStrictMode off for z.ai models", () => {
     expectSupportsStrictModeForcedOff();
   });
