@@ -12,6 +12,7 @@ import type {
   ChannelMessageActionContext,
   ChannelMessageActionDiscoveryContext,
   ChannelMessageActionName,
+  ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "./types.js";
 
@@ -31,7 +32,7 @@ const loggedMessageActionErrors = new Set<string>();
 
 function logMessageActionError(params: {
   pluginId: string;
-  operation: "listActions" | "getCapabilities";
+  operation: "describeMessageTool" | "getCapabilities" | "getToolSchema" | "listActions";
   error: unknown;
 }) {
   const message = params.error instanceof Error ? params.error.message : String(params.error);
@@ -64,22 +65,21 @@ function runListActionsSafely(params: {
   }
 }
 
-export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
-  const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
-  for (const plugin of listChannelPlugins()) {
-    if (!plugin.actions?.listActions) {
-      continue;
-    }
-    const list = runListActionsSafely({
-      pluginId: plugin.id,
-      context: { cfg },
-      listActions: plugin.actions.listActions,
+function describeMessageToolSafely(params: {
+  pluginId: string;
+  context: ChannelMessageActionDiscoveryContext;
+  describeMessageTool: NonNullable<ChannelActions["describeMessageTool"]>;
+}): ChannelMessageToolDiscovery | null {
+  try {
+    return params.describeMessageTool(params.context) ?? null;
+  } catch (error) {
+    logMessageActionError({
+      pluginId: params.pluginId,
+      operation: "describeMessageTool",
+      error,
     });
-    for (const action of list) {
-      actions.add(action);
-    }
+    return null;
   }
-  return Array.from(actions);
 }
 
 function listCapabilities(params: {
@@ -99,17 +99,136 @@ function listCapabilities(params: {
   }
 }
 
-export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
-  const capabilities = new Set<ChannelMessageCapability>();
+function normalizeToolSchemaContributions(
+  value:
+    | ChannelMessageToolSchemaContribution
+    | ChannelMessageToolSchemaContribution[]
+    | null
+    | undefined,
+): ChannelMessageToolSchemaContribution[] {
+  if (!value) {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
+}
+
+type ResolvedChannelMessageActionDiscovery = {
+  actions: ChannelMessageActionName[];
+  capabilities: readonly ChannelMessageCapability[];
+  schemaContributions: ChannelMessageToolSchemaContribution[];
+};
+
+export function resolveMessageActionDiscoveryForPlugin(params: {
+  pluginId: string;
+  actions?: ChannelActions;
+  context: ChannelMessageActionDiscoveryContext;
+  includeActions?: boolean;
+  includeCapabilities?: boolean;
+  includeSchema?: boolean;
+}): ResolvedChannelMessageActionDiscovery {
+  const adapter = params.actions;
+  if (!adapter) {
+    return {
+      actions: [],
+      capabilities: [],
+      schemaContributions: [],
+    };
+  }
+
+  if (adapter.describeMessageTool) {
+    const described = describeMessageToolSafely({
+      pluginId: params.pluginId,
+      context: params.context,
+      describeMessageTool: adapter.describeMessageTool,
+    });
+    return {
+      actions:
+        params.includeActions && Array.isArray(described?.actions) ? [...described.actions] : [],
+      capabilities:
+        params.includeCapabilities && Array.isArray(described?.capabilities)
+          ? described.capabilities
+          : [],
+      schemaContributions: params.includeSchema
+        ? normalizeToolSchemaContributions(described?.schema)
+        : [],
+    };
+  }
+
+  return {
+    actions:
+      params.includeActions && adapter.listActions
+        ? runListActionsSafely({
+            pluginId: params.pluginId,
+            context: params.context,
+            listActions: adapter.listActions,
+          })
+        : [],
+    capabilities:
+      params.includeCapabilities && adapter.getCapabilities
+        ? listCapabilities({
+            pluginId: params.pluginId,
+            actions: adapter,
+            context: params.context,
+          })
+        : [],
+    schemaContributions:
+      params.includeSchema && adapter.getToolSchema
+        ? normalizeToolSchemaContributions(
+            runGetToolSchemaSafely({
+              pluginId: params.pluginId,
+              context: params.context,
+              getToolSchema: adapter.getToolSchema,
+            }),
+          )
+        : [],
+  };
+}
+
+export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
+  const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
   for (const plugin of listChannelPlugins()) {
-    if (!plugin.actions) {
-      continue;
-    }
-    for (const capability of listCapabilities({
+    for (const action of resolveMessageActionDiscoveryForPlugin({
       pluginId: plugin.id,
       actions: plugin.actions,
       context: { cfg },
-    })) {
+      includeActions: true,
+    }).actions) {
+      actions.add(action);
+    }
+  }
+  return Array.from(actions);
+}
+
+function runGetToolSchemaSafely(params: {
+  pluginId: string;
+  context: ChannelMessageActionDiscoveryContext;
+  getToolSchema: NonNullable<ChannelActions["getToolSchema"]>;
+}):
+  | ChannelMessageToolSchemaContribution
+  | ChannelMessageToolSchemaContribution[]
+  | null
+  | undefined {
+  try {
+    return params.getToolSchema(params.context);
+  } catch (error) {
+    logMessageActionError({
+      pluginId: params.pluginId,
+      operation: "getToolSchema",
+      error,
+    });
+    return null;
+  }
+}
+
+export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
+  const capabilities = new Set<ChannelMessageCapability>();
+  for (const plugin of listChannelPlugins()) {
+    for (const capability of resolveMessageActionDiscoveryForPlugin({
+      pluginId: plugin.id,
+      actions: plugin.actions,
+      context: { cfg },
+      includeCapabilities: true,
+    }).capabilities) {
       capabilities.add(capability);
     }
   }
@@ -135,39 +254,14 @@ export function listChannelMessageCapabilitiesForChannel(params: {
   const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
   return plugin?.actions
     ? Array.from(
-        listCapabilities({
+        resolveMessageActionDiscoveryForPlugin({
           pluginId: plugin.id,
           actions: plugin.actions,
           context: createMessageActionDiscoveryContext(params),
-        }),
+          includeCapabilities: true,
+        }).capabilities,
       )
     : [];
-}
-
-function logMessageActionSchemaError(params: { pluginId: string; error: unknown }) {
-  const message = params.error instanceof Error ? params.error.message : String(params.error);
-  const key = `${params.pluginId}:getToolSchema:${message}`;
-  if (loggedMessageActionErrors.has(key)) {
-    return;
-  }
-  loggedMessageActionErrors.add(key);
-  const stack = params.error instanceof Error && params.error.stack ? params.error.stack : null;
-  defaultRuntime.error?.(
-    `[message-actions] ${params.pluginId}.actions.getToolSchema failed: ${stack ?? message}`,
-  );
-}
-
-function normalizeToolSchemaContributions(
-  value:
-    | ChannelMessageToolSchemaContribution
-    | ChannelMessageToolSchemaContribution[]
-    | null
-    | undefined,
-): ChannelMessageToolSchemaContribution[] {
-  if (!value) {
-    return [];
-  }
-  return Array.isArray(value) ? value : [value];
 }
 
 function mergeToolSchemaProperties(
@@ -203,27 +297,23 @@ export function resolveChannelMessageToolSchemaProperties(params: {
     createMessageActionDiscoveryContext(params);
 
   for (const plugin of plugins) {
-    const getToolSchema = plugin?.actions?.getToolSchema;
-    if (!plugin || !getToolSchema) {
+    if (!plugin?.actions) {
       continue;
     }
-    try {
-      const contributions = normalizeToolSchemaContributions(getToolSchema(discoveryBase));
-      for (const contribution of contributions) {
-        const visibility = contribution.visibility ?? "current-channel";
-        if (currentChannel) {
-          if (visibility === "all-configured" || plugin.id === currentChannel) {
-            mergeToolSchemaProperties(properties, contribution.properties);
-          }
-          continue;
+    for (const contribution of resolveMessageActionDiscoveryForPlugin({
+      pluginId: plugin.id,
+      actions: plugin.actions,
+      context: discoveryBase,
+      includeSchema: true,
+    }).schemaContributions) {
+      const visibility = contribution.visibility ?? "current-channel";
+      if (currentChannel) {
+        if (visibility === "all-configured" || plugin.id === currentChannel) {
+          mergeToolSchemaProperties(properties, contribution.properties);
         }
-        mergeToolSchemaProperties(properties, contribution.properties);
+        continue;
       }
-    } catch (error) {
-      logMessageActionSchemaError({
-        pluginId: plugin.id,
-        error,
-      });
+      mergeToolSchemaProperties(properties, contribution.properties);
     }
   }
 

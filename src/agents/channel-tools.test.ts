@@ -111,4 +111,37 @@ describe("channel tools", () => {
     const cfg = {} as OpenClawConfig;
     expect(listChannelSupportedActions({ cfg, channel: "tg" })).toEqual(["react"]);
   });
+
+  it("uses unified message tool discovery when available", () => {
+    const listActions = vi.fn(() => {
+      throw new Error("legacy listActions should not run");
+    });
+    const plugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "telegram plugin",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["react"],
+        }),
+        listActions,
+      },
+    };
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]));
+
+    const cfg = {} as OpenClawConfig;
+    expect(listChannelSupportedActions({ cfg, channel: "telegram" })).toEqual(["react"]);
+    expect(listActions).not.toHaveBeenCalled();
+  });
 });

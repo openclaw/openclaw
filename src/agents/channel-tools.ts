@@ -3,14 +3,13 @@ import {
   createMessageActionDiscoveryContext,
   resolveMessageActionDiscoveryChannelId,
 } from "../channels/plugins/message-action-discovery.js";
-import type {
-  ChannelAgentTool,
-  ChannelMessageActionName,
-  ChannelPlugin,
-} from "../channels/plugins/types.js";
+import {
+  __testing as messageActionTesting,
+  resolveMessageActionDiscoveryForPlugin,
+} from "../channels/plugins/message-actions.js";
+import type { ChannelAgentTool, ChannelMessageActionName } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { defaultRuntime } from "../runtime.js";
 
 /**
  * Get the list of supported message actions for a specific channel.
@@ -36,7 +35,12 @@ export function listChannelSupportedActions(params: {
   if (!plugin?.actions?.listActions) {
     return [];
   }
-  return runPluginListActions(plugin, createMessageActionDiscoveryContext(params));
+  return resolveMessageActionDiscoveryForPlugin({
+    pluginId: plugin.id,
+    actions: plugin.actions,
+    context: createMessageActionDiscoveryContext(params),
+    includeActions: true,
+  }).actions;
 }
 
 /**
@@ -55,16 +59,15 @@ export function listAllChannelSupportedActions(params: {
 }): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>();
   for (const plugin of listChannelPlugins()) {
-    if (!plugin.actions?.listActions) {
-      continue;
-    }
-    const channelActions = runPluginListActions(
-      plugin,
-      createMessageActionDiscoveryContext({
+    const channelActions = resolveMessageActionDiscoveryForPlugin({
+      pluginId: plugin.id,
+      actions: plugin.actions,
+      context: createMessageActionDiscoveryContext({
         ...params,
         currentChannelProvider: plugin.id,
       }),
-    );
+      includeActions: true,
+    }).actions;
     for (const action of channelActions) {
       actions.add(action);
     }
@@ -107,38 +110,8 @@ export function resolveChannelMessageToolHints(params: {
     .filter(Boolean);
 }
 
-const loggedListActionErrors = new Set<string>();
-
-function runPluginListActions(
-  plugin: ChannelPlugin,
-  context: Parameters<NonNullable<NonNullable<ChannelPlugin["actions"]>["listActions"]>>[0],
-): ChannelMessageActionName[] {
-  if (!plugin.actions?.listActions) {
-    return [];
-  }
-  try {
-    const listed = plugin.actions.listActions(context);
-    return Array.isArray(listed) ? listed : [];
-  } catch (err) {
-    logListActionsError(plugin.id, err);
-    return [];
-  }
-}
-
-function logListActionsError(pluginId: string, err: unknown) {
-  const message = err instanceof Error ? err.message : String(err);
-  const key = `${pluginId}:${message}`;
-  if (loggedListActionErrors.has(key)) {
-    return;
-  }
-  loggedListActionErrors.add(key);
-  const stack = err instanceof Error && err.stack ? err.stack : null;
-  const details = stack ?? message;
-  defaultRuntime.error?.(`[channel-tools] ${pluginId}.actions.listActions failed: ${details}`);
-}
-
 export const __testing = {
   resetLoggedListActionErrors() {
-    loggedListActionErrors.clear();
+    messageActionTesting.resetLoggedMessageActionErrors();
   },
 };
