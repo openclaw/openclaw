@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
+import { shouldBuildBundledCluster } from "./scripts/lib/optional-bundled-clusters.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -79,6 +80,9 @@ function listBundledPluginBuildEntries(): Record<string, string> {
 
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
+      continue;
+    }
+    if (!shouldBuildBundledCluster(dirent.name, process.env)) {
       continue;
     }
 
