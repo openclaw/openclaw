@@ -1,18 +1,14 @@
 import {
-  buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
-} from "openclaw/plugin-sdk/channel-policy";
+  createScopedAccountConfigAccessors,
+  createScopedChannelConfigBase,
+  createScopedDmSecurityResolver,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   buildChannelConfigSchema,
-  DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
-  formatTrimmedAllowFromEntries,
   getChatChannelMeta,
   IMessageConfigSchema,
-  resolveIMessageConfigAllowFrom,
-  resolveIMessageConfigDefaultTo,
-  setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/imessage-core";
 import {
@@ -29,9 +25,47 @@ async function loadIMessageChannelRuntime() {
   return await import("./channel.runtime.js");
 }
 
-export const imessageSetupWizard = createIMessageSetupWizardProxy(async () => ({
-  imessageSetupWizard: (await loadIMessageChannelRuntime()).imessageSetupWizard,
-}));
+export const imessageSetupWizard = createIMessageSetupWizardProxy(
+  async () => (await loadIMessageChannelRuntime()).imessageSetupWizard,
+);
+
+export const imessageConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) => resolveIMessageAccount({ cfg, accountId }),
+  resolveAllowFrom: (account: ResolvedIMessageAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) => allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+  resolveDefaultTo: (account: ResolvedIMessageAccount) => account.config.defaultTo,
+});
+
+export const imessageConfigBase = createScopedChannelConfigBase<ResolvedIMessageAccount>({
+  sectionKey: IMESSAGE_CHANNEL,
+  listAccountIds: listIMessageAccountIds,
+  resolveAccount: (cfg, accountId) => resolveIMessageAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultIMessageAccountId,
+  clearBaseFields: ["cliPath", "dbPath", "service", "region", "name"],
+});
+
+export const imessageResolveDmPolicy = createScopedDmSecurityResolver<ResolvedIMessageAccount>({
+  channelKey: IMESSAGE_CHANNEL,
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+});
+
+export function collectIMessageSecurityWarnings(params: {
+  account: ResolvedIMessageAccount;
+  cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
+}) {
+  return collectAllowlistProviderRestrictSendersWarnings({
+    cfg: params.cfg,
+    providerConfigPresent: params.cfg.channels?.imessage !== undefined,
+    configuredGroupPolicy: params.account.config.groupPolicy,
+    surface: "iMessage groups",
+    openScope: "any member",
+    groupPolicyPath: "channels.imessage.groupPolicy",
+    groupAllowFromPath: "channels.imessage.groupAllowFrom",
+    mentionGated: false,
+  });
+}
 
 export function createIMessagePluginBase(params: {
   setupWizard?: NonNullable<ChannelPlugin<ResolvedIMessageAccount>["setupWizard"]>;
@@ -63,24 +97,7 @@ export function createIMessagePluginBase(params: {
     reload: { configPrefixes: ["channels.imessage"] },
     configSchema: buildChannelConfigSchema(IMessageConfigSchema),
     config: {
-      listAccountIds: (cfg) => listIMessageAccountIds(cfg),
-      resolveAccount: (cfg, accountId) => resolveIMessageAccount({ cfg, accountId }),
-      defaultAccountId: (cfg) => resolveDefaultIMessageAccountId(cfg),
-      setAccountEnabled: ({ cfg, accountId, enabled }) =>
-        setAccountEnabledInConfigSection({
-          cfg,
-          sectionKey: IMESSAGE_CHANNEL,
-          accountId,
-          enabled,
-          allowTopLevel: true,
-        }),
-      deleteAccount: ({ cfg, accountId }) =>
-        deleteAccountFromConfigSection({
-          cfg,
-          sectionKey: IMESSAGE_CHANNEL,
-          accountId,
-          clearBaseFields: ["cliPath", "dbPath", "service", "region", "name"],
-        }),
+      ...imessageConfigBase,
       isConfigured: (account) => account.configured,
       describeAccount: (account) => ({
         accountId: account.accountId,
@@ -88,32 +105,11 @@ export function createIMessagePluginBase(params: {
         enabled: account.enabled,
         configured: account.configured,
       }),
-      resolveAllowFrom: ({ cfg, accountId }) => resolveIMessageConfigAllowFrom({ cfg, accountId }),
-      formatAllowFrom: ({ allowFrom }) => formatTrimmedAllowFromEntries(allowFrom),
-      resolveDefaultTo: ({ cfg, accountId }) => resolveIMessageConfigDefaultTo({ cfg, accountId }),
+      ...imessageConfigAccessors,
     },
     security: {
-      resolveDmPolicy: ({ cfg, accountId, account }) =>
-        buildAccountScopedDmSecurityPolicy({
-          cfg,
-          channelKey: IMESSAGE_CHANNEL,
-          accountId,
-          fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-          policy: account.config.dmPolicy,
-          allowFrom: account.config.allowFrom ?? [],
-          policyPathSuffix: "dmPolicy",
-        }),
-      collectWarnings: ({ account, cfg }) =>
-        collectAllowlistProviderRestrictSendersWarnings({
-          cfg,
-          providerConfigPresent: cfg.channels?.imessage !== undefined,
-          configuredGroupPolicy: account.config.groupPolicy,
-          surface: "iMessage groups",
-          openScope: "any member",
-          groupPolicyPath: "channels.imessage.groupPolicy",
-          groupAllowFromPath: "channels.imessage.groupAllowFrom",
-          mentionGated: false,
-        }),
+      resolveDmPolicy: imessageResolveDmPolicy,
+      collectWarnings: collectIMessageSecurityWarnings,
     },
     setup: params.setup,
   }) as Pick<
