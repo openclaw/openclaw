@@ -2216,4 +2216,500 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+
+  it("keeps plain chat turns unchanged when no tools are available", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("applies a low default temperature for tool-enabled turns", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+    });
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.temperature).toBe(0.3);
+    expect(calls[0]?.cacheRetention).toBeUndefined();
+  });
+
+  it("applies dynamic temperature AND cache retention when user params are present", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      maxTokens: 1000, // User param
+    });
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.temperature).toBe(0.3);
+    expect(calls[0]?.maxTokens).toBe(1000);
+    expect(calls[0]?.cacheRetention).toBe("short");
+  });
+
+  it("applies a stricter default temperature for shell-like turns", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["exec", "web_search"]),
+    });
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.temperature).toBe(0.1);
+  });
+
+  it("preserves explicit configured temperatures over dynamic tool defaults", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-6", {
+      temperature: 0.5,
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["exec"]),
+    });
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.temperature).toBe(0.5);
+  });
+
+  it("does not trigger extra temperature/cache wrappers when availableToolNames is empty and no other config exists", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set([]),
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.temperature).toBeUndefined();
+    expect(calls[0]?.cacheRetention).toBeUndefined();
+  });
+
+  it("strips availableToolNames from the resulting stream parameters", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      temperature: 0.5,
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]).not.toHaveProperty("availableToolNames");
+    expect(calls[0]?.temperature).toBe(0.5);
+  });
+
+  it("does not apply dynamic temperature when thinking is enabled via level", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "anthropic",
+      "claude-sonnet-4-6",
+      {
+        availableToolNames: new Set(["web_search"]),
+      },
+      "high",
+    );
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("does not apply dynamic temperature when thinking is enabled via raw param", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: "high",
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("applies dynamic temperature when thinking is explicitly disabled", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "anthropic",
+      "claude-sonnet-4-6",
+      {
+        availableToolNames: new Set(["web_search"]),
+        thinking: "off",
+      },
+      "off",
+    );
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("applies dynamic temperature when thinking is disabled via string 'disabled'", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: "disabled",
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("applies dynamic temperature when thinking is disabled via object { type: 'disabled' }", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: { type: "disabled" },
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("applies dynamic temperature when thinking is disabled via string 'disable'", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: "disable",
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("applies dynamic temperature when thinking is disabled via string 'false'", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: "false",
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("applies dynamic temperature when thinking is disabled via string '0'", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: "0",
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("applies dynamic temperature when thinking is disabled via nested object { type: 'off' }", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: { type: "off" },
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("applies dynamic temperature when thinking is disabled via config even if thinkingLevel is active", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "anthropic",
+      "claude-sonnet-4-6",
+      {
+        availableToolNames: new Set(["web_search"]),
+        thinking: "off",
+      },
+      "high",
+    );
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("does not apply dynamic temperature when thinking is enabled via config even if thinkingLevel is off", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "anthropic",
+      "claude-sonnet-4-6",
+      {
+        availableToolNames: new Set(["web_search"]),
+        thinking: "high",
+      },
+      "off",
+    );
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("does not apply dynamic temperature when thinking is enabled via object without 'type' field", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: { budget_tokens: 1000 },
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("applies dynamic temperature when thinking is disabled via null override", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "anthropic",
+      "claude-sonnet-4-6",
+      {
+        availableToolNames: new Set(["web_search"]),
+        thinking: null,
+      },
+      "high",
+    );
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("applies dynamic temperature when thinking is disabled via string 'null'", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: "null",
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("does not apply dynamic temperature when thinkingEnabled is true", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinkingEnabled: true,
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("does not apply dynamic temperature when reasoning is enabled", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "openai", "o1-preview", {
+      availableToolNames: new Set(["web_search"]),
+      reasoning: true,
+    });
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "o1-preview",
+    } as Model<"openai-responses">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("does not apply dynamic temperature when reasoning_effort is high", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "openai", "o3-mini", {
+      availableToolNames: new Set(["web_search"]),
+      reasoning_effort: "high",
+    });
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "o3-mini",
+    } as Model<"openai-responses">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("does not apply dynamic temperature when effort is high", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "openai", "o3-mini", {
+      availableToolNames: new Set(["web_search"]),
+      effort: "high",
+    });
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "o3-mini",
+    } as Model<"openai-responses">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("does not apply dynamic temperature when thinking is 'off' but effort is 'high'", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: "off",
+      effort: "high",
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("applies dynamic temperature when thinking is disabled via { effort: 'none' }", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinking: { effort: "none" },
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBe(0.3);
+  });
+
+  it("does not apply dynamic temperature when reasoningLevel is 'on'", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "anthropic",
+      "claude-sonnet-4-6",
+      {
+        availableToolNames: new Set(["web_search"]),
+      },
+      "off",
+      undefined,
+      "on",
+    );
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
 });
