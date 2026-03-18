@@ -52,8 +52,8 @@
       "destination": "/zh-Hans"
     },
     {
-      "source": "/zh-CN/:splat",
-      "destination": "/zh-Hans/:splat"
+      "source": "/zh-CN/:splat*",
+      "destination": "/zh-Hans/:splat*"
     },
     {
       "source": "/messages",
