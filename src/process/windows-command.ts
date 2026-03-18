@@ -4,6 +4,7 @@ import process from "node:process";
 
 export const WINDOWS_CMD_SHIM_COMMANDS = ["npm", "npx", "pnpm", "yarn", "codex"] as const;
 const DEFAULT_WINDOWS_PATHEXT = [".com", ".exe", ".bat", ".cmd"] as const;
+const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
 
 function parseWindowsPathExt(pathExt: string | undefined): string[] {
   const parsed = String(pathExt ?? "")
@@ -42,6 +43,34 @@ function findWindowsCommandMatch(params: {
   }
 
   return undefined;
+}
+
+export function isWindowsBatchCommand(
+  resolvedCommand: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "win32") {
+    return false;
+  }
+  const ext = path.win32.extname(resolvedCommand).toLowerCase();
+  return ext === ".cmd" || ext === ".bat";
+}
+
+function escapeForCmdExe(arg: string): string {
+  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
+    throw new Error(
+      `Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}. ` +
+        "Pass an explicit shell-wrapper argv at the call site instead.",
+    );
+  }
+  if (!arg.includes(" ") && !arg.includes('"')) {
+    return arg;
+  }
+  return `"${arg.replace(/"/g, '""')}"`;
+}
+
+export function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string {
+  return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
 }
 
 export function resolveWindowsCommandShim(params: {

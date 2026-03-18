@@ -7,38 +7,14 @@ import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
-import { resolveWindowsCommandShim, WINDOWS_CMD_SHIM_COMMANDS } from "./windows-command.js";
+import {
+  buildCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveWindowsCommandShim,
+  WINDOWS_CMD_SHIM_COMMANDS,
+} from "./windows-command.js";
 
 const execFileAsync = promisify(execFile);
-
-const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
-
-function isWindowsBatchCommand(resolvedCommand: string): boolean {
-  if (process.platform !== "win32") {
-    return false;
-  }
-  const ext = path.extname(resolvedCommand).toLowerCase();
-  return ext === ".cmd" || ext === ".bat";
-}
-
-function escapeForCmdExe(arg: string): string {
-  // Reject cmd metacharacters to avoid injection when we must pass a single command line.
-  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
-    throw new Error(
-      `Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}. ` +
-        "Pass an explicit shell-wrapper argv at the call site instead.",
-    );
-  }
-  // Quote when needed; double inner quotes for cmd parsing.
-  if (!arg.includes(" ") && !arg.includes('"')) {
-    return arg;
-  }
-  return `"${arg.replace(/"/g, '""')}"`;
-}
-
-function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string {
-  return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
-}
 
 /**
  * On Windows, Node 18.20.2+ (CVE-2024-27980) rejects spawning .cmd/.bat directly

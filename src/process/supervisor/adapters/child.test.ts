@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -137,5 +138,71 @@ describe("createChildAdapter", () => {
       options?: { env?: Record<string, string> };
     };
     expect(spawnArgs.options?.env).toEqual({ FOO: "bar", COUNT: "12" });
+  });
+
+  it("wraps codex.cmd via cmd.exe on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const envSpy = vi.spyOn(process, "env", "get").mockReturnValue({
+      ...process.env,
+      PATH: 'C:\\Tools;C:\\Other',
+      PATHEXT: ".EXE;.CMD",
+      ComSpec: "cmd.exe",
+    });
+    vi.spyOn(fs, "existsSync").mockImplementation(
+      (candidate) => String(candidate) === "C:\\Other\\codex.cmd",
+    );
+
+    try {
+      await createAdapterHarness({
+        pid: 5555,
+        argv: ["codex", "login", "--device-auth"],
+      });
+
+      const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+        argv?: string[];
+        options?: { windowsVerbatimArguments?: boolean };
+      };
+      expect(spawnArgs.argv).toEqual([
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        "C:\\Other\\codex.cmd login --device-auth",
+      ]);
+      expect(spawnArgs.options?.windowsVerbatimArguments).toBe(true);
+    } finally {
+      platformSpy.mockRestore();
+      envSpy.mockRestore();
+    }
+  });
+
+  it("spawns codex.exe directly on Windows when it is the PATH match", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const envSpy = vi.spyOn(process, "env", "get").mockReturnValue({
+      ...process.env,
+      PATH: 'C:\\Tools;C:\\Other',
+      PATHEXT: ".EXE;.CMD",
+      ComSpec: "cmd.exe",
+    });
+    vi.spyOn(fs, "existsSync").mockImplementation(
+      (candidate) => String(candidate) === "C:\\Tools\\codex.exe",
+    );
+
+    try {
+      await createAdapterHarness({
+        pid: 6666,
+        argv: ["codex", "login", "--device-auth"],
+      });
+
+      const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+        argv?: string[];
+        options?: { windowsVerbatimArguments?: boolean };
+      };
+      expect(spawnArgs.argv).toEqual(["C:\\Tools\\codex.exe", "login", "--device-auth"]);
+      expect(spawnArgs.options?.windowsVerbatimArguments).toBeUndefined();
+    } finally {
+      platformSpy.mockRestore();
+      envSpy.mockRestore();
+    }
   });
 });

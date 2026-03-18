@@ -1,7 +1,12 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
-import { resolveWindowsCommandShim, WINDOWS_CMD_SHIM_COMMANDS } from "../../windows-command.js";
+import {
+  buildCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveWindowsCommandShim,
+  WINDOWS_CMD_SHIM_COMMANDS,
+} from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -28,6 +33,16 @@ export async function createChildAdapter(params: {
 }): Promise<ChildAdapter> {
   const resolvedArgv = [...params.argv];
   resolvedArgv[0] = resolveCommand(resolvedArgv[0] ?? "");
+  const useCmdWrapper = isWindowsBatchCommand(resolvedArgv[0] ?? "");
+  const spawnArgv = useCmdWrapper
+    ? [
+        process.env.ComSpec ?? "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        buildCmdExeCommandLine(resolvedArgv[0] ?? "", resolvedArgv.slice(1)),
+      ]
+    : resolvedArgv;
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
@@ -42,7 +57,7 @@ export async function createChildAdapter(params: {
     stdio: ["pipe", "pipe", "pipe"],
     detached: useDetached,
     windowsHide: true,
-    windowsVerbatimArguments: params.windowsVerbatimArguments,
+    windowsVerbatimArguments: useCmdWrapper ? true : params.windowsVerbatimArguments,
   };
   if (stdinMode === "inherit") {
     options.stdio = ["inherit", "pipe", "pipe"];
@@ -51,7 +66,7 @@ export async function createChildAdapter(params: {
   }
 
   const spawned = await spawnWithFallback({
-    argv: resolvedArgv,
+    argv: spawnArgv,
     options,
     fallbacks: useDetached
       ? [
