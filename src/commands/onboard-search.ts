@@ -6,27 +6,13 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = NonNullable<
-  NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
->;
-
-const SEARCH_PROVIDER_IDS = ["brave", "firecrawl", "gemini", "grok", "kimi", "perplexity"] as const;
-
-function isSearchProvider(value: string): value is SearchProvider {
-  return (SEARCH_PROVIDER_IDS as readonly string[]).includes(value);
-}
-
-function hasSearchProviderId<T extends { id: string }>(
-  provider: T,
-): provider is T & { id: SearchProvider } {
-  return isSearchProvider(provider.id);
-}
+export type SearchProvider = string;
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -35,21 +21,23 @@ type SearchProviderEntry = {
   envKeys: string[];
   placeholder: string;
   signupUrl: string;
+  credentialPath: string;
+  applySelectionConfig?: PluginWebSearchProviderEntry["applySelectionConfig"];
 };
 
 export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] =
   resolvePluginWebSearchProviders({
     bundledAllowlistCompat: true,
-  })
-    .filter(hasSearchProviderId)
-    .map((provider) => ({
-      value: provider.id,
-      label: provider.label,
-      hint: provider.hint,
-      envKeys: provider.envVars,
-      placeholder: provider.placeholder,
-      signupUrl: provider.signupUrl,
-    }));
+  }).map((provider) => ({
+    value: provider.id,
+    label: provider.label,
+    hint: provider.hint,
+    envKeys: provider.envVars,
+    placeholder: provider.placeholder,
+    signupUrl: provider.signupUrl,
+    credentialPath: provider.credentialPath,
+    applySelectionConfig: provider.applySelectionConfig,
+  }));
 
 export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
   return entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
@@ -83,7 +71,7 @@ function buildSearchEnvRef(provider: SearchProvider): SecretRef {
   const envVar = entry?.envKeys.find((k) => Boolean(process.env[k]?.trim())) ?? entry?.envKeys[0];
   if (!envVar) {
     throw new Error(
-      `No env var mapping for search provider "${provider}" in secret-input-mode=ref.`,
+      `No env var mapping for search provider "${provider}" at ${entry?.credentialPath ?? "unknown path"} in secret-input-mode=ref.`,
     );
   }
   return { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: envVar };
@@ -107,29 +95,30 @@ export function applySearchKey(
   provider: SearchProvider,
   key: SecretInput,
 ): OpenClawConfig {
-  const search = { ...config.tools?.web?.search, provider, enabled: true };
-  const entry = resolvePluginWebSearchProviders({
+  const providerEntry = resolvePluginWebSearchProviders({
     config,
     bundledAllowlistCompat: true,
   }).find((candidate) => candidate.id === provider);
-  if (entry) {
-    entry.setCredentialValue(search as Record<string, unknown>, key);
+  const search = { ...config.tools?.web?.search, provider, enabled: true };
+  if (providerEntry) {
+    providerEntry.setCredentialValue(search as Record<string, unknown>, key);
   }
-  const next = {
+  const nextBase = {
     ...config,
     tools: {
       ...config.tools,
       web: { ...config.tools?.web, search },
     },
   };
-  if (provider !== "firecrawl") {
-    return next;
-  }
-  return enablePluginInConfig(next, "firecrawl").config;
+  return providerEntry?.applySelectionConfig?.(nextBase) ?? nextBase;
 }
 
 function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): OpenClawConfig {
-  const next = {
+  const providerEntry = resolvePluginWebSearchProviders({
+    config,
+    bundledAllowlistCompat: true,
+  }).find((candidate) => candidate.id === provider);
+  const nextBase = {
     ...config,
     tools: {
       ...config.tools,
@@ -143,10 +132,7 @@ function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): Op
       },
     },
   };
-  if (provider !== "firecrawl") {
-    return next;
-  }
-  return enablePluginInConfig(next, "firecrawl").config;
+  return providerEntry?.applySelectionConfig?.(nextBase) ?? nextBase;
 }
 
 function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig): OpenClawConfig {
@@ -203,7 +189,7 @@ export async function setupSearch(
     return SEARCH_PROVIDER_OPTIONS[0].value;
   })();
 
-  type PickerValue = SearchProvider | "__skip__";
+  type PickerValue = string;
   const choice = await prompter.select<PickerValue>({
     message: "Search provider",
     options: [
