@@ -4,10 +4,10 @@ import {
   readStringOrNumberParam,
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { handleTelegramAction } from "openclaw/plugin-sdk/agent-runtime";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-runtime";
 import {
+  createLegacyMessageToolDiscoveryMethods,
   createMessageToolButtonsSchema,
   createTelegramPollExtraToolSchemas,
   createUnionActionGate,
@@ -27,6 +27,7 @@ import {
   listEnabledTelegramAccounts,
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
+import { handleTelegramAction } from "./action-runtime.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 
@@ -177,6 +178,7 @@ function readTelegramMessageIdParam(params: Record<string, unknown>): number {
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
+  ...createLegacyMessageToolDiscoveryMethods(describeTelegramMessageTool),
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },

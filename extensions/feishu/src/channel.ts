@@ -1,8 +1,14 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
-import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
-import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  createLegacyMessageToolDiscoveryMethods,
+  createMessageToolCardSchema,
+} from "openclaw/plugin-sdk/channel-runtime";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageToolDiscovery,
+} from "openclaw/plugin-sdk/channel-runtime";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
   buildChannelConfigSchema,
@@ -48,6 +54,56 @@ const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "feishuChannelRuntime",
 );
+
+function describeFeishuMessageTool({
+  cfg,
+}: Parameters<
+  NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
+>[0]): ChannelMessageToolDiscovery {
+  const enabled =
+    cfg.channels?.feishu?.enabled !== false &&
+    Boolean(resolveFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined));
+  if (listEnabledFeishuAccounts(cfg).length === 0) {
+    return {
+      actions: [],
+      capabilities: enabled ? ["cards"] : [],
+      schema: enabled
+        ? {
+            properties: {
+              card: createMessageToolCardSchema(),
+            },
+          }
+        : null,
+    };
+  }
+  const actions = new Set<ChannelMessageActionName>([
+    "send",
+    "read",
+    "edit",
+    "thread-reply",
+    "pin",
+    "list-pins",
+    "unpin",
+    "member-info",
+    "channel-info",
+    "channel-list",
+  ]);
+  if (areAnyFeishuReactionActionsEnabled(cfg)) {
+    actions.add("react");
+    actions.add("reactions");
+  }
+  return {
+    actions: Array.from(actions),
+    capabilities: enabled ? ["cards"] : [],
+    schema: enabled
+      ? {
+          properties: {
+            card: createMessageToolCardSchema(),
+          },
+        }
+      : null,
+  };
+}
 
 function setFeishuNamedAccountEnabled(
   cfg: ClawdbotConfig,
@@ -396,53 +452,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }),
   },
   actions: {
-    describeMessageTool: ({
-      cfg,
-    }: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0]) => {
-      const enabled =
-        cfg.channels?.feishu?.enabled !== false &&
-        Boolean(resolveFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined));
-      if (listEnabledFeishuAccounts(cfg).length === 0) {
-        return {
-          actions: [],
-          capabilities: enabled ? ["cards"] : [],
-          schema: enabled
-            ? {
-                properties: {
-                  card: createMessageToolCardSchema(),
-                },
-              }
-            : null,
-        };
-      }
-      const actions = new Set<ChannelMessageActionName>([
-        "send",
-        "read",
-        "edit",
-        "thread-reply",
-        "pin",
-        "list-pins",
-        "unpin",
-        "member-info",
-        "channel-info",
-        "channel-list",
-      ]);
-      if (areAnyFeishuReactionActionsEnabled(cfg)) {
-        actions.add("react");
-        actions.add("reactions");
-      }
-      return {
-        actions: Array.from(actions),
-        capabilities: enabled ? ["cards"] : [],
-        schema: enabled
-          ? {
-              properties: {
-                card: createMessageToolCardSchema(),
-              },
-            }
-          : null,
-      };
-    },
+    describeMessageTool: describeFeishuMessageTool,
+    ...createLegacyMessageToolDiscoveryMethods(describeFeishuMessageTool),
     handleAction: async (ctx) => {
       const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId ?? undefined });
       if (
