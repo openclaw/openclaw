@@ -801,7 +801,16 @@ export const OpenClawSchema = z
               .strict()
               .optional(),
             allowCommands: z.array(z.string()).optional(),
-            denyCommands: z.array(z.string()).optional(),
+            denyCommands: z
+              .array(z.string())
+              .refine(
+                (cmds) => cmds.every((cmd) => !/\s/.test(cmd)),
+                {
+                  message:
+                    "Invalid denyCommands: command names must not contain whitespace. Use exact command names like 'system.run'",
+                },
+              )
+              .optional(),
           })
           .strict()
           .optional(),
