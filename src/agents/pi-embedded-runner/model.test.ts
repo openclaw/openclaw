@@ -533,6 +533,50 @@ describe("resolveModel", () => {
     });
   });
 
+  it("prefers the requested ref over fallback alternates in provider-config lookup", () => {
+    const cfg = {
+      models: {
+        providers: {
+          polza: {
+            baseUrl: "https://proxy.example/v1",
+            headers: { "X-Provider": "provider" },
+            models: [
+              {
+                ...makeModel("gpt-4o-mini"),
+                reasoning: false,
+                contextWindow: 1024,
+                maxTokens: 512,
+                headers: { "X-Model": "bare" },
+              },
+              {
+                ...makeModel("polza/gpt-4o-mini"),
+                reasoning: true,
+                contextWindow: 123456,
+                maxTokens: 4096,
+                headers: { "X-Model": "qualified" },
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("polza", "polza/gpt-4o-mini", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "polza",
+      id: "gpt-4o-mini",
+      reasoning: true,
+      contextWindow: 123456,
+      maxTokens: 4096,
+    });
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Provider": "provider",
+      "X-Model": "qualified",
+    });
+  });
+
   it("keeps OpenRouter native ids qualified when fallback config uses bare ids", () => {
     const cfg = {
       models: {

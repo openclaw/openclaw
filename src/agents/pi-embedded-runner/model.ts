@@ -350,9 +350,9 @@ export function resolveModelWithRegistry(params: {
   const fallbackModelId = fallbackLookupModelId;
   const configuredModelLookupIds =
     params.modelId === fallbackModelId ? [fallbackModelId] : [params.modelId, fallbackModelId];
-  const configuredModel = providerConfig?.models?.find((candidate) =>
-    configuredModelLookupIds.includes(candidate.id),
-  );
+  const configuredModel = configuredModelLookupIds
+    .map((candidateId) => providerConfig?.models?.find((candidate) => candidate.id === candidateId))
+    .find((candidate) => candidate !== undefined);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
