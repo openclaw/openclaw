@@ -228,4 +228,34 @@ describe("native command auth in groups", () => {
       expect.any(Object),
     );
   });
+
+  it("allows native commands from an explicitly configured channel when useAccessGroups is true", async () => {
+    const { handlers, sendMessage } = setup({
+      useAccessGroups: true,
+      resolveGroupPolicy: () =>
+        ({
+          allowlistEnabled: true,
+          allowed: true,
+          groupConfig: { requireMention: false },
+        }) as ChannelGroupPolicy,
+    });
+
+    await handlers.status?.({
+      channelPost: {
+        chat: { id: TEST_CHANNEL_ID, type: "channel", title: "Bot Relay" },
+        sender_chat: {
+          id: TEST_CHANNEL_ID,
+          type: "channel",
+          title: "Bot Relay",
+          username: "botrelay",
+        },
+        message_id: 1,
+        date: 1700000000,
+        text: "/status",
+      },
+      match: "",
+    });
+
+    expect(findNotAuthorizedCalls(sendMessage)).toHaveLength(0);
+  });
 });
