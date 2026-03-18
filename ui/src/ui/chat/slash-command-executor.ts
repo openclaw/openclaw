@@ -315,9 +315,13 @@ async function executeUsage(
     }
     const input = session.inputTokens ?? 0;
     const output = session.outputTokens ?? 0;
+    // totalTokens is a prompt/context snapshot (input + cacheRead + cacheWrite).
     const total = session.totalTokens ?? input + output;
     const ctx = session.contextTokens ?? 0;
-    const pct = ctx > 0 ? Math.round((input / ctx) * 100) : null;
+    // Use totalTokens (full context occupancy) for the percentage when
+    // available; fall back to input for stale sessions.
+    const contextUsed = session.totalTokens ?? input;
+    const pct = ctx > 0 ? Math.round((contextUsed / ctx) * 100) : null;
 
     const lines = [
       "**Session Usage**",
