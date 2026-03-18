@@ -232,7 +232,7 @@ function resolveHttpServerConfig(
   try {
     new URL(url);
   } catch {
-    return { ok: false, reason: `invalid URL: ${url}` };
+    return { ok: false, reason: `invalid URL: ${redactUrl(url)}` };
   }
   const headers = isRecord(rawServer.headers)
     ? Object.fromEntries(
