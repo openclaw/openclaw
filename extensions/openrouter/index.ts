@@ -3,7 +3,7 @@ import {
   definePluginEntry,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { applyXaiModelCompat, DEFAULT_CONTEXT_TOKENS } from "openclaw/plugin-sdk/provider-models";
 import {
