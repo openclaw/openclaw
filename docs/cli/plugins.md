@@ -21,6 +21,7 @@ Related:
 
 ```bash
 openclaw plugins list
+openclaw plugins install <path-or-spec>
 openclaw plugins inspect <id>
 openclaw plugins enable <id>
 openclaw plugins disable <id>
@@ -30,8 +31,6 @@ openclaw plugins update <id>
 openclaw plugins update --all
 openclaw plugins marketplace list <marketplace>
 ```
-
-`info` is an alias for `inspect`.
 
 Bundled plugins ship with OpenClaw but start disabled. Use `plugins enable` to
 activate them.
@@ -159,15 +158,17 @@ openclaw plugins inspect <id> --json
 ```
 
 Deep introspection for a single plugin. Shows identity, load status, source,
-plugin shape, registered capabilities, hooks, tools, commands, services,
-gateway methods, HTTP routes, policy flags, diagnostics, and install metadata.
+registered capabilities, hooks, tools, commands, services, gateway methods,
+HTTP routes, policy flags, diagnostics, and install metadata.
 
-Plugin shape is derived from actual registration behavior:
+Each plugin is classified by what it actually registers at runtime:
 
-- **plain-capability** — one capability type registered
-- **hybrid-capability** — multiple capability types registered
+- **plain-capability** — one capability type (e.g. a provider-only plugin)
+- **hybrid-capability** — multiple capability types (e.g. text + speech + images)
 - **hook-only** — only hooks, no capabilities or surfaces
 - **non-capability** — tools/commands/services but no capabilities
+
+See [Plugins](/tools/plugin#plugin-shapes) for more on the capability model.
 
 The `--json` flag outputs a machine-readable report suitable for scripting and
 auditing.

@@ -1,7 +1,7 @@
 ---
 summary: "Plugin manifest + JSON schema requirements (strict config validation)"
 read_when:
-  - You are building a OpenClaw plugin
+  - You are building an OpenClaw plugin
   - You need to ship a plugin config schema or debug plugin validation errors
 title: "Plugin Manifest"
 ---
@@ -32,7 +32,8 @@ Every native OpenClaw plugin **must** ship a `openclaw.plugin.json` file in the
 plugin errors and block config validation.
 
 See the full plugin system guide: [Plugins](/tools/plugin).
-For the public capability model: [Capability model](/tools/plugin#public-capability-model).
+For the native capability model and current external-compatibility guidance:
+[Capability model](/tools/plugin#public-capability-model).
 
 ## Required fields
 
