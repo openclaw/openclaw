@@ -99,19 +99,31 @@ export const providerContractRegistry: ProviderContractEntry[] = buildCapability
   select: () => [],
 });
 
-const loadedBundledProviderRegistry: ProviderContractEntry[] = resolvePluginProviders({
-  bundledProviderAllowlistCompat: true,
-  bundledProviderVitestCompat: true,
-  cache: false,
-  activate: false,
-})
-  .filter((provider): provider is ProviderPlugin & { pluginId: string } =>
-    Boolean(provider.pluginId),
-  )
-  .map((provider) => ({
-    pluginId: provider.pluginId,
-    provider,
-  }));
+export let providerContractLoadError: Error | undefined;
+
+function loadBundledProviderRegistry(): ProviderContractEntry[] {
+  try {
+    providerContractLoadError = undefined;
+    return resolvePluginProviders({
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
+      cache: false,
+      activate: false,
+    })
+      .filter((provider): provider is ProviderPlugin & { pluginId: string } =>
+        Boolean(provider.pluginId),
+      )
+      .map((provider) => ({
+        pluginId: provider.pluginId,
+        provider,
+      }));
+  } catch (error) {
+    providerContractLoadError = error instanceof Error ? error : new Error(String(error));
+    return [];
+  }
+}
+
+const loadedBundledProviderRegistry: ProviderContractEntry[] = loadBundledProviderRegistry();
 
 providerContractRegistry.splice(
   0,
@@ -134,6 +146,11 @@ export const providerContractCompatPluginIds = providerContractPluginIds.map((pl
 export function requireProviderContractProvider(providerId: string): ProviderPlugin {
   const provider = uniqueProviderContractProviders.find((entry) => entry.id === providerId);
   if (!provider) {
+    if (providerContractLoadError) {
+      throw new Error(
+        `provider contract entry missing for ${providerId}; bundled provider registry failed to load: ${providerContractLoadError.message}`,
+      );
+    }
     throw new Error(`provider contract entry missing for ${providerId}`);
   }
   return provider;
