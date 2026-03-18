@@ -10,7 +10,7 @@ import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw
 import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
-import { parseTelegramTopicConversation } from "openclaw/plugin-sdk/telegram";
+import { parseTelegramTopicConversation } from "../runtime-api.js";
 import {
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
@@ -21,7 +21,7 @@ import {
   type ChannelPlugin,
   type ChannelMessageActionAdapter,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/telegram";
+} from "../runtime-api.js";
 import {
   listTelegramAccountIds,
   resolveTelegramAccount,
