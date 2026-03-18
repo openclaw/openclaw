@@ -88,24 +88,10 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir) {
 function linkPluginNodeModules(params) {
   const runtimeNodeModulesDir = path.join(params.runtimePluginDir, "node_modules");
   removePathIfExists(runtimeNodeModulesDir);
-  if (params.distPluginDir) {
-    removePathIfExists(path.join(params.distPluginDir, "node_modules"));
-  }
   if (!fs.existsSync(params.sourcePluginNodeModulesDir)) {
     return;
   }
   fs.symlinkSync(params.sourcePluginNodeModulesDir, runtimeNodeModulesDir, symlinkType());
-
-  // Runtime wrappers re-export from dist/extensions/<plugin>/index.js, so Node
-  // resolves bare-specifier dependencies relative to the dist plugin directory.
-  // copy-bundled-plugin-metadata removes dist node_modules; restore the link here.
-  if (params.distPluginDir) {
-    removePathIfExists(path.join(params.distPluginDir, "node_modules"));
-  }
-  if (params.distPluginDir) {
-    const distNodeModulesDir = path.join(params.distPluginDir, "node_modules");
-    fs.symlinkSync(params.sourcePluginNodeModulesDir, distNodeModulesDir, symlinkType());
-  }
 }
 
 export function stageBundledPluginRuntime(params = {}) {
