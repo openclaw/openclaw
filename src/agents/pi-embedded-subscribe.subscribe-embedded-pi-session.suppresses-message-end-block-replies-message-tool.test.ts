@@ -105,6 +105,18 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("ignores gateway-injected assistant messages", async () => {
+    const { emit, onBlockReply } = createBlockReplyHarness("message_end");
+
+    emitAssistantMessageEnd(emit, "Injected transcript text", {
+      provider: "openclaw",
+      model: "gateway-injected",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("clears block reply state on message_start", async () => {
     const { emit, onBlockReply } = createBlockReplyHarness("text_end");
     emitAssistantTextEndBlock(emit, "OK");
