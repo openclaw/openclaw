@@ -13,7 +13,7 @@ Status: In progress
 
 ## Baseline snapshot
 
-- Runtime branch: `codex/consumer-openclaw-project`
+- Runtime branch: `codex/consumer-openclaw-smoke`
 - Synced base: `consumer` merged with `origin/main` on 2026-03-16
 - Browser priority order:
   1. `user` (existing-session / Chrome MCP)
@@ -46,11 +46,12 @@ Legend:
 
 - Browser attach is no longer the primary blocker.
 - Isolated `agent --local` turns now start, run, and exit cleanly after local teardown fixes.
-- The current hard blocker is provider/auth health inside `/tmp/openclaw-consumer`:
+- The current hard blocker is provider quota inside `/tmp/openclaw-consumer`:
   - `openai-codex:default` returns `⚠️ API rate limit reached. Please try again later.`
   - `openai-codex:notblockedamazon` returns `⚠️ API rate limit reached. Please try again later.`
   - previous isolated logs showed lower-priority Codex profiles failing with `refresh_token_reused`
   - previous isolated logs showed Anthropic fallback surfacing `overloaded`
+- Codex OAuth login is now proven healthy again once stale auth tabs are closed and the old `127.0.0.1:1455` listener is cleared. The earlier `state mismatch` was an auth-window collision, not a broken OpenAI token.
 
 Interpretation:
 
@@ -255,6 +256,17 @@ NODE
 
 kill "$GATEWAY_PID" 2>/dev/null || true
 ```
+
+### OAuth callback recovery note
+
+If `models auth login --provider openai-codex --method oauth` lands on a `State mismatch` page:
+
+1. Close every existing OpenAI/Codex auth tab in the browser.
+2. Check whether anything is still listening on `127.0.0.1:1455`.
+3. Kill the stale `openclaw-models` / auth listener process if one is still bound there.
+4. Rerun the login from a single fresh terminal session.
+
+That sequence cleared the repeated mismatch for this worktree.
 
 ### 8) Failure evidence checklist (required when a run fails)
 

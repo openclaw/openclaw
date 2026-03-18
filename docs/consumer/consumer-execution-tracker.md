@@ -27,20 +27,21 @@ Use these documents in this order when there is any ambiguity:
 
 ## Current baseline snapshot
 
-- Branch: `codex/consumer-openclaw-project`
+- Branch: `codex/consumer-openclaw-smoke`
 - `consumer...origin/main`: ahead 17, behind 27
-- `codex/consumer-openclaw-project...origin/main`: ahead 22, behind 5
+- `codex/consumer-openclaw-smoke...origin/main`: ahead 22, behind 5
 - `origin/main...upstream/main`: ahead 88, behind 220
 - Phase A merge and runtime validation are complete.
 - Phase B status now:
   - `profile=user` control lane passes (`start/status/tabs`) after remote debugging enablement.
   - `profile=openclaw` control lane passes (`start/status/tabs`) on isolated runtime.
   - Local `agent --local` prompt execution now exits cleanly in the isolated runtime after teardown fixes.
-  - Remaining blocker is provider/auth health for full task-matrix execution:
+  - Remaining blocker is provider quota for full task-matrix execution:
     - `openai-codex:default` returns `API rate limit reached`.
     - `openai-codex:notblockedamazon` returns `API rate limit reached`.
     - lower-priority Codex OAuth profiles previously surfaced `refresh_token_reused`.
     - Anthropic fallback previously surfaced `overloaded`.
+  - Codex OAuth login does work once stale auth windows are closed; overlapping browser tabs caused repeated `state mismatch` until the old `127.0.0.1:1455` listener was cleared.
   - LaunchAgent route was tested and reverted: it binds `19001` but runs against `~/.openclaw` state instead of `/tmp/openclaw-consumer`, so isolated auth/state checks fail.
 
 ## Execution phases and gates
@@ -177,6 +178,7 @@ Out of scope:
   - Confirmed `profile=user` and `profile=openclaw` control lanes remain healthy.
   - Confirmed isolated `agent --local` turns now complete and exit cleanly after CLI teardown fixes.
   - Pinned `openai-codex` auth order per agent to test individual profiles directly.
+  - Cleared a stale OAuth callback listener on `127.0.0.1:1455`; Codex login now completes when only one auth window is active.
 - Blocked:
   - `openai-codex:default` returns `⚠️ API rate limit reached. Please try again later.`
   - `openai-codex:notblockedamazon` returns `⚠️ API rate limit reached. Please try again later.`
