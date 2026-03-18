@@ -11,7 +11,25 @@ import type { ImageGenerationProviderPlugin } from "../../plugins/types.js";
 const DEFAULT_GOOGLE_IMAGE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
 const DEFAULT_OUTPUT_MIME = "image/png";
-const DEFAULT_ASPECT_RATIO = "1:1";
+const GOOGLE_SUPPORTED_SIZES = [
+  "1024x1024",
+  "1024x1536",
+  "1536x1024",
+  "1024x1792",
+  "1792x1024",
+] as const;
+const GOOGLE_SUPPORTED_ASPECT_RATIOS = [
+  "1:1",
+  "2:3",
+  "3:2",
+  "3:4",
+  "4:3",
+  "4:5",
+  "5:4",
+  "9:16",
+  "16:9",
+  "21:9",
+] as const;
 
 type GoogleInlineDataPart = {
   mimeType?: string;
@@ -46,7 +64,7 @@ function mapSizeToImageConfig(
 ): { aspectRatio?: string; imageSize?: "2K" | "4K" } | undefined {
   const trimmed = size?.trim();
   if (!trimmed) {
-    return { aspectRatio: DEFAULT_ASPECT_RATIO };
+    return undefined;
   }
 
   const normalized = trimmed.toLowerCase();
@@ -79,11 +97,35 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProviderPlu
   return {
     id: "google",
     label: "Google",
+    defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
+    models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image-preview"],
+    capabilities: {
+      generate: {
+        maxCount: 4,
+        supportsSize: true,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+      },
+      edit: {
+        enabled: true,
+        maxCount: 4,
+        maxInputImages: 5,
+        supportsSize: true,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+      },
+      geometry: {
+        sizes: [...GOOGLE_SUPPORTED_SIZES],
+        aspectRatios: [...GOOGLE_SUPPORTED_ASPECT_RATIOS],
+        resolutions: ["1K", "2K", "4K"],
+      },
+    },
     async generateImage(req) {
       const auth = await resolveApiKeyForProvider({
         provider: "google",
         cfg: req.cfg,
         agentDir: req.agentDir,
+        store: req.authStore,
       });
       if (!auth.apiKey) {
         throw new Error("Google API key missing");
@@ -98,6 +140,17 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProviderPlu
       const authHeaders = parseGeminiAuth(auth.apiKey);
       const headers = new Headers(authHeaders.headers);
       const imageConfig = mapSizeToImageConfig(req.size);
+      const inputParts = (req.inputImages ?? []).map((image) => ({
+        inlineData: {
+          mimeType: image.mimeType,
+          data: image.buffer.toString("base64"),
+        },
+      }));
+      const resolvedImageConfig = {
+        ...imageConfig,
+        ...(req.aspectRatio?.trim() ? { aspectRatio: req.aspectRatio.trim() } : {}),
+        ...(req.resolution ? { imageSize: req.resolution } : {}),
+      };
 
       const { response: res, release } = await postJsonRequest({
         url: `${baseUrl}/models/${model}:generateContent`,
@@ -106,12 +159,14 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProviderPlu
           contents: [
             {
               role: "user",
-              parts: [{ text: req.prompt }],
+              parts: [...inputParts, { text: req.prompt }],
             },
           ],
           generationConfig: {
             responseModalities: ["TEXT", "IMAGE"],
-            ...(imageConfig ? { imageConfig } : {}),
+            ...(Object.keys(resolvedImageConfig).length > 0
+              ? { imageConfig: resolvedImageConfig }
+              : {}),
           },
         },
         timeoutMs: 60_000,

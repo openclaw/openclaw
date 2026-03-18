@@ -113,7 +113,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     purpose: "status";
   }) => Promise<{
     manager: {
-      probeVectorAvailability(): Promise<void>;
+      probeVectorAvailability(): Promise<boolean>;
       status(): MemoryProviderStatus;
       close?(): Promise<void>;
     } | null;

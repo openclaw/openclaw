@@ -1,35 +1,51 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, it, vi } from "vitest";
 import {
-  providerContractPluginIds,
-  resolveProviderContractProvidersForPluginIds,
-  uniqueProviderContractProviders,
-} from "./registry.js";
+  expectAugmentedCodexCatalog,
+  expectCodexBuiltInSuppression,
+  expectCodexMissingAuthHint,
+} from "../provider-runtime.test-support.js";
 
-const resolvePluginProvidersMock = vi.fn();
-const resolveOwningPluginIdsForProviderMock = vi.fn();
-const resolveNonBundledProviderPluginIdsMock = vi.fn();
+type ResolvePluginProviders = typeof import("../providers.js").resolvePluginProviders;
+type ResolveOwningPluginIdsForProvider =
+  typeof import("../providers.js").resolveOwningPluginIdsForProvider;
+type ResolveNonBundledProviderPluginIds =
+  typeof import("../providers.js").resolveNonBundledProviderPluginIds;
 
-vi.mock("../providers.js", () => ({
-  resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
-  resolveOwningPluginIdsForProvider: (...args: unknown[]) =>
-    resolveOwningPluginIdsForProviderMock(...args),
-  resolveNonBundledProviderPluginIds: (...args: unknown[]) =>
-    resolveNonBundledProviderPluginIdsMock(...args),
-}));
+let resolveProviderContractPluginIdsForProvider: typeof import("./registry.js").resolveProviderContractPluginIdsForProvider;
+let resolveProviderContractProvidersForPluginIds: typeof import("./registry.js").resolveProviderContractProvidersForPluginIds;
+let uniqueProviderContractProviders: typeof import("./registry.js").uniqueProviderContractProviders;
 
-const {
-  augmentModelCatalogWithProviderPlugins,
-  buildProviderMissingAuthMessageWithPlugin,
-  resetProviderRuntimeHookCacheForTest,
-  resolveProviderBuiltInModelSuppression,
-} = await import("../provider-runtime.js");
+const resolvePluginProvidersMock = vi.hoisted(() =>
+  vi.fn<ResolvePluginProviders>((_) => uniqueProviderContractProviders),
+);
+const resolveOwningPluginIdsForProviderMock = vi.hoisted(() =>
+  vi.fn<ResolveOwningPluginIdsForProvider>((params) =>
+    resolveProviderContractPluginIdsForProvider(params.provider),
+  ),
+);
+const resolveNonBundledProviderPluginIdsMock = vi.hoisted(() =>
+  vi.fn<ResolveNonBundledProviderPluginIds>((_) => [] as string[]),
+);
+
+let augmentModelCatalogWithProviderPlugins: typeof import("../provider-runtime.js").augmentModelCatalogWithProviderPlugins;
+let buildProviderMissingAuthMessageWithPlugin: typeof import("../provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
+let resetProviderRuntimeHookCacheForTest: typeof import("../provider-runtime.js").resetProviderRuntimeHookCacheForTest;
+let resolveProviderBuiltInModelSuppression: typeof import("../provider-runtime.js").resolveProviderBuiltInModelSuppression;
 
 describe("provider catalog contract", () => {
-  beforeEach(() => {
-    resetProviderRuntimeHookCacheForTest();
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doUnmock("../providers.js");
+    ({
+      resolveProviderContractPluginIdsForProvider,
+      resolveProviderContractProvidersForPluginIds,
+      uniqueProviderContractProviders,
+    } = await import("./registry.js"));
 
     resolveOwningPluginIdsForProviderMock.mockReset();
-    resolveOwningPluginIdsForProviderMock.mockReturnValue(providerContractPluginIds);
+    resolveOwningPluginIdsForProviderMock.mockImplementation((params) =>
+      resolveProviderContractPluginIdsForProvider(params.provider),
+    );
 
     resolveNonBundledProviderPluginIdsMock.mockReset();
     resolveNonBundledProviderPluginIdsMock.mockReturnValue([]);
@@ -42,60 +58,33 @@ describe("provider catalog contract", () => {
       }
       return resolveProviderContractProvidersForPluginIds(onlyPluginIds);
     });
+
+    vi.doMock("../providers.js", () => ({
+      resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+      resolveOwningPluginIdsForProvider: (params: unknown) =>
+        resolveOwningPluginIdsForProviderMock(params as never),
+      resolveNonBundledProviderPluginIds: (params: unknown) =>
+        resolveNonBundledProviderPluginIdsMock(params as never),
+    }));
+
+    ({
+      augmentModelCatalogWithProviderPlugins,
+      buildProviderMissingAuthMessageWithPlugin,
+      resetProviderRuntimeHookCacheForTest,
+      resolveProviderBuiltInModelSuppression,
+    } = await import("../provider-runtime.js"));
+    resetProviderRuntimeHookCacheForTest();
   });
 
   it("keeps codex-only missing-auth hints wired through the provider runtime", () => {
-    expect(
-      buildProviderMissingAuthMessageWithPlugin({
-        provider: "openai",
-        env: process.env,
-        context: {
-          env: process.env,
-          provider: "openai",
-          listProfileIds: (providerId) => (providerId === "openai-codex" ? ["p1"] : []),
-        },
-      }),
-    ).toContain("openai-codex/gpt-5.4");
+    expectCodexMissingAuthHint(buildProviderMissingAuthMessageWithPlugin);
   });
 
   it("keeps built-in model suppression wired through the provider runtime", () => {
-    expect(
-      resolveProviderBuiltInModelSuppression({
-        env: process.env,
-        context: {
-          env: process.env,
-          provider: "azure-openai-responses",
-          modelId: "gpt-5.3-codex-spark",
-        },
-      }),
-    ).toMatchObject({
-      suppress: true,
-      errorMessage: expect.stringContaining("openai-codex/gpt-5.3-codex-spark"),
-    });
+    expectCodexBuiltInSuppression(resolveProviderBuiltInModelSuppression);
   });
 
   it("keeps bundled model augmentation wired through the provider runtime", async () => {
-    await expect(
-      augmentModelCatalogWithProviderPlugins({
-        env: process.env,
-        context: {
-          env: process.env,
-          entries: [
-            { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
-            { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
-            { provider: "openai-codex", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
-          ],
-        },
-      }),
-    ).resolves.toEqual([
-      { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
-      { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-      { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
-      {
-        provider: "openai-codex",
-        id: "gpt-5.3-codex-spark",
-        name: "gpt-5.3-codex-spark",
-      },
-    ]);
+    await expectAugmentedCodexCatalog(augmentModelCatalogWithProviderPlugins);
   });
 });

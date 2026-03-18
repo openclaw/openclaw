@@ -26,6 +26,11 @@ export class MediaFetchError extends Error {
 
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+export type FetchDispatcherAttempt = {
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  lookupFn?: LookupFn;
+};
+
 type FetchMediaOptions = {
   url: string;
   fetchImpl?: FetchLike;
@@ -37,8 +42,7 @@ type FetchMediaOptions = {
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
-  dispatcherPolicy?: PinnedDispatcherPolicy;
-  fallbackDispatcherPolicy?: PinnedDispatcherPolicy;
+  dispatcherAttempts?: FetchDispatcherAttempt[];
   shouldRetryFetchError?: (error: unknown) => boolean;
 };
 
@@ -101,8 +105,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     readIdleTimeoutMs,
     ssrfPolicy,
     lookupFn,
-    dispatcherPolicy,
-    fallbackDispatcherPolicy,
+    dispatcherAttempts,
     shouldRetryFetchError,
   } = options;
   const sourceUrl = redactMediaUrl(url);
@@ -110,7 +113,11 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
   let res: Response;
   let finalUrl = url;
   let release: (() => Promise<void>) | null = null;
-  const runGuardedFetch = async (policy?: PinnedDispatcherPolicy) =>
+  const attempts =
+    dispatcherAttempts && dispatcherAttempts.length > 0
+      ? dispatcherAttempts
+      : [{ dispatcherPolicy: undefined, lookupFn }];
+  const runGuardedFetch = async (attempt: FetchDispatcherAttempt) =>
     await fetchWithSsrFGuard(
       withStrictGuardedFetchMode({
         url,
@@ -118,32 +125,43 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
         init: requestInit,
         maxRedirects,
         policy: ssrfPolicy,
-        lookupFn,
-        dispatcherPolicy: policy,
+        lookupFn: attempt.lookupFn ?? lookupFn,
+        dispatcherPolicy: attempt.dispatcherPolicy,
       }),
     );
   try {
-    let result;
-    try {
-      result = await runGuardedFetch(dispatcherPolicy);
-    } catch (err) {
-      if (
-        fallbackDispatcherPolicy &&
-        typeof shouldRetryFetchError === "function" &&
-        shouldRetryFetchError(err)
-      ) {
-        try {
-          result = await runGuardedFetch(fallbackDispatcherPolicy);
-        } catch (fallbackErr) {
-          const combined = new Error(
-            `Primary fetch failed and fallback fetch also failed for ${sourceUrl}`,
-            { cause: fallbackErr },
-          );
-          (combined as Error & { primaryError?: unknown }).primaryError = err;
-          throw combined;
+    let result!: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    const attemptErrors: unknown[] = [];
+    for (let i = 0; i < attempts.length; i += 1) {
+      try {
+        result = await runGuardedFetch(attempts[i]);
+        break;
+      } catch (err) {
+        if (
+          typeof shouldRetryFetchError !== "function" ||
+          !shouldRetryFetchError(err) ||
+          i === attempts.length - 1
+        ) {
+          if (attemptErrors.length > 0) {
+            const combined = new Error(
+              `Primary fetch failed and fallback fetch also failed for ${sourceUrl}`,
+              { cause: err },
+            );
+            (
+              combined as Error & {
+                primaryError?: unknown;
+                attemptErrors?: unknown[];
+              }
+            ).primaryError = attemptErrors[0];
+            (combined as Error & { attemptErrors?: unknown[] }).attemptErrors = [
+              ...attemptErrors,
+              err,
+            ];
+            throw combined;
+          }
+          throw err;
         }
-      } else {
-        throw err;
+        attemptErrors.push(err);
       }
     }
     res = result.response;

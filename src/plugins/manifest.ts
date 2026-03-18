@@ -11,6 +11,7 @@ export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 export type PluginManifest = {
   id: string;
   configSchema: Record<string, unknown>;
+  enabledByDefault?: boolean;
   kind?: PluginKind;
   channels?: string[];
   providers?: string[];
@@ -180,6 +181,7 @@ export function loadPluginManifest(
   }
 
   const kind = typeof raw.kind === "string" ? (raw.kind as PluginKind) : undefined;
+  const enabledByDefault = raw.enabledByDefault === true;
   const name = typeof raw.name === "string" ? raw.name.trim() : undefined;
   const description = typeof raw.description === "string" ? raw.description.trim() : undefined;
   const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
@@ -199,6 +201,7 @@ export function loadPluginManifest(
     manifest: {
       id,
       configSchema,
+      ...(enabledByDefault ? { enabledByDefault } : {}),
       kind,
       channels,
       providers,

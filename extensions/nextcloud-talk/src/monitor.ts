@@ -1,12 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
+import { resolveLoggerBackedRuntime } from "../../shared/runtime.js";
 import {
   type RuntimeEnv,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/nextcloud-talk";
-import { resolveLoggerBackedRuntime } from "../../shared/runtime.js";
+} from "../runtime-api.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
