@@ -108,6 +108,8 @@ function redactUrl(raw: string): string {
 
 const TOOL_NAME_SAFE_RE = /[^A-Za-z0-9_.-]/g;
 const TOOL_NAME_MAX_PREFIX = 30;
+// Must match TOOL_CALL_NAME_MAX_CHARS in session-transcript-repair.ts
+const TOOL_NAME_MAX_TOTAL = 64;
 
 function sanitizeServerName(raw: string): string {
   const cleaned = raw.trim().replace(TOOL_NAME_SAFE_RE, "-");
@@ -255,6 +257,12 @@ function registerTools(params: {
       continue;
     }
     const prefixedName = `${params.serverName}:${originalName}`;
+    if (prefixedName.length > TOOL_NAME_MAX_TOTAL) {
+      logWarn(
+        `bundle-mcp: skipped tool "${originalName}" from server "${params.serverName}" because the namespaced name exceeds ${TOOL_NAME_MAX_TOTAL} characters.`,
+      );
+      continue;
+    }
     const normalizedName = prefixedName.toLowerCase();
     if (params.reservedNames.has(normalizedName)) {
       logWarn(
