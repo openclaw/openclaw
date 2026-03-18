@@ -32,13 +32,13 @@ INPUT_PATHS=(
 )
 
 compute_hash() {
-  ROOT_DIR="$ROOT_DIR" node --input-type=module - "${INPUT_PATHS[@]}" <<'NODE'
+  ROOT_DIR="$ROOT_DIR" node --input-type=module --eval '
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
 const rootDir = process.env.ROOT_DIR ?? process.cwd();
-const inputs = process.argv.slice(2);
+const inputs = process.argv.slice(1);
 const files = [];
 
 async function walk(entryPath) {
@@ -73,7 +73,7 @@ for (const filePath of files) {
 }
 
 process.stdout.write(hash.digest("hex"));
-NODE
+' "${INPUT_PATHS[@]}"
 }
 
 current_hash="$(compute_hash)"
@@ -88,6 +88,11 @@ fi
 pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
 if command -v rolldown >/dev/null 2>&1 && rolldown --version >/dev/null 2>&1; then
   rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
+elif [[ -f "$ROOT_DIR/node_modules/.pnpm/node_modules/rolldown/bin/cli.mjs" ]]; then
+  node "$ROOT_DIR/node_modules/.pnpm/node_modules/rolldown/bin/cli.mjs" -c "$A2UI_APP_DIR/rolldown.config.mjs"
+elif [[ -f "$ROOT_DIR/node_modules/.pnpm/rolldown@1.0.0-rc.9/node_modules/rolldown/bin/cli.mjs" ]]; then
+  node "$ROOT_DIR/node_modules/.pnpm/rolldown@1.0.0-rc.9/node_modules/rolldown/bin/cli.mjs" \
+    -c "$A2UI_APP_DIR/rolldown.config.mjs"
 else
   pnpm -s dlx rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
 fi

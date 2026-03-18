@@ -140,10 +140,16 @@ async function runFallbackCandidate<T>(params: {
       result,
     };
   } catch (err) {
-    if (shouldRethrowAbort(err)) {
+    // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
+    // so they become FailoverErrors and continue the fallback loop instead of aborting.
+    const normalizedFailover = coerceToFailoverError(err, {
+      provider: params.provider,
+      model: params.model,
+    });
+    if (shouldRethrowAbort(err) && !normalizedFailover) {
       throw err;
     }
-    return { ok: false, error: err };
+    return { ok: false, error: normalizedFailover ?? err };
   }
 }
 
@@ -449,7 +455,7 @@ function resolveCooldownDecision(params: {
       store: params.authStore,
       profileIds: params.profileIds,
       now: params.now,
-    }) ?? "rate_limit";
+    }) ?? "unknown";
   const isPersistentAuthIssue = inferredReason === "auth" || inferredReason === "auth_permanent";
   if (isPersistentAuthIssue) {
     return {
@@ -483,7 +489,10 @@ function resolveCooldownDecision(params: {
   // limits, which are often model-scoped and can recover on a sibling model.
   const shouldAttemptDespiteCooldown =
     (params.isPrimary && (!params.requestedModel || shouldProbe)) ||
-    (!params.isPrimary && (inferredReason === "rate_limit" || inferredReason === "overloaded"));
+    (!params.isPrimary &&
+      (inferredReason === "rate_limit" ||
+        inferredReason === "overloaded" ||
+        inferredReason === "unknown"));
   if (!shouldAttemptDespiteCooldown) {
     return {
       type: "skip",
@@ -588,13 +597,16 @@ export async function runWithModelFallback<T>(params: {
         if (
           decision.reason === "rate_limit" ||
           decision.reason === "overloaded" ||
-          decision.reason === "billing"
+          decision.reason === "billing" ||
+          decision.reason === "unknown"
         ) {
           // Probe at most once per provider per fallback run when all profiles
           // are cooldowned. Re-probing every same-provider candidate can stall
           // cross-provider fallback on providers with long internal retries.
           const isTransientCooldownReason =
-            decision.reason === "rate_limit" || decision.reason === "overloaded";
+            decision.reason === "rate_limit" ||
+            decision.reason === "overloaded" ||
+            decision.reason === "unknown";
           if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
             const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
             attempts.push({

@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
@@ -211,7 +212,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           .filter(Boolean)
           .join("\n");
         const mirrorMediaUrls = mirrorPayloads.flatMap(
-          (payload) => payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+          (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
         );
         const providedSessionKey =
           typeof request.sessionKey === "string" && request.sessionKey.trim()
@@ -268,6 +269,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 agentId: effectiveAgentId,
                 text: mirrorText || message,
                 mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+                idempotencyKey: idem,
               }
             : derivedRoute
               ? {
@@ -275,6 +277,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   agentId: effectiveAgentId,
                   text: mirrorText || message,
                   mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+                  idempotencyKey: idem,
                 }
               : undefined,
         });

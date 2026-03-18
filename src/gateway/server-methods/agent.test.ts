@@ -303,6 +303,107 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.acp).toEqual(existingAcpMeta);
   });
 
+  it("forwards provider and model overrides for admin-scoped callers", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "test override",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        idempotencyKey: "test-idem-model-override",
+      },
+      {
+        reqId: "test-idem-model-override",
+        client: {
+          connect: {
+            scopes: ["operator.admin"],
+          },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    const lastCall = mocks.agentCommand.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+      }),
+    );
+  });
+
+  it("rejects provider and model overrides for write-scoped callers", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "test override",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        idempotencyKey: "test-idem-model-override-write",
+      },
+      {
+        reqId: "test-idem-model-override-write",
+        client: {
+          connect: {
+            scopes: ["operator.write"],
+          },
+        } as AgentHandlerArgs["client"],
+        respond,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "provider/model overrides are not authorized for this caller.",
+      }),
+    );
+  });
+
+  it("forwards provider and model overrides when internal override authorization is set", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "test override",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        idempotencyKey: "test-idem-model-override-internal",
+      },
+      {
+        reqId: "test-idem-model-override-internal",
+        client: {
+          connect: {
+            scopes: ["operator.write"],
+          },
+          internal: {
+            allowModelOverride: true,
+          },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    const lastCall = mocks.agentCommand.mock.calls.at(-1);
+    expect(lastCall?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        senderIsOwner: false,
+      }),
+    );
+  });
+
   it("preserves cliSessionIds from existing session entry", async () => {
     const existingCliSessionIds = { "claude-cli": "abc-123-def" };
     const existingClaudeCliSessionId = "abc-123-def";
@@ -405,30 +506,53 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
-  it("only forwards workspaceDir for spawned subagent runs", async () => {
+  it("rejects public spawned-run metadata fields", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
-
-    await invokeAgent(
-      {
-        message: "normal run",
-        sessionKey: "agent:main:main",
-        workspaceDir: "/tmp/ignored",
-        idempotencyKey: "workspace-ignored",
-      },
-      { reqId: "workspace-ignored-1" },
-    );
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const normalCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
-    expect(normalCall.workspaceDir).toBeUndefined();
-    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
 
     await invokeAgent(
       {
         message: "spawned run",
         sessionKey: "agent:main:main",
         spawnedBy: "agent:main:subagent:parent",
-        workspaceDir: "/tmp/inherited",
+        workspaceDir: "/tmp/injected",
+        idempotencyKey: "workspace-rejected",
+      } as AgentParams,
+      { reqId: "workspace-rejected-1", respond },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("invalid agent params"),
+      }),
+    );
+  });
+
+  it("only forwards workspaceDir for spawned sessions with stored workspace inheritance", async () => {
+    primeMainAgentRun();
+    mockMainSessionEntry({
+      spawnedBy: "agent:main:subagent:parent",
+      spawnedWorkspaceDir: "/tmp/inherited",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          spawnedBy: "agent:main:subagent:parent",
+          spawnedWorkspaceDir: "/tmp/inherited",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "spawned run",
+        sessionKey: "agent:main:main",
         idempotencyKey: "workspace-forwarded",
       },
       { reqId: "workspace-forwarded-1" },
@@ -559,7 +683,7 @@ describe("gateway agent handler", () => {
     expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
     const call = readLastAgentCommandCall();
     // Message is now dynamically built with current date — check key substrings
-    expect(call?.message).toContain("Execute your Session Startup sequence now");
+    expect(call?.message).toContain("Run your Session Startup sequence");
     expect(call?.message).toContain("Current time:");
     expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
     expect(call?.sessionId).toBe("reset-session-id");

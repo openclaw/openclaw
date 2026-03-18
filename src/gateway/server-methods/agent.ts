@@ -50,8 +50,7 @@ import { performGatewaySessionReset } from "../session-reset-service.js";
 import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
+  migrateAndPruneGatewaySessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -70,6 +69,12 @@ const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
+}
+
+function resolveAllowModelOverrideFromClient(
+  client: GatewayRequestHandlerOptions["client"],
+): boolean {
+  return resolveSenderIsOwnerFromClient(client) || client?.internal?.allowModelOverride === true;
 }
 
 async function runSessionResetFromAgent(params: {
@@ -163,6 +168,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     const request = p as {
       message: string;
       agentId?: string;
+      provider?: string;
+      model?: string;
       to?: string;
       replyTo?: string;
       sessionId?: string;
@@ -190,24 +197,35 @@ export const agentHandlers: GatewayRequestHandlers = {
       timeout?: number;
       bestEffortDeliver?: boolean;
       label?: string;
-      spawnedBy?: string;
       inputProvenance?: InputProvenance;
-      workspaceDir?: string;
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
+    const allowModelOverride = resolveAllowModelOverrideFromClient(client);
+    const requestedModelOverride = Boolean(request.provider || request.model);
+    if (requestedModelOverride && !allowModelOverride) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "provider/model overrides are not authorized for this caller.",
+        ),
+      );
+      return;
+    }
+    const providerOverride = allowModelOverride ? request.provider : undefined;
+    const modelOverride = allowModelOverride ? request.model : undefined;
     const cfg = loadConfig();
     const idem = request.idempotencyKey;
     const normalizedSpawned = normalizeSpawnedRunMetadata({
-      spawnedBy: request.spawnedBy,
       groupId: request.groupId,
       groupChannel: request.groupChannel,
       groupSpace: request.groupSpace,
-      workspaceDir: request.workspaceDir,
     });
     let resolvedGroupId: string | undefined = normalizedSpawned.groupId;
     let resolvedGroupChannel: string | undefined = normalizedSpawned.groupChannel;
     let resolvedGroupSpace: string | undefined = normalizedSpawned.groupSpace;
-    let spawnedByValue = normalizedSpawned.spawnedBy;
+    let spawnedByValue: string | undefined;
     const inputProvenance = normalizeInputProvenance(request.inputProvenance);
     const cached = context.dedupe.get(`agent:${idem}`);
     if (cached) {
@@ -359,11 +377,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       const sessionId = entry?.sessionId ?? randomUUID();
       const labelValue = request.label?.trim() || entry?.label;
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
-      spawnedByValue = canonicalizeSpawnedByForAgent(
-        cfg,
-        sessionAgent,
-        spawnedByValue || entry?.spawnedBy,
-      );
+      spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
       let inheritedGroup:
         | { groupId?: string; groupChannel?: string; groupSpace?: string }
         | undefined;
@@ -387,6 +401,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         sessionId,
         updatedAt: now,
         thinkingLevel: entry?.thinkingLevel,
+        fastMode: entry?.fastMode,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         systemSent: entry?.systemSent,
@@ -400,6 +415,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
+        spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
         spawnDepth: entry?.spawnDepth,
         channel: entry?.channel ?? request.channel?.trim(),
         groupId: resolvedGroupId ?? entry?.groupId,
@@ -431,18 +447,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       if (storePath) {
         const persisted = await updateSessionStore(storePath, (store) => {
-          const target = resolveGatewaySessionStoreTarget({
+          const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
             cfg,
             key: requestedSessionKey,
             store,
           });
-          pruneLegacyStoreKeys({
-            store,
-            canonicalKey: target.canonicalKey,
-            candidates: target.storeKeys,
-          });
-          const merged = mergeSessionEntry(store[canonicalSessionKey], nextEntryPatch);
-          store[canonicalSessionKey] = merged;
+          const merged = mergeSessionEntry(store[primaryKey], nextEntryPatch);
+          store[primaryKey] = merged;
           return merged;
         });
         sessionEntry = persisted;
@@ -596,6 +607,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       ingressOpts: {
         message,
         images,
+        provider: providerOverride,
+        model: modelOverride,
         to: resolvedTo,
         sessionId: resolvedSessionId,
         sessionKey: resolvedSessionKey,
@@ -628,9 +641,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         // Internal-only: allow workspace override for spawned subagent runs.
         workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
           spawnedBy: spawnedByValue,
-          workspaceDir: request.workspaceDir,
+          workspaceDir: sessionEntry?.spawnedWorkspaceDir,
         }),
         senderIsOwner,
+        allowModelOverride,
       },
       runId,
       idempotencyKey: idem,
