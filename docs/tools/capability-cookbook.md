@@ -1,7 +1,7 @@
 ---
 summary: "Cookbook for adding a new shared capability to OpenClaw"
 read_when:
-  - Adding a new core capability and plugin seam
+  - Adding a new core capability and plugin registration surface
   - Deciding whether code belongs in core, a vendor plugin, or a feature plugin
   - Wiring a new runtime helper for channels or tools
 title: "Capability Cookbook"
@@ -88,7 +88,7 @@ Image generation follows the standard shape:
 1. core defines `ImageGenerationProvider`
 2. core exposes `registerImageGenerationProvider(...)`
 3. core exposes `runtime.imageGeneration.generate(...)`
-4. the `openai` plugin registers an OpenAI-backed implementation
+4. the `openai` and `google` plugins register vendor-backed implementations
 5. future vendors can register the same contract without changing channels/tools
 
 The config key is separate from vision-analysis routing:

@@ -4,11 +4,21 @@ import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveUserPath } from "../utils.js";
 
+function isSourceCheckoutRoot(packageRoot: string): boolean {
+  return (
+    fs.existsSync(path.join(packageRoot, ".git")) &&
+    fs.existsSync(path.join(packageRoot, "src")) &&
+    fs.existsSync(path.join(packageRoot, "extensions"))
+  );
+}
+
 export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env);
   }
+
+  const preferSourceCheckout = Boolean(env.VITEST);
 
   try {
     const packageRoots = [
@@ -18,6 +28,13 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
       (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
     );
     for (const packageRoot of packageRoots) {
+      const sourceExtensionsDir = path.join(packageRoot, "extensions");
+      if (
+        (preferSourceCheckout || isSourceCheckoutRoot(packageRoot)) &&
+        fs.existsSync(sourceExtensionsDir)
+      ) {
+        return sourceExtensionsDir;
+      }
       // Local source checkouts stage a runtime-complete bundled plugin tree under
       // dist-runtime/. Prefer that over source extensions only when the paired
       // dist/ tree exists; otherwise wrappers can drift ahead of the last build.

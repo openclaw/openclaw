@@ -24,6 +24,7 @@ export { normalizeE164, pathExists } from "../utils.js";
 export {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
+  createEnvPatchedAccountSetupAdapter,
   createPatchedAccountSetupAdapter,
   migrateBaseNameToDefaultAccount,
   patchScopedAccountConfig,
@@ -32,6 +33,17 @@ export {
 export {
   addWildcardAllowFrom,
   buildSingleChannelSecretPromptState,
+  createAccountScopedAllowFromSection,
+  createAccountScopedGroupAccessSection,
+  createAllowFromSection,
+  createLegacyCompatChannelDmPolicy,
+  createNestedChannelAllowFromSetter,
+  createNestedChannelDmPolicy,
+  createNestedChannelDmPolicySetter,
+  createTopLevelChannelAllowFromSetter,
+  createTopLevelChannelDmPolicy,
+  createTopLevelChannelDmPolicySetter,
+  createTopLevelChannelGroupPolicySetter,
   mergeAllowFromEntries,
   normalizeAllowFromEntries,
   noteChannelLookupFailure,
@@ -39,16 +51,27 @@ export {
   parseMentionOrPrefixedId,
   parseSetupEntriesAllowingWildcard,
   parseSetupEntriesWithParser,
+  patchNestedChannelConfigSection,
+  patchTopLevelChannelConfigSection,
   patchChannelConfigForAccount,
   promptLegacyChannelAllowFrom,
+  promptLegacyChannelAllowFromForAccount,
+  promptParsedAllowFromForAccount,
   promptParsedAllowFromForScopedChannel,
   promptSingleChannelSecretInput,
   promptResolvedAllowFrom,
+  resolveParsedAllowFromEntries,
+  resolveEntriesWithOptionalToken,
   resolveSetupAccountId,
+  resolveGroupAllowlistWithLookupNotes,
   runSingleChannelSecretStep,
+  setAccountAllowFromForChannel,
+  setAccountDmAllowFromForChannel,
   setAccountGroupPolicyForChannel,
   setChannelDmPolicyWithAllowFrom,
   setLegacyChannelDmPolicyWithAllowFrom,
+  setNestedChannelAllowFrom,
+  setNestedChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
@@ -56,5 +79,17 @@ export {
   splitSetupEntries,
 } from "../channels/plugins/setup-wizard-helpers.js";
 export { createAllowlistSetupWizardProxy } from "../channels/plugins/setup-wizard-proxy.js";
+export {
+  createDelegatedFinalize,
+  createDelegatedPrepare,
+  createDelegatedResolveConfigured,
+  createDelegatedSetupWizardProxy,
+} from "../channels/plugins/setup-wizard-proxy.js";
+export {
+  createCliPathTextInput,
+  createDelegatedSetupWizardStatusResolvers,
+  createDelegatedTextInputShouldPrompt,
+  createDetectedBinaryStatus,
+} from "../channels/plugins/setup-wizard-binary.js";
 
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";

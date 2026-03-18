@@ -1,5 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/discord";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getRequiredHookHandler,
+  registerHookHandlersForTest,
+} from "../../../test/helpers/extensions/subagent-hooks.js";
 import { registerDiscordSubagentHooks } from "./subagent-hooks.js";
 
 type ThreadBindingRecord = {
@@ -55,26 +59,10 @@ function registerHandlersForTest(
     },
   },
 ) {
-  const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
-  const api = {
+  return registerHookHandlersForTest<OpenClawPluginApi>({
     config,
-    on: (hookName: string, handler: (event: unknown, ctx: unknown) => unknown) => {
-      handlers.set(hookName, handler);
-    },
-  } as unknown as OpenClawPluginApi;
-  registerDiscordSubagentHooks(api);
-  return handlers;
-}
-
-function getRequiredHandler(
-  handlers: Map<string, (event: unknown, ctx: unknown) => unknown>,
-  hookName: string,
-): (event: unknown, ctx: unknown) => unknown {
-  const handler = handlers.get(hookName);
-  if (!handler) {
-    throw new Error(`expected ${hookName} hook handler`);
-  }
-  return handler;
+    register: registerDiscordSubagentHooks,
+  });
 }
 
 function resolveSubagentDeliveryTargetForTest(requesterOrigin: {
@@ -84,7 +72,7 @@ function resolveSubagentDeliveryTargetForTest(requesterOrigin: {
   threadId?: string;
 }) {
   const handlers = registerHandlersForTest();
-  const handler = getRequiredHandler(handlers, "subagent_delivery_target");
+  const handler = getRequiredHookHandler(handlers, "subagent_delivery_target");
   return handler(
     {
       childSessionKey: "agent:main:subagent:child",
@@ -158,7 +146,7 @@ async function runSubagentSpawning(
   event = createSpawnEventWithoutThread(),
 ) {
   const handlers = registerHandlersForTest(config);
-  const handler = getRequiredHandler(handlers, "subagent_spawning");
+  const handler = getRequiredHookHandler(handlers, "subagent_spawning");
   return await handler(event, {});
 }
 
@@ -202,7 +190,7 @@ describe("discord subagent hook handlers", () => {
 
   it("binds thread routing on subagent_spawning", async () => {
     const handlers = registerHandlersForTest();
-    const handler = getRequiredHandler(handlers, "subagent_spawning");
+    const handler = getRequiredHookHandler(handlers, "subagent_spawning");
 
     const result = await handler(createSpawnEvent(), {});
 
@@ -320,7 +308,7 @@ describe("discord subagent hook handlers", () => {
 
   it("unbinds thread routing on subagent_ended", () => {
     const handlers = registerHandlersForTest();
-    const handler = getRequiredHandler(handlers, "subagent_ended");
+    const handler = getRequiredHookHandler(handlers, "subagent_ended");
 
     handler(
       {

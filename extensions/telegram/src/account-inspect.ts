@@ -8,7 +8,7 @@ import {
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/telegram";
+import type { TelegramAccountConfig } from "../runtime-api.js";
 import {
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,

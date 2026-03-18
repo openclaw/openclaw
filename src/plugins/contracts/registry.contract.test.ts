@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import { resolvePluginWebSearchProviders } from "../web-search-providers.js";
 import {
+  capabilityContractLoadError,
   imageGenerationProviderContractRegistry,
   mediaUnderstandingProviderContractRegistry,
   pluginRegistrationContractRegistry,
@@ -85,6 +86,11 @@ function findRegistrationForPlugin(pluginId: string) {
 }
 
 describe("plugin contract registry", () => {
+  it("loads bundled non-provider capability registries without import-time failure", () => {
+    expect(capabilityContractLoadError).toBeUndefined();
+    expect(pluginRegistrationContractRegistry.length).toBeGreaterThan(0);
+  });
+
   it("does not duplicate bundled provider ids", () => {
     const ids = providerContractRegistry.map((entry) => entry.provider.id);
     expect(ids).toEqual([...new Set(ids)]);
@@ -165,6 +171,7 @@ describe("plugin contract registry", () => {
   });
 
   it("keeps bundled image-generation ownership explicit", () => {
+    expect(findImageGenerationProviderIdsForPlugin("google")).toEqual(["google"]);
     expect(findImageGenerationProviderIdsForPlugin("openai")).toEqual(["openai"]);
   });
 
@@ -180,6 +187,13 @@ describe("plugin contract registry", () => {
   });
 
   it("tracks speech registrations on bundled provider plugins", () => {
+    expect(findRegistrationForPlugin("google")).toMatchObject({
+      providerIds: ["google", "google-gemini-cli"],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: ["google"],
+      imageGenerationProviderIds: ["google"],
+      webSearchProviderIds: ["gemini"],
+    });
     expect(findRegistrationForPlugin("openai")).toMatchObject({
       providerIds: ["openai", "openai-codex"],
       speechProviderIds: ["openai"],
@@ -245,6 +259,9 @@ describe("plugin contract registry", () => {
   });
 
   it("keeps bundled image-generation support explicit", () => {
+    expect(findImageGenerationProviderForPlugin("google").generateImage).toEqual(
+      expect.any(Function),
+    );
     expect(findImageGenerationProviderForPlugin("openai").generateImage).toEqual(
       expect.any(Function),
     );
