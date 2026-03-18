@@ -21,8 +21,6 @@ import {
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
-  resolveDiscordGroupRequireMention,
-  resolveDiscordGroupToolPolicy,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type OpenClawConfig,
@@ -38,6 +36,10 @@ import {
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./exec-approvals.js";
+import {
+  resolveDiscordGroupRequireMention,
+  resolveDiscordGroupToolPolicy,
+} from "./group-policy.js";
 import { monitorDiscordProvider } from "./monitor.js";
 import {
   looksLikeDiscordTargetId,
