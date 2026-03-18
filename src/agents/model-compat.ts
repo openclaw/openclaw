@@ -114,12 +114,17 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
 
-  // The `developer` role and stream usage chunks are OpenAI-native behaviors.
-  // Many OpenAI-compatible backends reject `developer` and/or emit usage-only
-  // chunks that break strict parsers expecting choices[0]. Additionally, the
-  // `strict` boolean inside tools validation is rejected by several providers
-  // causing tool calls to be ignored. For non-native openai-completions endpoints,
-  // default these compat flags off unless explicitly opted in.
+  // The `developer` role is an OpenAI-native behavior that most compatible
+  // backends reject. The `strict` boolean in tool definitions is also rejected
+  // by several providers. For non-native openai-completions endpoints, force
+  // both flags off unless explicitly opted in.
+  //
+  // `supportsUsageInStreaming` defaults to true because most OpenAI-compatible
+  // backends (vllm, qwen, deepseek, groq, together, etc.) handle
+  // `stream_options: { include_usage: true }` correctly, and disabling it
+  // silently breaks usage/token tracking for all non-native providers.
+  // Backends that reject the parameter can opt out with
+  // `compat.supportsUsageInStreaming: false` in their model config.
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
   // leave compat unchanged and let default native behavior apply.
@@ -145,12 +150,12 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
       ? {
           ...compat,
           supportsDeveloperRole: forcedDeveloperRole || false,
-          ...(hasStreamingUsageOverride ? {} : { supportsUsageInStreaming: false }),
+          ...(hasStreamingUsageOverride ? {} : { supportsUsageInStreaming: true }),
           supportsStrictMode: targetStrictMode,
         }
       : {
           supportsDeveloperRole: false,
-          supportsUsageInStreaming: false,
+          supportsUsageInStreaming: true,
           supportsStrictMode: false,
         },
   } as typeof model;
