@@ -201,22 +201,9 @@ async function expectSlackSendRejected(params: Record<string, unknown>, error: R
 
 beforeEach(async () => {
   vi.resetModules();
-<<<<<<< HEAD
-  ({ discordMessageActions } =
-    await import("../../../../extensions/discord/src/channel-actions.js"));
-  ({ handleDiscordMessageAction } =
-    await import("../../../../extensions/discord/src/actions/handle-action.js"));
-  ({ telegramMessageActions } =
-    await import("../../../../extensions/telegram/src/channel-actions.js"));
-||||||| parent of 69827439b1 (fix: stabilize rebased full gate)
-  ({ discordMessageActions } = await import("./discord.js"));
-  ({ handleDiscordMessageAction } = await import("./discord/handle-action.js"));
-  ({ telegramMessageActions } = await import("./telegram.js"));
-=======
   ({ discordMessageActions } = await import("../../../../extensions/discord/runtime-api.js"));
   ({ handleDiscordMessageAction } = await import("./discord/handle-action.js"));
   ({ telegramMessageActions } = await import("../../../../extensions/telegram/runtime-api.js"));
->>>>>>> 69827439b1 (fix: stabilize rebased full gate)
   ({ signalMessageActions } = await import("../../../../extensions/signal/src/message-actions.js"));
   ({ createSlackActions } = await import("../../../../extensions/slack/src/channel-actions.js"));
   vi.clearAllMocks();
