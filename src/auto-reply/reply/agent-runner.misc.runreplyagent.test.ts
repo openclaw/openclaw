@@ -1935,3 +1935,156 @@ describe("runReplyAgent billing error classification", () => {
     expect(payload?.text).not.toContain("Context overflow");
   });
 });
+
+describe("runReplyAgent soft failure error feedback", () => {
+  function createSoftFailureRun(params: {
+    payloads?: { text: string }[];
+    attempts?: { provider: string; model: string; error: string }[];
+    provider?: string;
+    model?: string;
+    isHeartbeat?: boolean;
+  }) {
+    const provider = params.provider ?? "anthropic";
+    const model = params.model ?? "claude";
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "webchat",
+      OriginatingTo: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "webchat",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider,
+        model,
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: params.payloads ?? [],
+      meta: {},
+    });
+    runWithModelFallbackMock.mockImplementationOnce(
+      async ({ run }: RunWithModelFallbackParams) => ({
+        result: await run(provider, model),
+        provider,
+        model,
+        attempts: params.attempts ?? [],
+      }),
+    );
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: params.isHeartbeat ? { isHeartbeat: true } : undefined,
+      typing,
+      sessionCtx,
+      defaultModel: `${provider}/${model}`,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("sends error when all providers return empty content (multi-provider fallback)", async () => {
+    const result = await createSoftFailureRun({
+      payloads: [],
+      attempts: [
+        { provider: "openai", model: "gpt-4", error: "empty content" },
+      ],
+      provider: "anthropic",
+      model: "claude",
+    });
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toContain("All model providers failed");
+    expect(payload?.text).toContain("openai/gpt-4");
+    expect(payload?.text).toContain("anthropic/claude");
+    expect((payload as { isError?: boolean })?.isError).toBe(true);
+  });
+
+  it("sends error for single-provider soft failure (no fallback attempts)", async () => {
+    const result = await createSoftFailureRun({
+      payloads: [],
+      attempts: [],
+      provider: "anthropic",
+      model: "claude",
+    });
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toContain("All model providers failed");
+    expect(payload?.text).toContain("anthropic/claude");
+    expect((payload as { isError?: boolean })?.isError).toBe(true);
+  });
+
+  it("does NOT send error for heartbeat with empty payloads", async () => {
+    const result = await createSoftFailureRun({
+      payloads: [],
+      attempts: [],
+      isHeartbeat: true,
+    });
+
+    // Heartbeat with empty payload should finalize with undefined (no error)
+    expect(result).toBeUndefined();
+  });
+
+  it("does NOT send error when agent returns NO_REPLY payload", async () => {
+    const result = await createSoftFailureRun({
+      payloads: [{ text: "NO_REPLY" }],
+      attempts: [],
+    });
+
+    // NO_REPLY produces a payload so payloadArray.length > 0 — our error guard
+    // does not fire. The NO_REPLY filtering happens downstream in buildReplyPayloads.
+    // The result should NOT contain our error message.
+    if (result) {
+      const payload = Array.isArray(result) ? result[0] : result;
+      expect((payload as { isError?: boolean })?.isError).not.toBe(true);
+    }
+  });
+
+  it("includes fallback provider with undefined fields using 'unknown' fallback", async () => {
+    const result = await createSoftFailureRun({
+      payloads: [],
+      attempts: [
+        { provider: undefined as unknown as string, model: undefined as unknown as string, error: "empty" },
+      ],
+      provider: "anthropic",
+      model: "claude",
+    });
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toContain("unknown/unknown");
+    expect(payload?.text).toContain("anthropic/claude");
+  });
+});

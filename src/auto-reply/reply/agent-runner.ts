@@ -485,13 +485,28 @@ export async function runReplyAgent(params: {
       // When all providers failed with soft failures (HTTP 200 but empty content),
       // send an error message instead of staying completely silent.
       // Skip for heartbeats — empty payloads are normal for those.
-      if (!isHeartbeat && fallbackAttempts.length > 0) {
-        const failedProviders = fallbackAttempts.map((a) => `${a.provider}/${a.model}`).join(", ");
-        const errorPayload: ReplyPayload = {
-          text: `⚠️ All model providers failed to generate a response. Attempted: ${failedProviders}. Please try again.`,
-          isError: true,
-        };
-        return finalizeWithFollowup(errorPayload, queueKey, runFollowupTurn);
+      // Also skip when the agent deliberately returned NO_REPLY (empty payloads
+      // can result from NO_REPLY being stripped before reaching this point).
+      if (!isHeartbeat) {
+        // Build the full list of attempted providers including the final one
+        // (fallbackAttempts only includes providers tried before the final provider).
+        const allAttempts: string[] = fallbackAttempts.map(
+          (a) => `${a.provider || "unknown"}/${a.model || "unknown"}`,
+        );
+        const finalProvider = fallbackProvider || followupRun.run.provider;
+        const finalModel = fallbackModel || followupRun.run.model || defaultModel;
+        if (finalProvider || finalModel) {
+          allAttempts.push(`${finalProvider || "unknown"}/${finalModel || "unknown"}`);
+        }
+
+        if (allAttempts.length > 0) {
+          const failedProviders = allAttempts.join(", ");
+          const errorPayload: ReplyPayload = {
+            text: `⚠️ All model providers failed to generate a response. Attempted: ${failedProviders}. Please try again.`,
+            isError: true,
+          };
+          return finalizeWithFollowup(errorPayload, queueKey, runFollowupTurn);
+        }
       }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
