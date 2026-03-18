@@ -11,6 +11,7 @@ import {
   isContextOverflowError,
   isBillingErrorMessage,
   isLikelyContextOverflowError,
+  isThinkingBlockImmutabilityError,
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
@@ -533,6 +534,7 @@ export async function runAgentTurnWithFallback(params: {
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
+      const isThinkingImmutability = isThinkingBlockImmutabilityError(message);
       const isTransientHttp = isTransientHttpError(message);
 
       if (
@@ -555,6 +557,18 @@ export async function runAgentTurnWithFallback(params: {
             kind: "final",
             payload: {
               text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
+            },
+          };
+        }
+      }
+
+      if (isThinkingImmutability) {
+        const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
+        if (didReset) {
+          return {
+            kind: "final",
+            payload: {
+              text: "⚠️ Session history conflict (thinking block mismatch). I've reset the conversation - please try again.",
             },
           };
         }
@@ -631,7 +645,9 @@ export async function runAgentTurnWithFallback(params: {
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
           : isRoleOrderingError
             ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+            : isThinkingImmutability
+              ? "⚠️ Session history conflict. Use /new to start a fresh session."
+              : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",

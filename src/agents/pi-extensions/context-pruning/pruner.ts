@@ -142,9 +142,8 @@ function estimateMessageChars(message: AgentMessage): number {
       if (b.type === "text" && typeof b.text === "string") {
         chars += b.text.length;
       }
-      if (b.type === "thinking" && typeof b.thinking === "string") {
-        chars += b.thinking.length;
-      }
+      // Thinking/redacted_thinking blocks are stripped before reaching the API,
+      // so exclude them from the estimate to prevent over-pruning.
       if (b.type === "toolCall") {
         try {
           chars += JSON.stringify(b.arguments ?? {}).length;

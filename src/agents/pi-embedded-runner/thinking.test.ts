@@ -60,4 +60,13 @@ describe("dropThinkingBlocks", () => {
     ]);
     expect(assistant.content).toEqual([{ type: "text", text: "" }]);
   });
+
+  it("drops redacted_thinking blocks", () => {
+    const { assistant, messages, result } = dropSingleAssistantContent([
+      { type: "redacted_thinking", data: "encrypted" },
+      { type: "text", text: "visible" },
+    ]);
+    expect(result).not.toBe(messages);
+    expect(assistant.content).toEqual([{ type: "text", text: "visible" }]);
+  });
 });

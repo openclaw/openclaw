@@ -119,6 +119,21 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
   });
 
+  it("returns a friendly message for thinking block immutability errors", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"invalid_request_error","message":"thinking or redacted_thinking blocks in the latest assistant message cannot be modified"}}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("thinking block mismatch");
+    expect(result).toContain("/new");
+    expect(result).not.toContain("invalid_request_error");
+  });
+  it("returns a friendly message for short thinking block immutability errors", () => {
+    const msg = makeAssistantError("thinking blocks cannot be modified");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("thinking block mismatch");
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");

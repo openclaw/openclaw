@@ -200,6 +200,34 @@ describe("pruneContextMessages", () => {
     ]);
   });
 
+  it("excludes thinking block chars from context estimate (prevents over-pruning)", () => {
+    // A large thinking block should NOT inflate the context estimate.
+    // Without the fix, the 10k thinking chars push the ratio over the soft-trim
+    // threshold and the tool result gets pruned unnecessarily.
+    const messages: AgentMessage[] = [
+      makeUser("hello"),
+      makeAssistant([
+        { type: "thinking", thinking: "A".repeat(10_000) } as unknown as AssistantContentBlock,
+        { type: "text", text: "short" },
+      ]),
+      makeToolResult([{ type: "text", text: "tool output" }]),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+    const result = pruneContextMessages({
+      messages,
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 100,
+    });
+    const toolResult = result[2] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(toolResult.content[0]).toMatchObject({ type: "text", text: "tool output" });
+  });
+
   it("hard-clears image-containing tool results once ratios require clearing", () => {
     const messages: AgentMessage[] = [
       makeUser("summarize this"),
