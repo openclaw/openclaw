@@ -6,7 +6,7 @@ import {
   resolveBundledProviderBuiltInModelSuppression,
 } from "./provider-catalog-metadata.js";
 import {
-  resolveNonBundledProviderPluginIds,
+  resolveProviderPluginIdsForCatalogHooks,
   resolveOwningPluginIdsForProvider,
   resolvePluginProviders,
 } from "./providers.js";
@@ -137,7 +137,7 @@ function resolveProviderPluginsForCatalogHooks(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin[] {
-  const onlyPluginIds = resolveNonBundledProviderPluginIds({
+  const onlyPluginIds = resolveProviderPluginIdsForCatalogHooks({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,

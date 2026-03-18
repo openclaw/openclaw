@@ -115,7 +115,7 @@ export function resolveOwningPluginIdsForProvider(params: {
   return pluginIds.length > 0 ? pluginIds : undefined;
 }
 
-export function resolveNonBundledProviderPluginIds(params: {
+export function resolveProviderPluginIdsForCatalogHooks(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
@@ -127,20 +127,30 @@ export function resolveNonBundledProviderPluginIds(params: {
   });
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   return registry.plugins
-    .filter(
-      (plugin) =>
-        plugin.origin !== "bundled" &&
-        plugin.providers.length > 0 &&
-        resolveEffectiveEnableState({
-          id: plugin.id,
-          origin: plugin.origin,
-          config: normalizedConfig,
-          rootConfig: params.config,
-        }).enabled,
-    )
+    .filter((plugin) => {
+      if (plugin.providers.length === 0) {
+        return false;
+      }
+      // Bundled plugins that are only enabled via BUNDLED_ENABLED_BY_DEFAULT do not need
+      // augmentModelCatalog — their models are registered directly. Only include bundled
+      // plugins that have been explicitly opted-in by the user (entries[id].enabled === true)
+      // to avoid loading heavyweight plugin deps in test environments.
+      if (plugin.origin === "bundled" && normalizedConfig.entries[plugin.id]?.enabled !== true) {
+        return false;
+      }
+      return resolveEffectiveEnableState({
+        id: plugin.id,
+        origin: plugin.origin,
+        config: normalizedConfig,
+        rootConfig: params.config,
+      }).enabled;
+    })
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
+
+/** @deprecated Use resolveProviderPluginIdsForCatalogHooks */
+export const resolveNonBundledProviderPluginIds = resolveProviderPluginIdsForCatalogHooks;
 
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
