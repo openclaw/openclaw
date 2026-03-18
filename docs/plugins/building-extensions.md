@@ -89,7 +89,7 @@ For provider plugins, use `definePluginEntry` instead.
 
 ## Step 3: Import from focused subpaths
 
-The plugin SDK exposes 70+ focused subpaths. Always import from specific
+The plugin SDK exposes many focused subpaths. Always import from specific
 subpaths rather than the monolithic root:
 
 ```typescript
@@ -131,10 +131,10 @@ export { MyChannelRuntime } from "./src/runtime.js";
 export { internalHelper } from "./src/helpers.js";
 ```
 
-**Self-import guardrail**: never import your own extension through
-`openclaw/plugin-sdk/my-channel` from production files. Route internal imports
-through `./api.ts` or `./runtime-api.ts` instead. The SDK subpath is the
-external contract only.
+**Self-import guardrail**: never import your own extension back through its
+published SDK contract path from production files. Route internal imports
+through `./api.ts` or `./runtime-api.ts` instead. The SDK contract is for
+external consumers only.
 
 ## Step 5: Add a plugin manifest
 
