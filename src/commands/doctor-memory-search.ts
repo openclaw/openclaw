@@ -218,15 +218,13 @@ function providerEnvVar(provider: string): string {
   }
 }
 
-function buildGatewayProbeWarning(
-  probe:
-    | {
-        checked: boolean;
-        ready: boolean;
-        error?: string;
-      }
-    | undefined,
-): string | null {
+type GatewayMemoryProbe = {
+  checked: boolean;
+  ready: boolean;
+  error?: string;
+};
+
+function buildGatewayProbeWarning(probe: GatewayMemoryProbe | undefined): string | null {
   if (!probe?.checked || probe.ready) {
     return null;
   }
@@ -236,15 +234,7 @@ function buildGatewayProbeWarning(
     : "Gateway memory probe for default agent is not ready.";
 }
 
-function isTransientGatewayMemoryProbeUnavailable(
-  probe:
-    | {
-        checked: boolean;
-        ready: boolean;
-        error?: string;
-      }
-    | undefined,
-): boolean {
+function isTransientGatewayMemoryProbeUnavailable(probe: GatewayMemoryProbe | undefined): boolean {
   const detail = probe?.error?.trim();
   return Boolean(detail && /^gateway memory probe unavailable:/i.test(detail));
 }
