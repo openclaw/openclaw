@@ -48,6 +48,14 @@
   },
   "redirects": [
     {
+      "source": "/zh-CN",
+      "destination": "/zh-Hans"
+    },
+    {
+      "source": "/zh-CN/:splat",
+      "destination": "/zh-Hans/:splat"
+    },
+    {
       "source": "/messages",
       "destination": "/concepts/messages"
     },
