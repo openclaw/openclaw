@@ -74,14 +74,6 @@ export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
   preferredProfile?: string;
 };
 
-type WebSearchProviderConfig = {
-  apiKey?: SecretInput;
-  model?: string;
-  baseUrl?: string;
-  mode?: string;
-  inlineCitations?: boolean;
-} & Record<string, unknown>;
-
 export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   /** Enable media understanding when models are configured. */
   enabled?: boolean;
@@ -483,8 +475,6 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
-      /** @deprecated Legacy Brave credential path. */
-      apiKey?: SecretInput;
       /** @deprecated Legacy Brave scoped config. */
       brave?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Firecrawl scoped config. */
