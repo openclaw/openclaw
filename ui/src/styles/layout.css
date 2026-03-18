@@ -70,7 +70,7 @@
   padding-top: 0;
 }
 
-.shell--chat-focus .content>*+* {
+.shell--chat-focus .content > * + * {
   margin-top: 0;
 }
 
@@ -688,9 +688,11 @@
 
 .sidebar--collapsed .nav-item.active,
 .sidebar--collapsed .nav-item--active {
-  background: linear-gradient(180deg,
-      color-mix(in srgb, var(--accent) 14%, var(--bg-elevated) 86%) 0%,
-      color-mix(in srgb, var(--accent) 8%, var(--bg) 92%) 100%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 14%, var(--bg-elevated) 86%) 0%,
+    color-mix(in srgb, var(--accent) 8%, var(--bg) 92%) 100%
+  );
   border-color: color-mix(in srgb, var(--accent) 18%, var(--border) 82%);
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
@@ -853,7 +855,7 @@
   overflow-x: hidden;
 }
 
-.content>*+* {
+.content > * + * {
   margin-top: 20px;
 }
 
@@ -869,7 +871,7 @@
   padding-bottom: 0;
 }
 
-.content--chat>*+* {
+.content--chat > * + * {
   margin-top: 0;
 }
 
@@ -928,7 +930,7 @@
   padding-bottom: 0;
 }
 
-.content--chat .content-header>div:first-child {
+.content--chat .content-header > div:first-child {
   text-align: left;
 }
 

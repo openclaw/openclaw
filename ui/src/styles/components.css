@@ -1019,11 +1019,11 @@
   position: relative;
 }
 
-.cron-filter-dropdown__details>summary {
+.cron-filter-dropdown__details > summary {
   list-style: none;
 }
 
-.cron-filter-dropdown__details>summary::-webkit-details-marker {
+.cron-filter-dropdown__details > summary::-webkit-details-marker {
   display: none;
 }
 
@@ -1645,7 +1645,6 @@
 }
 
 @media (max-width: 1100px) {
-
   .table-head,
   .table-row {
     grid-template-columns: 1fr;
@@ -1653,7 +1652,6 @@
 }
 
 @container (max-width: 1100px) {
-
   .table-head,
   .table-row {
     grid-template-columns: 1fr;
@@ -2306,7 +2304,6 @@
 }
 
 @keyframes chatStreamPulse {
-
   0%,
   100% {
     border-color: var(--border);
@@ -2341,7 +2338,7 @@
   height: 12px;
 }
 
-.chat-reading-indicator__dots>span {
+.chat-reading-indicator__dots > span {
   display: inline-block;
   width: 6px;
   height: 6px;
@@ -2353,16 +2350,15 @@
   will-change: transform, opacity;
 }
 
-.chat-reading-indicator__dots>span:nth-child(2) {
+.chat-reading-indicator__dots > span:nth-child(2) {
   animation-delay: 0.15s;
 }
 
-.chat-reading-indicator__dots>span:nth-child(3) {
+.chat-reading-indicator__dots > span:nth-child(3) {
   animation-delay: 0.3s;
 }
 
 @keyframes chatReadingDot {
-
   0%,
   80%,
   100% {
@@ -2377,7 +2373,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-reading-indicator__dots>span {
+  .chat-reading-indicator__dots > span {
     animation: none;
     opacity: 0.6;
   }
@@ -3063,7 +3059,7 @@
   min-width: 0;
 }
 
-.agent-kv>div {
+.agent-kv > div {
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -3318,7 +3314,7 @@
   gap: 8px;
 }
 
-.agent-skills-header>span:last-child {
+.agent-skills-header > span:last-child {
   margin-left: auto;
 }
 

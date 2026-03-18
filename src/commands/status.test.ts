@@ -1,5 +1,6 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { captureEnv } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -205,7 +206,7 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   }),
-  buildPluginCompatibilityNotices: vi.fn(() => []),
+  buildPluginCompatibilityNotices: vi.fn((): PluginCompatibilityNotice[] => []),
 }));
 
 vi.mock("../memory/manager.js", () => ({
