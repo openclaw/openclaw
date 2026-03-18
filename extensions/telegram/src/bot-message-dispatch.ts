@@ -52,6 +52,18 @@ import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const DEFAULT_BOT_MESSAGE_DISPATCH_RUNTIME = {
+  dispatchReplyWithBufferedBlockDispatcher,
+};
+let botMessageDispatchRuntimeForTest:
+  | Partial<typeof DEFAULT_BOT_MESSAGE_DISPATCH_RUNTIME>
+  | undefined;
+
+export function setBotMessageDispatchRuntimeForTest(
+  runtime?: Partial<typeof DEFAULT_BOT_MESSAGE_DISPATCH_RUNTIME>,
+): void {
+  botMessageDispatchRuntimeForTest = runtime;
+}
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -149,6 +161,10 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   opts,
 }: DispatchTelegramMessageParams) => {
+  const botMessageDispatchRuntime = {
+    ...DEFAULT_BOT_MESSAGE_DISPATCH_RUNTIME,
+    ...botMessageDispatchRuntimeForTest,
+  };
   const {
     ctxPayload,
     msg,
@@ -535,7 +551,7 @@ export const dispatchTelegramMessage = async ({
 
   let dispatchError: unknown;
   try {
-    ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
+    ({ queuedFinal } = await botMessageDispatchRuntime.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg,
       dispatcherOptions: {
