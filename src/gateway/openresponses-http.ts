@@ -732,7 +732,8 @@ export async function handleOpenResponsesHttpRequest(
 
       if (phase === "result") {
         const isError = evt.data?.isError as boolean | undefined;
-        const result = evt.data?.result;
+        // Prefer rawResult (unsanitized/untruncated) for HTTP consumers
+        const result = evt.data?.rawResult ?? evt.data?.result;
         const resultStr =
           result != null ? (typeof result === "string" ? result : JSON.stringify(result)) : "";
         const callItemId = `fc_${toolCallId}`;

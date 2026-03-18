@@ -528,6 +528,7 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       result: sanitizedResult,
+      rawResult: result,
     },
   });
   void ctx.params.onAgentEvent?.({
