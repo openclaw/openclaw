@@ -190,7 +190,57 @@ describe("secrets audit", () => {
     expect(hasFinding(report, (entry) => entry.code === "REF_UNRESOLVED")).toBe(true);
   });
 
-  it("batches ref resolution per provider during audit", async () => {
+  it("skips exec ref resolution during audit unless explicitly allowed", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const execLogPath = path.join(fixture.rootDir, "exec-calls-skipped.log");
+    const execScriptPath = path.join(fixture.rootDir, "resolver-skipped.sh");
+    await fs.writeFile(
+      execScriptPath,
+      [
+        "#!/bin/sh",
+        `printf 'x\\n' >> ${JSON.stringify(execLogPath)}`,
+        "cat >/dev/null",
+        'printf \'{"protocolVersion":1,"values":{"providers/openai/apiKey":"value:providers/openai/apiKey"}}\'', // pragma: allowlist secret
+      ].join("\n"),
+      { encoding: "utf8", mode: 0o700 },
+    );
+
+    await writeJsonFile(fixture.configPath, {
+      secrets: {
+        providers: {
+          execmain: {
+            source: "exec",
+            command: execScriptPath,
+            jsonOnly: true,
+            timeoutMs: 20_000,
+            noOutputTimeoutMs: 10_000,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "exec", provider: "execmain", id: "providers/openai/apiKey" },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(report.resolution.resolvabilityComplete).toBe(false);
+    expect(report.resolution.skippedExecRefs).toBe(1);
+    expect(report.summary.unresolvedRefCount).toBe(0);
+    await expect(fs.stat(execLogPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("batches ref resolution per provider during audit when --allow-exec is enabled", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -239,7 +289,7 @@ describe("secrets audit", () => {
     await fs.rm(fixture.authStorePath, { force: true });
     await fs.writeFile(fixture.envPath, "", "utf8");
 
-    const report = await runSecretsAudit({ env: fixture.env });
+    const report = await runSecretsAudit({ env: fixture.env, allowExec: true });
     expect(report.summary.unresolvedRefCount).toBe(0);
 
     const callLog = await fs.readFile(execLogPath, "utf8");
@@ -247,7 +297,7 @@ describe("secrets audit", () => {
     expect(callCount).toBe(1);
   });
 
-  it("short-circuits per-ref fallback for provider-wide batch failures", async () => {
+  it("short-circuits per-ref fallback for provider-wide batch failures when --allow-exec is enabled", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -303,7 +353,7 @@ describe("secrets audit", () => {
     await fs.rm(fixture.authStorePath, { force: true });
     await fs.writeFile(fixture.envPath, "", "utf8");
 
-    const report = await runSecretsAudit({ env: fixture.env });
+    const report = await runSecretsAudit({ env: fixture.env, allowExec: true });
     expect(report.summary.unresolvedRefCount).toBeGreaterThanOrEqual(2);
 
     const callLog = await fs.readFile(execLogPath, "utf8");
