@@ -94,9 +94,10 @@ export class PrivacyReplacer {
   loadMappings(mappings: PrivacyMapping[]): void {
     for (const m of mappings) {
       if (!this.forwardMap.has(m.original)) {
-        this.forwardMap.set(m.original, m.replacement);
-        this.reverseMap.set(m.replacement, m.original);
-        this.mappings.push(m);
+        const replacement = this.ensureUniqueReplacement(m.replacement, m.original);
+        this.forwardMap.set(m.original, replacement);
+        this.reverseMap.set(replacement, m.original);
+        this.mappings.push(replacement === m.replacement ? m : { ...m, replacement });
       }
     }
   }
@@ -128,23 +129,37 @@ export class PrivacyReplacer {
       seqId,
       match.replacementTemplate,
     );
+    const uniqueReplacement = this.ensureUniqueReplacement(replacement, match.content);
     const id = `pf_${now}_${seqId}`;
 
     const mapping: PrivacyMapping = {
       id,
       sessionId: this.sessionId,
       original: match.content,
-      replacement,
+      replacement: uniqueReplacement,
       type: match.type,
       riskLevel: match.riskLevel,
       createdAt: now,
     };
 
-    this.forwardMap.set(match.content, replacement);
-    this.reverseMap.set(replacement, match.content);
+    this.forwardMap.set(match.content, uniqueReplacement);
+    this.reverseMap.set(uniqueReplacement, match.content);
     this.mappings.push(mapping);
 
     return { mapping, isNew: true };
+  }
+
+  private ensureUniqueReplacement(replacement: string, original: string): string {
+    let candidate = replacement;
+    let suffix = 1;
+    while (true) {
+      const existing = this.reverseMap.get(candidate);
+      if (!existing || existing === original) {
+        return candidate;
+      }
+      candidate = `${replacement}__${suffix}`;
+      suffix += 1;
+    }
   }
 }
 

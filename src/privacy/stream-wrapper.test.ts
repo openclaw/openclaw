@@ -143,6 +143,28 @@ describe("stream-wrapper integration", () => {
       expect(JSON.stringify(block.arguments)).not.toContain("secret-token-123456");
     });
 
+    it("filters nested strings inside non-text assistant blocks", () => {
+      const ctx = createPrivacyFilterContext("test-session");
+      const messages: Message[] = [
+        {
+          ...assistantMessage([{ type: "text", text: "placeholder" }]),
+          content: [
+            {
+              type: "input_image",
+              source: {
+                type: "url",
+                url: "https://example.test/image.png?token=sk-proj1234567890abcdefghijklm",
+              },
+            },
+          ],
+        } as unknown as AssistantMessage,
+      ];
+
+      const filtered = filterMessages(messages, ctx);
+      const msg = filtered[0] as unknown as { content: unknown };
+      expect(JSON.stringify(msg.content)).not.toContain("sk-proj1234567890abcdefghijklm");
+    });
+
     it("returns same array if no changes needed", () => {
       const ctx = createPrivacyFilterContext("test-session");
       const messages: Message[] = [userMessage("Hello there!")];

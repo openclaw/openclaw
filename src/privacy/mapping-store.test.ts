@@ -88,6 +88,17 @@ describe("PrivacyMappingStore", () => {
       expect(sessionA).toHaveLength(2);
       expect(sessionA.every((m) => m.sessionId === "session-a")).toBe(true);
     });
+
+    it("returns empty result when lock is busy", () => {
+      const dir = mkdtempSync(join(tmpdir(), "privacy-test-"));
+      cleanups.push(dir);
+      const storePath = join(dir, "locked-load.enc");
+      const lockPath = `${storePath}.lock`;
+      writeFileSync(lockPath, "locked");
+
+      const store = new PrivacyMappingStore({ storePath, salt: "test-salt" });
+      expect(store.loadSession("session-a")).toEqual([]);
+    });
   });
 
   describe("cleanup", () => {
@@ -104,6 +115,17 @@ describe("PrivacyMappingStore", () => {
       const remaining = store.load();
       expect(remaining).toHaveLength(1);
       expect(remaining[0].id).toBe("new");
+    });
+
+    it("returns zero removed when lock is busy", () => {
+      const dir = mkdtempSync(join(tmpdir(), "privacy-test-"));
+      cleanups.push(dir);
+      const storePath = join(dir, "locked-cleanup.enc");
+      const lockPath = `${storePath}.lock`;
+      writeFileSync(lockPath, "locked");
+
+      const store = new PrivacyMappingStore({ storePath, salt: "test-salt" });
+      expect(store.cleanup(1_000)).toBe(0);
     });
   });
 

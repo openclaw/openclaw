@@ -103,6 +103,21 @@ describe("PrivacyReplacer", () => {
       expect(newMappings[0].type).toBe("email");
       expect(newMappings[0].sessionId).toBe("test-session");
     });
+
+    it("keeps replacements unique when custom templates collide", () => {
+      const replacer = new PrivacyReplacer("test-session");
+      const original = "a@a.com b@b.com";
+      const matches: DetectionMatch[] = [
+        { ...makeMatch("email", "a@a.com", 0), replacementTemplate: "MASKED_EMAIL" },
+        { ...makeMatch("email", "b@b.com", 8), replacementTemplate: "MASKED_EMAIL" },
+      ];
+
+      const { replaced, newMappings } = replacer.replaceAll(original, matches);
+      expect(newMappings).toHaveLength(2);
+      expect(new Set(newMappings.map((m) => m.replacement)).size).toBe(2);
+      expect(replaced).toContain("MASKED_EMAIL");
+      expect(replacer.restore(replaced)).toBe(original);
+    });
   });
 
   describe("idempotency", () => {

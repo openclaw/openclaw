@@ -450,6 +450,11 @@ function filterAssistantMessage(
       }
       return block;
     }
+    const filteredBlock = filterUnknownStrings(block, ctx);
+    if (filteredBlock !== block) {
+      changed = true;
+      return filteredBlock;
+    }
     return block;
   });
 

@@ -140,7 +140,14 @@ export class PrivacyMappingStore {
   /** Load only mappings for a specific session. */
   loadSession(sessionId: string): PrivacyMapping[] {
     // Use write-lock so we cannot observe a partially-written file from another concurrent instance.
-    return this.withWriteLock(() => this.load().filter((m) => m.sessionId === sessionId));
+    try {
+      return this.withWriteLock(() => this.load().filter((m) => m.sessionId === sessionId));
+    } catch (error) {
+      if (this.isLockBusyError(error)) {
+        return [];
+      }
+      throw error;
+    }
   }
 
   /** Append new mappings (merges with existing). */
@@ -160,16 +167,23 @@ export class PrivacyMappingStore {
 
   /** Remove expired mappings (older than ttlMs). */
   cleanup(ttlMs: number): number {
-    return this.withWriteLock(() => {
-      const mappings = this.load();
-      const cutoff = Date.now() - ttlMs;
-      const kept = mappings.filter((m) => m.createdAt > cutoff);
-      const removed = mappings.length - kept.length;
-      if (removed > 0) {
-        this.saveUnlocked(kept);
+    try {
+      return this.withWriteLock(() => {
+        const mappings = this.load();
+        const cutoff = Date.now() - ttlMs;
+        const kept = mappings.filter((m) => m.createdAt > cutoff);
+        const removed = mappings.length - kept.length;
+        if (removed > 0) {
+          this.saveUnlocked(kept);
+        }
+        return removed;
+      });
+    } catch (error) {
+      if (this.isLockBusyError(error)) {
+        return 0;
       }
-      return removed;
-    });
+      throw error;
+    }
   }
 
   /** Remove all mappings for a specific session. */
@@ -271,5 +285,9 @@ export class PrivacyMappingStore {
     } catch {
       return false;
     }
+  }
+
+  private isLockBusyError(error: unknown): boolean {
+    return error instanceof Error && error.message.includes("privacy mapping store lock busy:");
   }
 }
