@@ -6,6 +6,7 @@ import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { recordSessionMetaFromInbound } from "openclaw/plugin-sdk/config-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/reply-runtime";
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/reply-runtime";
@@ -429,10 +430,11 @@ export async function processMessage(params: {
         });
         const fromDisplay =
           params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
-        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+        const reply = resolveSendableOutboundReplyParts(payload);
+        const hasMedia = reply.hasMedia;
         whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
         if (shouldLogVerbose()) {
-          const preview = payload.text != null ? elide(payload.text, 400) : "<media>";
+          const preview = payload.text != null ? elide(reply.text, 400) : "<media>";
           whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
         }
       },

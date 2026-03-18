@@ -1,6 +1,6 @@
 import type { messagingApi } from "@line/bot-sdk";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { resolveOutboundMediaUrls } from "../plugin-sdk/reply-payload.js";
+import { resolveSendableOutboundReplyParts } from "../plugin-sdk/reply-payload.js";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import type { SendLineReplyChunksParams } from "./reply-chunks.js";
@@ -124,7 +124,7 @@ export async function deliverLineAutoReply(params: {
 
   const chunks = processed.text ? deps.chunkMarkdownText(processed.text, textLimit) : [];
 
-  const mediaUrls = resolveOutboundMediaUrls(payload);
+  const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
   const mediaMessages = mediaUrls
     .map((url) => url?.trim())
     .filter((url): url is string => Boolean(url))

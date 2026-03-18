@@ -5,7 +5,7 @@ import {
   type MarkdownTableMode,
   type MSTeamsReplyStyle,
   type ReplyPayload,
-  resolveOutboundMediaUrls,
+  resolveSendableOutboundReplyParts,
   SILENT_REPLY_TOKEN,
   sleep,
 } from "../runtime-api.js";
@@ -217,41 +217,39 @@ export function renderReplyPayloadsToMessages(
     });
 
   for (const payload of replies) {
-    const mediaList = resolveOutboundMediaUrls(payload);
-    const text = getMSTeamsRuntime().channel.text.convertMarkdownTables(
-      payload.text ?? "",
-      tableMode,
-    );
+    const reply = resolveSendableOutboundReplyParts(payload, {
+      text: getMSTeamsRuntime().channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+    });
 
-    if (!text && mediaList.length === 0) {
+    if (!reply.hasContent) {
       continue;
     }
 
-    if (mediaList.length === 0) {
-      pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
+    if (!reply.hasMedia) {
+      pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
       continue;
     }
 
     if (mediaMode === "inline") {
       // For inline mode, combine text with first media as attachment
-      const firstMedia = mediaList[0];
+      const firstMedia = reply.mediaUrls[0];
       if (firstMedia) {
-        out.push({ text: text || undefined, mediaUrl: firstMedia });
+        out.push({ text: reply.text || undefined, mediaUrl: firstMedia });
         // Additional media URLs as separate messages
-        for (let i = 1; i < mediaList.length; i++) {
-          if (mediaList[i]) {
-            out.push({ mediaUrl: mediaList[i] });
+        for (let i = 1; i < reply.mediaUrls.length; i++) {
+          if (reply.mediaUrls[i]) {
+            out.push({ mediaUrl: reply.mediaUrls[i] });
           }
         }
       } else {
-        pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
+        pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
       }
       continue;
     }
 
     // mediaMode === "split"
-    pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
-    for (const mediaUrl of mediaList) {
+    pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
+    for (const mediaUrl of reply.mediaUrls) {
       if (!mediaUrl) {
         continue;
       }

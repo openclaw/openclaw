@@ -46,7 +46,7 @@ export {
   splitSetupEntries,
 } from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
-export { resolveOutboundMediaUrls } from "./reply-payload.js";
+export { resolveOutboundMediaUrls, resolveSendableOutboundReplyParts } from "./reply-payload.js";
 export type {
   BaseProbeResult,
   ChannelDirectoryEntry,

@@ -9,7 +9,7 @@ import {
   type RetryConfig,
 } from "openclaw/plugin-sdk/infra-runtime";
 import {
-  resolveOutboundMediaUrls,
+  resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -268,18 +268,18 @@ export async function deliverDiscordReply(params: {
     : undefined;
   let deliveredAny = false;
   for (const payload of params.replies) {
-    const mediaList = resolveOutboundMediaUrls(payload);
-    const rawText = payload.text ?? "";
     const tableMode = params.tableMode ?? "code";
-    const text = convertMarkdownTables(rawText, tableMode);
-    if (!text && mediaList.length === 0) {
+    const reply = resolveSendableOutboundReplyParts(payload, {
+      text: convertMarkdownTables(payload.text ?? "", tableMode),
+    });
+    if (!reply.hasContent) {
       continue;
     }
-    if (mediaList.length === 0) {
+    if (!reply.hasMedia) {
       const mode = params.chunkMode ?? "length";
       const chunks = resolveTextChunksWithFallback(
-        text,
-        chunkDiscordTextWithMode(text, {
+        reply.text,
+        chunkDiscordTextWithMode(reply.text, {
           maxChars: chunkLimit,
           maxLines: params.maxLinesPerMessage,
           chunkMode: mode,
@@ -312,7 +312,7 @@ export async function deliverDiscordReply(params: {
       continue;
     }
 
-    const firstMedia = mediaList[0];
+    const firstMedia = reply.mediaUrls[0];
     if (!firstMedia) {
       continue;
     }
@@ -331,7 +331,7 @@ export async function deliverDiscordReply(params: {
       await sendDiscordChunkWithFallback({
         cfg: params.cfg,
         target: params.target,
-        text,
+        text: reply.text,
         token: params.token,
         rest: params.rest,
         accountId: params.accountId,
@@ -347,7 +347,7 @@ export async function deliverDiscordReply(params: {
       });
       // Additional media items are sent as regular attachments (voice is single-file only).
       await sendMediaWithLeadingCaption({
-        mediaUrls: mediaList.slice(1),
+        mediaUrls: reply.mediaUrls.slice(1),
         caption: "",
         send: async ({ mediaUrl }) => {
           const replyTo = resolveReplyTo();
@@ -370,8 +370,8 @@ export async function deliverDiscordReply(params: {
     }
 
     await sendMediaWithLeadingCaption({
-      mediaUrls: mediaList,
-      caption: text,
+      mediaUrls: reply.mediaUrls,
+      caption: reply.text,
       send: async ({ mediaUrl, caption }) => {
         const replyTo = resolveReplyTo();
         await sendWithRetry(

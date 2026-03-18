@@ -71,6 +71,7 @@ export {
   deliverTextOrMediaReply,
   isNumericTargetId,
   resolveOutboundMediaUrls,
+  resolveSendableOutboundReplyParts,
   sendMediaWithLeadingCaption,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";

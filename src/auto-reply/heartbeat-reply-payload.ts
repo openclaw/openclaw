@@ -1,3 +1,4 @@
+import { hasOutboundReplyContent } from "../plugin-sdk/reply-payload.js";
 import type { ReplyPayload } from "./types.js";
 
 export function resolveHeartbeatReplyPayload(
@@ -14,7 +15,7 @@ export function resolveHeartbeatReplyPayload(
     if (!payload) {
       continue;
     }
-    if (payload.text || payload.mediaUrl || (payload.mediaUrls && payload.mediaUrls.length > 0)) {
+    if (hasOutboundReplyContent(payload)) {
       return payload;
     }
   }

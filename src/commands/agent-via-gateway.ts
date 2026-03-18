@@ -4,6 +4,7 @@ import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
+import { resolveSendableOutboundReplyParts } from "../plugin-sdk/reply-payload.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -69,16 +70,16 @@ function formatPayloadForLog(payload: {
   mediaUrls?: string[];
   mediaUrl?: string | null;
 }) {
+  const parts = resolveSendableOutboundReplyParts({
+    text: payload.text,
+    mediaUrls: payload.mediaUrls,
+    mediaUrl: typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined,
+  });
   const lines: string[] = [];
-  if (payload.text) {
-    lines.push(payload.text.trimEnd());
+  if (parts.text) {
+    lines.push(parts.text.trimEnd());
   }
-  const mediaUrl =
-    typeof payload.mediaUrl === "string" && payload.mediaUrl.trim()
-      ? payload.mediaUrl.trim()
-      : undefined;
-  const media = payload.mediaUrls ?? (mediaUrl ? [mediaUrl] : []);
-  for (const url of media) {
+  for (const url of parts.mediaUrls) {
     lines.push(`MEDIA:${url}`);
   }
   return lines.join("\n").trimEnd();

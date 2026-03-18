@@ -3,6 +3,7 @@ import { isVerbose } from "../globals.js";
 import { shouldLogSubsystemToConsole } from "../logging/console.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveSendableOutboundReplyParts } from "../plugin-sdk/reply-payload.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
@@ -204,9 +205,11 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
     if (text?.trim()) {
       extra.text = compactPreview(text);
     }
-    const mediaUrls = Array.isArray(data.mediaUrls) ? data.mediaUrls : undefined;
-    if (mediaUrls && mediaUrls.length > 0) {
-      extra.media = mediaUrls.length;
+    const mediaCount = resolveSendableOutboundReplyParts({
+      mediaUrls: Array.isArray(data.mediaUrls) ? data.mediaUrls : undefined,
+    }).mediaCount;
+    if (mediaCount > 0) {
+      extra.media = mediaCount;
     }
     return extra;
   }

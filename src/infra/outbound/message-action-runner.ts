@@ -14,7 +14,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { hasInteractiveReplyBlocks, hasReplyContent } from "../../interactive/payload.js";
+import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { hasPollCreationParams, resolveTelegramPollVisibility } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
@@ -484,13 +484,17 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     }
   }
   if (
-    !hasReplyContent({
-      text: message,
-      mediaUrl,
-      mediaUrls: mergedMediaUrls,
-      interactive: params.interactive,
-      extraContent: hasButtons || hasCard || hasComponents || hasBlocks,
-    })
+    !hasReplyPayloadContent(
+      {
+        text: message,
+        mediaUrl,
+        mediaUrls: mergedMediaUrls,
+        interactive: params.interactive,
+      },
+      {
+        extraContent: hasButtons || hasCard || hasComponents || hasBlocks,
+      },
+    )
   ) {
     throw new Error("send requires text or media");
   }

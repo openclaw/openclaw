@@ -1,5 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { deliverTextOrMediaReply } from "openclaw/plugin-sdk/reply-payload";
+import {
+  deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   createWebhookInFlightLimiter,
@@ -376,8 +379,10 @@ async function deliverGoogleChatReply(params: {
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
     params;
-  const hasMedia = Boolean(payload.mediaUrls?.length) || Boolean(payload.mediaUrl);
-  const text = payload.text ?? "";
+  const reply = resolveSendableOutboundReplyParts(payload);
+  const mediaCount = reply.mediaCount;
+  const hasMedia = reply.hasMedia;
+  const text = reply.text;
   let firstTextChunk = true;
   let suppressCaption = false;
 
@@ -390,8 +395,7 @@ async function deliverGoogleChatReply(params: {
         });
       } catch (err) {
         runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
-        const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
-        const fallbackText = text.trim()
+        const fallbackText = reply.hasText
           ? text
           : mediaCount > 1
             ? "Sent attachments."
@@ -414,7 +418,7 @@ async function deliverGoogleChatReply(params: {
   const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
   await deliverTextOrMediaReply({
     payload,
-    text: suppressCaption ? "" : text,
+    text: suppressCaption ? "" : reply.text,
     chunkText: (value) => core.channel.text.chunkMarkdownTextWithMode(value, chunkLimit, chunkMode),
     sendText: async (chunk) => {
       try {

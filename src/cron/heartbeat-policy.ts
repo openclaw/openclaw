@@ -1,4 +1,5 @@
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { resolveSendableOutboundReplyParts } from "../plugin-sdk/reply-payload.js";
 
 export type HeartbeatDeliveryPayload = {
   text?: string;
@@ -14,7 +15,7 @@ export function shouldSkipHeartbeatOnlyDelivery(
     return true;
   }
   const hasAnyMedia = payloads.some(
-    (payload) => (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.mediaUrl),
+    (payload) => resolveSendableOutboundReplyParts(payload).hasMedia,
   );
   if (hasAnyMedia) {
     return false;

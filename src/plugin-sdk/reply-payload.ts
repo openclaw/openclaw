@@ -5,6 +5,16 @@ export type OutboundReplyPayload = {
   replyToId?: string;
 };
 
+export type SendableOutboundReplyParts = {
+  text: string;
+  trimmedText: string;
+  mediaUrls: string[];
+  mediaCount: number;
+  hasText: boolean;
+  hasMedia: boolean;
+  hasContent: boolean;
+};
+
 /** Extract the supported outbound reply fields from loose tool or agent payload objects. */
 export function normalizeOutboundReplyPayload(
   payload: Record<string, unknown>,
@@ -50,6 +60,54 @@ export function resolveOutboundMediaUrls(payload: {
     return [payload.mediaUrl];
   }
   return [];
+}
+
+/** Count outbound media items after legacy single-media fallback normalization. */
+export function countOutboundMedia(payload: { mediaUrls?: string[]; mediaUrl?: string }): number {
+  return resolveOutboundMediaUrls(payload).length;
+}
+
+/** Check whether an outbound payload includes any media after normalization. */
+export function hasOutboundMedia(payload: { mediaUrls?: string[]; mediaUrl?: string }): boolean {
+  return countOutboundMedia(payload) > 0;
+}
+
+/** Check whether an outbound payload includes text, optionally trimming whitespace first. */
+export function hasOutboundText(payload: { text?: string }, options?: { trim?: boolean }): boolean {
+  const text = options?.trim ? payload.text?.trim() : payload.text;
+  return Boolean(text);
+}
+
+/** Check whether an outbound payload includes any sendable text or media. */
+export function hasOutboundReplyContent(
+  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+  options?: { trimText?: boolean },
+): boolean {
+  return hasOutboundText(payload, { trim: options?.trimText }) || hasOutboundMedia(payload);
+}
+
+/** Normalize reply payload text/media into a trimmed, sendable shape for delivery paths. */
+export function resolveSendableOutboundReplyParts(
+  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+  options?: { text?: string },
+): SendableOutboundReplyParts {
+  const text = options?.text ?? payload.text ?? "";
+  const trimmedText = text.trim();
+  const mediaUrls = resolveOutboundMediaUrls(payload)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const mediaCount = mediaUrls.length;
+  const hasText = Boolean(trimmedText);
+  const hasMedia = mediaCount > 0;
+  return {
+    text,
+    trimmedText,
+    mediaUrls,
+    mediaCount,
+    hasText,
+    hasMedia,
+    hasContent: hasText || hasMedia,
+  };
 }
 
 /** Preserve caller-provided chunking, but fall back to the full text when chunkers return nothing. */
@@ -188,7 +246,9 @@ export async function deliverTextOrMediaReply(params: {
     isFirst: boolean;
   }) => Promise<void> | void;
 }): Promise<"empty" | "text" | "media"> {
-  const mediaUrls = resolveOutboundMediaUrls(params.payload);
+  const { mediaUrls } = resolveSendableOutboundReplyParts(params.payload, {
+    text: params.text,
+  });
   const sentMedia = await sendMediaWithLeadingCaption({
     mediaUrls,
     caption: params.text,

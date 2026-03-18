@@ -8,10 +8,10 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import {
   hasInteractiveReplyBlocks,
   hasReplyChannelData,
-  hasReplyContent,
+  hasReplyPayloadContent,
   type InteractiveReply,
 } from "../../interactive/payload.js";
-import { resolveOutboundMediaUrls } from "../../plugin-sdk/reply-payload.js";
+import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -97,25 +97,20 @@ export function normalizeOutboundPayloads(
 ): NormalizedOutboundPayload[] {
   const normalizedPayloads: NormalizedOutboundPayload[] = [];
   for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
-    const mediaUrls = resolveOutboundMediaUrls(payload);
+    const parts = resolveSendableOutboundReplyParts(payload);
     const interactive = payload.interactive;
     const channelData = payload.channelData;
     const hasChannelData = hasReplyChannelData(channelData);
     const hasInteractive = hasInteractiveReplyBlocks(interactive);
-    const text = payload.text ?? "";
+    const text = parts.text;
     if (
-      !hasReplyContent({
-        text,
-        mediaUrls,
-        interactive,
-        hasChannelData,
-      })
+      !hasReplyPayloadContent({ ...payload, text, mediaUrls: parts.mediaUrls }, { hasChannelData })
     ) {
       continue;
     }
     normalizedPayloads.push({
       text,
-      mediaUrls,
+      mediaUrls: parts.mediaUrls,
       ...(hasInteractive ? { interactive } : {}),
       ...(hasChannelData ? { channelData } : {}),
     });
@@ -128,11 +123,11 @@ export function normalizeOutboundPayloadsForJson(
 ): OutboundPayloadJson[] {
   const normalized: OutboundPayloadJson[] = [];
   for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
-    const mediaUrls = resolveOutboundMediaUrls(payload);
+    const parts = resolveSendableOutboundReplyParts(payload);
     normalized.push({
-      text: payload.text ?? "",
+      text: parts.text,
       mediaUrl: payload.mediaUrl ?? null,
-      mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+      mediaUrls: parts.mediaUrls.length ? parts.mediaUrls : undefined,
       interactive: payload.interactive,
       channelData: payload.channelData,
     });

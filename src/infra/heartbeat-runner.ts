@@ -35,6 +35,10 @@ import {
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "../plugin-sdk/reply-payload.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -368,7 +372,7 @@ function normalizeHeartbeatReply(
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
   });
-  const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);
+  const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
   if (stripped.shouldSkip && !hasMedia) {
     return {
       shouldSkip: true,
@@ -720,10 +724,7 @@ export async function runHeartbeatOnce(opts: {
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
       : [];
 
-    if (
-      !replyPayload ||
-      (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
-    ) {
+    if (!replyPayload || !hasOutboundReplyContent(replyPayload)) {
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -780,8 +781,7 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const mediaUrls =
-      replyPayload.mediaUrls ?? (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
+    const mediaUrls = resolveSendableOutboundReplyParts(replyPayload).mediaUrls;
 
     // Suppress duplicate heartbeats (same payload) within a short window.
     // This prevents "nagging" when nothing changed but the model repeats the same items.

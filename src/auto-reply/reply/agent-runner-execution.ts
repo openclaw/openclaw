@@ -23,6 +23,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -148,6 +149,7 @@ export async function runAgentTurnWithFallback(params: {
     try {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
+        const reply = resolveSendableOutboundReplyParts(payload);
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
             mode: "message",
@@ -156,7 +158,7 @@ export async function runAgentTurnWithFallback(params: {
             didLogHeartbeatStrip = true;
             logVerbose("Stripped stray HEARTBEAT_OK token from reply");
           }
-          if (stripped.shouldSkip && (payload.mediaUrls?.length ?? 0) === 0) {
+          if (stripped.shouldSkip && !reply.hasMedia) {
             return { skip: true };
           }
           text = stripped.text;
@@ -172,7 +174,7 @@ export async function runAgentTurnWithFallback(params: {
         }
         if (!text) {
           // Allow media-only payloads (e.g. tool result screenshots) through.
-          if ((payload.mediaUrls?.length ?? 0) > 0) {
+          if (reply.hasMedia) {
             return { text: undefined, skip: false };
           }
           return { skip: true };
