@@ -99,6 +99,7 @@ export const formatResponseUsageLine = (params: {
     cacheRead: number;
     cacheWrite: number;
   };
+  durationMs?: number;
 }): string | null => {
   const usage = params.usage;
   if (!usage) {
@@ -124,8 +125,18 @@ export const formatResponseUsageLine = (params: {
         })
       : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
-  const suffix = costLabel ? ` · est ${costLabel}` : "";
-  return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
+  const durationLabel =
+    typeof params.durationMs === "number" && params.durationMs > 0
+      ? `${(params.durationMs / 1000).toFixed(1)}s`
+      : undefined;
+  const parts = [`${inputLabel} in / ${outputLabel} out`];
+  if (durationLabel) {
+    parts.push(`⏱ ${durationLabel}`);
+  }
+  if (costLabel) {
+    parts.push(`est ${costLabel}`);
+  }
+  return `Usage: ${parts.join(" / ")}`;
 };
 
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
