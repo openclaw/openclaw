@@ -811,4 +811,51 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     const stats = store.usageStats?.["github-copilot:github"];
     expect(stats?.cooldownModel).toBe("claude-sonnet-4.6");
   });
+
+  it("updates cooldownReason when auth failure occurs during active rate_limit window", async () => {
+    const now = 1_000_000;
+    const store = makeStoreWithCopilot({
+      "github-copilot:github": {
+        cooldownUntil: now + 30_000,
+        cooldownReason: "rate_limit",
+        cooldownModel: "claude-sonnet-4.6",
+        errorCount: 1,
+        lastFailureAt: now - 1000,
+      },
+    });
+    await markAuthProfileFailure({
+      store,
+      profileId: "github-copilot:github",
+      reason: "auth",
+      modelId: "claude-opus-4.6",
+    });
+    const stats = store.usageStats?.["github-copilot:github"];
+    // Reason should update to the new failure type, not stay as rate_limit
+    expect(stats?.cooldownReason).toBe("auth");
+    // Model scope should be cleared — auth failures are profile-wide
+    expect(stats?.cooldownModel).toBeUndefined();
+  });
+
+  it("clears cooldownModel when non-rate_limit failure hits same model during active window", async () => {
+    const now = 1_000_000;
+    const store = makeStoreWithCopilot({
+      "github-copilot:github": {
+        cooldownUntil: now + 30_000,
+        cooldownReason: "rate_limit",
+        cooldownModel: "claude-sonnet-4.6",
+        errorCount: 1,
+        lastFailureAt: now - 1000,
+      },
+    });
+    await markAuthProfileFailure({
+      store,
+      profileId: "github-copilot:github",
+      reason: "auth",
+      modelId: "claude-sonnet-4.6",
+    });
+    const stats = store.usageStats?.["github-copilot:github"];
+    // Even same-model auth failure should clear model scope (auth is profile-wide)
+    expect(stats?.cooldownReason).toBe("auth");
+    expect(stats?.cooldownModel).toBeUndefined();
+  });
 });

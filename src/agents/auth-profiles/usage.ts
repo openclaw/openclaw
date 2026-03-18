@@ -498,7 +498,11 @@ function computeNextProfileUsageStats(params: {
       typeof params.existing.cooldownUntil === "number" &&
       params.existing.cooldownUntil > params.now;
     if (existingCooldownActive) {
-      updatedStats.cooldownReason = params.existing.cooldownReason;
+      // Always use the latest failure reason so that downstream consumers
+      // (e.g. isProfileInCooldown model-bypass) see the most recent signal.
+      // A non-rate_limit failure (auth, billing, …) is profile-wide, so
+      // upgrading from rate_limit → auth correctly blocks all models.
+      updatedStats.cooldownReason = params.reason;
       // If a different model fails during an active window, widen the scope
       // to all models (undefined) so neither model bypasses the cooldown.
       if (
@@ -506,6 +510,10 @@ function computeNextProfileUsageStats(params: {
         params.modelId &&
         params.existing.cooldownModel !== params.modelId
       ) {
+        updatedStats.cooldownModel = undefined;
+      } else if (params.reason !== "rate_limit") {
+        // Non-rate-limit failures are profile-wide — clear model scope even
+        // when the same model fails, so that no model can bypass.
         updatedStats.cooldownModel = undefined;
       } else {
         updatedStats.cooldownModel = params.existing.cooldownModel;
