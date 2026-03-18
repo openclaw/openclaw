@@ -1,5 +1,7 @@
 import { loadConfig } from "../../config/config.js";
 import {
+  INWORLD_TTS_MODELS,
+  INWORLD_TTS_VOICES,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   getTtsProvider,
@@ -38,6 +40,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         prefsPath,
         hasOpenAIKey: Boolean(resolveTtsApiKey(config, "openai")),
         hasElevenLabsKey: Boolean(resolveTtsApiKey(config, "elevenlabs")),
+        hasInworldKey: Boolean(resolveTtsApiKey(config, "inworld")),
         edgeEnabled: isTtsProviderConfigured(config, "edge"),
       });
     } catch (err) {
@@ -100,13 +103,18 @@ export const ttsHandlers: GatewayRequestHandlers = {
   },
   "tts.setProvider": async ({ params, respond }) => {
     const provider = typeof params.provider === "string" ? params.provider.trim() : "";
-    if (provider !== "openai" && provider !== "elevenlabs" && provider !== "edge") {
+    if (
+      provider !== "openai" &&
+      provider !== "elevenlabs" &&
+      provider !== "edge" &&
+      provider !== "inworld"
+    ) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "Invalid provider. Use openai, elevenlabs, or edge.",
+          "Invalid provider. Use openai, elevenlabs, inworld, or edge.",
         ),
       );
       return;
@@ -140,6 +148,13 @@ export const ttsHandlers: GatewayRequestHandlers = {
             name: "ElevenLabs",
             configured: Boolean(resolveTtsApiKey(config, "elevenlabs")),
             models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
+          },
+          {
+            id: "inworld",
+            name: "InWorld AI",
+            configured: Boolean(resolveTtsApiKey(config, "inworld")),
+            models: [...INWORLD_TTS_MODELS],
+            voices: [...INWORLD_TTS_VOICES],
           },
           {
             id: "edge",

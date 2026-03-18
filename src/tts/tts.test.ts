@@ -107,6 +107,31 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
   };
 }
 
+function createInworldCfg(params?: { includeOpenAIFallback?: boolean }): OpenClawConfig {
+  return {
+    agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+    messages: {
+      tts: {
+        provider: "inworld",
+        inworld: {
+          apiKey: "inworld-key",
+          voiceId: "Dennis",
+          modelId: "inworld-tts-1.5-max",
+        },
+        ...(params?.includeOpenAIFallback
+          ? {
+              openai: {
+                apiKey: "openai-key",
+                model: "gpt-4o-mini-tts",
+                voice: "alloy",
+              },
+            }
+          : {}),
+      },
+    },
+  };
+}
+
 describe("tts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -308,6 +333,18 @@ describe("tts", () => {
       const result = parseTtsDirectives(input, policy);
 
       expect(result.overrides.provider).toBe("edge");
+    });
+
+    it("accepts inworld provider and inworld-specific override keys", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input =
+        "Hello [[tts:provider=inworld inworld_voice=Ashley inworld_model=inworld-tts-1.5-mini]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("inworld");
+      expect(result.overrides.inworld?.voiceId).toBe("Ashley");
+      expect(result.overrides.inworld?.modelId).toBe("inworld-tts-1.5-mini");
+      expect(result.warnings).toHaveLength(0);
     });
 
     it("rejects provider override by default while keeping voice overrides enabled", () => {
@@ -633,6 +670,132 @@ describe("tts", () => {
 
     it("includes instructions for gpt-4o-mini-tts", async () => {
       await expectTelephonyInstructions("gpt-4o-mini-tts", "Speak warmly");
+    });
+  });
+
+  describe("textToSpeech – inworld", () => {
+    const withMockedFetch = async (
+      impl: (input: RequestInfo | URL, init?: RequestInit) => Promise<unknown>,
+      run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
+    ) => {
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(impl);
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      try {
+        await run(fetchMock);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    };
+
+    it("keeps InWorld on MP3 even for Telegram channels", async () => {
+      await withMockedFetch(
+        async () => ({
+          ok: true,
+          json: async () => ({ audioContent: Buffer.from("inworld-mp3").toString("base64") }),
+        }),
+        async (fetchMock) => {
+          const result = await tts.textToSpeech({
+            text: "Hello from InWorld",
+            cfg: createInworldCfg(),
+            channel: "telegram",
+          });
+
+          expect(result.success).toBe(true);
+          expect(fetchMock).toHaveBeenCalledTimes(1);
+
+          const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+          const body = JSON.parse(init.body as string) as Record<string, unknown>;
+          expect(body).toMatchObject({
+            text: "Hello from InWorld",
+            voiceId: "Dennis",
+            modelId: "inworld-tts-1.5-max",
+            audioConfig: {
+              audioEncoding: "MP3",
+              sampleRateHertz: 44100,
+              bitRate: 128000,
+            },
+          });
+
+          if (result.success) {
+            expect(result.outputFormat).toBe("mp3");
+            expect(result.voiceCompatible).toBe(false);
+            expect(result.audioPath).toMatch(/\.mp3$/);
+          }
+        },
+      );
+    });
+
+    it("preserves Telegram opus fallback when an InWorld attempt fails", async () => {
+      await withMockedFetch(
+        async (_input, init) => {
+          const body = JSON.parse(init?.body as string) as Record<string, unknown>;
+          if ("voiceId" in body) {
+            return {
+              ok: false,
+              status: 500,
+              text: async () => "inworld failed",
+            };
+          }
+          return {
+            ok: true,
+            arrayBuffer: async () => new ArrayBuffer(4),
+          };
+        },
+        async (fetchMock) => {
+          const result = await tts.textToSpeech({
+            text: "Fallback me",
+            cfg: createInworldCfg({ includeOpenAIFallback: true }),
+            channel: "telegram",
+          });
+
+          expect(result.success).toBe(true);
+          expect(fetchMock).toHaveBeenCalledTimes(2);
+
+          const [, openAiInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+          const openAiBody = JSON.parse(openAiInit.body as string) as Record<string, unknown>;
+          expect(openAiBody.response_format).toBe("opus");
+
+          if (result.success) {
+            expect(result.provider).toBe("openai");
+            expect(result.outputFormat).toBe("opus");
+            expect(result.voiceCompatible).toBe(true);
+            expect(result.audioPath).toMatch(/\.opus$/);
+          }
+        },
+      );
+    });
+  });
+
+  describe("textToSpeechTelephony – inworld", () => {
+    it("falls back to OpenAI because InWorld is unsupported for telephony", async () => {
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(4),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      try {
+        const result = await tts.textToSpeechTelephony({
+          text: "Telephony check",
+          cfg: createInworldCfg({ includeOpenAIFallback: true }),
+        });
+
+        expect(result.success).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const body = JSON.parse(init.body as string) as Record<string, unknown>;
+        expect(body.response_format).toBe("pcm");
+
+        if (result.success) {
+          expect(result.provider).toBe("openai");
+          expect(result.outputFormat).toBe("pcm");
+          expect(result.sampleRate).toBe(24000);
+        }
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 
