@@ -102,10 +102,6 @@ function linkPluginNodeModules(params) {
   if (params.distPluginDir) {
     removePathIfExists(path.join(params.distPluginDir, "node_modules"));
   }
-  if (!fs.existsSync(params.sourcePluginNodeModulesDir)) {
-    return;
-  }
-  fs.symlinkSync(params.sourcePluginNodeModulesDir, runtimeNodeModulesDir, symlinkType());
 
   if (params.distPluginDir) {
     const distNodeModulesDir = path.join(params.distPluginDir, "node_modules");
