@@ -952,6 +952,16 @@ export function renderChat(props: ChatProps) {
     </div>
   `;
 
+  /** After arrow-key navigation, scroll the active slash-menu item into view. */
+  const scrollSlashMenuActiveIntoView = () => {
+    requestAnimationFrame(() => {
+      const active = document.querySelector(".agent-chat__input-wrap .slash-menu-item--active");
+      if (active) {
+        active.scrollIntoView({ block: "nearest" });
+      }
+    });
+  };
+
   const handleKeyDown = (e: KeyboardEvent) => {
     // Slash menu navigation — arg mode
     if (vs.slashMenuOpen && vs.slashMenuMode === "args" && vs.slashMenuArgItems.length > 0) {
@@ -961,11 +971,13 @@ export function renderChat(props: ChatProps) {
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex + 1) % len;
           requestUpdate();
+          scrollSlashMenuActiveIntoView();
           return;
         case "ArrowUp":
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex - 1 + len) % len;
           requestUpdate();
+          scrollSlashMenuActiveIntoView();
           return;
         case "Tab":
           e.preventDefault();
@@ -992,11 +1004,13 @@ export function renderChat(props: ChatProps) {
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex + 1) % len;
           requestUpdate();
+          scrollSlashMenuActiveIntoView();
           return;
         case "ArrowUp":
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex - 1 + len) % len;
           requestUpdate();
+          scrollSlashMenuActiveIntoView();
           return;
         case "Tab":
           e.preventDefault();
@@ -1182,34 +1196,35 @@ export function renderChat(props: ChatProps) {
       }
 
       <!-- Input bar -->
-      <div class="agent-chat__input">
+      <div class="agent-chat__input-wrap">
         ${renderSlashMenu(requestUpdate, props)}
-        ${renderAttachmentPreview(props)}
+        <div class="agent-chat__input">
+          ${renderAttachmentPreview(props)}
 
-        <input
-          type="file"
-          accept=${CHAT_ATTACHMENT_ACCEPT}
-          multiple
-          class="agent-chat__file-input"
-          @change=${(e: Event) => handleFileSelect(e, props)}
-        />
+          <input
+            type="file"
+            accept=${CHAT_ATTACHMENT_ACCEPT}
+            multiple
+            class="agent-chat__file-input"
+            @change=${(e: Event) => handleFileSelect(e, props)}
+          />
 
-        ${vs.sttRecording && vs.sttInterimText ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>` : nothing}
+          ${vs.sttRecording && vs.sttInterimText ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>` : nothing}
 
-        <textarea
-          ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
-          .value=${props.draft}
-          dir=${detectTextDirection(props.draft)}
-          ?disabled=${!props.connected}
-          @keydown=${handleKeyDown}
-          @input=${handleInput}
-          @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-          placeholder=${vs.sttRecording ? "Listening..." : placeholder}
-          rows="1"
-        ></textarea>
+          <textarea
+            ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+            .value=${props.draft}
+            dir=${detectTextDirection(props.draft)}
+            ?disabled=${!props.connected}
+            @keydown=${handleKeyDown}
+            @input=${handleInput}
+            @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+            placeholder=${vs.sttRecording ? "Listening..." : placeholder}
+            rows="1"
+          ></textarea>
 
-        <div class="agent-chat__toolbar">
-          <div class="agent-chat__toolbar-left">
+          <div class="agent-chat__toolbar">
+            <div class="agent-chat__toolbar-left">
             <button
               class="agent-chat__input-btn"
               @click=${() => {
@@ -1324,7 +1339,8 @@ export function renderChat(props: ChatProps) {
           </div>
         </div>
       </div>
-    </section>
+    </div>
+  </section>
   `;
 }
 
