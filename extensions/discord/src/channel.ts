@@ -1,60 +1,59 @@
 import { Separator, TextDisplay } from "@buape/carbon";
-import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedAllowlistConfigEditor,
-  buildAccountScopedDmSecurityPolicy,
-  collectOpenProviderGroupPolicyWarnings,
+  resolveLegacyDmAllowlistConfigPaths,
+} from "openclaw/plugin-sdk/allowlist-config-edit";
+import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
   collectOpenGroupPolicyConfiguredRouteWarnings,
-  createScopedAccountConfigAccessors,
-  formatAllowFromLowercase,
-} from "openclaw/plugin-sdk/compat";
-import {
-  buildAgentSessionKey,
-  resolveThreadSessionKeys,
-  type RoutePeer,
-} from "openclaw/plugin-sdk/core";
-import {
-  buildComputedAccountStatusSnapshot,
-  buildChannelConfigSchema,
-  buildTokenChannelStatusSummary,
-  DEFAULT_ACCOUNT_ID,
-  DiscordConfigSchema,
-  getChatChannelMeta,
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
-  PAIRING_APPROVED_MESSAGE,
-  projectCredentialSnapshotFields,
-  resolveConfiguredFromCredentialStatuses,
-  resolveDiscordGroupRequireMention,
-  resolveDiscordGroupToolPolicy,
-  type ChannelMessageActionAdapter,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/discord";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
-import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
-import { inspectDiscordAccount } from "./account-inspect.js";
+  collectOpenProviderGroupPolicyWarnings,
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { normalizeMessageChannel } from "openclaw/plugin-sdk/channel-runtime";
+import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw/plugin-sdk/core";
+import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   listDiscordAccountIds,
   resolveDiscordAccount,
-  resolveDefaultDiscordAccountId,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
-import { collectDiscordAuditChannelIds } from "./audit.js";
+import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
+import {
+  listDiscordDirectoryGroupsFromConfig,
+  listDiscordDirectoryPeersFromConfig,
+} from "./directory-config.js";
 import {
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./exec-approvals.js";
 import {
+  resolveDiscordGroupRequireMention,
+  resolveDiscordGroupToolPolicy,
+} from "./group-policy.js";
+import { monitorDiscordProvider } from "./monitor.js";
+import {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
 } from "./normalize.js";
-import type { DiscordProbe } from "./probe.js";
+import { probeDiscord, type DiscordProbe } from "./probe.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
+import {
+  buildComputedAccountStatusSnapshot,
+  buildTokenChannelStatusSummary,
+  type ChannelMessageActionAdapter,
+  type ChannelPlugin,
+  DEFAULT_ACCOUNT_ID,
+  getChatChannelMeta,
+  PAIRING_APPROVED_MESSAGE,
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromCredentialStatuses,
+  type OpenClawConfig,
+} from "./runtime-api.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
-import { createDiscordSetupWizardProxy, discordSetupAdapter } from "./setup-core.js";
+import { discordSetupAdapter } from "./setup-core.js";
+import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./targets.js";
 import { DiscordUiContainer } from "./ui.js";
@@ -66,9 +65,13 @@ type DiscordSendFn = ReturnType<
 const meta = getChatChannelMeta("discord");
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 
-async function loadDiscordChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
+const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAccount>({
+  channelKey: "discord",
+  resolvePolicy: (account) => account.config.dm?.policy,
+  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
+  allowFromPathSuffix: "dm.",
+  normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
+});
 
 function formatDiscordIntents(intents?: {
   messageContent?: string;
@@ -86,10 +89,8 @@ function formatDiscordIntents(intents?: {
 }
 
 const discordMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) =>
-    getDiscordRuntime().channel.discord.messageActions?.listActions?.(ctx) ?? [],
-  getCapabilities: (ctx) =>
-    getDiscordRuntime().channel.discord.messageActions?.getCapabilities?.(ctx) ?? [],
+  describeMessageTool: (ctx) =>
+    getDiscordRuntime().channel.discord.messageActions?.describeMessageTool?.(ctx) ?? null,
   extractToolSend: (ctx) =>
     getDiscordRuntime().channel.discord.messageActions?.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
@@ -208,34 +209,13 @@ function parseDiscordExplicitTarget(raw: string) {
   }
 }
 
-function normalizeOutboundThreadId(value?: string | number | null): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      return undefined;
-    }
-    return String(Math.trunc(value));
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function buildDiscordBaseSessionKey(params: {
   cfg: OpenClawConfig;
   agentId: string;
   accountId?: string | null;
   peer: RoutePeer;
 }) {
-  return buildAgentSessionKey({
-    agentId: params.agentId,
-    channel: "discord",
-    accountId: params.accountId,
-    peer: params.peer,
-    dmScope: params.cfg.session?.dmScope ?? "main",
-    identityLinks: params.cfg.session?.identityLinks,
-  });
+  return buildOutboundBaseSessionKey({ ...params, channel: "discord" });
 }
 
 function resolveDiscordOutboundTargetKindHint(params: {
@@ -304,32 +284,10 @@ function resolveDiscordOutboundSessionRoute(params: {
   };
 }
 
-const discordConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
-  resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
-});
-
-const discordConfigBase = createScopedChannelConfigBase({
-  sectionKey: "discord",
-  listAccountIds: listDiscordAccountIds,
-  resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
-  inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
-  defaultAccountId: resolveDefaultDiscordAccountId,
-  clearBaseFields: ["token", "name"],
-});
-
-const discordSetupWizard = createDiscordSetupWizardProxy(async () => ({
-  discordSetupWizard: (await loadDiscordChannelRuntime()).discordSetupWizard,
-}));
-
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
-  id: "discord",
-  meta: {
-    ...meta,
-  },
-  setupWizard: discordSetupWizard,
+  ...createDiscordPluginBase({
+    setup: discordSetupAdapter,
+  }),
   pairing: {
     idLabel: "discordUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(discord|user):/i, ""),
@@ -340,31 +298,6 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       );
     },
   },
-  capabilities: {
-    chatTypes: ["direct", "channel", "thread"],
-    polls: true,
-    reactions: true,
-    threads: true,
-    media: true,
-    nativeCommands: true,
-  },
-  streaming: {
-    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-  },
-  reload: { configPrefixes: ["channels.discord"] },
-  configSchema: buildChannelConfigSchema(DiscordConfigSchema),
-  config: {
-    ...discordConfigBase,
-    isConfigured: (account) => Boolean(account.token?.trim()),
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(account.token?.trim()),
-      tokenSource: account.tokenSource,
-    }),
-    ...discordConfigAccessors,
-  },
   allowlist: {
     supportsScope: ({ scope }) => scope === "dm",
     readConfig: ({ cfg, accountId }) =>
@@ -374,30 +307,12 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
       channelId: "discord",
       normalize: ({ cfg, accountId, values }) =>
-        discordConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
-      resolvePaths: (scope) =>
-        scope === "dm"
-          ? {
-              readPaths: [["allowFrom"], ["dm", "allowFrom"]],
-              writePath: ["allowFrom"],
-              cleanupPaths: [["dm", "allowFrom"]],
-            }
-          : null,
+        discordConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+      resolvePaths: resolveLegacyDmAllowlistConfigPaths,
     }),
   },
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "discord",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dm?.policy,
-        allowFrom: account.config.dm?.allowFrom ?? [],
-        allowFromPathSuffix: "dm.",
-        normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
-      });
-    },
+    resolveDmPolicy: resolveDiscordDmPolicy,
     collectWarnings: ({ account, cfg }) => {
       const guildEntries = account.config.guilds ?? {};
       const guildsConfigured = Object.keys(guildEntries).length > 0;
@@ -446,6 +361,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeDiscordMessagingTarget,
+    resolveSessionTarget: ({ id }) => normalizeDiscordMessagingTarget(`channel:${id}`),
     parseExplicitTarget: ({ raw }) => parseDiscordExplicitTarget(raw),
     inferTargetChatType: ({ to }) => parseDiscordExplicitTarget(to)?.chatType,
     buildCrossContextComponents: buildDiscordCrossContextComponents,
@@ -573,11 +489,15 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         silent: silent ?? undefined,
       }),
   },
-  acpBindings: {
-    normalizeConfiguredBindingTarget: ({ conversationId }) =>
+  bindings: {
+    compileConfiguredBinding: ({ conversationId }) =>
       normalizeDiscordAcpConversationId(conversationId),
-    matchConfiguredBinding: ({ bindingConversationId, conversationId, parentConversationId }) =>
-      matchDiscordAcpConversation({ bindingConversationId, conversationId, parentConversationId }),
+    matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+      matchDiscordAcpConversation({
+        bindingConversationId: compiledBinding.conversationId,
+        conversationId,
+        parentConversationId,
+      }),
   },
   status: {
     defaultRuntime: {
@@ -596,7 +516,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     buildChannelSummary: ({ snapshot }) =>
       buildTokenChannelStatusSummary(snapshot, { includeMode: false }),
     probeAccount: async ({ account, timeoutMs }) =>
-      getDiscordRuntime().channel.discord.probeDiscord(account.token, timeoutMs, {
+      probeDiscord(account.token, timeoutMs, {
         includeApplication: true,
       }),
     formatCapabilitiesProbe: ({ probe }) => {
@@ -702,7 +622,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
           elapsedMs: 0,
         };
       }
-      const audit = await getDiscordRuntime().channel.discord.auditChannelPermissions({
+      const audit = await auditDiscordChannelPermissions({
         token: botToken,
         accountId: account.accountId,
         channelIds,
@@ -743,7 +663,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       const token = account.token.trim();
       let discordBotLabel = "";
       try {
-        const probe = await getDiscordRuntime().channel.discord.probeDiscord(token, 2500, {
+        const probe = await probeDiscord(token, 2500, {
           includeApplication: true,
         });
         const username = probe.ok ? probe.bot?.username?.trim() : null;
@@ -771,7 +691,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         }
       }
       ctx.log?.info(`[${account.accountId}] starting provider${discordBotLabel}`);
-      return getDiscordRuntime().channel.discord.monitorDiscordProvider({
+      return monitorDiscordProvider({
         token,
         accountId: account.accountId,
         config: ctx.cfg,

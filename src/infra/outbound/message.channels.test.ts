@@ -4,7 +4,6 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createMSTeamsTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
-import { sendMessage, sendPoll } from "./message.js";
 
 const setRegistry = (registry: ReturnType<typeof createTestRegistry>) => {
   setActivePluginRegistry(registry);
@@ -17,7 +16,12 @@ vi.mock("../../gateway/call.js", () => ({
   randomIdempotencyKey: () => "idem-1",
 }));
 
-beforeEach(() => {
+let sendMessage: typeof import("./message.js").sendMessage;
+let sendPoll: typeof import("./message.js").sendPoll;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ sendMessage, sendPoll } = await import("./message.js"));
   callGatewayMock.mockClear();
   setRegistry(emptyRegistry);
 });

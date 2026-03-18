@@ -1,5 +1,5 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { createAccountListHelpers, type OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
+import { createAccountListHelpers, type OpenClawConfig } from "./runtime-api.js";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
 import { normalizeBlueBubblesServerUrl, type BlueBubblesAccountConfig } from "./types.js";
 
