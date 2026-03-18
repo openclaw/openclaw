@@ -40,7 +40,7 @@ vi.doMock("openclaw/plugin-sdk/web-media", () => ({
 }));
 
 const { loadConfig } = vi.hoisted((): { loadConfig: AnyMock } => ({
-  loadConfig: vi.fn(() => ({})),
+  loadConfig: vi.fn(() => ({}) as OpenClawConfig),
 }));
 const { resolveStorePathMock } = vi.hoisted((): { resolveStorePathMock: AnyMock } => ({
   resolveStorePathMock: vi.fn((storePath?: string) => storePath ?? sessionStorePath),

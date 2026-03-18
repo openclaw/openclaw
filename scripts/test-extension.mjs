@@ -296,7 +296,7 @@ async function run() {
 
   // Node 24 + Vitest loader state can crash some extension suites before test
   // discovery. Run the affected suites in forked workers until upstream is fixed.
-  const forkPoolExtensionIds = new Set(["nostr", "synology-chat"]);
+  const forkPoolExtensionIds = new Set(["firecrawl", "nostr", "synology-chat", "xai"]);
   const poolArgs = forkPoolExtensionIds.has(plan.extensionId) ? ["--pool=forks"] : [];
 
   const child = spawn(
