@@ -415,7 +415,7 @@ describe("resolveSessionModelRef", () => {
 
   test("preserves openrouter provider when model contains vendor prefix", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "openrouter/minimax/minimax-m2.5",
+      primary: "openrouter/minimax/minimax-m2.7",
     });
 
     const resolved = resolveSessionModelRef(cfg, {
