@@ -1,23 +1,26 @@
-import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  createScopedDmSecurityResolver,
+  createTopLevelChannelConfigAdapter,
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  buildPassiveChannelStatusSummary,
+  buildTrafficStatusSummary,
+} from "../../shared/channel-status-summary.js";
 import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
-  mapAllowFromEntries,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/nostr";
-import {
-  buildPassiveChannelStatusSummary,
-  buildTrafficStatusSummary,
-} from "../../shared/channel-status-summary.js";
+} from "../runtime-api.js";
 import type { NostrProfile } from "./config-schema.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { normalizePubkey, startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
 import { getNostrRuntime } from "./runtime.js";
+import { resolveNostrOutboundSessionRoute } from "./session-route.js";
 import { nostrSetupAdapter, nostrSetupWizard } from "./setup-surface.js";
 import {
   listNostrAccountIds,
@@ -48,6 +51,39 @@ const resolveNostrDmPolicy = createScopedDmSecurityResolver<ResolvedNostrAccount
   },
 });
 
+const nostrConfigAdapter = createTopLevelChannelConfigAdapter<ResolvedNostrAccount>({
+  sectionKey: "nostr",
+  resolveAccount: (cfg) => resolveNostrAccount({ cfg }),
+  listAccountIds: listNostrAccountIds,
+  defaultAccountId: resolveDefaultNostrAccountId,
+  deleteMode: "clear-fields",
+  clearBaseFields: [
+    "name",
+    "defaultAccount",
+    "privateKey",
+    "relays",
+    "dmPolicy",
+    "allowFrom",
+    "profile",
+  ],
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    allowFrom
+      .map((entry) => String(entry).trim())
+      .filter(Boolean)
+      .map((entry) => {
+        if (entry === "*") {
+          return "*";
+        }
+        try {
+          return normalizePubkey(entry);
+        } catch {
+          return entry;
+        }
+      })
+      .filter(Boolean),
+});
+
 export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   id: "nostr",
   meta: {
@@ -69,9 +105,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   setupWizard: nostrSetupWizard,
 
   config: {
-    listAccountIds: (cfg) => listNostrAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveNostrAccount({ cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultNostrAccountId(cfg),
+    ...nostrConfigAdapter,
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({
       accountId: account.accountId,
@@ -80,23 +114,6 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       configured: account.configured,
       publicKey: account.publicKey,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(resolveNostrAccount({ cfg, accountId }).config.allowFrom),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => {
-          if (entry === "*") {
-            return "*";
-          }
-          try {
-            return normalizePubkey(entry);
-          } catch {
-            return entry; // Keep as-is if normalization fails
-          }
-        })
-        .filter(Boolean),
   },
 
   pairing: {
@@ -138,6 +155,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       },
       hint: "<npub|hex pubkey|nostr:npub...>",
     },
+    resolveOutboundSessionRoute: (params) => resolveNostrOutboundSessionRoute(params),
   },
 
   outbound: {

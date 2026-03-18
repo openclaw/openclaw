@@ -1,7 +1,6 @@
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
+  createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
@@ -29,10 +28,13 @@ import {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
 } from "./runtime-api.js";
+import { resolveBlueBubblesOutboundSessionRoute } from "./session-route.js";
 import { blueBubblesSetupAdapter } from "./setup-core.js";
 import { blueBubblesSetupWizard } from "./setup-surface.js";
 import {
   extractHandleFromChatGuid,
+  inferBlueBubblesTargetChatType,
+  looksLikeBlueBubblesExplicitTargetId,
   looksLikeBlueBubblesTargetId,
   normalizeBlueBubblesHandle,
   normalizeBlueBubblesMessagingTarget,
@@ -44,22 +46,18 @@ const loadBlueBubblesChannelRuntime = createLazyRuntimeNamedExport(
   "blueBubblesChannelRuntime",
 );
 
-const bluebubblesConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveBlueBubblesAccount({ cfg, accountId }),
+const bluebubblesConfigAdapter = createScopedChannelConfigAdapter<ResolvedBlueBubblesAccount>({
+  sectionKey: "bluebubbles",
+  listAccountIds: listBlueBubblesAccountIds,
+  resolveAccount: (cfg, accountId) => resolveBlueBubblesAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultBlueBubblesAccountId,
+  clearBaseFields: ["serverUrl", "password", "name", "webhookPath"],
   resolveAllowFrom: (account: ResolvedBlueBubblesAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     formatNormalizedAllowFromEntries({
       allowFrom,
       normalizeEntry: (entry) => normalizeBlueBubblesHandle(entry.replace(/^bluebubbles:/i, "")),
     }),
-});
-
-const bluebubblesConfigBase = createScopedChannelConfigBase<ResolvedBlueBubblesAccount>({
-  sectionKey: "bluebubbles",
-  listAccountIds: listBlueBubblesAccountIds,
-  resolveAccount: (cfg, accountId) => resolveBlueBubblesAccount({ cfg, accountId }),
-  defaultAccountId: resolveDefaultBlueBubblesAccountId,
-  clearBaseFields: ["serverUrl", "password", "name", "webhookPath"],
 });
 
 const resolveBlueBubblesDmPolicy = createScopedDmSecurityResolver<ResolvedBlueBubblesAccount>({
@@ -112,7 +110,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   configSchema: buildChannelConfigSchema(BlueBubblesConfigSchema),
   setupWizard: blueBubblesSetupWizard,
   config: {
-    ...bluebubblesConfigBase,
+    ...bluebubblesConfigAdapter,
     isConfigured: (account) => account.configured,
     describeAccount: (account): ChannelAccountSnapshot => ({
       accountId: account.accountId,
@@ -121,7 +119,6 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       configured: account.configured,
       baseUrl: account.baseUrl,
     }),
-    ...bluebubblesConfigAccessors,
   },
   actions: bluebubblesMessageActions,
   security: {
@@ -140,9 +137,26 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeBlueBubblesMessagingTarget,
+    inferTargetChatType: ({ to }) => inferBlueBubblesTargetChatType(to),
+    resolveOutboundSessionRoute: (params) => resolveBlueBubblesOutboundSessionRoute(params),
     targetResolver: {
-      looksLikeId: looksLikeBlueBubblesTargetId,
+      looksLikeId: looksLikeBlueBubblesExplicitTargetId,
       hint: "<handle|chat_guid:GUID|chat_id:ID|chat_identifier:ID>",
+      resolveTarget: async ({ normalized }) => {
+        const to = normalized?.trim();
+        if (!to) {
+          return null;
+        }
+        const chatType = inferBlueBubblesTargetChatType(to);
+        if (!chatType) {
+          return null;
+        }
+        return {
+          to,
+          kind: chatType === "direct" ? "user" : "group",
+          source: "normalized" as const,
+        };
+      },
     },
     formatTargetDisplay: ({ target, display }) => {
       const shouldParseDisplay = (value: string): boolean => {

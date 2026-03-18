@@ -88,11 +88,80 @@ describe("noteWorkspaceStatus", () => {
       );
       expect(compatibilityCalls).toHaveLength(1);
       expect(String(compatibilityCalls[0]?.[0])).toContain(
-        "legacy-plugin still relies on legacy before_agent_start",
+        "legacy-plugin still uses legacy before_agent_start",
       );
       expect(String(compatibilityCalls[0]?.[0])).toContain(
-        "legacy-plugin is hook-only; this remains supported for compatibility",
+        "legacy-plugin is hook-only. This remains a supported compatibility path",
       );
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("surfaces bundle plugin capabilities in the plugins note", async () => {
+    resolveDefaultAgentIdMock.mockReturnValue("default");
+    resolveAgentWorkspaceDirMock.mockReturnValue("/workspace");
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      skills: [],
+    });
+    loadOpenClawPluginsMock.mockReturnValue({
+      plugins: [
+        {
+          id: "claude-bundle",
+          name: "Claude Bundle",
+          source: "/tmp/claude-bundle",
+          origin: "workspace",
+          enabled: true,
+          status: "loaded",
+          format: "bundle",
+          bundleFormat: "claude",
+          bundleCapabilities: ["skills", "commands", "agents"],
+          toolNames: [],
+          hookNames: [],
+          channelIds: [],
+          providerIds: [],
+          speechProviderIds: [],
+          mediaUnderstandingProviderIds: [],
+          imageGenerationProviderIds: [],
+          webSearchProviderIds: [],
+          gatewayMethods: [],
+          cliCommands: [],
+          services: [],
+          commands: [],
+          httpRoutes: 0,
+          hookCount: 0,
+          configSchema: false,
+        },
+      ],
+      diagnostics: [],
+      channels: [],
+      channelSetups: [],
+      providers: [],
+      speechProviders: [],
+      mediaUnderstandingProviders: [],
+      imageGenerationProviders: [],
+      webSearchProviders: [],
+      tools: [],
+      hooks: [],
+      typedHooks: [],
+      httpRoutes: [],
+      gatewayHandlers: {},
+      cliRegistrars: [],
+      services: [],
+      commands: [],
+      conversationBindingResolvedHandlers: [],
+    });
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      const { noteWorkspaceStatus } = await import("./doctor-workspace-status.js");
+      noteWorkspaceStatus({});
+
+      const pluginCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugins");
+      expect(pluginCalls).toHaveLength(1);
+      const body = String(pluginCalls[0]?.[0]);
+      expect(body).toContain("Bundle plugins: 1");
+      expect(body).toContain("agents, commands, skills");
     } finally {
       noteSpy.mockRestore();
     }

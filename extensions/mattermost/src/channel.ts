@@ -1,7 +1,6 @@
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
+  createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
@@ -39,6 +38,7 @@ import {
   type ChannelPlugin,
 } from "./runtime-api.js";
 import { getMattermostRuntime } from "./runtime.js";
+import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 
@@ -247,22 +247,18 @@ function formatAllowEntry(entry: string): string {
   return trimmed.replace(/^(mattermost|user):/i, "").toLowerCase();
 }
 
-const mattermostConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveMattermostAccount({ cfg, accountId }),
+const mattermostConfigAdapter = createScopedChannelConfigAdapter<ResolvedMattermostAccount>({
+  sectionKey: "mattermost",
+  listAccountIds: listMattermostAccountIds,
+  resolveAccount: (cfg, accountId) => resolveMattermostAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultMattermostAccountId,
+  clearBaseFields: ["botToken", "baseUrl", "name"],
   resolveAllowFrom: (account: ResolvedMattermostAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     formatNormalizedAllowFromEntries({
       allowFrom,
       normalizeEntry: formatAllowEntry,
     }),
-});
-
-const mattermostConfigBase = createScopedChannelConfigBase<ResolvedMattermostAccount>({
-  sectionKey: "mattermost",
-  listAccountIds: listMattermostAccountIds,
-  resolveAccount: (cfg, accountId) => resolveMattermostAccount({ cfg, accountId }),
-  defaultAccountId: resolveDefaultMattermostAccountId,
-  clearBaseFields: ["botToken", "baseUrl", "name"],
 });
 
 const resolveMattermostDmPolicy = createScopedDmSecurityResolver<ResolvedMattermostAccount>({
@@ -310,7 +306,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   reload: { configPrefixes: ["channels.mattermost"] },
   configSchema: buildChannelConfigSchema(MattermostConfigSchema),
   config: {
-    ...mattermostConfigBase,
+    ...mattermostConfigAdapter,
     isConfigured: (account) => Boolean(account.botToken && account.baseUrl),
     describeAccount: (account) => ({
       accountId: account.accountId,
@@ -320,7 +316,6 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       botTokenSource: account.botTokenSource,
       baseUrl: account.baseUrl,
     }),
-    ...mattermostConfigAccessors,
   },
   security: {
     resolveDmPolicy: resolveMattermostDmPolicy,
@@ -348,6 +343,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeMattermostMessagingTarget,
+    resolveOutboundSessionRoute: (params) => resolveMattermostOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: looksLikeMattermostTargetId,
       hint: "<channelId|user:ID|channel:ID>",

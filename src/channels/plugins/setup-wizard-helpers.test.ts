@@ -6,6 +6,7 @@ import {
   buildSingleChannelSecretPromptState,
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
+  createAllowFromSection,
   createLegacyCompatChannelDmPolicy,
   createNestedChannelAllowFromSetter,
   createNestedChannelDmPolicy,
@@ -25,6 +26,7 @@ import {
   patchTopLevelChannelConfigSection,
   promptLegacyChannelAllowFrom,
   promptLegacyChannelAllowFromForAccount,
+  promptParsedAllowFromForAccount,
   parseSetupEntriesWithParser,
   promptParsedAllowFromForScopedChannel,
   promptSingleChannelSecretInput,
@@ -33,6 +35,7 @@ import {
   resolveAccountIdForConfigure,
   resolveEntriesWithOptionalToken,
   resolveGroupAllowlistWithLookupNotes,
+  resolveParsedAllowFromEntries,
   resolveSetupAccountId,
   setAccountDmAllowFromForChannel,
   setAccountAllowFromForChannel,
@@ -579,6 +582,76 @@ describe("promptParsedAllowFromForScopedChannel", () => {
     });
 
     expect(next.channels?.imessage?.allowFrom).toEqual(["ok"]);
+  });
+});
+
+describe("promptParsedAllowFromForAccount", () => {
+  it("applies parsed allowFrom values through the provided writer", async () => {
+    const prompter = createPrompter(["Alice, ALICE"]);
+
+    const next = await promptParsedAllowFromForAccount({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            accounts: {
+              alt: {
+                allowFrom: ["old"],
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "alt",
+      defaultAccountId: DEFAULT_ACCOUNT_ID,
+      prompter,
+      noteTitle: "BlueBubbles allowlist",
+      noteLines: ["line"],
+      message: "msg",
+      placeholder: "placeholder",
+      parseEntries: (raw) =>
+        parseSetupEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
+      getExistingAllowFrom: ({ cfg, accountId }) =>
+        cfg.channels?.bluebubbles?.accounts?.[accountId]?.allowFrom ?? [],
+      applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
+        patchChannelConfigForAccount({
+          cfg,
+          channel: "bluebubbles",
+          accountId,
+          patch: { allowFrom },
+        }),
+    });
+
+    expect(next.channels?.bluebubbles?.accounts?.alt?.allowFrom).toEqual(["alice"]);
+    expect(prompter.note).toHaveBeenCalledWith("line", "BlueBubbles allowlist");
+  });
+
+  it("can merge parsed values with existing entries", async () => {
+    const next = await promptParsedAllowFromForAccount({
+      cfg: {
+        channels: {
+          nostr: {
+            allowFrom: ["old"],
+          },
+        },
+      } as OpenClawConfig,
+      defaultAccountId: DEFAULT_ACCOUNT_ID,
+      prompter: createPrompter(["new"]),
+      noteTitle: "Nostr allowlist",
+      noteLines: ["line"],
+      message: "msg",
+      placeholder: "placeholder",
+      parseEntries: (raw) => ({ entries: [raw.trim()] }),
+      getExistingAllowFrom: ({ cfg }) => cfg.channels?.nostr?.allowFrom ?? [],
+      mergeEntries: ({ existing, parsed }) => [...existing.map(String), ...parsed],
+      applyAllowFrom: ({ cfg, allowFrom }) =>
+        patchTopLevelChannelConfigSection({
+          cfg,
+          channel: "nostr",
+          patch: { allowFrom },
+        }),
+    });
+
+    expect(next.channels?.nostr?.allowFrom).toEqual(["old", "new"]);
   });
 });
 
@@ -1402,6 +1475,44 @@ describe("createAccountScopedAllowFromSection", () => {
   });
 });
 
+describe("createAllowFromSection", () => {
+  it("builds a parsed allowFrom section with default local resolution", async () => {
+    const section = createAllowFromSection({
+      helpTitle: "LINE allowlist",
+      helpLines: ["line"],
+      credentialInputKey: "token",
+      message: "LINE allowFrom",
+      placeholder: "U123",
+      invalidWithoutCredentialNote: "need ids",
+      parseId: (value) => value.trim().toUpperCase() || null,
+      apply: ({ cfg, accountId, allowFrom }) =>
+        patchChannelConfigForAccount({
+          cfg,
+          channel: "line",
+          accountId,
+          patch: { dmPolicy: "allowlist", allowFrom },
+        }),
+    });
+
+    expect(section.helpTitle).toBe("LINE allowlist");
+    await expect(
+      section.resolveEntries({
+        cfg: {},
+        accountId: DEFAULT_ACCOUNT_ID,
+        credentialValues: {},
+        entries: ["u1"],
+      }),
+    ).resolves.toEqual([{ input: "u1", resolved: true, id: "U1" }]);
+
+    const next = await section.apply({
+      cfg: {},
+      accountId: DEFAULT_ACCOUNT_ID,
+      allowFrom: ["U1"],
+    });
+    expect(next.channels?.line?.allowFrom).toEqual(["U1"]);
+  });
+});
+
 describe("createAccountScopedGroupAccessSection", () => {
   it("builds group access with shared setPolicy and fallback lookup notes", async () => {
     const prompter = createPrompter([]);
@@ -1541,6 +1652,20 @@ describe("resolveEntriesWithOptionalToken", () => {
           entries.map((input) => ({ input, resolved: true, id: `${token}:${input}` })),
       }),
     ).resolves.toEqual([{ input: "alice", resolved: true, id: "xoxb-test:alice" }]);
+  });
+});
+
+describe("resolveParsedAllowFromEntries", () => {
+  it("maps parsed ids into resolved/unresolved entries", () => {
+    expect(
+      resolveParsedAllowFromEntries({
+        entries: ["alice", " "],
+        parseId: (raw) => raw.trim() || null,
+      }),
+    ).toEqual([
+      { input: "alice", resolved: true, id: "alice" },
+      { input: " ", resolved: false, id: null },
+    ]);
   });
 });
 

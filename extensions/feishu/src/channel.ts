@@ -1,8 +1,5 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import {
-  createHybridChannelConfigBase,
-  createScopedAccountConfigAccessors,
-} from "openclaw/plugin-sdk/channel-config-helpers";
+import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
 import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
 import type {
@@ -34,6 +31,7 @@ import { parseFeishuConversationId } from "./conversation-id.js";
 import { listFeishuDirectoryPeers, listFeishuDirectoryGroups } from "./directory.static.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupAdapter } from "./setup-core.js";
 import { feishuSetupWizard } from "./setup-surface.js";
 import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
@@ -129,17 +127,16 @@ function setFeishuNamedAccountEnabled(
   };
 }
 
-const feishuConfigBase = createHybridChannelConfigBase<ResolvedFeishuAccount, ClawdbotConfig>({
+const feishuConfigAdapter = createHybridChannelConfigAdapter<
+  ResolvedFeishuAccount,
+  ResolvedFeishuAccount,
+  ClawdbotConfig
+>({
   sectionKey: "feishu",
   listAccountIds: listFeishuAccountIds,
   resolveAccount: (cfg, accountId) => resolveFeishuAccount({ cfg, accountId }),
   defaultAccountId: resolveDefaultFeishuAccountId,
   clearBaseFields: [],
-});
-
-const feishuConfigAccessors = createScopedAccountConfigAccessors<ResolvedFeishuAccount>({
-  resolveAccount: ({ cfg, accountId }) =>
-    resolveFeishuAccount({ cfg: cfg as ClawdbotConfig, accountId }),
   resolveAllowFrom: (account) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
 });
@@ -395,7 +392,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   reload: { configPrefixes: ["channels.feishu"] },
   configSchema: buildChannelConfigSchema(FeishuConfigSchema),
   config: {
-    ...feishuConfigBase,
+    ...feishuConfigAdapter,
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
       const isDefault = accountId === DEFAULT_ACCOUNT_ID;
       if (isDefault) {
@@ -453,7 +450,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       appId: account.appId,
       domain: account.domain,
     }),
-    ...feishuConfigAccessors,
   },
   actions: {
     describeMessageTool: describeFeishuMessageTool,
@@ -871,6 +867,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   setupWizard: feishuSetupWizard,
   messaging: {
     normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
+    resolveOutboundSessionRoute: (params) => resolveFeishuOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: looksLikeFeishuId,
       hint: "<chatId|user:openId|chat:chatId>",

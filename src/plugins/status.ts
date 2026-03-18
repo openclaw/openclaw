@@ -2,6 +2,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -64,7 +65,12 @@ export type PluginInspectReport = {
   cliCommands: string[];
   services: string[];
   gatewayMethods: string[];
+  mcpServers: Array<{
+    name: string;
+    hasStdioTransport: boolean;
+  }>;
   httpRouteCount: number;
+  bundleCapabilities: string[];
   diagnostics: PluginDiagnostic[];
   policy: {
     allowPromptInjection?: boolean;
@@ -86,7 +92,7 @@ function buildCompatibilityNoticesForInspect(
       code: "legacy-before-agent-start",
       severity: "warn",
       message:
-        "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+        "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
     });
   }
   if (inspect.shape === "hook-only") {
@@ -95,7 +101,7 @@ function buildCompatibilityNoticesForInspect(
       code: "hook-only",
       severity: "info",
       message:
-        "is hook-only; this remains supported for compatibility, but it has not migrated to explicit capability registration.",
+        "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
     });
   }
   return warnings;
@@ -226,6 +232,26 @@ export function buildPluginInspectReport(params: {
     httpRouteCount: plugin.httpRoutes,
   });
 
+  // Populate MCP server info for bundle-format plugins with a known rootDir.
+  let mcpServers: PluginInspectReport["mcpServers"] = [];
+  if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
+    const mcpSupport = inspectBundleMcpRuntimeSupport({
+      pluginId: plugin.id,
+      rootDir: plugin.rootDir,
+      bundleFormat: plugin.bundleFormat,
+    });
+    mcpServers = [
+      ...mcpSupport.supportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: true,
+      })),
+      ...mcpSupport.unsupportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: false,
+      })),
+    ];
+  }
+
   const usesLegacyBeforeAgentStart = typedHooks.some(
     (entry) => entry.name === "before_agent_start",
   );
@@ -248,7 +274,9 @@ export function buildPluginInspectReport(params: {
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
     gatewayMethods: [...plugin.gatewayMethods],
+    mcpServers,
     httpRouteCount: plugin.httpRoutes,
+    bundleCapabilities: plugin.bundleCapabilities ?? [],
     diagnostics,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,
