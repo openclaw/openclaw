@@ -111,7 +111,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("falls back to base session delivery only when the current session route is incomplete", async () => {
+  it("prefers the parsed thread target over a stale base-session route", async () => {
     mocks.consumeRestartSentinel.mockResolvedValueOnce({
       payload: {
         sessionKey: "agent:main:slack:channel:C0AL50GP89M:thread:1773827207.576549",
@@ -122,6 +122,11 @@ describe("scheduleRestartSentinelWake", () => {
     });
     mocks.parseSessionThreadInfo.mockReturnValueOnce({
       baseSessionKey: "agent:main:slack:channel:C0ALZAZ6ZBK",
+      threadId: "1773827207.576549",
+    });
+    mocks.resolveAnnounceTargetFromKey.mockReturnValueOnce({
+      channel: "slack",
+      to: "channel:C0AL50GP89M",
       threadId: "1773827207.576549",
     });
     mocks.loadSessionEntry
@@ -138,14 +143,14 @@ describe("scheduleRestartSentinelWake", () => {
         entry: {
           deliveryContext: {
             channel: "slack",
-            to: "channel:C0AL50GP89M",
+            to: "channel:C0ALZAZ6ZBK",
             accountId: "default",
           },
         },
       });
     mocks.deliveryContextFromSession.mockReturnValueOnce({ channel: "slack" }).mockReturnValueOnce({
       channel: "slack",
-      to: "channel:C0AL50GP89M",
+      to: "channel:C0ALZAZ6ZBK",
       accountId: "default",
     });
     mocks.resolveOutboundTarget.mockReturnValueOnce({
@@ -163,12 +168,13 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
-  it("keeps a partially populated current route when no base session is available", async () => {
+  it("preserves partial sentinel account hints while resolving the route from session data", async () => {
     mocks.consumeRestartSentinel.mockResolvedValueOnce({
       payload: {
         sessionKey: "agent:main:slack:channel:C0AL50GP89M:thread:1773827207.576549",
         deliveryContext: {
           channel: "slack",
+          accountId: "acct-2",
         },
       },
     });
@@ -201,6 +207,7 @@ describe("scheduleRestartSentinelWake", () => {
       expect.objectContaining({
         channel: "slack",
         to: "channel:C0AL50GP89M",
+        accountId: "acct-2",
       }),
     );
   });

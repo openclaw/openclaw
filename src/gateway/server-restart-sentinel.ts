@@ -39,22 +39,21 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
   // Prefer delivery context from sentinel (captured at restart) over session store
   // Handles race condition where store wasn't flushed before restart
   const sentinelContext = payload.deliveryContext;
-  let sessionDeliveryContext = deliveryContextFromSession(entry);
-  if (
+  const sessionDeliveryContext = deliveryContextFromSession(entry);
+  const shouldConsultBaseSession =
     (!sessionDeliveryContext || !sessionDeliveryContext.channel || !sessionDeliveryContext.to) &&
     baseSessionKey &&
-    baseSessionKey !== sessionKey
-  ) {
-    const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
-    const baseDeliveryContext = deliveryContextFromSession(baseEntry);
-    sessionDeliveryContext = mergeDeliveryContext(sessionDeliveryContext, baseDeliveryContext);
-  }
+    baseSessionKey !== sessionKey;
+  const baseDeliveryContext = shouldConsultBaseSession
+    ? deliveryContextFromSession(loadSessionEntry(baseSessionKey).entry)
+    : undefined;
 
-  const trustedSentinelContext =
-    sentinelContext?.channel && sentinelContext?.to ? sentinelContext : undefined;
+  // Keep explicit restart/session hints ahead of fallback routing derived from a
+  // parent/base session. The base session should only fill fields that are still
+  // missing after consulting the current session key/parsed target.
   const origin = mergeDeliveryContext(
-    trustedSentinelContext,
-    mergeDeliveryContext(sessionDeliveryContext, parsedTarget ?? undefined),
+    mergeDeliveryContext(sentinelContext, sessionDeliveryContext),
+    mergeDeliveryContext(parsedTarget ?? undefined, baseDeliveryContext),
   );
 
   const channelRaw = origin?.channel;
