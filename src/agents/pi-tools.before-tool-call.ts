@@ -87,6 +87,86 @@ async function recordLoopOutcome(args: {
   }
 }
 
+async function applyLoopProtection(args: {
+  ctx?: HookContext;
+  toolName: string;
+  toolParams: unknown;
+  toolCallId?: string;
+  recordAttemptOnCritical?: boolean;
+}): Promise<{ blockedReason?: string }> {
+  if (!args.ctx?.sessionKey) {
+    return {};
+  }
+
+  const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
+    await loadBeforeToolCallRuntime();
+  const sessionState = getDiagnosticSessionState({
+    sessionKey: args.ctx.sessionKey,
+    sessionId: args.ctx?.agentId,
+  });
+
+  const loopResult = detectToolCallLoop(
+    sessionState,
+    args.toolName,
+    args.toolParams,
+    args.ctx.loopDetection,
+  );
+
+  if (loopResult.stuck) {
+    if (loopResult.level === "critical") {
+      log.error(`Blocking ${args.toolName} due to critical loop: ${loopResult.message}`);
+      logToolLoopAction({
+        sessionKey: args.ctx.sessionKey,
+        sessionId: args.ctx?.agentId,
+        toolName: args.toolName,
+        level: "critical",
+        action: "block",
+        detector: loopResult.detector,
+        count: loopResult.count,
+        message: loopResult.message,
+        pairedToolName: loopResult.pairedToolName,
+      });
+      if (args.recordAttemptOnCritical) {
+        recordToolCall(
+          sessionState,
+          args.toolName,
+          args.toolParams,
+          args.toolCallId,
+          args.ctx.loopDetection,
+        );
+      }
+      return {
+        blockedReason: loopResult.message,
+      };
+    }
+
+    const warningKey = loopResult.warningKey ?? `${loopResult.detector}:${args.toolName}`;
+    if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
+      log.warn(`Loop warning for ${args.toolName}: ${loopResult.message}`);
+      logToolLoopAction({
+        sessionKey: args.ctx.sessionKey,
+        sessionId: args.ctx?.agentId,
+        toolName: args.toolName,
+        level: "warning",
+        action: "warn",
+        detector: loopResult.detector,
+        count: loopResult.count,
+        message: loopResult.message,
+        pairedToolName: loopResult.pairedToolName,
+      });
+    }
+  }
+
+  recordToolCall(
+    sessionState,
+    args.toolName,
+    args.toolParams,
+    args.toolCallId,
+    args.ctx.loopDetection,
+  );
+  return {};
+}
+
 export async function runBeforeToolCallHook(args: {
   toolName: string;
   params: unknown;
@@ -120,9 +200,19 @@ export async function runBeforeToolCallHook(args: {
       );
 
       if (hookResult?.block) {
+        const loopProtectionResult = await applyLoopProtection({
+          ctx: args.ctx,
+          toolName,
+          toolParams: effectiveParams,
+          toolCallId: args.toolCallId,
+          recordAttemptOnCritical: true,
+        });
         return {
           blocked: true,
-          reason: hookResult.blockReason || "Tool call blocked by plugin hook",
+          reason:
+            loopProtectionResult.blockedReason ||
+            hookResult.blockReason ||
+            "Tool call blocked by plugin hook",
         };
       }
 
@@ -137,65 +227,17 @@ export async function runBeforeToolCallHook(args: {
     }
   }
 
-  if (args.ctx?.sessionKey) {
-    const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
-      await loadBeforeToolCallRuntime();
-    const sessionState = getDiagnosticSessionState({
-      sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx?.agentId,
-    });
-
-    const loopResult = detectToolCallLoop(
-      sessionState,
-      toolName,
-      effectiveParams,
-      args.ctx.loopDetection,
-    );
-
-    if (loopResult.stuck) {
-      if (loopResult.level === "critical") {
-        log.error(`Blocking ${toolName} due to critical loop: ${loopResult.message}`);
-        logToolLoopAction({
-          sessionKey: args.ctx.sessionKey,
-          sessionId: args.ctx?.agentId,
-          toolName,
-          level: "critical",
-          action: "block",
-          detector: loopResult.detector,
-          count: loopResult.count,
-          message: loopResult.message,
-          pairedToolName: loopResult.pairedToolName,
-        });
-        return {
-          blocked: true,
-          reason: loopResult.message,
-        };
-      }
-
-      const warningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
-      if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
-        log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
-        logToolLoopAction({
-          sessionKey: args.ctx.sessionKey,
-          sessionId: args.ctx?.agentId,
-          toolName,
-          level: "warning",
-          action: "warn",
-          detector: loopResult.detector,
-          count: loopResult.count,
-          message: loopResult.message,
-          pairedToolName: loopResult.pairedToolName,
-        });
-      }
-    }
-
-    recordToolCall(
-      sessionState,
-      toolName,
-      effectiveParams,
-      args.toolCallId,
-      args.ctx.loopDetection,
-    );
+  const loopProtectionResult = await applyLoopProtection({
+    ctx: args.ctx,
+    toolName,
+    toolParams: effectiveParams,
+    toolCallId: args.toolCallId,
+  });
+  if (loopProtectionResult.blockedReason) {
+    return {
+      blocked: true,
+      reason: loopProtectionResult.blockedReason,
+    };
   }
 
   return { blocked: false, params: effectiveParams };

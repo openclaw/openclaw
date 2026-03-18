@@ -201,6 +201,25 @@ function normalizeHostname(hostname: string): string {
   return lowered.startsWith("www.") ? lowered.slice(4) : lowered;
 }
 
+function extractBrowserActKind(params: Record<string, unknown>): string | undefined {
+  const request = isPlainObject(params.request) ? params.request : undefined;
+  if (typeof request?.kind === "string") {
+    return request.kind;
+  }
+  return typeof params.kind === "string" ? params.kind : undefined;
+}
+
+function isBrowserNavigationBoundary(toolName: string, params: unknown): boolean {
+  if (toolName !== "browser" || !isPlainObject(params)) {
+    return false;
+  }
+  const action = params.action;
+  if (action === "open" || action === "navigate") {
+    return true;
+  }
+  return action === "act" && extractBrowserActKind(params) === "click";
+}
+
 function extractBrowserNavigationUrl(toolName: string, params: unknown): URL | undefined {
   if (toolName !== "browser" || !isPlainObject(params)) {
     return undefined;
@@ -275,10 +294,12 @@ function extractToolCallLoopHint(
     return undefined;
   }
   const navigationUrl = extractBrowserNavigationUrl(toolName, params);
-  if (!navigationUrl) {
+  if (!navigationUrl && !isBrowserNavigationBoundary(toolName, params)) {
     return undefined;
   }
-  const browserSearch = extractBrowserSearchLoopHintFromUrl(navigationUrl);
+  const browserSearch = navigationUrl
+    ? extractBrowserSearchLoopHintFromUrl(navigationUrl)
+    : undefined;
   if (browserSearch) {
     return { browserNavigation: true, browserSearch };
   }

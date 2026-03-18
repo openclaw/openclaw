@@ -99,14 +99,21 @@ function createPingPongFixture() {
 function createBrowserSearchFixture(
   query: string,
   host = "www.google.com",
-  options?: { path?: string; queryParam?: string },
+  options?: {
+    path?: string;
+    queryParam?: string;
+    action?: "open" | "navigate";
+    urlField?: "url" | "targetUrl";
+  },
 ) {
   const path = options?.path ?? "/search";
   const queryParam = options?.queryParam ?? "q";
   const url = `https://${host}${path}?${queryParam}=${encodeURIComponent(query)}`;
+  const action = options?.action ?? "open";
+  const urlField = options?.urlField ?? "url";
   return {
     toolName: "browser",
-    params: { action: "open", url },
+    params: { action, [urlField]: url },
     result: {
       content: [{ type: "text", text: `results for ${query}` }],
       details: { url },
@@ -121,6 +128,17 @@ function createBrowserPageFixture(url: string) {
     result: {
       content: [{ type: "text", text: `opened ${url}` }],
       details: { url },
+    },
+  } as const;
+}
+
+function createBrowserActClickFixture(ref = "1") {
+  return {
+    toolName: "browser",
+    params: { action: "act", request: { kind: "click", ref } },
+    result: {
+      content: [{ type: "text", text: `clicked ${ref}` }],
+      details: { ok: true },
     },
   } as const;
 }
@@ -657,6 +675,39 @@ describe("tool-loop-detection", () => {
       expect(loopResult.stuck).toBe(false);
     });
 
+    it("resets the browser search storm streak after browser act click navigation", () => {
+      const state = createState();
+      recordSuccessfulBrowserSearchCalls({
+        state,
+        queries: ["openclaw issue 0", "openclaw issue 1", "openclaw issue 2", "openclaw issue 3"],
+      });
+
+      const clickedResult = createBrowserActClickFixture("5");
+      recordSuccessfulCall(
+        state,
+        clickedResult.toolName,
+        clickedResult.params,
+        clickedResult.result,
+        4,
+      );
+
+      recordSuccessfulBrowserSearchCalls({
+        state,
+        queries: ["openclaw follow-up 0", "openclaw follow-up 1", "openclaw follow-up 2"],
+        startIndex: 5,
+      });
+
+      const current = createBrowserSearchFixture("openclaw follow-up next");
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
     it("only counts the non-repeating active browser-search tail", () => {
       const state = createState();
       recordSuccessfulBrowserSearchCalls({
@@ -716,6 +767,34 @@ describe("tool-loop-detection", () => {
       const current = createBrowserSearchFixture("yandex issue next", "yandex.com", {
         path: "/search/",
         queryParam: "text",
+      });
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.detector).toBe("browser_search_storm");
+        expect(loopResult.count).toBe(BROWSER_SEARCH_WARNING_THRESHOLD);
+      }
+    });
+
+    it("matches browser search pages opened via navigate targetUrl", () => {
+      const state = createState();
+      for (let i = 0; i < BROWSER_SEARCH_WARNING_THRESHOLD; i += 1) {
+        const fixture = createBrowserSearchFixture(`navigate issue ${i}`, "www.google.com", {
+          action: "navigate",
+          urlField: "targetUrl",
+        });
+        recordSuccessfulCall(state, fixture.toolName, fixture.params, fixture.result, i);
+      }
+
+      const current = createBrowserSearchFixture("navigate issue next", "www.google.com", {
+        action: "navigate",
+        urlField: "targetUrl",
       });
       const loopResult = detectToolCallLoop(
         state,

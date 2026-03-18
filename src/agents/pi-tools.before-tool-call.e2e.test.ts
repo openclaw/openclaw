@@ -12,6 +12,7 @@ import {
   BROWSER_SEARCH_WARNING_THRESHOLD,
   CRITICAL_THRESHOLD,
   GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+  WARNING_THRESHOLD,
 } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -280,6 +281,37 @@ describe("before_tool_call loop detection behavior", () => {
       );
       expect(browserWarns).toHaveLength(0);
     });
+  });
+
+  it("records hook-blocked calls so repeated forbidden actions still emit loop warnings", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockReason: "blocked by policy",
+    });
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "should not run" }],
+      details: { ok: true },
+    });
+    const tool = createWrappedTool("read", execute);
+
+    await withToolLoopEvents(
+      async (emitted) => {
+        for (let i = 0; i <= WARNING_THRESHOLD; i += 1) {
+          await expect(
+            tool.execute(`blocked-read-${i}`, { path: "/forbidden.txt" }, undefined, undefined),
+          ).rejects.toThrow("blocked by policy");
+        }
+
+        const genericWarns = emitted.filter(
+          (evt) => evt.level === "warning" && evt.detector === "generic_repeat",
+        );
+        expect(genericWarns).toHaveLength(1);
+        expect(genericWarns[0]?.count).toBe(WARNING_THRESHOLD);
+        expect(execute).not.toHaveBeenCalled();
+      },
+      (evt) => evt.level === "warning",
+    );
   });
 
   it("emits warnings for separate browser search storms within the same session", async () => {
