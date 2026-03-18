@@ -34,6 +34,7 @@ import {
 import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
+import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import { nextcloudTalkSetupAdapter } from "./setup-core.js";
 import { nextcloudTalkSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
@@ -171,6 +172,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
   },
   messaging: {
     normalizeTarget: normalizeNextcloudTalkMessagingTarget,
+    resolveOutboundSessionRoute: (params) => resolveNextcloudTalkOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: looksLikeNextcloudTalkTargetId,
       hint: "<roomToken>",
