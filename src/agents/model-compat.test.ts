@@ -1,5 +1,6 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
+import { streamSimpleOpenAICompletions } from "@mariozechner/pi-ai/openai-completions";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderModernModelRef: vi.fn(),
@@ -46,11 +47,11 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): 
   expect(supportsDeveloperRole(normalized)).toBe(false);
 }
 
-function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
+function expectSupportsUsageInStreamingForcedOn(overrides?: Partial<Model<Api>>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
   const normalized = normalizeModelCompat(model as Model<Api>);
-  expect(supportsUsageInStreaming(normalized)).toBe(false);
+  expect(supportsUsageInStreaming(normalized)).toBe(true);
 }
 
 function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): void {
@@ -60,9 +61,118 @@ function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): voi
   expect(supportsStrictMode(normalized)).toBe(false);
 }
 
+function decodeBodyText(body: unknown): string {
+  if (!body) {
+    return "";
+  }
+  if (typeof body === "string") {
+    return body;
+  }
+  if (body instanceof Uint8Array) {
+    return Buffer.from(body).toString("utf8");
+  }
+  if (body instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(body)).toString("utf8");
+  }
+  return "";
+}
+
+function buildSseResponse(events: unknown[]): Response {
+  const sse = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(sse));
+      controller.close();
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function installOpenAiCompletionsStreamMock(params: {
+  baseUrl: string;
+  onRequest: (body: Record<string, unknown>) => void;
+}): { restore: () => void } {
+  const originalFetch = globalThis.fetch;
+  const completionsUrl = `${params.baseUrl}/chat/completions`;
+  const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === completionsUrl) {
+      const bodyText =
+        typeof (init as { body?: unknown } | undefined)?.body !== "undefined"
+          ? decodeBodyText((init as { body?: unknown }).body)
+          : input instanceof Request
+            ? await input.clone().text()
+            : "";
+      const parsed = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {};
+      params.onRequest(parsed);
+      return buildSseResponse([
+        {
+          id: "chatcmpl_test",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "custom-model",
+          choices: [{ index: 0, delta: { content: "ok" }, finish_reason: null }],
+        },
+        {
+          id: "chatcmpl_test",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "custom-model",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        },
+        {
+          id: "chatcmpl_test",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "custom-model",
+          choices: [],
+          usage: { prompt_tokens: 72, completion_tokens: 8, total_tokens: 80 },
+        },
+      ]);
+    }
+
+    if (!originalFetch) {
+      throw new Error(`fetch is not available (url=${url})`);
+    }
+    return await originalFetch(input, init);
+  };
+  (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchImpl;
+  return {
+    restore: () => {
+      (globalThis as unknown as { fetch: typeof fetch }).fetch = originalFetch;
+    },
+  };
+}
+
+async function collectDoneMessage(
+  stream: ReturnType<typeof streamSimpleOpenAICompletions>,
+): Promise<AssistantMessage> {
+  for await (const event of stream) {
+    if (event.type === "done") {
+      return event.message;
+    }
+    if (event.type === "error") {
+      throw new Error(event.error.errorMessage ?? "stream failed");
+    }
+  }
+  throw new Error("stream ended without done");
+}
+
+let restoreFetch: (() => void) | undefined;
+
 beforeEach(() => {
   providerRuntimeMocks.resolveProviderModernModelRef.mockReset();
   providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(undefined);
+});
+
+afterEach(() => {
+  restoreFetch?.();
+  restoreFetch = undefined;
 });
 
 describe("normalizeModelCompat — Anthropic baseUrl", () => {
@@ -181,8 +291,8 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("forces supportsUsageInStreaming off for generic custom openai-completions provider", () => {
-    expectSupportsUsageInStreamingForcedOff({
+  it("defaults supportsUsageInStreaming on for generic custom openai-completions provider", () => {
+    expectSupportsUsageInStreamingForcedOn({
       provider: "custom-cpa",
       baseUrl: "https://cpa.example.com/v1",
     });
@@ -257,7 +367,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
-  it("still forces flags off when not explicitly set by user", () => {
+  it("still forces developer role and strict mode off while defaulting stream usage on", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
@@ -266,7 +376,7 @@ describe("normalizeModelCompat", () => {
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
     expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
     expect(supportsStrictMode(normalized)).toBe(false);
   });
 
@@ -294,7 +404,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(model)).toBeUndefined();
     expect(supportsStrictMode(model)).toBeUndefined();
     expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
     expect(supportsStrictMode(normalized)).toBe(false);
   });
 
@@ -335,6 +445,41 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(normalized)).toBe(true);
     expect(supportsUsageInStreaming(normalized)).toBe(true);
     expect(supportsStrictMode(normalized)).toBe(true);
+  });
+
+  it("requests streaming usage and records the final usage-only chunk for custom providers", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    restoreFetch = installOpenAiCompletionsStreamMock({
+      baseUrl: "https://proxy.example.com/v1",
+      onRequest: (body) => {
+        requestBody = body;
+      },
+    }).restore;
+
+    const model = normalizeModelCompat({
+      ...baseModel(),
+      id: "custom-model",
+      name: "custom-model",
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+    } as Model<Api>);
+
+    const message = await collectDoneMessage(
+      streamSimpleOpenAICompletions(
+        model as Model<"openai-completions">,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        },
+        { apiKey: "test-key" },
+      ),
+    );
+
+    expect(requestBody?.stream_options).toEqual({ include_usage: true });
+    expect(message.usage).toMatchObject({
+      input: 72,
+      output: 8,
+      totalTokens: 80,
+    });
   });
 });
 
