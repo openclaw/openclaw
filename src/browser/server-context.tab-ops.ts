@@ -1,12 +1,16 @@
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { fetchJson, fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
+import { listChromeMcpTabs, openChromeMcpTab } from "./chrome-mcp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
+  InvalidBrowserNavigationUrlError,
+  requiresInspectableBrowserNavigationRedirects,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
@@ -59,10 +63,14 @@ export function createProfileTabOps({
   getProfileState,
 }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
+  const capabilities = getBrowserProfileCapabilities(profile);
 
   const listTabs = async (): Promise<BrowserTab[]> => {
-    // For remote profiles, use Playwright's persistent connection to avoid ephemeral sessions
-    if (!profile.cdpIsLoopback) {
+    if (capabilities.usesChromeMcp) {
+      return await listChromeMcpTabs(profile.name, profile.userDataDir);
+    }
+
+    if (capabilities.usesPersistentPlaywright) {
       const mod = await getPwAiModule({ mode: "strict" });
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
@@ -99,8 +107,7 @@ export function createProfileTabOps({
   const enforceManagedTabLimit = async (keepTargetId: string): Promise<void> => {
     const profileState = getProfileState();
     if (
-      profile.driver !== "openclaw" ||
-      !profile.cdpIsLoopback ||
+      !capabilities.supportsManagedTabLimit ||
       state().resolved.attachOnly ||
       !profileState.running
     ) {
@@ -132,9 +139,16 @@ export function createProfileTabOps({
   const openTab = async (url: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
 
-    // For remote profiles, use Playwright's persistent connection to create tabs
-    // This ensures the tab persists beyond a single request.
-    if (!profile.cdpIsLoopback) {
+    if (capabilities.usesChromeMcp) {
+      await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+      const page = await openChromeMcpTab(profile.name, url, profile.userDataDir);
+      const profileState = getProfileState();
+      profileState.lastTargetId = page.targetId;
+      await assertBrowserNavigationResultAllowed({ url: page.url, ...ssrfPolicyOpts });
+      return page;
+    }
+
+    if (capabilities.usesPersistentPlaywright) {
       const mod = await getPwAiModule({ mode: "strict" });
       const createPageViaPlaywright = (mod as Partial<PwAiModule> | null)?.createPageViaPlaywright;
       if (typeof createPageViaPlaywright === "function") {
@@ -153,6 +167,12 @@ export function createProfileTabOps({
           type: page.type,
         };
       }
+    }
+
+    if (requiresInspectableBrowserNavigationRedirects(state().resolved.ssrfPolicy)) {
+      throw new InvalidBrowserNavigationUrlError(
+        "Navigation blocked: strict browser SSRF policy requires Playwright-backed redirect-hop inspection",
+      );
     }
 
     const createdViaCdp = await createTargetViaCdp({

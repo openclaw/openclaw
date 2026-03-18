@@ -11,10 +11,8 @@ export {
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { logTypingFailure } from "../channels/logging.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
+export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export { createActionGate } from "../agents/tools/common.js";
 export {
   buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
@@ -23,15 +21,21 @@ export {
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
   setTopLevelChannelGroupPolicy,
-  splitOnboardingEntries,
-} from "../channels/plugins/onboarding/helpers.js";
+  splitSetupEntries,
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type {
   BaseProbeResult,
   ChannelGroupContext,
+  ChannelMessageActionName,
   ChannelMeta,
   ChannelOutboundAdapter,
 } from "../channels/plugins/types.js";
+export type {
+  ChannelConfiguredBindingProvider,
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
+} from "../channels/plugins/types.adapters.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixContext } from "../channels/reply-prefix.js";
 export { createTypingCallbacks } from "../channels/typing.js";
@@ -51,8 +55,10 @@ export {
 } from "../config/types.secrets.js";
 export { buildSecretInputSchema } from "./secret-input-schema.js";
 export { createDedupeCache } from "../infra/dedupe.js";
-export { installRequestBodyLimitGuard } from "../infra/http-body.js";
+export { installRequestBodyLimitGuard, readJsonBodyWithLimit } from "../infra/http-body.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+export { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
+export type { OutboundIdentity } from "../infra/outbound/identity.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { AnyAgentTool, OpenClawPluginApi } from "../plugins/types.js";
@@ -61,6 +67,7 @@ export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { evaluateSenderGroupAccessForPolicy } from "./group-access.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
+export { feishuSetupWizard, feishuSetupAdapter } from "../../extensions/feishu/setup-api.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { readJsonFileWithFallback } from "./json-store.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
@@ -73,6 +80,10 @@ export {
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 export { withTempDownloadPath } from "./temp-path.js";
+export {
+  buildFeishuConversationId,
+  parseFeishuConversationId,
+} from "../../extensions/feishu/src/conversation-id.js";
 export {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,

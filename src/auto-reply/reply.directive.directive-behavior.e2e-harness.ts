@@ -4,6 +4,7 @@ import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.j
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { loadSessionStore } from "../config/sessions.js";
+import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
 
 export { loadModelCatalog } from "../agents/model-catalog.js";
 export { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
@@ -134,7 +135,7 @@ export function assertElevatedOffStatusReply(text: string | undefined) {
 
 export function installDirectiveBehaviorE2EHooks() {
   beforeEach(() => {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
+    runEmbeddedPiAgentMock.mockReset();
     vi.mocked(loadModelCatalog).mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
   });
 

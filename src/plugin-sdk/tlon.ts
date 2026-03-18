@@ -1,14 +1,17 @@
 // Narrow plugin-sdk surface for the bundled tlon plugin.
 // Keep this list additive and scoped to symbols used under extensions/tlon.
 
+import {
+  createOptionalChannelSetupAdapter,
+  createOptionalChannelSetupWizard,
+} from "./optional-channel-setup.js";
+
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-export type { ChannelOnboardingAdapter } from "../channels/plugins/onboarding-types.js";
 export {
-  promptAccountId,
-  resolveAccountIdForConfigure,
-} from "../channels/plugins/onboarding/helpers.js";
-export { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
+  applyAccountNameToChannelSection,
+  patchScopedAccountConfig,
+} from "../channels/plugins/setup-helpers.js";
 export type {
   ChannelAccountSnapshot,
   ChannelOutboundAdapter,
@@ -29,3 +32,17 @@ export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
+
+export const tlonSetupAdapter = createOptionalChannelSetupAdapter({
+  channel: "tlon",
+  label: "Tlon",
+  npmSpec: "@openclaw/tlon",
+  docsPath: "/channels/tlon",
+});
+
+export const tlonSetupWizard = createOptionalChannelSetupWizard({
+  channel: "tlon",
+  label: "Tlon",
+  npmSpec: "@openclaw/tlon",
+  docsPath: "/channels/tlon",
+});

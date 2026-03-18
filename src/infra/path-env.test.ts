@@ -33,6 +33,10 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...wrapped, default: wrapped };
 });
 
+vi.mock("./env.js", () => ({
+  isTruthyEnvValue: (value?: string) => value === "1" || value === "true",
+}));
+
 let ensureOpenClawCliOnPath: typeof import("./path-env.js").ensureOpenClawCliOnPath;
 
 describe("ensureOpenClawCliOnPath", () => {
@@ -72,26 +76,39 @@ describe("ensureOpenClawCliOnPath", () => {
     }
   });
 
-  it("prepends the bundled app bin dir when a sibling openclaw exists", () => {
-    const tmp = abs("/tmp/openclaw-path/case-bundled");
+  function setupAppCliRoot(name: string) {
+    const tmp = abs(`/tmp/openclaw-path/${name}`);
     const appBinDir = path.join(tmp, "AppBin");
-    const cliPath = path.join(appBinDir, "openclaw");
+    const appCli = path.join(appBinDir, "openclaw");
     setDir(tmp);
     setDir(appBinDir);
-    setExe(cliPath);
+    setExe(appCli);
+    return { tmp, appBinDir, appCli };
+  }
 
+  function bootstrapPath(params: {
+    execPath: string;
+    cwd: string;
+    homeDir: string;
+    platform: NodeJS.Platform;
+    allowProjectLocalBin?: boolean;
+  }) {
+    ensureOpenClawCliOnPath(params);
+    return (process.env.PATH ?? "").split(path.delimiter);
+  }
+
+  it("prepends the bundled app bin dir when a sibling openclaw exists", () => {
+    const { tmp, appBinDir, appCli } = setupAppCliRoot("case-bundled");
     process.env.PATH = "/usr/bin";
     delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
 
-    ensureOpenClawCliOnPath({
-      execPath: cliPath,
+    const updated = bootstrapPath({
+      execPath: appCli,
       cwd: tmp,
       homeDir: tmp,
       platform: "darwin",
     });
-
-    const updated = process.env.PATH ?? "";
-    expect(updated.split(path.delimiter)[0]).toBe(appBinDir);
+    expect(updated[0]).toBe(appBinDir);
   });
 
   it("is idempotent", () => {
@@ -107,13 +124,7 @@ describe("ensureOpenClawCliOnPath", () => {
   });
 
   it("prepends mise shims when available", () => {
-    const tmp = abs("/tmp/openclaw-path/case-mise");
-    const appBinDir = path.join(tmp, "AppBin");
-    const appCli = path.join(appBinDir, "openclaw");
-    setDir(tmp);
-    setDir(appBinDir);
-    setExe(appCli);
-
+    const { tmp, appBinDir, appCli } = setupAppCliRoot("case-mise");
     const miseDataDir = path.join(tmp, "mise");
     const shimsDir = path.join(miseDataDir, "shims");
     setDir(miseDataDir);
@@ -123,62 +134,92 @@ describe("ensureOpenClawCliOnPath", () => {
     process.env.PATH = "/usr/bin";
     delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
 
-    ensureOpenClawCliOnPath({
+    const updated = bootstrapPath({
       execPath: appCli,
       cwd: tmp,
       homeDir: tmp,
       platform: "darwin",
     });
-
-    const updated = process.env.PATH ?? "";
-    const parts = updated.split(path.delimiter);
-    const appBinIndex = parts.indexOf(appBinDir);
-    const shimsIndex = parts.indexOf(shimsDir);
+    const appBinIndex = updated.indexOf(appBinDir);
+    const shimsIndex = updated.indexOf(shimsDir);
     expect(appBinIndex).toBeGreaterThanOrEqual(0);
     expect(shimsIndex).toBeGreaterThan(appBinIndex);
   });
 
-  it("only appends project-local node_modules/.bin when explicitly enabled", () => {
-    const tmp = abs("/tmp/openclaw-path/case-project-local");
-    const appBinDir = path.join(tmp, "AppBin");
-    const appCli = path.join(appBinDir, "openclaw");
-    setDir(tmp);
-    setDir(appBinDir);
-    setExe(appCli);
-
-    const localBinDir = path.join(tmp, "node_modules", ".bin");
-    const localCli = path.join(localBinDir, "openclaw");
-    setDir(path.join(tmp, "node_modules"));
-    setDir(localBinDir);
-    setExe(localCli);
-
-    process.env.PATH = "/usr/bin";
-    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
-
-    ensureOpenClawCliOnPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
-      platform: "darwin",
-    });
-    const withoutOptIn = (process.env.PATH ?? "").split(path.delimiter);
-    expect(withoutOptIn.includes(localBinDir)).toBe(false);
-
-    process.env.PATH = "/usr/bin";
-    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
-
-    ensureOpenClawCliOnPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
-      platform: "darwin",
+  it.each([
+    {
+      name: "explicit option",
+      envValue: undefined,
       allowProjectLocalBin: true,
+    },
+    {
+      name: "truthy env",
+      envValue: "1",
+      allowProjectLocalBin: undefined,
+    },
+  ])(
+    "only appends project-local node_modules/.bin when enabled via $name",
+    ({ envValue, allowProjectLocalBin }) => {
+      const { tmp, appCli } = setupAppCliRoot("case-project-local");
+      const localBinDir = path.join(tmp, "node_modules", ".bin");
+      const localCli = path.join(localBinDir, "openclaw");
+      setDir(path.join(tmp, "node_modules"));
+      setDir(localBinDir);
+      setExe(localCli);
+
+      process.env.PATH = "/usr/bin";
+      delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+      delete process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN;
+
+      const withoutOptIn = bootstrapPath({
+        execPath: appCli,
+        cwd: tmp,
+        homeDir: tmp,
+        platform: "darwin",
+      });
+      expect(withoutOptIn.includes(localBinDir)).toBe(false);
+
+      process.env.PATH = "/usr/bin";
+      delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+      if (envValue === undefined) {
+        delete process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN;
+      } else {
+        process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN = envValue;
+      }
+
+      const withOptIn = bootstrapPath({
+        execPath: appCli,
+        cwd: tmp,
+        homeDir: tmp,
+        platform: "darwin",
+        ...(allowProjectLocalBin === undefined ? {} : { allowProjectLocalBin }),
+      });
+      const usrBinIndex = withOptIn.indexOf("/usr/bin");
+      const localIndex = withOptIn.indexOf(localBinDir);
+      expect(usrBinIndex).toBeGreaterThanOrEqual(0);
+      expect(localIndex).toBeGreaterThan(usrBinIndex);
+    },
+  );
+
+  it("prepends XDG_BIN_HOME ahead of other user bin fallbacks", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-xdg-bin-home");
+    const xdgBinHome = path.join(tmp, "xdg-bin");
+    const localBin = path.join(tmp, ".local", "bin");
+    setDir(xdgBinHome);
+    setDir(path.join(tmp, ".local"));
+    setDir(localBin);
+
+    process.env.PATH = "/usr/bin";
+    process.env.XDG_BIN_HOME = xdgBinHome;
+    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
     });
-    const withOptIn = (process.env.PATH ?? "").split(path.delimiter);
-    const usrBinIndex = withOptIn.indexOf("/usr/bin");
-    const localIndex = withOptIn.indexOf(localBinDir);
-    expect(usrBinIndex).toBeGreaterThanOrEqual(0);
-    expect(localIndex).toBeGreaterThan(usrBinIndex);
+    expect(updated.indexOf(xdgBinHome)).toBeLessThan(updated.indexOf(localBin));
   });
 
   it("prepends Linuxbrew dirs when present", () => {
@@ -200,15 +241,12 @@ describe("ensureOpenClawCliOnPath", () => {
     delete process.env.HOMEBREW_BREW_FILE;
     delete process.env.XDG_BIN_HOME;
 
-    ensureOpenClawCliOnPath({
+    const parts = bootstrapPath({
       execPath: path.join(execDir, "node"),
       cwd: tmp,
       homeDir: tmp,
       platform: "linux",
     });
-
-    const updated = process.env.PATH ?? "";
-    const parts = updated.split(path.delimiter);
     expect(parts[0]).toBe(linuxbrewBin);
     expect(parts[1]).toBe(linuxbrewSbin);
   });

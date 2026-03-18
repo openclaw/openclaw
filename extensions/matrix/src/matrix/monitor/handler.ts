@@ -14,7 +14,7 @@ import {
   type PluginRuntime,
   type RuntimeEnv,
   type RuntimeLogger,
-} from "openclaw/plugin-sdk/matrix";
+} from "../../../runtime-api.js";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { fetchEventSummary } from "../actions/summary.js";
 import {
@@ -76,6 +76,56 @@ export type MatrixMonitorHandlerParams = {
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
   accountId?: string | null;
 };
+
+export function resolveMatrixBaseRouteSession(params: {
+  buildAgentSessionKey: (params: {
+    agentId: string;
+    channel: string;
+    accountId?: string | null;
+    peer?: { kind: "direct" | "channel"; id: string } | null;
+  }) => string;
+  baseRoute: {
+    agentId: string;
+    sessionKey: string;
+    mainSessionKey: string;
+    matchedBy?: string;
+  };
+  isDirectMessage: boolean;
+  roomId: string;
+  accountId?: string | null;
+}): { sessionKey: string; lastRoutePolicy: "main" | "session" } {
+  const sessionKey =
+    params.isDirectMessage && params.baseRoute.matchedBy === "binding.peer.parent"
+      ? params.buildAgentSessionKey({
+          agentId: params.baseRoute.agentId,
+          channel: "matrix",
+          accountId: params.accountId,
+          peer: { kind: "channel", id: params.roomId },
+        })
+      : params.baseRoute.sessionKey;
+  return {
+    sessionKey,
+    lastRoutePolicy: sessionKey === params.baseRoute.mainSessionKey ? "main" : "session",
+  };
+}
+
+export function shouldOverrideMatrixDmToGroup(params: {
+  isDirectMessage: boolean;
+  roomConfigInfo?:
+    | {
+        config?: MatrixRoomConfig;
+        allowed: boolean;
+        matchSource?: string;
+      }
+    | undefined;
+}): boolean {
+  return (
+    params.isDirectMessage === true &&
+    params.roomConfigInfo?.config !== undefined &&
+    params.roomConfigInfo.allowed === true &&
+    params.roomConfigInfo.matchSource === "direct"
+  );
+}
 
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
   const {
@@ -188,22 +238,37 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       }
 
-      const isDirectMessage = await directTracker.isDirectMessage({
+      let isDirectMessage = await directTracker.isDirectMessage({
         roomId,
         senderId,
         selfUserId,
       });
+
+      // Resolve room config early so explicitly configured rooms can override DM classification.
+      // This ensures rooms in the groups config are always treated as groups regardless of
+      // member count or protocol-level DM flags. Only explicit matches (not wildcards) trigger
+      // the override to avoid breaking DM routing when a wildcard entry exists. (See #9106)
+      const roomConfigInfo = resolveMatrixRoomConfig({
+        rooms: roomsConfig,
+        roomId,
+        aliases: roomAliases,
+        name: roomName,
+      });
+      if (shouldOverrideMatrixDmToGroup({ isDirectMessage, roomConfigInfo })) {
+        logVerboseMessage(
+          `matrix: overriding DM to group for configured room=${roomId} (${roomConfigInfo.matchKey})`,
+        );
+        isDirectMessage = false;
+      }
+
       const isRoom = !isDirectMessage;
 
-      const roomConfigInfo = isRoom
-        ? resolveMatrixRoomConfig({
-            rooms: roomsConfig,
-            roomId,
-            aliases: roomAliases,
-            name: roomName,
-          })
-        : undefined;
-      const roomConfig = roomConfigInfo?.config;
+      if (isRoom && groupPolicy === "disabled") {
+        return;
+      }
+      // Only expose room config for confirmed group rooms. DMs should never inherit
+      // group settings (skills, systemPrompt, autoReply) even when a wildcard entry exists.
+      const roomConfig = isRoom ? roomConfigInfo?.config : undefined;
       const roomMatchMeta = roomConfigInfo
         ? `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
             roomConfigInfo.matchSource ?? "none"
@@ -435,13 +500,24 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           kind: isDirectMessage ? "direct" : "channel",
           id: isDirectMessage ? senderId : roomId,
         },
+        // For DMs, pass roomId as parentPeer so the conversation is bindable by room ID
+        // while preserving DM trust semantics (secure 1:1, no group restrictions).
+        parentPeer: isDirectMessage ? { kind: "channel", id: roomId } : undefined,
+      });
+      const baseRouteSession = resolveMatrixBaseRouteSession({
+        buildAgentSessionKey: core.channel.routing.buildAgentSessionKey,
+        baseRoute,
+        isDirectMessage,
+        roomId,
+        accountId,
       });
 
       const route = {
         ...baseRoute,
+        lastRoutePolicy: baseRouteSession.lastRoutePolicy,
         sessionKey: threadRootId
-          ? `${baseRoute.sessionKey}:thread:${threadRootId}`
-          : baseRoute.sessionKey,
+          ? `${baseRouteSession.sessionKey}:thread:${threadRootId}`
+          : baseRouteSession.sessionKey,
       };
 
       let threadStarterBody: string | undefined;
@@ -610,6 +686,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         channel: "matrix",
         accountId: route.accountId,
       });
+      const humanDelay = core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId);
       const typingCallbacks = createTypingCallbacks({
         start: () => sendTypingMatrix(roomId, true, undefined, client),
         stop: () => sendTypingMatrix(roomId, false, undefined, client),
@@ -635,7 +712,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
           ...prefixOptions,
-          humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+          humanDelay,
           typingCallbacks,
           deliver: async (payload) => {
             await deliverMatrixReplies({
