@@ -440,3 +440,45 @@ describe("acquireSessionWriteLock", () => {
     process.off("SIGINT", keepAlive);
   });
 });
+
+it("cleans orphan self-lock files with matching starttime (Linux-realistic scenario)", async () => {
+  // This test covers the Linux-realistic scenario where the lock file has a
+  // valid starttime that matches the current process. On Linux, getProcessStartTime
+  // always returns a value, so every lock file will have starttime set.
+  // The fix must detect these as orphans by comparing starttime values.
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-orphan-starttime-"));
+  const sessionsDir = path.join(root, "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+
+  const nowMs = Date.now();
+  const orphanWithStarttime = path.join(sessionsDir, "orphan-with-starttime.jsonl.lock");
+
+  try {
+    await fs.writeFile(
+      orphanWithStarttime,
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date(nowMs - 1_000).toISOString(),
+        // Include starttime matching the current process (via mock: FAKE_STARTTIME = 12345)
+        // This simulates a Linux environment where starttime is always written.
+        starttime: 12345,
+      }),
+      "utf8",
+    );
+
+    const result = await cleanStaleLockFiles({
+      sessionsDir,
+      staleMs: 30_000, // 30 seconds - the lock is only 1 second old
+      nowMs,
+      removeStale: true,
+    });
+
+    // Should still be cleaned because it's not in HELD_LOCKS
+    expect(result.locks).toHaveLength(1);
+    expect(result.cleaned).toHaveLength(1);
+    expect(result.cleaned[0].staleReasons).toContain("orphan-self-pid");
+    await expect(fs.access(orphanWithStarttime)).rejects.toThrow();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
