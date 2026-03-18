@@ -11,9 +11,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-prompt="${1:-}"
-timeout_ms="${2:-${RCA_LLM_TIMEOUT_MS:-15000}}"
-
 # Set codex model for the primary attempt only (not exported globally)
 if RCA_PROVIDER_MODEL="${RCA_PROVIDER_MODEL:-openai-codex/gpt-5.4}" \
    RCA_PROVIDER_SESSION_PREFIX="${RCA_PROVIDER_SESSION_PREFIX:-rca-codex}" \
