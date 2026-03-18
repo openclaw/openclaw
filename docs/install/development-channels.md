@@ -11,9 +11,11 @@ title: "Development Channels"
 
 OpenClaw ships three update channels:
 
-- **stable**: npm dist-tag `latest`.
+- **stable**: npm dist-tag `latest`. Recommended for most users.
 - **beta**: npm dist-tag `beta` (builds under test).
 - **dev**: moving head of `main` (git). npm dist-tag: `dev` (when published).
+  The `main` branch is for experimentation and active development. It may contain
+  incomplete features or breaking changes. Do not use it for production gateways.
 
 We ship builds to **beta**, test them, then **promote a vetted build to `latest`**
 without changing the version number -- dist-tags are the source of truth for npm installs.
