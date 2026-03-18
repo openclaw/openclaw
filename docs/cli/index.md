@@ -400,8 +400,9 @@ Subcommands:
   - SecretRef builder mode: `config set <path> --ref-provider <provider> --ref-source <source> --ref-id <id>`
   - provider builder mode: `config set secrets.providers.<alias> --provider-source <env|file|exec> ...`
   - batch mode: `config set --batch-json '<json>'` or `config set --batch-file <path>`
-- `config set --dry-run`: validate assignments without writing `openclaw.json`.
-- `config set --dry-run --json`: emit machine-readable dry-run output (checks, operations, errors).
+- `config set --dry-run`: validate assignments without writing `openclaw.json` (exec SecretRef checks are skipped by default).
+- `config set --allow-exec --dry-run`: opt in to exec SecretRef dry-run checks (may execute provider commands).
+- `config set --dry-run --json`: emit machine-readable dry-run output (checks + completeness signal, operations, refs checked/skipped, errors).
 - `config set --strict-json`: require JSON5 parsing for path/value input. `--json` remains a legacy alias for strict parsing outside dry-run output mode.
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
