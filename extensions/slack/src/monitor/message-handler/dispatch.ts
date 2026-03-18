@@ -28,6 +28,7 @@ import {
   createSlackReplyDeliveryPlan,
   deliverReplies,
   readSlackReplyBlocks,
+  resolveDeliveredSlackReplyThreadTs,
   resolveSlackThreadTs,
 } from "../replies.js";
 import type { PreparedSlackMessage } from "./types.js";
@@ -241,19 +242,21 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
+  let usedBlockReplyThreadTs: string | undefined;
 
   const deliverNormally = async (
     payload: ReplyPayload,
     options?: {
       forcedThreadTs?: string;
       allowUsedReplyThreadTs?: boolean;
+      trackBlockReplyThreadTs?: boolean;
     },
   ): Promise<void> => {
     const plannedThreadTs = options?.forcedThreadTs ? undefined : replyPlan.nextThreadTs();
     const replyThreadTs = resolveSlackDeliveryThreadTs({
       forcedThreadTs: options?.forcedThreadTs,
       plannedThreadTs,
-      usedReplyThreadTs,
+      usedReplyThreadTs: usedBlockReplyThreadTs,
       allowUsedReplyThreadTs: options?.allowUsedReplyThreadTs,
     });
     await deliverReplies({
@@ -267,9 +270,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyToMode: prepared.replyToMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
+    const effectiveReplyThreadTs = resolveDeliveredSlackReplyThreadTs({
+      replyToMode: prepared.replyToMode,
+      payloadReplyToId: payload.replyToId,
+      replyThreadTs,
+    });
     // Record the thread ts only after confirmed delivery success.
-    if (replyThreadTs) {
-      usedReplyThreadTs ??= replyThreadTs;
+    if (effectiveReplyThreadTs) {
+      usedReplyThreadTs ??= effectiveReplyThreadTs;
+      if (options?.trackBlockReplyThreadTs) {
+        usedBlockReplyThreadTs ??= effectiveReplyThreadTs;
+      }
     }
     replyPlan.markSent();
   };
@@ -278,7 +289,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     payload: ReplyPayload,
     kind: "tool" | "block" | "final",
   ): Promise<void> => {
-    const allowUsedReplyThreadTs = kind === "block";
+    const trackBlockReplyThreadTs = kind === "block";
     if (
       streamFailed ||
       hasMedia(payload) ||
@@ -287,7 +298,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ) {
       await deliverNormally(payload, {
         forcedThreadTs: streamSession?.threadTs,
-        allowUsedReplyThreadTs,
+        allowUsedReplyThreadTs: trackBlockReplyThreadTs,
+        trackBlockReplyThreadTs,
       });
       return;
     }
@@ -303,7 +315,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             "slack-stream: no reply thread target for stream start, falling back to normal delivery",
           );
           streamFailed = true;
-          await deliverNormally(payload, { allowUsedReplyThreadTs });
+          await deliverNormally(payload, {
+            allowUsedReplyThreadTs: trackBlockReplyThreadTs,
+            trackBlockReplyThreadTs,
+          });
           return;
         }
 
@@ -316,6 +331,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           userId: message.user,
         });
         usedReplyThreadTs ??= streamThreadTs;
+        if (trackBlockReplyThreadTs) {
+          usedBlockReplyThreadTs ??= streamThreadTs;
+        }
         replyPlan.markSent();
         return;
       }
@@ -331,7 +349,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       streamFailed = true;
       await deliverNormally(payload, {
         forcedThreadTs: streamSession?.threadTs ?? plannedThreadTs,
-        allowUsedReplyThreadTs,
+        allowUsedReplyThreadTs: trackBlockReplyThreadTs,
+        trackBlockReplyThreadTs,
       });
     }
   };
@@ -403,6 +422,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
       await deliverNormally(payload, {
         allowUsedReplyThreadTs: info.kind === "block",
+        trackBlockReplyThreadTs: info.kind === "block",
       });
     },
     onError: (err, info) => {
@@ -419,11 +439,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     resolveThreadTs: () => {
       const ts = resolveSlackDeliveryThreadTs({
         plannedThreadTs: replyPlan.nextThreadTs(),
-        usedReplyThreadTs,
+        usedReplyThreadTs: usedBlockReplyThreadTs,
         allowUsedReplyThreadTs: true,
       });
       if (ts) {
         usedReplyThreadTs ??= ts;
+        usedBlockReplyThreadTs ??= ts;
       }
       return ts;
     },

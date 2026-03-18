@@ -5,7 +5,7 @@ vi.mock("../send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
 }));
 
-import { deliverReplies } from "./replies.js";
+import { deliverReplies, resolveDeliveredSlackReplyThreadTs } from "./replies.js";
 
 function baseParams(overrides?: Record<string, unknown>) {
   return {
@@ -93,5 +93,27 @@ describe("deliverReplies identity passthrough", () => {
         blocks,
       }),
     );
+  });
+});
+
+describe("resolveDeliveredSlackReplyThreadTs", () => {
+  it("prefers explicit reply targets when reply threading is enabled", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "first",
+        payloadReplyToId: "reply-tag.1",
+        replyThreadTs: "planned.1",
+      }),
+    ).toBe("reply-tag.1");
+  });
+
+  it("ignores explicit reply targets when reply threading is off", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "off",
+        payloadReplyToId: "reply-tag.1",
+        replyThreadTs: "planned.1",
+      }),
+    ).toBe("planned.1");
   });
 });
