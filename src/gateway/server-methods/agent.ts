@@ -122,12 +122,14 @@ function buildUsageMetaFromRunResult(result: {
   if (agentMeta.usage) {
     const input = agentMeta.usage.input ?? 0;
     const output = agentMeta.usage.output ?? 0;
-    if (input > 0 || output > 0) {
+    const cacheRead = agentMeta.usage.cacheRead ?? 0;
+    const cacheWrite = agentMeta.usage.cacheWrite ?? 0;
+    if (input > 0 || output > 0 || cacheRead > 0 || cacheWrite > 0) {
       meta.usage = {
         input,
         output,
-        cacheRead: agentMeta.usage.cacheRead,
-        cacheWrite: agentMeta.usage.cacheWrite,
+        ...(cacheRead > 0 ? { cacheRead } : {}),
+        ...(cacheWrite > 0 ? { cacheWrite } : {}),
       };
       hasAnyField = true;
     }
@@ -161,6 +163,7 @@ function buildUsageMetaFromRunResult(result: {
     const costUsd = estimateUsageCost({ usage: meta.usage, cost: costConfig });
     if (costUsd !== undefined) {
       meta.costUsd = costUsd;
+      hasAnyField = true;
     }
   }
 
@@ -857,13 +860,25 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+
+    // When lifecycle wins the race, it may not carry meta (usage/cost).
+    // Fall back to the dedupe entry which has meta from dispatchAgentRunFromGateway.
+    let meta: AgentWaitUsageMeta | undefined =
+      "meta" in snapshot ? snapshot.meta : undefined;
+    if (!meta && first.source === "lifecycle") {
+      const dedupeSnapshot = await dedupePromise.catch(() => null);
+      if (dedupeSnapshot && "meta" in dedupeSnapshot) {
+        meta = dedupeSnapshot.meta;
+      }
+    }
+
     respond(true, {
       runId,
       status: snapshot.status,
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
       error: snapshot.error,
-      meta: "meta" in snapshot ? (snapshot as AgentWaitTerminalSnapshot).meta : undefined,
+      meta,
     });
   },
 };
