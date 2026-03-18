@@ -1,3 +1,8 @@
+import {
+  resolveOutboundMediaUrls,
+  resolveTextChunksWithFallback,
+  sendMediaWithLeadingCaption,
+} from "openclaw/plugin-sdk/reply-payload";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { fetchBlueBubblesHistory } from "./history.js";
@@ -1243,11 +1248,7 @@ export async function processMessage(
           const replyToMessageGuid = rawReplyToId
             ? resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
             : "";
-          const mediaList = payload.mediaUrls?.length
-            ? payload.mediaUrls
-            : payload.mediaUrl
-              ? [payload.mediaUrl]
-              : [];
+          const mediaList = resolveOutboundMediaUrls(payload);
           if (mediaList.length > 0) {
             const tableMode = core.channel.text.resolveMarkdownTableMode({
               cfg: config,
@@ -1257,43 +1258,44 @@ export async function processMessage(
             const text = sanitizeReplyDirectiveText(
               core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
             );
-            let first = true;
-            for (const mediaUrl of mediaList) {
-              const caption = first ? text : undefined;
-              first = false;
-              const cachedBody = (caption ?? "").trim() || "<media:attachment>";
-              const pendingId = rememberPendingOutboundMessageId({
-                accountId: account.accountId,
-                sessionKey: route.sessionKey,
-                outboundTarget,
-                chatGuid: chatGuidForActions ?? chatGuid,
-                chatIdentifier,
-                chatId,
-                snippet: cachedBody,
-              });
-              let result: Awaited<ReturnType<typeof sendBlueBubblesMedia>>;
-              try {
-                result = await sendBlueBubblesMedia({
-                  cfg: config,
-                  to: outboundTarget,
-                  mediaUrl,
-                  caption: caption ?? undefined,
-                  replyToId: replyToMessageGuid || null,
+            await sendMediaWithLeadingCaption({
+              mediaUrls: mediaList,
+              caption: text,
+              send: async ({ mediaUrl, caption }) => {
+                const cachedBody = (caption ?? "").trim() || "<media:attachment>";
+                const pendingId = rememberPendingOutboundMessageId({
                   accountId: account.accountId,
+                  sessionKey: route.sessionKey,
+                  outboundTarget,
+                  chatGuid: chatGuidForActions ?? chatGuid,
+                  chatIdentifier,
+                  chatId,
+                  snippet: cachedBody,
                 });
-              } catch (err) {
-                forgetPendingOutboundMessageId(pendingId);
-                throw err;
-              }
-              if (maybeEnqueueOutboundMessageId(result.messageId, cachedBody)) {
-                forgetPendingOutboundMessageId(pendingId);
-              }
-              sentMessage = true;
-              statusSink?.({ lastOutboundAt: Date.now() });
-              if (info.kind === "block") {
-                restartTypingSoon();
-              }
-            }
+                let result: Awaited<ReturnType<typeof sendBlueBubblesMedia>>;
+                try {
+                  result = await sendBlueBubblesMedia({
+                    cfg: config,
+                    to: outboundTarget,
+                    mediaUrl,
+                    caption: caption ?? undefined,
+                    replyToId: replyToMessageGuid || null,
+                    accountId: account.accountId,
+                  });
+                } catch (err) {
+                  forgetPendingOutboundMessageId(pendingId);
+                  throw err;
+                }
+                if (maybeEnqueueOutboundMessageId(result.messageId, cachedBody)) {
+                  forgetPendingOutboundMessageId(pendingId);
+                }
+                sentMessage = true;
+                statusSink?.({ lastOutboundAt: Date.now() });
+                if (info.kind === "block") {
+                  restartTypingSoon();
+                }
+              },
+            });
             return;
           }
 
@@ -1312,11 +1314,14 @@ export async function processMessage(
           );
           const chunks =
             chunkMode === "newline"
-              ? core.channel.text.chunkTextWithMode(text, textLimit, chunkMode)
-              : core.channel.text.chunkMarkdownText(text, textLimit);
-          if (!chunks.length && text) {
-            chunks.push(text);
-          }
+              ? resolveTextChunksWithFallback(
+                  text,
+                  core.channel.text.chunkTextWithMode(text, textLimit, chunkMode),
+                )
+              : resolveTextChunksWithFallback(
+                  text,
+                  core.channel.text.chunkMarkdownText(text, textLimit),
+                );
           if (!chunks.length) {
             return;
           }

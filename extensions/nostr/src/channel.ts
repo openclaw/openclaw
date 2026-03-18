@@ -2,6 +2,7 @@ import {
   createScopedDmSecurityResolver,
   createTopLevelChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import {
   buildPassiveChannelStatusSummary,
   buildTrafficStatusSummary,
@@ -176,11 +177,10 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       const message = core.channel.text.convertMarkdownTables(text ?? "", tableMode);
       const normalizedTo = normalizePubkey(to);
       await bus.sendDm(normalizedTo, message);
-      return {
-        channel: "nostr" as const,
+      return attachChannelToResult("nostr", {
         to: normalizedTo,
         messageId: `nostr-${Date.now()}`,
-      };
+      });
     },
   },
 
