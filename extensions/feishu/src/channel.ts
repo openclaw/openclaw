@@ -1,6 +1,8 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
+import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-runtime";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
   buildChannelConfigSchema,
@@ -12,7 +14,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/feishu";
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/feishu";
-import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveFeishuAccount,
   resolveFeishuCredentials,
@@ -42,11 +44,9 @@ const meta: ChannelMeta = {
   order: 70,
 };
 
-type FeishuChannelRuntime = typeof import("./channel.runtime.js").feishuChannelRuntime;
-
-const loadFeishuChannelRuntime = createLazyRuntimeSurface(
+const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
-  ({ feishuChannelRuntime }) => feishuChannelRuntime,
+  "feishuChannelRuntime",
 );
 
 function setFeishuNamedAccountEnabled(
@@ -396,9 +396,24 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }),
   },
   actions: {
-    listActions: ({ cfg }) => {
+    describeMessageTool: ({
+      cfg,
+    }: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0]) => {
+      const enabled =
+        cfg.channels?.feishu?.enabled !== false &&
+        Boolean(resolveFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined));
       if (listEnabledFeishuAccounts(cfg).length === 0) {
-        return [];
+        return {
+          actions: [],
+          capabilities: enabled ? ["cards"] : [],
+          schema: enabled
+            ? {
+                properties: {
+                  card: createMessageToolCardSchema(),
+                },
+              }
+            : null,
+        };
       }
       const actions = new Set<ChannelMessageActionName>([
         "send",
@@ -416,13 +431,17 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         actions.add("react");
         actions.add("reactions");
       }
-      return Array.from(actions);
-    },
-    getCapabilities: ({ cfg }) => {
-      return cfg.channels?.feishu?.enabled !== false &&
-        Boolean(resolveFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined))
-        ? (["cards"] as const)
-        : [];
+      return {
+        actions: Array.from(actions),
+        capabilities: enabled ? ["cards"] : [],
+        schema: enabled
+          ? {
+              properties: {
+                card: createMessageToolCardSchema(),
+              },
+            }
+          : null,
+      };
     },
     handleAction: async (ctx) => {
       const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId ?? undefined });
@@ -824,11 +843,15 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       });
     },
   },
-  acpBindings: {
-    normalizeConfiguredBindingTarget: ({ conversationId }) =>
+  bindings: {
+    compileConfiguredBinding: ({ conversationId }) =>
       normalizeFeishuAcpConversationId(conversationId),
-    matchConfiguredBinding: ({ bindingConversationId, conversationId, parentConversationId }) =>
-      matchFeishuAcpConversation({ bindingConversationId, conversationId, parentConversationId }),
+    matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+      matchFeishuAcpConversation({
+        bindingConversationId: compiledBinding.conversationId,
+        conversationId,
+        parentConversationId,
+      }),
   },
   setup: feishuSetupAdapter,
   setupWizard: feishuSetupWizard,

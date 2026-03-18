@@ -91,6 +91,7 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
 import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
@@ -113,6 +114,11 @@ export type CompactEmbeddedPiSessionParams = {
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  /** Trusted sender id from inbound context for scoped message-tool discovery. */
+  senderId?: string;
   authProfileId?: string;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
@@ -649,12 +655,26 @@ export async function compactEmbeddedPiSessionDirect(
             return undefined;
           })()
         : undefined;
+    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: params.sessionKey,
+      config: params.config,
+    });
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
-      ? listChannelSupportedActions({
-          cfg: params.config,
-          channel: runtimeChannel,
-        })
+      ? listChannelSupportedActions(
+          buildEmbeddedMessageActionDiscoveryInput({
+            cfg: params.config,
+            channel: runtimeChannel,
+            currentChannelId: params.currentChannelId,
+            currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
+            accountId: params.agentAccountId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            agentId: sessionAgentId,
+            senderId: params.senderId,
+          }),
+        )
       : undefined;
     const messageToolHints = runtimeChannel
       ? resolveChannelMessageToolHints({
@@ -680,10 +700,6 @@ export async function compactEmbeddedPiSessionDirect(
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
     const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-    });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
@@ -1039,6 +1055,7 @@ export async function compactEmbeddedPiSessionDirect(
                 messageCount: messageCountAfter,
                 tokenCount: tokensAfter,
                 compactedCount,
+                sessionFile: params.sessionFile,
               },
               {
                 sessionId: params.sessionId,

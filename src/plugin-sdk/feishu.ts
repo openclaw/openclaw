@@ -31,6 +31,11 @@ export type {
   ChannelMeta,
   ChannelOutboundAdapter,
 } from "../channels/plugins/types.js";
+export type {
+  ChannelConfiguredBindingProvider,
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
+} from "../channels/plugins/types.adapters.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixContext } from "../channels/reply-prefix.js";
 export { createTypingCallbacks } from "../channels/typing.js";
@@ -62,8 +67,8 @@ export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { evaluateSenderGroupAccessForPolicy } from "./group-access.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export { feishuSetupWizard } from "../../extensions/feishu/src/setup-surface.js";
-export { feishuSetupAdapter } from "../../extensions/feishu/src/setup-core.js";
+export { feishuSetupWizard } from "../../extensions/feishu/api.js";
+export { feishuSetupAdapter } from "../../extensions/feishu/api.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { readJsonFileWithFallback } from "./json-store.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
@@ -79,7 +84,7 @@ export { withTempDownloadPath } from "./temp-path.js";
 export {
   buildFeishuConversationId,
   parseFeishuConversationId,
-} from "../../extensions/feishu/src/conversation-id.js";
+} from "../../extensions/feishu/api.js";
 export {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
