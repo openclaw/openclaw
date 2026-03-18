@@ -405,7 +405,7 @@ export function createExecTool(
         return executeNodeHostCommand({
           command: params.command,
           workdir,
-          forwardedWorkdir: requestedWorkdir || configuredWorkdir || undefined,
+          forwardedWorkdir: requestedWorkdir || undefined,
           env,
           requestedEnv: params.env,
           requestedNode: params.node?.trim(),

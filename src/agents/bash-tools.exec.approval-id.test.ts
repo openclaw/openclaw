@@ -290,6 +290,7 @@ describe("exec approvals", () => {
   });
 
   it("does not forward the local cwd to node prepare or run payloads", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-default-cwd-"));
     let prepareParams: Record<string, unknown> | undefined;
     let runParams: Record<string, unknown> | undefined;
 
@@ -316,6 +317,7 @@ describe("exec approvals", () => {
       ask: "off",
       security: "full",
       approvalRunningNoticeMs: 0,
+      cwd: tempDir,
     });
 
     const result = await tool.execute("call-node-cwd", { command: "echo hello" });
