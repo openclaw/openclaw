@@ -143,6 +143,60 @@ export function extractMediaPlaceholder(
   if (message.stickerMessage) {
     return "<media:sticker>";
   }
+  // Poll creation messages (V1/V2/V3)
+  const pollCreation: proto.Message.IPollCreationMessage | undefined =
+    message.pollCreationMessage ??
+    (message as Record<string, proto.Message.IPollCreationMessage | undefined>)
+      .pollCreationMessageV2 ??
+    (message as Record<string, proto.Message.IPollCreationMessage | undefined>)
+      .pollCreationMessageV3 ??
+    undefined;
+  if (pollCreation) {
+    const question = (pollCreation.name ?? "Poll").trim();
+    const options = (pollCreation.options ?? [])
+      .map(
+        (opt: proto.Message.PollCreationMessage.IOption, i: number) =>
+          `${i + 1}. ${(opt.optionName ?? "").trim()}`,
+      )
+      .join("\n");
+    return options ? `<media:poll>\n${question}\n${options}` : `<media:poll>\n${question}`;
+  }
+  // Poll vote update messages
+  if (message.pollUpdateMessage) {
+    return "<media:poll-vote>";
+  }
+  // Emoji reaction messages
+  if (message.reactionMessage) {
+    const emoji = (message.reactionMessage.text ?? "").trim();
+    return emoji ? `<reaction:${emoji}>` : "<reaction:removed>";
+  }
+  // WhatsApp event messages (group events with name, time, location)
+  if (message.eventMessage) {
+    const event = message.eventMessage;
+    const name = (event.name ?? "Event").trim();
+    const desc = event.description ? `\n${event.description.trim()}` : "";
+    const canceled = event.isCanceled ? " [CANCELED]" : "";
+    return `<media:event>${canceled}\n${name}${desc}`;
+  }
+  // Event RSVP responses (going / not going / maybe)
+  // Baileys exposes this as eventResponseMessage (unencrypted) or encEventResponseMessage
+  const eventResponse = (message as Record<string, unknown>).eventResponseMessage as
+    | { response?: number; extraGuestCount?: number }
+    | undefined;
+  if (eventResponse) {
+    const responseType = eventResponse.response ?? 0;
+    const label = responseType === 1 ? "going" : responseType === 2 ? "not-going" : "maybe";
+    const extraGuests = eventResponse.extraGuestCount ? ` +${eventResponse.extraGuestCount}` : "";
+    return `<event-rsvp:${label}${extraGuests}>`;
+  }
+  // Encrypted event RSVP (WhatsApp may send the encrypted variant)
+  if ((message as Record<string, unknown>).encEventResponseMessage) {
+    return "<event-rsvp:encrypted>";
+  }
+  // Secret encrypted messages (used for event cancellation/closing)
+  if ((message as Record<string, unknown>).secretEncryptedMessage) {
+    return "<media:encrypted-update>";
+  }
   return undefined;
 }
 

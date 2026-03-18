@@ -432,6 +432,121 @@ export async function monitorWebInbox(options: {
   };
   sock.ev.on("messages.upsert", handleMessagesUpsert);
 
+  // Poll vote updates arrive via messages.update with pollUpdates array.
+  // These are separate from messages.upsert and must be subscribed to explicitly.
+  // We construct a synthetic WAMessage so the vote flows through the full pipeline.
+  const handleMessagesUpdate = async (
+    updates: Array<{ key: proto.IMessageKey; update: Partial<WAMessage> }>,
+  ) => {
+    for (const { key, update } of updates) {
+      if (!update.pollUpdates || update.pollUpdates.length === 0) {
+        continue;
+      }
+      const chatJid = key.remoteJid;
+      if (!chatJid) {
+        continue;
+      }
+      inboundLogger.info(
+        {
+          chatId: chatJid,
+          messageId: key.id,
+          voteCount: update.pollUpdates.length,
+        },
+        "poll vote update received",
+      );
+      // Each pollUpdate entry has a pollUpdateMessageKey with the voter's identity.
+      // Process each voter's update individually so access control checks the voter,
+      // not the poll creator (key.participant is the poll creator, not the voter).
+      for (const pollUpdate of update.pollUpdates) {
+        const voterKey = pollUpdate.pollUpdateMessageKey;
+        const voterParticipant = voterKey?.participant ?? key.participant;
+        const syntheticMsg: WAMessage = {
+          key: {
+            remoteJid: chatJid,
+            id: `poll-vote-${key.id}-${voterParticipant}-${Date.now()}`,
+            participant: voterParticipant,
+            fromMe: Boolean(voterKey?.fromMe),
+          },
+          message: { pollUpdateMessage: {} } as proto.IMessage,
+          messageTimestamp: Math.floor(Date.now() / 1000),
+        };
+        recordChannelActivity({
+          channel: "whatsapp",
+          accountId: options.accountId,
+          direction: "inbound",
+        });
+        const inbound = await normalizeInboundMessage(syntheticMsg);
+        if (!inbound) {
+          continue;
+        }
+        const enriched = await enrichInboundMessage(syntheticMsg);
+        if (!enriched) {
+          continue;
+        }
+        await enqueueInboundMessage(syntheticMsg, inbound, enriched);
+      }
+    }
+  };
+  sock.ev.on("messages.update", handleMessagesUpdate);
+
+  // Emoji reactions arrive via messages.reaction as a dedicated event.
+  // We construct a synthetic WAMessage so the reaction flows through the full pipeline.
+  const handleMessagesReaction = async (
+    reactions: Array<{ key: proto.IMessageKey; reaction: proto.IReaction }>,
+  ) => {
+    for (const { key, reaction } of reactions) {
+      const emoji = reaction.text ?? "";
+      const chatJid = key.remoteJid;
+      if (!chatJid) {
+        continue;
+      }
+      inboundLogger.info(
+        {
+          chatId: chatJid,
+          messageId: key.id,
+          emoji,
+          participant: key.participant,
+        },
+        "reaction received",
+      );
+      // Construct a synthetic WAMessage with reactionMessage so it flows through extract.ts.
+      // Use the reactor's participant (from the reaction event itself, not reaction.key which
+      // refers to the message being reacted to) to preserve correct sender identity.
+      const reactorParticipant = key.participant ?? reaction.key?.participant;
+      const syntheticMsg: WAMessage = {
+        key: {
+          remoteJid: chatJid,
+          id: `reaction-${key.id}-${reactorParticipant ?? "unknown"}-${Date.now()}`,
+          participant: reactorParticipant,
+          fromMe: Boolean(key.fromMe),
+        },
+        message: {
+          reactionMessage: {
+            key: reaction.key ?? key,
+            text: emoji || null,
+          },
+        } as proto.IMessage,
+        messageTimestamp: Math.floor(Date.now() / 1000),
+        pushName: undefined,
+      };
+      recordChannelActivity({
+        channel: "whatsapp",
+        accountId: options.accountId,
+        direction: "inbound",
+      });
+      const inbound = await normalizeInboundMessage(syntheticMsg);
+      if (!inbound) {
+        continue;
+      }
+      const enriched = await enrichInboundMessage(syntheticMsg);
+      if (!enriched) {
+        continue;
+      }
+      await enqueueInboundMessage(syntheticMsg, inbound, enriched);
+    }
+  };
+  sock.ev.on("messages.reaction", handleMessagesReaction);
+
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
   ) => {
@@ -472,11 +587,21 @@ export async function monitorWebInbox(options: {
         const connectionUpdateHandler = handleConnectionUpdate as unknown as (
           ...args: unknown[]
         ) => void;
+        const messagesUpdateHandler = handleMessagesUpdate as unknown as (
+          ...args: unknown[]
+        ) => void;
+        const messagesReactionHandler = handleMessagesReaction as unknown as (
+          ...args: unknown[]
+        ) => void;
         if (typeof ev.off === "function") {
           ev.off("messages.upsert", messagesUpsertHandler);
+          ev.off("messages.update", messagesUpdateHandler);
+          ev.off("messages.reaction", messagesReactionHandler);
           ev.off("connection.update", connectionUpdateHandler);
         } else if (typeof ev.removeListener === "function") {
           ev.removeListener("messages.upsert", messagesUpsertHandler);
+          ev.removeListener("messages.update", messagesUpdateHandler);
+          ev.removeListener("messages.reaction", messagesReactionHandler);
           ev.removeListener("connection.update", connectionUpdateHandler);
         }
         sock.ws?.close();
