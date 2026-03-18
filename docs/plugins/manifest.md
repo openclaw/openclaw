@@ -121,6 +121,8 @@ Example:
 - If plugin config exists but the plugin is **disabled**, the config is kept and
   a **warning** is surfaced in Doctor + logs.
 
+See [Configuration reference](/configuration) for the full `plugins.*` schema.
+
 ## Notes
 
 - The manifest is **required for native OpenClaw plugins**, including local filesystem loads.
@@ -131,7 +133,9 @@ Example:
   runtime just to inspect env names.
 - `providerAuthChoices` is the cheap metadata path for auth-choice pickers,
   `--auth-choice` resolution, preferred-provider mapping, and simple onboarding
-  CLI flag registration before provider runtime loads.
+  CLI flag registration before provider runtime loads. For runtime wizard
+  metadata that requires provider code, see
+  [Provider runtime hooks](/tools/plugin#provider-runtime-hooks).
 - Exclusive plugin kinds are selected through `plugins.slots.*`.
   - `kind: "memory"` is selected by `plugins.slots.memory`.
   - `kind: "context-engine"` is selected by `plugins.slots.contextEngine`
