@@ -48,6 +48,41 @@
   `pkill -9 -f openclaw-gateway || true; nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
 - Verify: `openclaw channels status --probe`, `ss -ltnp | rg 18789`, `tail -n 120 /tmp/openclaw-gateway.log`.
 
+## Gateway Deploy Protocol
+
+- Canonical terms:
+  - `Agent` = one full Hetzner Docker Compose deployment.
+  - `Bot` = one channel inside an Agent.
+  - `Org` = dashboard-level unit in Firestore.
+  - `Workspace` = per-Agent local dir on Hetzner, usually `/root/.openclaw/agents/{name}/workspace/`.
+- Hetzner servers:
+  - EU prod: `89.167.70.46`
+  - US standby: `5.161.84.219`
+- Artifact Registry image:
+  - `europe-west1-docker.pkg.dev/gold-verve-459312-e7/openclaw-gateway/gateway`
+- Shared compose file:
+  - `/opt/openclaw/docker-compose.yml`
+- Per-Agent env file:
+  - `/root/.openclaw/agents/{name}/docker.env`
+- Ops scripts:
+  - build/push from EU server: `/opt/openclaw-ops/scripts/build-and-push.sh <tag>`
+  - deploy on target server: `/opt/openclaw-ops/scripts/deploy.sh <tag>`
+- Tag format:
+  - `vYYYY.M.D.N`
+  - `vYYYY.M.D.N-hotfix`
+- Deploy rule:
+  - when asked to deploy gateway/runtime changes, use the tag-based ops scripts above; do not replace this with ad hoc `docker build`, `docker compose up`, or manual image name edits unless the user explicitly asks.
+- Rollout behavior of `deploy.sh`:
+  - updates `OPENCLAW_IMAGE` in each Agent `docker.env`
+  - rolls one Agent at a time
+  - health-checks each Agent
+  - rolls back on failure
+- Core API keys are default deploy-time secrets and should normally be present for every Agent unless explicitly overridden:
+  - `VENICE_API_KEY`
+  - `OPENAI_API_KEY`
+  - `BRAVE_API_KEY`
+  - `ELEVENLABS_API_KEY`
+
 ## Build, Test, and Development Commands
 
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).
