@@ -77,17 +77,12 @@ describe("memory search async sync", () => {
 
   it("waits for in-flight search sync during close", async () => {
     const cfg = buildConfig();
-    let releaseSync = () => {};
-    const syncGate = new Promise<void>((resolve) => {
-      releaseSync = () => resolve();
-    });
-    embedBatch.mockImplementation(async (input: string[]) => {
-      await syncGate;
-      return input.map(() => [0.3, 0.2, 0.1]);
-    });
-
     manager = await createMemoryManagerOrThrow(cfg);
-    await manager.search("hello");
+    let releaseSync = () => {};
+    const pendingSync = new Promise<void>((resolve) => {
+      releaseSync = resolve;
+    });
+    (manager as unknown as { syncing: Promise<void> | null }).syncing = pendingSync;
 
     let closed = false;
     const closePromise = manager.close().then(() => {

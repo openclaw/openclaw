@@ -7,12 +7,12 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
+import { danger, success } from "openclaw/plugin-sdk/runtime-env";
+import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
+import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
 import qrcode from "qrcode-terminal";
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import { danger, success } from "../../../src/globals.js";
-import { getChildLogger, toPinoLikeLogger } from "../../../src/logging.js";
-import { ensureDir, resolveUserPath } from "../../../src/utils.js";
-import { VERSION } from "../../../src/version.js";
 import {
   maybeRestoreCredsFromBackup,
   readCredsJsonRaw,
@@ -31,17 +31,24 @@ export {
   webAuthExists,
 } from "./auth-store.js";
 
-let credsSaveQueue: Promise<void> = Promise.resolve();
+// Per-authDir queues so multi-account creds saves don't block each other.
+const credsSaveQueues = new Map<string, Promise<void>>();
+const CREDS_SAVE_FLUSH_TIMEOUT_MS = 15_000;
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
   logger: ReturnType<typeof getChildLogger>,
 ): void {
-  credsSaveQueue = credsSaveQueue
+  const prev = credsSaveQueues.get(authDir) ?? Promise.resolve();
+  const next = prev
     .then(() => safeSaveCreds(authDir, saveCreds, logger))
     .catch((err) => {
       logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
+    })
+    .finally(() => {
+      if (credsSaveQueues.get(authDir) === next) credsSaveQueues.delete(authDir);
     });
+  credsSaveQueues.set(authDir, next);
 }
 
 async function safeSaveCreds(
@@ -186,8 +193,35 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 export function getStatusCode(err: unknown) {
   return (
     (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-    (err as { status?: number })?.status
+    (err as { status?: number })?.status ??
+    (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode
   );
+}
+
+/** Await pending credential saves — scoped to one authDir, or all if omitted. */
+export function waitForCredsSaveQueue(authDir?: string): Promise<void> {
+  if (authDir) {
+    return credsSaveQueues.get(authDir) ?? Promise.resolve();
+  }
+  return Promise.all(credsSaveQueues.values()).then(() => {});
+}
+
+/** Await pending credential saves, but don't hang forever on stalled I/O. */
+export async function waitForCredsSaveQueueWithTimeout(
+  authDir: string,
+  timeoutMs = CREDS_SAVE_FLUSH_TIMEOUT_MS,
+): Promise<void> {
+  let flushTimeout: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    waitForCredsSaveQueue(authDir),
+    new Promise<void>((resolve) => {
+      flushTimeout = setTimeout(resolve, timeoutMs);
+    }),
+  ]).finally(() => {
+    if (flushTimeout) {
+      clearTimeout(flushTimeout);
+    }
+  });
 }
 
 function safeStringify(value: unknown, limit = 800): string {

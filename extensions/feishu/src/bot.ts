@@ -1,4 +1,11 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
+import {
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
+import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import {
   buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
@@ -13,9 +20,11 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/feishu";
+} from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
+import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
+import { buildFeishuConversationId } from "./conversation-id.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -31,150 +40,13 @@ import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
-import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
+import type { FeishuMessageContext, FeishuMediaInfo } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
-
-// --- Permission error extraction ---
-// Extract permission grant URL from Feishu API error response.
-type PermissionError = {
-  code: number;
-  message: string;
-  grantUrl?: string;
-};
-
-const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
-
-// Feishu API sometimes returns incorrect scope names in permission error
-// responses (e.g. "contact:contact.base:readonly" instead of the valid
-// "contact:user.base:readonly"). This map corrects known mismatches.
-const FEISHU_SCOPE_CORRECTIONS: Record<string, string> = {
-  "contact:contact.base:readonly": "contact:user.base:readonly",
-};
-
-function correctFeishuScopeInUrl(url: string): string {
-  let corrected = url;
-  for (const [wrong, right] of Object.entries(FEISHU_SCOPE_CORRECTIONS)) {
-    corrected = corrected.replaceAll(encodeURIComponent(wrong), encodeURIComponent(right));
-    corrected = corrected.replaceAll(wrong, right);
-  }
-  return corrected;
-}
-
-function shouldSuppressPermissionErrorNotice(permissionError: PermissionError): boolean {
-  const message = permissionError.message.toLowerCase();
-  return IGNORED_PERMISSION_SCOPE_TOKENS.some((token) => message.includes(token));
-}
-
-function extractPermissionError(err: unknown): PermissionError | null {
-  if (!err || typeof err !== "object") return null;
-
-  // Axios error structure: err.response.data contains the Feishu error
-  const axiosErr = err as { response?: { data?: unknown } };
-  const data = axiosErr.response?.data;
-  if (!data || typeof data !== "object") return null;
-
-  const feishuErr = data as {
-    code?: number;
-    msg?: string;
-    error?: { permission_violations?: Array<{ uri?: string }> };
-  };
-
-  // Feishu permission error code: 99991672
-  if (feishuErr.code !== 99991672) return null;
-
-  // Extract the grant URL from the error message (contains the direct link)
-  const msg = feishuErr.msg ?? "";
-  const urlMatch = msg.match(/https:\/\/[^\s,]+\/app\/[^\s,]+/);
-  const grantUrl = urlMatch?.[0] ? correctFeishuScopeInUrl(urlMatch[0]) : undefined;
-
-  return {
-    code: feishuErr.code,
-    message: msg,
-    grantUrl,
-  };
-}
-
-// --- Sender name resolution (so the agent can distinguish who is speaking in group chats) ---
-// Cache display names by sender id (open_id/user_id) to avoid an API call on every message.
-const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
-const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
-
-type SenderNameResult = {
-  name?: string;
-  permissionError?: PermissionError;
-};
-
-function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "union_id" {
-  const trimmed = senderId.trim();
-  if (trimmed.startsWith("ou_")) {
-    return "open_id";
-  }
-  if (trimmed.startsWith("on_")) {
-    return "union_id";
-  }
-  return "user_id";
-}
-
-async function resolveFeishuSenderName(params: {
-  account: ResolvedFeishuAccount;
-  senderId: string;
-  log: (...args: any[]) => void;
-}): Promise<SenderNameResult> {
-  const { account, senderId, log } = params;
-  if (!account.configured) return {};
-
-  const normalizedSenderId = senderId.trim();
-  if (!normalizedSenderId) return {};
-
-  const cached = senderNameCache.get(normalizedSenderId);
-  const now = Date.now();
-  if (cached && cached.expireAt > now) return { name: cached.name };
-
-  try {
-    const client = createFeishuClient(account);
-    const userIdType = resolveSenderLookupIdType(normalizedSenderId);
-
-    // contact/v3/users/:user_id?user_id_type=<open_id|user_id|union_id>
-    const res: any = await client.contact.user.get({
-      path: { user_id: normalizedSenderId },
-      params: { user_id_type: userIdType },
-    });
-
-    const name: string | undefined =
-      res?.data?.user?.name ||
-      res?.data?.user?.display_name ||
-      res?.data?.user?.nickname ||
-      res?.data?.user?.en_name;
-
-    if (name && typeof name === "string") {
-      senderNameCache.set(normalizedSenderId, { name, expireAt: now + SENDER_NAME_TTL_MS });
-      return { name };
-    }
-
-    return {};
-  } catch (err) {
-    // Check if this is a permission error
-    const permErr = extractPermissionError(err);
-    if (permErr) {
-      if (shouldSuppressPermissionErrorNotice(permErr)) {
-        log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
-        return {};
-      }
-      log(`feishu: permission error resolving sender name: code=${permErr.code}`);
-      return { permissionError: permErr };
-    }
-
-    // Best-effort. Don't fail message handling if name lookup fails.
-    log(`feishu: failed to resolve sender name for ${normalizedSenderId}: ${String(err)}`);
-    return {};
-  }
-}
-
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {
@@ -273,15 +145,34 @@ function resolveFeishuGroupSession(params: {
   let peerId = chatId;
   switch (groupSessionScope) {
     case "group_sender":
-      peerId = `${chatId}:sender:${senderOpenId}`;
+      peerId = buildFeishuConversationId({
+        chatId,
+        scope: "group_sender",
+        senderOpenId,
+      });
       break;
     case "group_topic":
-      peerId = topicScope ? `${chatId}:topic:${topicScope}` : chatId;
+      peerId = topicScope
+        ? buildFeishuConversationId({
+            chatId,
+            scope: "group_topic",
+            topicId: topicScope,
+          })
+        : chatId;
       break;
     case "group_topic_sender":
       peerId = topicScope
-        ? `${chatId}:topic:${topicScope}:sender:${senderOpenId}`
-        : `${chatId}:sender:${senderOpenId}`;
+        ? buildFeishuConversationId({
+            chatId,
+            scope: "group_topic_sender",
+            topicId: topicScope,
+            senderOpenId,
+          })
+        : buildFeishuConversationId({
+            chatId,
+            scope: "group_sender",
+            senderOpenId,
+          });
       break;
     case "group":
     default:
@@ -524,17 +415,17 @@ function parseMediaKeys(
     const fileKey = normalizeFeishuExternalKey(parsed.file_key);
     switch (messageType) {
       case "image":
-        return { imageKey };
+        return { imageKey, fileName: parsed.file_name };
       case "file":
         return { fileKey, fileName: parsed.file_name };
       case "audio":
-        return { fileKey };
+        return { fileKey, fileName: parsed.file_name };
       case "video":
       case "media":
         // Video/media has both file_key (video) and image_key (thumbnail)
-        return { fileKey, imageKey };
+        return { fileKey, imageKey, fileName: parsed.file_name };
       case "sticker":
-        return { fileKey };
+        return { fileKey, fileName: parsed.file_name };
       default:
         return {};
     }
@@ -821,7 +712,7 @@ export function buildFeishuAgentBody(params: {
     "content" | "senderName" | "senderOpenId" | "mentionTargets" | "messageId" | "hasAnyMention"
   >;
   quotedContent?: string;
-  permissionErrorForAgent?: PermissionError;
+  permissionErrorForAgent?: FeishuPermissionError;
   botOpenId?: string;
 }): string {
   const { ctx, quotedContent, permissionErrorForAgent, botOpenId } = params;
@@ -940,7 +831,7 @@ export async function handleFeishuMessage(params: {
 
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   // Optimization: skip if disabled to save API quota (Feishu free tier limit).
-  let permissionErrorForAgent: PermissionError | undefined;
+  let permissionErrorForAgent: FeishuPermissionError | undefined;
   if (feishuCfg?.resolveSenderNames ?? true) {
     const senderResult = await resolveFeishuSenderName({
       account,
@@ -1168,6 +1059,10 @@ export async function handleFeishuMessage(params: {
     const peerId = isGroup ? (groupSession?.peerId ?? ctx.chatId) : ctx.senderOpenId;
     const parentPeer = isGroup ? (groupSession?.parentPeer ?? null) : null;
     const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : false;
+    const feishuAcpConversationSupported =
+      !isGroup ||
+      groupSession?.groupSessionScope === "group_topic" ||
+      groupSession?.groupSessionScope === "group_topic_sender";
 
     if (isGroup && groupSession) {
       log(
@@ -1213,6 +1108,78 @@ export async function handleFeishuMessage(params: {
             `feishu[${account.accountId}]: dynamic agent created, new route: ${route.sessionKey}`,
           );
         }
+      }
+    }
+
+    const currentConversationId = peerId;
+    const parentConversationId = isGroup ? (parentPeer?.id ?? ctx.chatId) : undefined;
+    let configuredBinding = null;
+    if (feishuAcpConversationSupported) {
+      const configuredRoute = resolveConfiguredBindingRoute({
+        cfg: effectiveCfg,
+        route,
+        conversation: {
+          channel: "feishu",
+          accountId: account.accountId,
+          conversationId: currentConversationId,
+          parentConversationId,
+        },
+      });
+      configuredBinding = configuredRoute.bindingResolution;
+      route = configuredRoute.route;
+
+      // Bound Feishu conversations intentionally require an exact live conversation-id match.
+      // Sender-scoped topic sessions therefore bind on `chat:topic:root:sender:user`, while
+      // configured ACP bindings may still inherit the shared `chat:topic:root` topic session.
+      const threadBinding = getSessionBindingService().resolveByConversation({
+        channel: "feishu",
+        accountId: account.accountId,
+        conversationId: currentConversationId,
+        ...(parentConversationId ? { parentConversationId } : {}),
+      });
+      const boundSessionKey = threadBinding?.targetSessionKey?.trim();
+      if (threadBinding && boundSessionKey) {
+        route = {
+          ...route,
+          sessionKey: boundSessionKey,
+          agentId: resolveAgentIdFromSessionKey(boundSessionKey) || route.agentId,
+          lastRoutePolicy: deriveLastRoutePolicy({
+            sessionKey: boundSessionKey,
+            mainSessionKey: route.mainSessionKey,
+          }),
+          matchedBy: "binding.channel",
+        };
+        configuredBinding = null;
+        getSessionBindingService().touch(threadBinding.bindingId);
+        log(
+          `feishu[${account.accountId}]: routed via bound conversation ${currentConversationId} -> ${boundSessionKey}`,
+        );
+      }
+    }
+
+    if (configuredBinding) {
+      const ensured = await ensureConfiguredBindingRouteReady({
+        cfg: effectiveCfg,
+        bindingResolution: configuredBinding,
+      });
+      if (!ensured.ok) {
+        const replyTargetMessageId =
+          isGroup &&
+          (groupSession?.groupSessionScope === "group_topic" ||
+            groupSession?.groupSessionScope === "group_topic_sender")
+            ? (ctx.rootId ?? ctx.messageId)
+            : ctx.messageId;
+        await sendMessageFeishu({
+          cfg: effectiveCfg,
+          to: `chat:${ctx.chatId}`,
+          text: `⚠️ Failed to initialize the configured ACP session for this Feishu conversation: ${ensured.error}`,
+          replyToMessageId: replyTargetMessageId,
+          replyInThread: isGroup ? (groupSession?.replyInThread ?? false) : false,
+          accountId: account.accountId,
+        }).catch((err) => {
+          log(`feishu[${account.accountId}]: failed to send ACP init error reply: ${String(err)}`);
+        });
+        return;
       }
     }
 

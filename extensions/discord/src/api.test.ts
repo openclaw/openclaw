@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withFetchPreconnect } from "../../../src/test-utils/fetch-mock.js";
+import { withFetchPreconnect } from "../../../test/helpers/extensions/fetch-mock.js";
 import { fetchDiscord } from "./api.js";
 import { jsonResponse } from "./test-http-helpers.js";
 

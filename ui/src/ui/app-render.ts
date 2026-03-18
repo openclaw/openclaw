@@ -4,6 +4,7 @@ import {
   parseAgentSessionKey,
 } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
@@ -181,7 +182,7 @@ type DismissedUpdateBanner = {
 
 function loadDismissedUpdateBanner(): DismissedUpdateBanner | null {
   try {
-    const raw = localStorage.getItem(UPDATE_BANNER_DISMISS_KEY);
+    const raw = getSafeLocalStorage()?.getItem(UPDATE_BANNER_DISMISS_KEY);
     if (!raw) {
       return null;
     }
@@ -225,7 +226,7 @@ function dismissUpdateBanner(updateAvailable: unknown) {
     dismissedAtMs: Date.now(),
   };
   try {
-    localStorage.setItem(UPDATE_BANNER_DISMISS_KEY, JSON.stringify(payload));
+    getSafeLocalStorage()?.setItem(UPDATE_BANNER_DISMISS_KEY, JSON.stringify(payload));
   } catch {
     // ignore
   }
@@ -1511,6 +1512,7 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
+                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.configFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.configSearchQuery = query),
@@ -1581,6 +1583,7 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
+                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.communicationsFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.communicationsSearchQuery = query),
@@ -1645,6 +1648,7 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
+                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.appearanceFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.appearanceSearchQuery = query),
@@ -1709,6 +1713,7 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
+                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.automationFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.automationSearchQuery = query),
@@ -1773,6 +1778,7 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
+                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.infrastructureFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.infrastructureSearchQuery = query),
@@ -1837,6 +1843,7 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
+                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.aiAgentsFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.aiAgentsSearchQuery = query),
