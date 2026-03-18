@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **NovaSpine Memory** — Local-first long-term memory for OpenClaw with recall, rollover capture, compression, provenance, and fact resolution.
+  npm: `novaspine-openclaw-memory`
+  repo: `https://github.com/maddwiz/Novaspine-Openclaw`
+  install: `openclaw plugins install novaspine-openclaw-memory`
