@@ -87,7 +87,7 @@ export { issuePairingChallenge } from "../../src/pairing/pairing-challenge.js";
 export {
   evaluateGroupRouteAccessForPolicy,
   resolveSenderScopedGroupPolicy,
-} from "./src/group-access.js";
+} from "../../src/plugin-sdk/group-access.js";
 export { extractToolSend } from "../../src/plugin-sdk/tool-send.js";
 export { resolveWebhookPath } from "../../src/plugin-sdk/webhook-path.js";
 export type { WebhookInFlightLimiter } from "../../src/plugin-sdk/webhook-request-guards.js";
