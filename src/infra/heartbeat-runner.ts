@@ -10,6 +10,7 @@ import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
+  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
   resolveHeartbeatPrompt as resolveHeartbeatPromptText,
   resolveHeartbeatReplyDisposition,
@@ -155,6 +156,15 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
 
 export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
   return resolveHeartbeatPromptText(heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt);
+}
+
+function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
+  return Math.max(
+    0,
+    heartbeat?.ackMaxChars ??
+      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
+      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  );
 }
 
 function resolveHeartbeatSession(
@@ -700,11 +710,14 @@ export async function runHeartbeatOnce(opts: {
 
     const mediaUrls =
       replyPayload.mediaUrls ?? (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
+    const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
     const replyDisposition = resolveHeartbeatReplyDisposition({
       text: replyPayload.text,
       responsePrefix,
       hasMedia: mediaUrls.length > 0,
       hasReasoning: reasoningPayloads.length > 0,
+      hasExecCompletion,
+      ackMaxChars,
     });
     const previewFromRaw =
       typeof replyPayload.text === "string" && replyPayload.text.trim()

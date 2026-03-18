@@ -260,6 +260,19 @@ describe("resolveHeartbeatReplyDisposition", () => {
     });
   });
 
+  it("treats short trailing text as ack when ackMaxChars allows it", () => {
+    expect(
+      resolveHeartbeatReplyDisposition({
+        text: "HEARTBEAT_OK all good",
+        ackMaxChars: 16,
+      }),
+    ).toEqual({
+      disposition: "ack",
+      text: "",
+      hadToken: true,
+    });
+  });
+
   it("classifies token plus reasoning as malformed", () => {
     expect(
       resolveHeartbeatReplyDisposition({
@@ -269,6 +282,19 @@ describe("resolveHeartbeatReplyDisposition", () => {
     ).toEqual({
       disposition: "malformedAck",
       text: "",
+      hadToken: true,
+    });
+  });
+
+  it("delivers exec-completion payloads even when they include the heartbeat token", () => {
+    expect(
+      resolveHeartbeatReplyDisposition({
+        text: "Backup finished successfully. HEARTBEAT_OK",
+        hasExecCompletion: true,
+      }),
+    ).toEqual({
+      disposition: "deliver",
+      text: "Backup finished successfully.",
       hadToken: true,
     });
   });

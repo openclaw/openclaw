@@ -194,6 +194,8 @@ export function resolveHeartbeatReplyDisposition(params: {
   responsePrefix?: string;
   hasMedia?: boolean;
   hasReasoning?: boolean;
+  hasExecCompletion?: boolean;
+  ackMaxChars?: number;
 }): {
   disposition: HeartbeatReplyDisposition;
   text: string;
@@ -202,9 +204,17 @@ export function resolveHeartbeatReplyDisposition(params: {
   const rawText = typeof params.text === "string" ? params.text : "";
   const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, params.responsePrefix);
   const stripped = stripHeartbeatToken(textForStrip, { mode: "message" });
+  const heartbeatAckStrip =
+    typeof params.ackMaxChars === "number"
+      ? stripHeartbeatToken(textForStrip, {
+          mode: "heartbeat",
+          maxAckChars: params.ackMaxChars,
+        })
+      : null;
   const normalized = textForStrip.trim();
   const hasMedia = params.hasMedia === true;
   const hasReasoning = params.hasReasoning === true;
+  const hasExecCompletion = params.hasExecCompletion === true;
   const normalizedMarkup = normalized
     .replace(/<[^>]*>/g, " ")
     .replace(/&nbsp;/gi, " ")
@@ -224,11 +234,27 @@ export function resolveHeartbeatReplyDisposition(params: {
     };
   }
 
+  let finalText = stripped.didStrip ? stripped.text.trim() : rawText.trim();
+  if (!finalText && hasExecCompletion) {
+    finalText = rawText.trim();
+  }
+  if (params.responsePrefix && finalText && !finalText.startsWith(params.responsePrefix)) {
+    finalText = `${params.responsePrefix} ${finalText}`;
+  }
+
+  if (hasExecCompletion) {
+    return {
+      disposition: "deliver",
+      text: finalText,
+      hadToken: true,
+    };
+  }
+
   if (
     !hasMedia &&
     !hasReasoning &&
-    stripped.didStrip &&
-    (!strippedRemainder || isSymbolOnlyRemainder)
+    ((stripped.didStrip && (!strippedRemainder || isSymbolOnlyRemainder)) ||
+      heartbeatAckStrip?.shouldSkip === true)
   ) {
     return {
       disposition: "ack",
@@ -237,10 +263,6 @@ export function resolveHeartbeatReplyDisposition(params: {
     };
   }
 
-  let finalText = stripped.didStrip ? stripped.text.trim() : rawText.trim();
-  if (params.responsePrefix && finalText && !finalText.startsWith(params.responsePrefix)) {
-    finalText = `${params.responsePrefix} ${finalText}`;
-  }
   return {
     disposition: "malformedAck",
     text: finalText,

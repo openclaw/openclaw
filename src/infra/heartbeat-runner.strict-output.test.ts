@@ -13,6 +13,7 @@ import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 
 const TELEGRAM_GROUP = "-1001234567890";
+const LONG_MIXED_ACK_TEXT = `${"Checking queue/state before deciding. ".repeat(12)}HEARTBEAT_OK`;
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
@@ -65,7 +66,7 @@ describe("heartbeat strict output handling", () => {
       });
 
       replySpy.mockResolvedValue({
-        text: "Checking queue/state before deciding. Nothing needs attention.\n\nHEARTBEAT_OK",
+        text: LONG_MIXED_ACK_TEXT,
       });
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
@@ -103,7 +104,7 @@ describe("heartbeat strict output handling", () => {
 
       replySpy
         .mockResolvedValueOnce({
-          text: "I checked the reminder state and will stay quiet.\n\nHEARTBEAT_OK",
+          text: LONG_MIXED_ACK_TEXT,
         })
         .mockResolvedValueOnce({
           text: "Please rotate the API keys today.",
@@ -170,6 +171,43 @@ describe("heartbeat strict output handling", () => {
         status: "skipped",
         reason: "token-with-reasoning",
       });
+    });
+  });
+
+  it("delivers exec-completion payloads even when the reply also contains HEARTBEAT_OK", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      enqueueSystemEvent("exec finished: backup completed", {
+        sessionKey,
+        contextKey: "exec:backup",
+      });
+
+      replySpy.mockResolvedValue({
+        text: "Backup completed successfully. HEARTBEAT_OK",
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: TELEGRAM_GROUP,
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: { telegram: sendTelegram },
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram).toHaveBeenCalledWith(
+        TELEGRAM_GROUP,
+        "Backup completed successfully.",
+        expect.any(Object),
+      );
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
     });
   });
 });
