@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MarkdownConfigSchema } from "../api.js";
+import { MarkdownConfigSchema } from "../runtime-api.js";
 
 /**
  * Twitch user roles that can be allowed to interact with the bot
