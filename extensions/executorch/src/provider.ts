@@ -28,6 +28,7 @@ export function createExecuTorchProvider(
   return {
     id: providerId,
     capabilities: ["audio"],
+    requiresApiKey: false,
     async transcribeAudio(req: AudioTranscriptionRequest): Promise<AudioTranscriptionResult> {
       const pcmBuffer = await convertToPcmF32(req.buffer, req.fileName);
       let runner: ReturnType<typeof getRunner>;

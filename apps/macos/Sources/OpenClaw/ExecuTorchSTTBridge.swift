@@ -759,6 +759,10 @@ actor ExecuTorchSTTBridge {
 
 #if DEBUG
 extension ExecuTorchSTTBridge {
+    func _testSetState(_ newState: State) {
+        self.state = newState
+    }
+
     nonisolated static func _testDeltaSuffix(previous: String, current: String) -> String {
         deltaSuffix(previous: previous, current: current)
     }

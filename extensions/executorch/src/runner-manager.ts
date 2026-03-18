@@ -79,11 +79,14 @@ export class RunnerManager {
   async ensureReady(): Promise<void> {
     if (this._state === "ready" && this.isAlive) return;
     if (this.readyPromise) return this.readyPromise;
-    this.readyPromise = this.launch();
+    const launchPromise = this.launch();
+    this.readyPromise = launchPromise;
     try {
-      await this.readyPromise;
+      await launchPromise;
     } finally {
-      this.readyPromise = null;
+      if (this.readyPromise === launchPromise) {
+        this.readyPromise = null;
+      }
     }
   }
 
@@ -93,7 +96,7 @@ export class RunnerManager {
       throw new Error("Runtime handle is not initialized");
     }
     try {
-      const text = this.native.transcribe(this.handle, pcmBuffer, {
+      const text = await this.native.transcribe(this.handle, pcmBuffer, {
         maxNewTokens: 500,
         temperature: 0.0,
       });
@@ -114,7 +117,6 @@ export class RunnerManager {
       this.handle = null;
     }
     this._state = "unloaded";
-    this.readyPromise = null;
   }
 
   private async launch(): Promise<void> {
@@ -160,7 +162,6 @@ export class RunnerManager {
       missing.push(modelCandidates.join(" or "));
     } else {
       this.modelPath = resolvedModelPath;
-      required.push(this.modelPath);
     }
 
     const tokenizerCandidates = this.tokenizerFileCandidates(resolvedModelPath ?? this.modelPath);
@@ -169,7 +170,6 @@ export class RunnerManager {
       missing.push(tokenizerCandidates.join(" or "));
     } else {
       this.tokenizerPath = resolvedTokenizerPath;
-      required.push(this.tokenizerPath);
     }
 
     if (this.dataPath) {

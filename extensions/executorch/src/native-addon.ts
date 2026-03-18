@@ -28,7 +28,7 @@ export type NativeExecuTorchAddon = {
     handle: NativeRunnerHandle,
     pcmBuffer: Buffer,
     options?: NativeTranscribeOptions,
-  ): string;
+  ): Promise<string>;
 };
 
 let cachedAddon: NativeExecuTorchAddon | null = null;

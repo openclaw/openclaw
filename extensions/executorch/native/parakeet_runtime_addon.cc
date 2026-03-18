@@ -1,8 +1,10 @@
 #include <stdint.h>
 
+#include <atomic>
 #include <cstring>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <node_api.h>
 
@@ -70,10 +72,22 @@ struct RuntimeSymbols {
 struct RunnerHandle {
   RuntimeSymbols symbols;
   pqt_runner_t* runner = nullptr;
+  std::atomic<uint32_t> refs{1};
 };
 
 struct RunnerBox {
   RunnerHandle* handle = nullptr;
+};
+
+struct AsyncTranscribeWork {
+  napi_env env = nullptr;
+  napi_async_work work = nullptr;
+  napi_deferred deferred = nullptr;
+  RunnerHandle* handle = nullptr;
+  std::vector<float> samples;
+  pqt_transcribe_config_t config{500, 0.0f};
+  std::string transcript;
+  std::string error;
 };
 
 std::string g_last_error;
@@ -263,12 +277,27 @@ void destroy_runner_handle(RunnerHandle* handle) {
   delete handle;
 }
 
+void retain_runner_handle(RunnerHandle* handle) {
+  if (handle != nullptr) {
+    handle->refs.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+void release_runner_handle(RunnerHandle* handle) {
+  if (handle == nullptr) {
+    return;
+  }
+  if (handle->refs.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    destroy_runner_handle(handle);
+  }
+}
+
 void finalize_runner_box(napi_env /*env*/, void* data, void* /*hint*/) {
   auto* box = static_cast<RunnerBox*>(data);
   if (box == nullptr) {
     return;
   }
-  destroy_runner_handle(box->handle);
+  release_runner_handle(box->handle);
   box->handle = nullptr;
   delete box;
 }
@@ -387,8 +416,9 @@ napi_value destroy_runner(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  destroy_runner_handle(box->handle);
+  RunnerHandle* handle = box->handle;
   box->handle = nullptr;
+  release_runner_handle(handle);
 
   napi_value undefined;
   napi_get_undefined(env, &undefined);
@@ -441,6 +471,59 @@ double get_named_optional_double(
   return out;
 }
 
+void execute_transcribe(napi_env /*env*/, void* data) {
+  auto* work = static_cast<AsyncTranscribeWork*>(data);
+  if (work == nullptr || work->handle == nullptr) {
+    return;
+  }
+
+  int generated_tokens = 0;
+  pqt_status_t run_status = work->handle->symbols.runner_transcribe(
+      work->handle->runner,
+      work->samples.data(),
+      static_cast<int64_t>(work->samples.size()),
+      &work->config,
+      append_piece_callback,
+      &work->transcript,
+      &generated_tokens);
+
+  if (run_status != PQT_STATUS_OK) {
+    const char* runtime_error =
+        work->handle->symbols.last_error == nullptr ? nullptr : work->handle->symbols.last_error();
+    work->error =
+        runtime_error != nullptr ? runtime_error : "pqt_runner_transcribe failed";
+  }
+}
+
+void complete_transcribe(napi_env env, napi_status status, void* data) {
+  auto* work = static_cast<AsyncTranscribeWork*>(data);
+  if (work == nullptr) {
+    return;
+  }
+
+  if (status != napi_ok && work->error.empty()) {
+    work->error = "transcribe async work failed";
+  }
+
+  if (!work->error.empty()) {
+    napi_value message;
+    napi_create_string_utf8(env, work->error.c_str(), work->error.size(), &message);
+    napi_value error;
+    napi_create_error(env, nullptr, message, &error);
+    napi_reject_deferred(env, work->deferred, error);
+  } else {
+    napi_value out_text;
+    napi_create_string_utf8(env, work->transcript.c_str(), work->transcript.size(), &out_text);
+    napi_resolve_deferred(env, work->deferred, out_text);
+  }
+
+  if (work->work != nullptr) {
+    napi_delete_async_work(env, work->work);
+  }
+  release_runner_handle(work->handle);
+  delete work;
+}
+
 napi_value transcribe(napi_env env, napi_callback_info info) {
   size_t argc = 3;
   napi_value argv[3];
@@ -487,35 +570,59 @@ napi_value transcribe(napi_env env, napi_callback_info info) {
     }
   }
 
-  std::string transcript;
-  int generated_tokens = 0;
-  const int64_t num_samples = static_cast<int64_t>(byte_length / sizeof(float));
-  pqt_status_t run_status = box->handle->symbols.runner_transcribe(
-      box->handle->runner,
+  auto* work = new AsyncTranscribeWork();
+  work->env = env;
+  work->handle = box->handle;
+  work->config = config;
+  retain_runner_handle(work->handle);
+  const size_t num_samples = byte_length / sizeof(float);
+  work->samples.assign(
       static_cast<const float*>(data),
-      num_samples,
-      &config,
-      append_piece_callback,
-      &transcript,
-      &generated_tokens);
+      static_cast<const float*>(data) + num_samples);
 
-  if (run_status != PQT_STATUS_OK) {
-    const char* runtime_error =
-        box->handle->symbols.last_error == nullptr ? nullptr : box->handle->symbols.last_error();
-    set_last_error(
-        runtime_error != nullptr ? runtime_error : "pqt_runner_transcribe failed");
-    throw_last_error(env, "transcribe failed");
-    return nullptr;
-  }
-
-  napi_value out_text;
-  status = napi_create_string_utf8(
-      env, transcript.c_str(), transcript.size(), &out_text);
+  napi_value promise;
+  status = napi_create_promise(env, &work->deferred, &promise);
   if (status != napi_ok) {
-    napi_throw_error(env, nullptr, "failed to create transcript string");
+    release_runner_handle(work->handle);
+    delete work;
+    napi_throw_error(env, nullptr, "failed to create transcribe promise");
     return nullptr;
   }
-  return out_text;
+
+  napi_value resource_name;
+  status = napi_create_string_utf8(env, "parakeet.transcribe", NAPI_AUTO_LENGTH, &resource_name);
+  if (status != napi_ok) {
+    release_runner_handle(work->handle);
+    delete work;
+    napi_throw_error(env, nullptr, "failed to create async resource name");
+    return nullptr;
+  }
+
+  status = napi_create_async_work(
+      env,
+      nullptr,
+      resource_name,
+      execute_transcribe,
+      complete_transcribe,
+      work,
+      &work->work);
+  if (status != napi_ok) {
+    release_runner_handle(work->handle);
+    delete work;
+    napi_throw_error(env, nullptr, "failed to create async transcribe work");
+    return nullptr;
+  }
+
+  status = napi_queue_async_work(env, work->work);
+  if (status != napi_ok) {
+    napi_delete_async_work(env, work->work);
+    release_runner_handle(work->handle);
+    delete work;
+    napi_throw_error(env, nullptr, "failed to queue async transcribe work");
+    return nullptr;
+  }
+
+  return promise;
 }
 
 napi_value init(napi_env env, napi_value exports) {

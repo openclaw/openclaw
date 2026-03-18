@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/executorch";
 import { registerExecuTorchCli } from "./src/cli.js";
-import type { RunnerBackend } from "./src/native-addon.js";
+import { loadNativeExecuTorchAddon, type RunnerBackend } from "./src/native-addon.js";
 import { createExecuTorchProvider } from "./src/provider.js";
 import { RunnerManager } from "./src/runner-manager.js";
 import {
@@ -91,7 +91,6 @@ const plugin = {
       );
 
       try {
-        const { loadNativeExecuTorchAddon } = require("./src/native-addon.js");
         loadNativeExecuTorchAddon();
         api.logger.info("[executorch] Native addon loaded successfully");
       } catch {

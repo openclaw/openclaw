@@ -20,4 +20,11 @@ struct TalkModeRuntimeSpeechTests {
         #expect(TalkModeRuntime.playbackPlan(apiKey: "key", voiceId: nil) == .systemVoiceOnly)
         #expect(TalkModeRuntime.playbackPlan(apiKey: "", voiceId: "voice") == .systemVoiceOnly)
     }
+
+    @Test func `execuTorch load failure fallback resets bridge state`() async {
+        let result = await TalkModeRuntime.shared._testHandleExecuTorchLoadFailure()
+
+        #expect(result.useExecuTorch == false)
+        #expect(result.bridgeState == .idle)
+    }
 }
