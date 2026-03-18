@@ -1,13 +1,18 @@
 import {
-  buildAccountScopedAllowlistConfigEditor,
-  resolveLegacyDmAllowlistConfigPaths,
+  buildLegacyDmAccountAllowlistAdapter,
+  createAccountScopedAllowlistNameResolver,
+  createFlatAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
-  createScopedDmSecurityResolver,
-  collectOpenGroupPolicyConfiguredRouteWarnings,
-  collectOpenProviderGroupPolicyWarnings,
-} from "openclaw/plugin-sdk/channel-config-helpers";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+  createChannelDirectoryAdapter,
+  createPairingPrefixStripper,
+  createRuntimeDirectoryLiveAdapter,
+  createTextPairingAdapter,
+  resolveOutboundSendDep,
+  resolveTargetsWithOptionalToken,
+} from "openclaw/plugin-sdk/channel-runtime";
 import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw/plugin-sdk/core";
 import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
@@ -286,41 +291,49 @@ function formatSlackScopeDiagnostic(params: {
   } as const;
 }
 
-function readSlackAllowlistConfig(account: ResolvedSlackAccount) {
-  return {
-    dmAllowFrom: (account.config.allowFrom ?? account.config.dm?.allowFrom ?? []).map(String),
-    groupPolicy: account.groupPolicy,
-    groupOverrides: Object.entries(account.channels ?? {})
-      .map(([key, value]) => {
-        const entries = (value?.users ?? []).map(String).filter(Boolean);
-        return entries.length > 0 ? { label: key, entries } : null;
-      })
-      .filter(Boolean) as Array<{ label: string; entries: string[] }>,
-  };
-}
+const resolveSlackAllowlistGroupOverrides = createFlatAllowlistOverrideResolver({
+  resolveRecord: (account: ResolvedSlackAccount) => account.channels,
+  label: (key) => key,
+  resolveEntries: (value) => value?.users,
+});
 
-async function resolveSlackAllowlistNames(params: {
-  cfg: Parameters<typeof resolveSlackAccount>[0]["cfg"];
-  accountId?: string | null;
-  entries: string[];
-}) {
-  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
-  const token = account.config.userToken?.trim() || account.botToken?.trim();
-  if (!token) {
-    return [];
-  }
-  return await resolveSlackUserAllowlist({ token, entries: params.entries });
-}
+const resolveSlackAllowlistNames = createAccountScopedAllowlistNameResolver({
+  resolveAccount: ({ cfg, accountId }) => resolveSlackAccount({ cfg, accountId }),
+  resolveToken: (account: ResolvedSlackAccount) =>
+    account.config.userToken?.trim() || account.botToken?.trim(),
+  resolveNames: ({ token, entries }) => resolveSlackUserAllowlist({ token, entries }),
+});
+
+const collectSlackSecurityWarnings =
+  createOpenProviderConfiguredRouteWarningCollector<ResolvedSlackAccount>({
+    providerConfigPresent: (cfg) => cfg.channels?.slack !== undefined,
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
+    resolveRouteAllowlistConfigured: (account) =>
+      Boolean(account.config.channels) && Object.keys(account.config.channels ?? {}).length > 0,
+    configureRouteAllowlist: {
+      surface: "Slack channels",
+      openScope: "any channel not explicitly denied",
+      groupPolicyPath: "channels.slack.groupPolicy",
+      routeAllowlistPath: "channels.slack.channels",
+    },
+    missingRouteAllowlist: {
+      surface: "Slack channels",
+      openBehavior: "with no channel allowlist; any channel can trigger (mention-gated)",
+      remediation:
+        'Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels',
+    },
+  });
 
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   ...createSlackPluginBase({
     setupWizard: slackSetupWizard,
     setup: slackSetupAdapter,
   }),
-  pairing: {
+  pairing: createTextPairingAdapter({
     idLabel: "slackUserId",
-    normalizeAllowEntry: (entry) => entry.replace(/^(slack|user):/i, ""),
-    notifyApproval: async ({ id }) => {
+    message: PAIRING_APPROVED_MESSAGE,
+    normalizeAllowEntry: createPairingPrefixStripper(/^(slack|user):/i),
+    notify: async ({ id, message }) => {
       const cfg = getSlackRuntime().config.loadConfig();
       const account = resolveSlackAccount({
         cfg,
@@ -330,63 +343,29 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       const botToken = account.botToken?.trim();
       const tokenOverride = token && token !== botToken ? token : undefined;
       if (tokenOverride) {
-        await getSlackRuntime().channel.slack.sendMessageSlack(
-          `user:${id}`,
-          PAIRING_APPROVED_MESSAGE,
-          {
-            token: tokenOverride,
-          },
-        );
+        await getSlackRuntime().channel.slack.sendMessageSlack(`user:${id}`, message, {
+          token: tokenOverride,
+        });
       } else {
-        await getSlackRuntime().channel.slack.sendMessageSlack(
-          `user:${id}`,
-          PAIRING_APPROVED_MESSAGE,
-        );
+        await getSlackRuntime().channel.slack.sendMessageSlack(`user:${id}`, message);
       }
     },
-  },
+  }),
   allowlist: {
-    supportsScope: ({ scope }) => scope === "dm",
-    readConfig: ({ cfg, accountId }) =>
-      readSlackAllowlistConfig(resolveSlackAccount({ cfg, accountId })),
-    resolveNames: async ({ cfg, accountId, entries }) =>
-      await resolveSlackAllowlistNames({ cfg, accountId, entries }),
-    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
+    ...buildLegacyDmAccountAllowlistAdapter({
       channelId: "slack",
+      resolveAccount: ({ cfg, accountId }) => resolveSlackAccount({ cfg, accountId }),
       normalize: ({ cfg, accountId, values }) =>
         slackConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
-      resolvePaths: resolveLegacyDmAllowlistConfigPaths,
+      resolveDmAllowFrom: (account) => account.config.allowFrom ?? account.config.dm?.allowFrom,
+      resolveGroupPolicy: (account) => account.groupPolicy,
+      resolveGroupOverrides: resolveSlackAllowlistGroupOverrides,
     }),
+    resolveNames: resolveSlackAllowlistNames,
   },
   security: {
     resolveDmPolicy: resolveSlackDmPolicy,
-    collectWarnings: ({ account, cfg }) => {
-      const channelAllowlistConfigured =
-        Boolean(account.config.channels) && Object.keys(account.config.channels ?? {}).length > 0;
-
-      return collectOpenProviderGroupPolicyWarnings({
-        cfg,
-        providerConfigPresent: cfg.channels?.slack !== undefined,
-        configuredGroupPolicy: account.config.groupPolicy,
-        collect: (groupPolicy) =>
-          collectOpenGroupPolicyConfiguredRouteWarnings({
-            groupPolicy,
-            routeAllowlistConfigured: channelAllowlistConfigured,
-            configureRouteAllowlist: {
-              surface: "Slack channels",
-              openScope: "any channel not explicitly denied",
-              groupPolicyPath: "channels.slack.groupPolicy",
-              routeAllowlistPath: "channels.slack.channels",
-            },
-            missingRouteAllowlist: {
-              surface: "Slack channels",
-              openBehavior: "with no channel allowlist; any channel can trigger (mention-gated)",
-              remediation:
-                'Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels',
-            },
-          }),
-      });
-    },
+    collectWarnings: collectSlackSecurityWarnings,
   },
   groups: {
     resolveRequireMention: resolveSlackGroupRequireMention,
@@ -435,14 +414,15 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       hint: "<channelId|user:ID|channel:ID>",
     },
   },
-  directory: {
-    self: async () => null,
+  directory: createChannelDirectoryAdapter({
     listPeers: async (params) => listSlackDirectoryPeersFromConfig(params),
     listGroups: async (params) => listSlackDirectoryGroupsFromConfig(params),
-    listPeersLive: async (params) => getSlackRuntime().channel.slack.listDirectoryPeersLive(params),
-    listGroupsLive: async (params) =>
-      getSlackRuntime().channel.slack.listDirectoryGroupsLive(params),
-  },
+    ...createRuntimeDirectoryLiveAdapter({
+      getRuntime: () => getSlackRuntime().channel.slack,
+      listPeersLive: (runtime) => runtime.listDirectoryPeersLive,
+      listGroupsLive: (runtime) => runtime.listDirectoryGroupsLive,
+    }),
+  }),
   resolver: {
     resolveTargets: async ({ cfg, accountId, inputs, kind }) => {
       const toResolvedTarget = <
@@ -458,28 +438,30 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         note,
       });
       const account = resolveSlackAccount({ cfg, accountId });
-      const token = account.config.userToken?.trim() || account.botToken?.trim();
-      if (!token) {
-        return inputs.map((input) => ({
-          input,
-          resolved: false,
-          note: "missing Slack token",
-        }));
-      }
       if (kind === "group") {
-        const resolved = await getSlackRuntime().channel.slack.resolveChannelAllowlist({
-          token,
-          entries: inputs,
+        return resolveTargetsWithOptionalToken({
+          token: account.config.userToken?.trim() || account.botToken?.trim(),
+          inputs,
+          missingTokenNote: "missing Slack token",
+          resolveWithToken: ({ token, inputs }) =>
+            getSlackRuntime().channel.slack.resolveChannelAllowlist({
+              token,
+              entries: inputs,
+            }),
+          mapResolved: (entry) => toResolvedTarget(entry, entry.archived ? "archived" : undefined),
         });
-        return resolved.map((entry) =>
-          toResolvedTarget(entry, entry.archived ? "archived" : undefined),
-        );
       }
-      const resolved = await getSlackRuntime().channel.slack.resolveUserAllowlist({
-        token,
-        entries: inputs,
+      return resolveTargetsWithOptionalToken({
+        token: account.config.userToken?.trim() || account.botToken?.trim(),
+        inputs,
+        missingTokenNote: "missing Slack token",
+        resolveWithToken: ({ token, inputs }) =>
+          getSlackRuntime().channel.slack.resolveUserAllowlist({
+            token,
+            entries: inputs,
+          }),
+        mapResolved: (entry) => toResolvedTarget(entry, entry.note),
       });
-      return resolved.map((entry) => toResolvedTarget(entry, entry.note));
     },
   },
   actions: createSlackActions(SLACK_CHANNEL, {
