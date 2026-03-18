@@ -137,6 +137,9 @@ function resolveTelegramAutoThreadId(params: {
     return undefined;
   }
   const parsedTo = parseTelegramTarget(params.to);
+  if (parsedTo.messageThreadId != null) {
+    return undefined;
+  }
   const parsedChannel = parseTelegramTarget(context.currentChannelId);
   if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
     return undefined;

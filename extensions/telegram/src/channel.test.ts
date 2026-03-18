@@ -186,6 +186,84 @@ describe("telegramPlugin threading", () => {
       }),
     ).toBe("928");
   });
+
+  it("does not auto-resolve a thread when the target already includes a topic", () => {
+    const toolContext = telegramPlugin.threading?.buildToolContext?.({
+      cfg: createCfg(),
+      accountId: "ops",
+      context: {
+        Channel: "telegram",
+        From: "telegram:123",
+        To: "telegram:-1003841603622",
+        ChatType: "group",
+        CurrentMessageId: "2284",
+        MessageThreadId: 928,
+      },
+      hasRepliedRef: { value: false },
+    });
+
+    expect(
+      telegramPlugin.threading?.resolveAutoThreadId?.({
+        cfg: createCfg(),
+        accountId: "ops",
+        to: "telegram:group:-1003841603622:topic:111",
+        toolContext,
+        replyToId: undefined,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not auto-resolve a thread when replying to a specific message", () => {
+    const toolContext = telegramPlugin.threading?.buildToolContext?.({
+      cfg: createCfg(),
+      accountId: "ops",
+      context: {
+        Channel: "telegram",
+        From: "telegram:123",
+        To: "telegram:-1003841603622",
+        ChatType: "group",
+        CurrentMessageId: "2284",
+        MessageThreadId: 928,
+      },
+      hasRepliedRef: { value: false },
+    });
+
+    expect(
+      telegramPlugin.threading?.resolveAutoThreadId?.({
+        cfg: createCfg(),
+        accountId: "ops",
+        to: "telegram:group:-1003841603622",
+        toolContext,
+        replyToId: "2284",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not auto-resolve a thread when the incoming message has no topic id", () => {
+    const toolContext = telegramPlugin.threading?.buildToolContext?.({
+      cfg: createCfg(),
+      accountId: "ops",
+      context: {
+        Channel: "telegram",
+        From: "telegram:123",
+        To: "telegram:-1003841603622",
+        ChatType: "group",
+        CurrentMessageId: "2284",
+      },
+      hasRepliedRef: { value: false },
+    });
+
+    expect(toolContext?.currentThreadTs).toBeUndefined();
+    expect(
+      telegramPlugin.threading?.resolveAutoThreadId?.({
+        cfg: createCfg(),
+        accountId: "ops",
+        to: "telegram:group:-1003841603622",
+        toolContext,
+        replyToId: undefined,
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("telegramPlugin groups", () => {
