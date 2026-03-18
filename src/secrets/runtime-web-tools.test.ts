@@ -1,11 +1,20 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import * as webSearchProviders from "../plugins/web-search-providers.js";
 import * as secretResolve from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
 
 type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+
+const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
+  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+}));
+
+vi.mock("../plugins/web-search-providers.js", () => ({
+  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+}));
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -22,6 +31,79 @@ function providerPluginId(provider: ProviderUnderTest): string {
     default:
       return provider;
   }
+}
+
+function ensureRecord(target: Record<string, unknown>, key: string): Record<string, unknown> {
+  const current = target[key];
+  if (typeof current === "object" && current !== null && !Array.isArray(current)) {
+    return current as Record<string, unknown>;
+  }
+  const next: Record<string, unknown> = {};
+  target[key] = next;
+  return next;
+}
+
+function setConfiguredProviderKey(
+  configTarget: OpenClawConfig,
+  pluginId: string,
+  value: unknown,
+): void {
+  const plugins = ensureRecord(configTarget as Record<string, unknown>, "plugins");
+  const entries = ensureRecord(plugins, "entries");
+  const pluginEntry = ensureRecord(entries, pluginId);
+  const config = ensureRecord(pluginEntry, "config");
+  const webSearch = ensureRecord(config, "webSearch");
+  webSearch.apiKey = value;
+}
+
+function createTestProvider(params: {
+  provider: ProviderUnderTest;
+  pluginId: string;
+  order: number;
+}): PluginWebSearchProviderEntry {
+  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
+  return {
+    pluginId: params.pluginId,
+    id: params.provider,
+    label: params.provider,
+    hint: `${params.provider} test provider`,
+    envVars: [`${params.provider.toUpperCase()}_API_KEY`],
+    placeholder: `${params.provider}-...`,
+    signupUrl: `https://example.com/${params.provider}`,
+    autoDetectOrder: params.order,
+    credentialPath,
+    inactiveSecretPaths: [credentialPath],
+    getCredentialValue: (searchConfig) => searchConfig?.apiKey,
+    setCredentialValue: (searchConfigTarget, value) => {
+      searchConfigTarget.apiKey = value;
+    },
+    getConfiguredCredentialValue: (config) => {
+      const entryConfig = config?.plugins?.entries?.[params.pluginId]?.config;
+      return entryConfig && typeof entryConfig === "object"
+        ? (entryConfig as { webSearch?: { apiKey?: unknown } }).webSearch?.apiKey
+        : undefined;
+    },
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setConfiguredProviderKey(configTarget, params.pluginId, value);
+    },
+    resolveRuntimeMetadata:
+      params.provider === "perplexity"
+        ? () => ({
+            perplexityTransport: "search_api" as const,
+          })
+        : undefined,
+    createTool: () => null,
+  };
+}
+
+function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
+  return [
+    createTestProvider({ provider: "brave", pluginId: "brave", order: 10 }),
+    createTestProvider({ provider: "gemini", pluginId: "google", order: 20 }),
+    createTestProvider({ provider: "grok", pluginId: "xai", order: 30 }),
+    createTestProvider({ provider: "kimi", pluginId: "moonshot", order: 40 }),
+    createTestProvider({ provider: "perplexity", pluginId: "perplexity", order: 50 }),
+  ];
 }
 
 async function runRuntimeWebTools(params: { config: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
@@ -93,12 +175,16 @@ function expectInactiveFirecrawlSecretRef(params: {
 }
 
 describe("runtime web tools resolution", () => {
+  beforeEach(() => {
+    vi.mocked(webSearchProviders.resolvePluginWebSearchProviders).mockClear();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it("skips loading web search providers when search config is absent", async () => {
-    const providerSpy = vi.spyOn(webSearchProviders, "resolvePluginWebSearchProviders");
+    const providerSpy = vi.mocked(webSearchProviders.resolvePluginWebSearchProviders);
 
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
