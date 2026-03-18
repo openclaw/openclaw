@@ -131,6 +131,15 @@ function mergeConfiguredOptInProviderModels(params: {
   }
 }
 
+/**
+ * Invalidate the cached model catalog so the next {@link loadModelCatalog}
+ * call re-reads `models.json` from disk. Safe to call at runtime (e.g. after
+ * a config hot reload regenerates models.json).
+ */
+export function invalidateModelCatalogCache(): void {
+  modelCatalogPromise = null;
+}
+
 export function resetModelCatalogCacheForTest() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;

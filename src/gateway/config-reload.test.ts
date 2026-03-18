@@ -147,22 +147,24 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(expected);
   });
 
-  it("restarts heartbeat when model-related config changes", () => {
+  it("restarts heartbeat and regenerates models when model-related config changes", () => {
     const plan = buildGatewayReloadPlan([
       "models.providers.openai.models",
       "agents.defaults.model",
     ]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.regenerateModels).toBe(true);
     expect(plan.hotReasons).toEqual(
       expect.arrayContaining(["models.providers.openai.models", "agents.defaults.model"]),
     );
   });
 
-  it("restarts heartbeat when agents.defaults.models allowlist changes", () => {
+  it("restarts heartbeat and regenerates models when agents.defaults.models allowlist changes", () => {
     const plan = buildGatewayReloadPlan(["agents.defaults.models"]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.regenerateModels).toBe(true);
     expect(plan.hotReasons).toContain("agents.defaults.models");
     expect(plan.noopPaths).toEqual([]);
   });
