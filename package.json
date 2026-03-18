@@ -291,6 +291,7 @@
     "moltbot:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "openfinclaw": "node scripts/run-node.mjs",
     "openfinclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
+    "plugins:publish:findoo-slim": "bash scripts/publish-findoo-datahub-slim.sh",
     "plugins:publish:openfinclaw": "bash scripts/publish-openfinclaw.sh",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "prepack": "pnpm build && pnpm ui:build",
