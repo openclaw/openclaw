@@ -691,53 +691,65 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
         let promptTokens = 0;
         let completionTokens = 0;
 
-        // Our own SSE parsing that handles `: ` in JSON correctly
+        // Our own SSE parsing that handles `: ` in JSON correctly and keeps
+        // UTF-8 code points intact when TCP chunks split multibyte characters.
         let sseBuffer = "";
-        for await (const chunk of response.data) {
-          sseBuffer += chunk.toString();
+        const sseDecoder = new TextDecoder();
+        const consumeSseLine = (line: string) => {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith(":")) {
+            return;
+          }
+          if (trimmed === "data: [DONE]") {
+            return;
+          }
+          if (trimmed.startsWith("data: ")) {
+            // Fix: only split on first `: ` occurrence
+            const jsonStr = trimmed.slice(6); // Remove "data: " prefix
+            try {
+              const parsed = JSON.parse(jsonStr) as ExtendedChatCompletionChunk;
+              const choice = parsed.choices?.[0];
+
+              if (choice?.delta?.content) {
+                accumulatedContent += choice.delta.content;
+              }
+              if (choice?.delta?.function_call) {
+                if (!functionCallBuffer) {
+                  functionCallBuffer = { name: "", arguments: "" };
+                }
+                if (choice.delta.function_call.name) {
+                  functionCallBuffer.name += choice.delta.function_call.name;
+                }
+                if (choice.delta.function_call.arguments) {
+                  const args = choice.delta.function_call.arguments;
+                  functionCallBuffer.arguments +=
+                    typeof args === "string" ? args : JSON.stringify(args);
+                }
+              }
+              if (parsed.usage) {
+                promptTokens = parsed.usage.prompt_tokens ?? 0;
+                completionTokens = parsed.usage.completion_tokens ?? 0;
+              }
+            } catch (e) {
+              log.warn(`Failed to parse SSE chunk: ${String(e)}`);
+            }
+          }
+        };
+        for await (const chunk of response.data as AsyncIterable<string | Uint8Array>) {
+          sseBuffer +=
+            typeof chunk === "string"
+              ? `${sseDecoder.decode()}${chunk}`
+              : sseDecoder.decode(chunk, { stream: true });
           const lines = sseBuffer.split("\n");
           sseBuffer = lines.pop() ?? "";
 
           for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith(":")) {
-              continue;
-            }
-            if (trimmed === "data: [DONE]") {
-              continue;
-            }
-            if (trimmed.startsWith("data: ")) {
-              // Fix: only split on first `: ` occurrence
-              const jsonStr = trimmed.slice(6); // Remove "data: " prefix
-              try {
-                const parsed = JSON.parse(jsonStr) as ExtendedChatCompletionChunk;
-                const choice = parsed.choices?.[0];
-
-                if (choice?.delta?.content) {
-                  accumulatedContent += choice.delta.content;
-                }
-                if (choice?.delta?.function_call) {
-                  if (!functionCallBuffer) {
-                    functionCallBuffer = { name: "", arguments: "" };
-                  }
-                  if (choice.delta.function_call.name) {
-                    functionCallBuffer.name += choice.delta.function_call.name;
-                  }
-                  if (choice.delta.function_call.arguments) {
-                    const args = choice.delta.function_call.arguments;
-                    functionCallBuffer.arguments +=
-                      typeof args === "string" ? args : JSON.stringify(args);
-                  }
-                }
-                if (parsed.usage) {
-                  promptTokens = parsed.usage.prompt_tokens ?? 0;
-                  completionTokens = parsed.usage.completion_tokens ?? 0;
-                }
-              } catch (e) {
-                log.warn(`Failed to parse SSE chunk: ${String(e)}`);
-              }
-            }
+            consumeSseLine(line);
           }
+        }
+        sseBuffer += sseDecoder.decode();
+        if (sseBuffer.trim()) {
+          consumeSseLine(sseBuffer);
         }
 
         if (functionCallBuffer && functionCallBuffer.name) {

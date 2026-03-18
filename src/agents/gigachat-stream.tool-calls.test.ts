@@ -26,6 +26,10 @@ function createSseStream(lines: string[]): Readable {
   return Readable.from(lines.map((line) => `${line}\n`));
 }
 
+function createSseByteStream(chunks: Buffer[]): Readable {
+  return Readable.from(chunks);
+}
+
 describe("createGigachatStreamFn tool calling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -88,6 +92,63 @@ describe("createGigachatStreamFn tool calling", () => {
         type: "toolCall",
         name: "llm-task",
         arguments: { prompt: "hi" },
+      }),
+    ]);
+  });
+
+  it("preserves multibyte UTF-8 tool arguments split across stream chunks", async () => {
+    const toolNameLine = Buffer.from(
+      'data: {"choices":[{"delta":{"function_call":{"name":"llm_task"}}}]}\n',
+      "utf8",
+    );
+    const argsLine = Buffer.from(
+      'data: {"choices":[{"delta":{"function_call":{"arguments":"{\\"prompt\\":\\"привет\\"}"}}}]}\n',
+      "utf8",
+    );
+    const splitAt = argsLine.indexOf("привет", 0, "utf8") + 1;
+
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseByteStream([
+        toolNameLine,
+        argsLine.subarray(0, splitAt),
+        argsLine.subarray(splitAt),
+        Buffer.from("data: [DONE]\n", "utf8"),
+      ]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      {
+        messages: [],
+        tools: [
+          {
+            name: "llm-task",
+            description: "Run a task",
+            parameters: {
+              type: "object",
+              properties: {
+                prompt: { type: "string" },
+              },
+            },
+          },
+        ],
+      } as never,
+      { apiKey: "token" } as never,
+    );
+
+    const event = await stream.result();
+
+    expect(event.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "llm-task",
+        arguments: { prompt: "привет" },
       }),
     ]);
   });
