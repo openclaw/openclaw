@@ -56,7 +56,7 @@ export {
 export {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
-} from "../../extensions/discord/src/group-policy.js";
+} from "../../extensions/discord/api.js";
 export { DiscordConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export {
@@ -81,7 +81,7 @@ export {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
 } from "../../extensions/discord/runtime-api.js";
-export { normalizeExplicitDiscordSessionKey } from "../../extensions/discord/api.js";
+export { normalizeExplicitDiscordSessionKey } from "../../extensions/discord/session-key-api.js";
 export {
   autoBindSpawnedDiscordSubagent,
   listThreadBindingsBySessionKey,
