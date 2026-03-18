@@ -432,6 +432,50 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
   });
 
+  it("passes persisted ACP identity back into ensureSession for configured bindings after restart", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:binding:discord:default:deadbeef";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: key,
+          identity: {
+            state: "resolved",
+            source: "status",
+            acpxSessionId: "acpx-sid-1",
+            agentSessionId: "agent-sid-1",
+            lastUpdatedAt: Date.now(),
+          },
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-binding-restart",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        agent: "codex",
+        resumeSessionId: "agent-sid-1",
+      }),
+    );
+  });
+
   it("enforces acp.maxConcurrentSessions when opening new runtime handles", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
