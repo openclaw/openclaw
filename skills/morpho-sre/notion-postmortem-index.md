@@ -13,6 +13,13 @@ without committing direct workspace URLs into the repo.
 - open the Morpho Notion workspace
 - navigate to the shared `Post Mortems` database from the engineering resources
   area or internal wiki
+- API path:
+  - search candidate pages by title:
+    - `/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh search --query "post mortem" --filter page`
+  - fetch a page directly as enhanced markdown:
+    - `/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh page markdown <page-id-or-url>`
+  - if you know the table/data source id already:
+    - `/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh data-source query <data-source-id-or-url> --body-file /tmp/notion-query.json`
 - search by:
   - service or component name
   - incident date or time window

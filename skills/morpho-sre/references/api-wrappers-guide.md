@@ -83,6 +83,48 @@ Token is cached at `/tmp/wiz-api-token.json` (chmod 600) and auto-refreshed. Pre
 - `dune/query-management.md` -- create, get, update, archive
 - `dune/docs-and-usage.md` -- docs search and credit usage
 
+## Notion API
+
+**Script:** `/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh`
+
+**Credential chain:** `NOTION_SECRET` env > `NOTION_TOKEN` env > Vault token (fast) > Vault K8s JWT (slow)
+
+**Vault path:** `secret/data/openclaw-sre/all-secrets` (key: `NOTION_SECRET`)
+
+- Read-only wrapper around the Notion REST API for Morpho's internal integration token.
+- Default Notion version is pinned to `2025-09-03` because the current data-source APIs are versioned there; override with `NOTION_API_VERSION` if needed.
+- Search is title-oriented only. For row filtering inside a Notion table, use `data-source query`.
+
+```bash
+# Probe auth / workspace identity
+/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh --probe-auth
+
+# Inspect current bot user + workspace metadata
+/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh me
+
+# Search shared pages or data sources by title
+/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh search --query "post mortem" --filter page
+
+# Fetch a database container to list its child data sources
+/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh database get <database-id-or-url>
+
+# Fetch a data source schema
+/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh data-source get <data-source-id-or-url>
+
+# Query rows from a data source with a custom Notion filter body
+/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh data-source query <data-source-id-or-url> \
+  --body-file /tmp/notion-query.json --filter-properties title,f%5C%5C%3Ap
+
+# Retrieve a page plus selected properties by property ID
+/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh page get <page-id-or-url> --filter-properties title,f%5C%5C%3Ap
+
+# Retrieve a large relation/rollup/title property accurately using the property ID from Notion
+/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh page property <page-id-or-url> <property-id>
+
+# Retrieve page content as Markdown
+/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh page markdown <page-id-or-url>
+```
+
 ## BetterStack Incident API
 
 **Script:** `/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh`

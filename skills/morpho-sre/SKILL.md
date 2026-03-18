@@ -190,6 +190,7 @@ Check active modes: run the corresponding script with `check` argument.
 - DB evidence wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/db-evidence.sh`
 - Single-vault GraphQL evidence helper: `/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh`
 - Linear ticket API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh`
+- Notion API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh`
 - Sentinel snapshot helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-snapshot.sh`
 - Sentinel triage helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-triage.sh`
 - Dune CLI wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh`
@@ -380,6 +381,7 @@ cast calldata-decode <abi_types> <calldata>                            # decode 
   - live secret path: `secret/openclaw-sre/all-secrets`
   - Kubernetes sync path: chart hook `charts/openclaw-sre/templates/job-vault.yaml`
   - pod consumption path: `envFrom.secretRef.name = openclaw-sre-vault-secrets`
+- Notion internal integration token key: `NOTION_SECRET`
 - Preferred rollout:
   - patch Vault secret
   - let the pre-upgrade Vault sync job recreate `openclaw-sre-vault-secrets`

@@ -72,7 +72,9 @@ for var in \
   WIZ_MCP_CLIENT_SECRET \
   WIZ_MCP_CLIENT_ENDPOINT \
   WIZ_MCP_DATA_CENTER \
-  DUNE_API_KEY; do
+  DUNE_API_KEY \
+  NOTION_TOKEN \
+  NOTION_SECRET; do
   trim_env_var "$var"
 done
 
