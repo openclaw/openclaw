@@ -1,7 +1,7 @@
-import { sendMessageSignal as sendMessageSignalImpl } from "../../plugin-sdk/signal.js";
+import { sendMessageSignal as sendMessageSignalImpl } from "openclaw/plugin-sdk/signal";
 
 type RuntimeSend = {
-  sendMessage: typeof import("../../plugin-sdk/signal.js").sendMessageSignal;
+  sendMessage: typeof import("openclaw/plugin-sdk/signal").sendMessageSignal;
 };
 
 export const runtimeSend = {

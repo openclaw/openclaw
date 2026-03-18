@@ -1,4 +1,4 @@
-import { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { RuntimeEnv } from "../../runtime.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
 
