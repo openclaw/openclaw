@@ -611,8 +611,8 @@
     "file": "src/plugins/runtime/runtime-whatsapp.ts",
     "line": 85,
     "kind": "dynamic-import",
-    "specifier": "../../../extensions/whatsapp/action-runtime.runtime.js",
-    "resolvedPath": "extensions/whatsapp/action-runtime.runtime.js",
+    "specifier": "../../../extensions/whatsapp/action-runtime-api.js",
+    "resolvedPath": "extensions/whatsapp/action-runtime-api.js",
     "reason": "dynamically imports extension-owned file from src/plugins"
   }
 ]
