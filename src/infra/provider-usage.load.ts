@@ -179,6 +179,8 @@ export async function loadProviderUsageSummary(
     providers: opts.providers ?? usageProviders,
     auth: opts.auth,
     agentDir: opts.agentDir,
+    config,
+    env,
   });
   if (auths.length === 0) {
     return { updatedAt: now, providers: [] };
