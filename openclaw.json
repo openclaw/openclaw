@@ -2,9 +2,22 @@
   "logging": { "level": "info" },
   "gateway": { "mode": "local" },
 
+  "env": {
+    "vars": {
+      "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}"
+    }
+  },
+
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-sonnet-4-6",
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-6",
+        "fallbacks": [
+          "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+          "openrouter/google/gemma-3-12b-it:free",
+          "ollama/gemma3:12b"
+        ]
+      },
       "workspace": "~/.openclaw/workspace",
       "thinkingDefault": "low",
       "timeoutSeconds": 300,
@@ -28,13 +41,14 @@
         "identity": {
           "name": "Bodhi",
           "avatar": "🪷",
-          "bio": "Thinking partner. Socratic companion. Asks better questions. Warm, reflective, curious. Default mode."
+          "bio": "Thinking partner. Socratic companion. Asks better questions. Warm, reflective, curious. Default mode. Soul: souls/bodhi-soul.md. Operator permissions: souls/operator-permissions.md."
         },
         "skills": [
           "bodhi-pm",
           "bodhi-budget",
           "bodhi-model-switch",
-          "bodhi-switch"
+          "bodhi-switch",
+          "bodhi-msf"
         ]
       },
       {
@@ -43,7 +57,7 @@
         "identity": {
           "name": "Bo",
           "avatar": "🧘",
-          "bio": "Wellness criticality monitor and goal coach. Buddhist writer. Calm, precise, never prescriptive. Surfaces patterns."
+          "bio": "Wellness criticality monitor. Buddhist writer. Calm, precise, never prescriptive. Surfaces patterns. Soul: souls/bo-soul.md. Operator permissions: souls/operator-permissions.md."
         },
         "skills": [
           "bodhi-curator",
@@ -59,6 +73,48 @@
           "bodhi-calendar",
           "bodhi-accountability",
           "bodhi-query",
+          "bodhi-switch"
+        ]
+      },
+      {
+        "id": "qenjin",
+        "name": "Qenjin",
+        "identity": {
+          "name": "Qenjin",
+          "avatar": "⚙️",
+          "bio": "Business operator for qenjin.io. Clipped, military-brief, zero filler. CRM, pipeline, outreach, content, analytics, security. Subject. Verb. Object. Done. Soul: souls/qenjin-soul.md. Operator permissions: souls/operator-permissions.md."
+        },
+        "skills": [
+          "qenjin-crm",
+          "qenjin-outreach",
+          "qenjin-content",
+          "qenjin-n8n",
+          "qenjin-osint",
+          "qenjin-mautic",
+          "qenjin-analytics",
+          "qenjin-security",
+          "qenjin-video",
+          "bodhi-switch"
+        ]
+      },
+      {
+        "id": "moonman",
+        "name": "Moonman",
+        "identity": {
+          "name": "Moonman",
+          "avatar": "🌙",
+          "bio": "Edge hunter. Numbers-first. Paper before live — always. Polymarket, crypto, TA, wallet analysis. Trader slang, no filler. Soul: souls/moonman-soul.md. Operator permissions: souls/operator-permissions.md."
+        },
+        "skills": [
+          "trader-scan",
+          "trader-ta",
+          "trader-signals",
+          "trader-backtest",
+          "trader-polymarket",
+          "trader-wallet",
+          "trader-risk",
+          "trader-cron",
+          "trader-dashboard",
           "bodhi-switch"
         ]
       }
@@ -91,7 +147,26 @@
         "skills/bodhi-tasks",
         "skills/bodhi-calendar",
         "skills/bodhi-accountability",
-        "skills/bodhi-query"
+        "skills/bodhi-query",
+        "skills/bodhi-msf",
+        "skills/qenjin-crm",
+        "skills/qenjin-outreach",
+        "skills/qenjin-content",
+        "skills/qenjin-n8n",
+        "skills/qenjin-osint",
+        "skills/qenjin-mautic",
+        "skills/qenjin-analytics",
+        "skills/qenjin-security",
+        "skills/qenjin-video",
+        "skills/trader-scan",
+        "skills/trader-ta",
+        "skills/trader-signals",
+        "skills/trader-backtest",
+        "skills/trader-polymarket",
+        "skills/trader-wallet",
+        "skills/trader-risk",
+        "skills/trader-cron",
+        "skills/trader-dashboard"
       ],
       "watch": false
     }
@@ -107,6 +182,9 @@
       "retryOn": ["rate_limit", "overloaded", "network", "server_error"]
     },
     "jobs": [
+
+      // ── BO — wellness ──────────────────────────────────────────────────────
+
       {
         "id": "nudge-daily",
         "schedule": "0 10 * * *",
@@ -136,6 +214,30 @@
         "recurring": true
       },
       {
+        "id": "distiller-daily",
+        "schedule": "0 6 * * *",
+        "agent": "bo",
+        "prompt": "Run the daily digest. Run /distiller — query last 7 days of vault nodes and send morning synthesis.",
+        "recurring": true
+      },
+      {
+        "id": "surveyor-weekly",
+        "schedule": "0 2 * * 6",
+        "agent": "bo",
+        "prompt": "Run the weekly vault survey. Run /surveyor — cluster all vault nodes, detect bridges, surface SOC signals, and send the weekly digest.",
+        "recurring": true
+      },
+      {
+        "id": "janitor-weekly",
+        "schedule": "30 3 * * 0",
+        "agent": "bo",
+        "prompt": "Run /janitor — weekly vault hygiene check. Scan for orphans, duplicates, broken edges. Report only, no auto-cleanup.",
+        "recurring": true
+      },
+
+      // ── BODHI — system ────────────────────────────────────────────────────
+
+      {
         "id": "budget-reset-notify",
         "schedule": "1 0 * * *",
         "agent": "bodhi",
@@ -164,13 +266,6 @@
         "recurring": true
       },
       {
-        "id": "janitor-weekly",
-        "schedule": "30 3 * * 0",
-        "agent": "bo",
-        "prompt": "Run /janitor — weekly vault hygiene check. Scan for orphans, duplicates, broken edges. Report only, no auto-cleanup.",
-        "recurring": true
-      },
-      {
         "id": "disk-monitor-daily",
         "schedule": "0 7 * * *",
         "agent": "bodhi",
@@ -184,20 +279,104 @@
         "prompt": "Run: bash ~/openbodhi/docs/bodhi/scripts/secrets-audit.sh — send the full output as a Telegram message. This is the monthly security audit reminder.",
         "recurring": true
       },
+
+      // ── QENJIN — business ─────────────────────────────────────────────────
+
       {
-        "id": "distiller-daily",
-        "schedule": "0 6 * * *",
-        "agent": "bo",
-        "prompt": "Run the daily digest. Run /distiller — query last 7 days of vault nodes and send morning synthesis.",
+        "id": "qenjin-intel-weekly",
+        "schedule": "0 7 * * 1",
+        "agent": "qenjin",
+        "prompt": "Run /intel weekly — competitive intelligence brief. Scan competitor content, FDA announcements relevant to psychedelic therapeutics, market trends, funding rounds. Store to SiYuan Qenjin-Research. Send brief to Telegram.",
         "recurring": true
       },
       {
-        "id": "surveyor-weekly",
-        "schedule": "0 2 * * 6",
-        "agent": "bo",
-        "prompt": "Run the weekly vault survey. Run /surveyor — cluster all vault nodes, detect bridges, surface SOC signals, and send the weekly digest.",
+        "id": "qenjin-outreach-daily",
+        "schedule": "0 14 * * *",
+        "agent": "qenjin",
+        "prompt": "Run /q outreach today — check Twenty CRM for connections accepted in last 24-48h. Generate DM for each. Send list to Telegram for manual review and sending. Format: one DM per contact, name + message.",
+        "recurring": true
+      },
+      {
+        "id": "qenjin-analytics-weekly",
+        "schedule": "0 17 * * 5",
+        "agent": "qenjin",
+        "prompt": "Run /q analytics weekly — content performance (pageviews, subscribers), outreach funnel (connections, replies, calls booked), pipeline status (MRR, leads warm, calls scheduled). Send brief to Telegram. Numbers only, no narrative.",
+        "recurring": true
+      },
+      {
+        "id": "qenjin-business-report-monthly",
+        "schedule": "0 9 1 * *",
+        "agent": "qenjin",
+        "prompt": "Run /q analytics monthly — full monthly business report: MRR, churn, pipeline value, content output vs target, outreach volume vs target, AI budget spend, top wins, top gaps. Send to Telegram.",
+        "recurring": true
+      },
+
+      // ── MOONMAN — trading ─────────────────────────────────────────────────
+
+      {
+        "id": "moonman-morning-brief",
+        "schedule": "0 9 * * *",
+        "agent": "moonman",
+        "prompt": "Run /scan morning — market morning brief. BTC price + 24h change, top 3 movers (crypto), macro headline if any. Polymarket: top 5 markets by volume today. Any active paper trade setups triggered? Send to Telegram. Keep it under 10 lines.",
+        "recurring": true
+      },
+      {
+        "id": "moonman-midday-check",
+        "schedule": "0 12 * * *",
+        "agent": "moonman",
+        "prompt": "Silent midday check. Run: python3 -c \"import pathlib, json; f=pathlib.Path('~/.openclaw/trader/signals/signals.json').expanduser(); d=json.loads(f.read_text()) if f.exists() else {}; alerts=[s for s in d.get('active',[]) if s.get('confidence',0)>0.75]; print('SIGNAL' if alerts else 'QUIET')\" — send Telegram message ONLY if output is SIGNAL. Include signal details. Silent if QUIET.",
+        "recurring": true
+      },
+      {
+        "id": "moonman-eod-review",
+        "schedule": "0 16 * * *",
+        "agent": "moonman",
+        "prompt": "Run /scan eod — end of day review. Paper trade P&L today (read from ~/.openclaw/trader/paper-trades/trades.json, filter today's date). Active signals still open. Any new setups for tomorrow's session? Send to Telegram. Numbers first, always.",
+        "recurring": true
+      },
+      {
+        "id": "moonman-evening-scan",
+        "schedule": "0 21 * * *",
+        "agent": "moonman",
+        "prompt": "Run /scan evening — Asian session setup scan. BTC/ETH overnight key levels. Any Polymarket markets closing in next 12h that have edge? Send only if there is something actionable. Otherwise: 'Evening scan: quiet.' One line.",
+        "recurring": true
+      },
+      {
+        "id": "moonman-polymarket-monitor",
+        "schedule": "*/15 * * * *",
+        "agent": "moonman",
+        "prompt": "Silent Polymarket monitor. Run: python3 ~/openbodhi/docs/bodhi/scripts/polymarket-check.py — script writes to ~/.openclaw/trader/signals/pm-state.json and outputs ALERT or QUIET. Send Telegram message ONLY if output is ALERT. Include market name, current odds, edge estimate. Silent otherwise.",
+        "recurring": true
+      },
+      {
+        "id": "moonman-wallet-tracker",
+        "schedule": "0 * * * *",
+        "agent": "moonman",
+        "prompt": "Silent wallet check. Run: python3 ~/openbodhi/docs/bodhi/scripts/wallet-check.py — script checks monitored wallets for new trades in last hour, writes to ~/.openclaw/trader/wallets/activity.json, outputs ACTIVITY or QUIET. Send Telegram message ONLY if output is ACTIVITY. Include wallet alias, trade direction, size estimate. Silent otherwise.",
+        "recurring": true
+      },
+      {
+        "id": "moonman-strategy-review-weekly",
+        "schedule": "0 9 * * 0",
+        "agent": "moonman",
+        "prompt": "Run /backtest review — weekly strategy performance. For each active strategy in ~/.openclaw/trader/strategies/: win rate, expectancy, Sharpe ratio, trade count this week. Flag any strategy with win rate below 45% or Sharpe below 0.8 for review. Send full table to Telegram.",
+        "recurring": true
+      },
+      {
+        "id": "moonman-edge-decay-weekly",
+        "schedule": "0 10 * * 0",
+        "agent": "moonman",
+        "prompt": "Run /scan edge-decay — compare last 30 trades vs prior 30 trades for each strategy. If edge is degrading (win rate dropping, expectancy shrinking): flag it. Send decay report to Telegram. No decay = 'Edge stable. Nothing to flag.'",
+        "recurring": true
+      },
+      {
+        "id": "moonman-monthly-report",
+        "schedule": "0 8 1 * *",
+        "agent": "moonman",
+        "prompt": "Run the monthly trading report. Read all paper trades from ~/.openclaw/trader/paper-trades/trades.json for last 30 days. Compute: total P&L, win rate, best strategy, worst strategy, largest win, largest loss, current drawdown, strategies ready to go live (30+ trades + positive expectancy). Send full report to Telegram.",
         "recurring": true
       }
+
     ]
   },
 
@@ -208,6 +387,15 @@
       "mode": "daily",
       "atHour": 4,
       "idleMinutes": 1440
+    }
+  },
+
+  "tools": {
+    "exec": {
+      "host": "local",
+      "timeoutSec": 30,
+      "ask": true,
+      "security": "strict"
     }
   }
 }
