@@ -749,12 +749,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     ): Promise<QmdQueryResult[]> => {
       try {
         if (mcporterEnabled) {
-          const tool: "search" | "vector_search" | "deep_search" =
+          const tool: "search" | "vector_search" | "query" =
             qmdSearchCommand === "search"
               ? "search"
               : qmdSearchCommand === "vsearch"
                 ? "vector_search"
-                : "deep_search";
+                : "query";
           const minScore = opts?.minScore ?? 0;
           if (collectionNames.length > 1) {
             return await this.runMcporterAcrossCollections({
@@ -1263,7 +1263,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async runQmdSearchViaMcporter(params: {
     mcporter: ResolvedQmdMcporterConfig;
-    tool: "search" | "vector_search" | "deep_search";
+    tool: "search" | "vector_search" | "query";
     query: string;
     limit: number;
     minScore: number;
@@ -1997,7 +1997,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async runMcporterAcrossCollections(params: {
-    tool: "search" | "vector_search" | "deep_search";
+    tool: "search" | "vector_search" | "query";
     query: string;
     limit: number;
     minScore: number;
