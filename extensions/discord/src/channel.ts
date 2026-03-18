@@ -13,10 +13,8 @@ import { normalizeMessageChannel } from "openclaw/plugin-sdk/channel-runtime";
 import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw/plugin-sdk/core";
 import {
   buildComputedAccountStatusSnapshot,
-  buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   DEFAULT_ACCOUNT_ID,
-  DiscordConfigSchema,
   getChatChannelMeta,
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -79,10 +77,14 @@ function formatDiscordIntents(intents?: {
 }
 
 const discordMessageActions: ChannelMessageActionAdapter = {
+  describeMessageTool: (ctx) =>
+    getDiscordRuntime().channel.discord.messageActions?.describeMessageTool?.(ctx) ?? null,
   listActions: (ctx) =>
     getDiscordRuntime().channel.discord.messageActions?.listActions?.(ctx) ?? [],
   getCapabilities: (ctx) =>
     getDiscordRuntime().channel.discord.messageActions?.getCapabilities?.(ctx) ?? [],
+  getToolSchema: (ctx) =>
+    getDiscordRuntime().channel.discord.messageActions?.getToolSchema?.(ctx) ?? null,
   extractToolSend: (ctx) =>
     getDiscordRuntime().channel.discord.messageActions?.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
@@ -278,7 +280,6 @@ function resolveDiscordOutboundSessionRoute(params: {
 
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   ...createDiscordPluginBase({
-    configSchema: buildChannelConfigSchema(DiscordConfigSchema),
     setup: discordSetupAdapter,
   }),
   pairing: {

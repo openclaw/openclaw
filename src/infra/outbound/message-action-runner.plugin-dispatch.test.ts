@@ -112,6 +112,50 @@ describe("runMessageAction plugin dispatch", () => {
         }),
       );
     });
+
+    it("routes execution context ids into plugin handleAction", async () => {
+      await runMessageAction({
+        cfg: {
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "pin",
+        params: {
+          channel: "feishu",
+          messageId: "om_123",
+        },
+        defaultAccountId: "ops",
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:main",
+        sessionId: "session-123",
+        agentId: "alpha",
+        toolContext: {
+          currentChannelId: "chat:oc_123",
+          currentThreadTs: "thread-456",
+          currentMessageId: "msg-789",
+        },
+        dryRun: false,
+      });
+
+      expect(handleAction).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          action: "pin",
+          accountId: "ops",
+          requesterSenderId: "trusted-user",
+          sessionKey: "agent:alpha:main",
+          sessionId: "session-123",
+          agentId: "alpha",
+          toolContext: expect.objectContaining({
+            currentChannelId: "chat:oc_123",
+            currentThreadTs: "thread-456",
+            currentMessageId: "msg-789",
+          }),
+        }),
+      );
+    });
   });
 
   describe("media caption behavior", () => {

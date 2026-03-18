@@ -1,6 +1,8 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
+import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-runtime";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
   buildChannelConfigSchema,
@@ -394,9 +396,24 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }),
   },
   actions: {
-    listActions: ({ cfg }) => {
+    describeMessageTool: ({
+      cfg,
+    }: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0]) => {
+      const enabled =
+        cfg.channels?.feishu?.enabled !== false &&
+        Boolean(resolveFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined));
       if (listEnabledFeishuAccounts(cfg).length === 0) {
-        return [];
+        return {
+          actions: [],
+          capabilities: enabled ? ["cards"] : [],
+          schema: enabled
+            ? {
+                properties: {
+                  card: createMessageToolCardSchema(),
+                },
+              }
+            : null,
+        };
       }
       const actions = new Set<ChannelMessageActionName>([
         "send",
@@ -414,13 +431,17 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         actions.add("react");
         actions.add("reactions");
       }
-      return Array.from(actions);
-    },
-    getCapabilities: ({ cfg }) => {
-      return cfg.channels?.feishu?.enabled !== false &&
-        Boolean(resolveFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined))
-        ? (["cards"] as const)
-        : [];
+      return {
+        actions: Array.from(actions),
+        capabilities: enabled ? ["cards"] : [],
+        schema: enabled
+          ? {
+              properties: {
+                card: createMessageToolCardSchema(),
+              },
+            }
+          : null,
+      };
     },
     handleAction: async (ctx) => {
       const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId ?? undefined });
