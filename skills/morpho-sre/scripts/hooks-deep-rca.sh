@@ -5,11 +5,14 @@
 
 set -eu
 
-DEEP_FILE="${CLAUDE_PLUGIN_DATA:-/tmp}/.sre-deep-rca"
+DATADIR="${CLAUDE_PLUGIN_DATA:-${XDG_RUNTIME_DIR:-/tmp}}"
+mkdir -p "$DATADIR"
+DEEP_FILE="$DATADIR/.sre-deep-rca"
 
 case "${1:-activate}" in
   activate)
-    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$DEEP_FILE"
+    printf '%s' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$DEEP_FILE"
+    chmod 600 "$DEEP_FILE"
     echo "DEEP_RCA=1"
     echo "Deep RCA mode active. Full evidence collection enabled for all incident types."
     ;;

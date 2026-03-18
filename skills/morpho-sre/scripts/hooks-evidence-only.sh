@@ -4,11 +4,14 @@
 
 set -eu
 
-EVIDENCE_FILE="${CLAUDE_PLUGIN_DATA:-/tmp}/.sre-evidence-only"
+DATADIR="${CLAUDE_PLUGIN_DATA:-${XDG_RUNTIME_DIR:-/tmp}}"
+mkdir -p "$DATADIR"
+EVIDENCE_FILE="$DATADIR/.sre-evidence-only"
 
 case "${1:-activate}" in
   activate)
-    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$EVIDENCE_FILE"
+    printf '%s' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$EVIDENCE_FILE"
+    chmod 600 "$EVIDENCE_FILE"
     echo "EVIDENCE_ONLY=1"
     echo "Evidence-only mode active. No hypotheses, no auto-PR. Facts only."
     ;;

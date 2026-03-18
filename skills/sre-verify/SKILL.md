@@ -38,7 +38,7 @@ Re-run the exact failing evidence path from the incident to confirm the fix.
 kubectl logs deploy/<service> -n <namespace> --since=10m | grep -i "error\|panic\|fatal"
 
 # Re-run the DB query that showed stale data
-db-evidence.sh --mode data --service <service> --query "<original-query>"
+db-evidence.sh --mode data --namespace <namespace> --target <service>
 
 # Re-run the API call that was failing
 curl -sf https://<endpoint>/health | jq .
