@@ -165,7 +165,7 @@ describe("buildPluginStatusReport", () => {
         code: "legacy-before-agent-start",
         severity: "warn",
         message:
-          "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
       },
     ]);
     expect(inspect?.policy).toEqual({
@@ -332,8 +332,8 @@ describe("buildPluginStatusReport", () => {
     });
 
     expect(buildPluginCompatibilityWarnings()).toEqual([
-      "lca still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
-      "lca is hook-only; this remains supported for compatibility, but it has not migrated to explicit capability registration.",
+      "lca still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+      "lca is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
     ]);
   });
 
@@ -431,14 +431,14 @@ describe("buildPluginStatusReport", () => {
         code: "hook-only",
         severity: "info",
         message:
-          "is hook-only; this remains supported for compatibility, but it has not migrated to explicit capability registration.",
+          "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
       },
       {
         pluginId: "legacy-only",
         code: "legacy-before-agent-start",
         severity: "warn",
         message:
-          "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
       },
     ]);
   });
@@ -499,11 +499,11 @@ describe("buildPluginStatusReport", () => {
       code: "legacy-before-agent-start" as const,
       severity: "warn" as const,
       message:
-        "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+        "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
     };
 
     expect(formatPluginCompatibilityNotice(notice)).toBe(
-      "legacy-plugin still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+      "legacy-plugin still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
     );
     expect(
       summarizePluginCompatibility([
@@ -513,7 +513,7 @@ describe("buildPluginStatusReport", () => {
           code: "hook-only",
           severity: "info",
           message:
-            "is hook-only; this remains supported for compatibility, but it has not migrated to explicit capability registration.",
+            "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
         },
       ]),
     ).toEqual({
