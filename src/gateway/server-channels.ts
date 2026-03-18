@@ -332,6 +332,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             enabled: true,
             configured: true,
             running: true,
+            connected: false,
             restartPending: false,
             lastStartAt: Date.now(),
             lastError: null,
@@ -408,6 +409,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               }
             })
             .finally(() => {
+              setRuntime(channelId, id, {
+                accountId: id,
+                running: false,
+                connected: false,
+                lastStopAt: Date.now(),
+              });
               if (store.tasks.get(id) === trackedPromise) {
                 store.tasks.delete(id);
               }
@@ -485,6 +492,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         setRuntime(channelId, id, {
           accountId: id,
           running: false,
+          connected: false,
           restartPending: false,
           lastStopAt: Date.now(),
         });

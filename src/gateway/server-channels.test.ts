@@ -223,6 +223,32 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
+  it("resets connected state when channel is stopped", async () => {
+    const startAccount = vi.fn(async ({ setStatus, abortSignal }) => {
+      setStatus({ connected: true });
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", resolve, { once: true });
+      });
+    });
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    let snapshot = manager.getRuntimeSnapshot();
+    let account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.connected).toBe(true);
+    expect(account?.running).toBe(true);
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    snapshot = manager.getRuntimeSnapshot();
+    account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.connected).toBe(false);
+    expect(account?.running).toBe(false);
+  });
+
   it("cancels a pending startup when the account is stopped mid-boot", async () => {
     const startupGate = createDeferred();
     const isConfigured = vi.fn(async () => {
