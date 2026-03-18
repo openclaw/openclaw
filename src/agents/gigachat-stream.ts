@@ -774,6 +774,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
 
         let accumulatedContent = "";
         const accumulatedToolCalls: ToolCall[] = [];
+        const resolvedFunctionCalls: Array<{ name: string; arguments: string }> = [];
         let functionCallBuffer: { name: string; arguments: string } | null = null;
         let promptTokens = 0;
         let completionTokens = 0;
@@ -782,6 +783,14 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
         // UTF-8 code points intact when TCP chunks split multibyte characters.
         let sseBuffer = "";
         const sseDecoder = new TextDecoder();
+        const flushFunctionCallBuffer = () => {
+          if (!functionCallBuffer?.name) {
+            functionCallBuffer = null;
+            return;
+          }
+          resolvedFunctionCalls.push(functionCallBuffer);
+          functionCallBuffer = null;
+        };
         const consumeSseLine = (line: string) => {
           const trimmed = line.trim();
           if (!trimmed || trimmed.startsWith(":")) {
@@ -801,6 +810,11 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
                 accumulatedContent += choice.delta.content;
               }
               if (choice?.delta?.function_call) {
+                if (choice.delta.function_call.name && functionCallBuffer?.arguments) {
+                  // A new tool name after arguments indicates the previous streamed
+                  // function call is complete and a new call has begun.
+                  flushFunctionCallBuffer();
+                }
                 if (!functionCallBuffer) {
                   functionCallBuffer = { name: "", arguments: "" };
                 }
@@ -812,6 +826,9 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
                   functionCallBuffer.arguments +=
                     typeof args === "string" ? args : JSON.stringify(args);
                 }
+              }
+              if (choice?.finish_reason === "function_call") {
+                flushFunctionCallBuffer();
               }
               if (parsed.usage) {
                 promptTokens = parsed.usage.prompt_tokens ?? 0;
@@ -839,38 +856,37 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
           consumeSseLine(sseBuffer);
         }
 
-        const resolvedFunctionCall = functionCallBuffer as unknown as {
-          name: string;
-          arguments: string;
-        } | null;
-        if (resolvedFunctionCall && resolvedFunctionCall.name) {
+        flushFunctionCallBuffer();
+        if (resolvedFunctionCalls.length > 0) {
           accumulatedContent = stripLeakedFunctionCallPrelude(accumulatedContent);
-          let parsedArgs: Record<string, unknown> = {};
-          try {
-            if (resolvedFunctionCall.arguments) {
-              parsedArgs = JSON.parse(resolvedFunctionCall.arguments) as Record<string, unknown>;
+          for (const resolvedFunctionCall of resolvedFunctionCalls) {
+            let parsedArgs: Record<string, unknown> = {};
+            try {
+              if (resolvedFunctionCall.arguments) {
+                parsedArgs = JSON.parse(resolvedFunctionCall.arguments) as Record<string, unknown>;
+              }
+            } catch (parseErr) {
+              const errMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+              log.error(
+                `GigaChat: failed to parse function arguments for "${resolvedFunctionCall.name}": ${errMsg}. ` +
+                  `Raw arguments: ${resolvedFunctionCall.arguments.slice(0, 500)}`,
+              );
+              // Return error instead of continuing with empty args
+              throw new Error(
+                `Failed to parse function call arguments for "${resolvedFunctionCall.name}": ${errMsg}`,
+                { cause: parseErr },
+              );
             }
-          } catch (parseErr) {
-            const errMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
-            log.error(
-              `GigaChat: failed to parse function arguments for "${resolvedFunctionCall.name}": ${errMsg}. ` +
-                `Raw arguments: ${resolvedFunctionCall.arguments.slice(0, 500)}`,
-            );
-            // Return error instead of continuing with empty args
-            throw new Error(
-              `Failed to parse function call arguments for "${resolvedFunctionCall.name}": ${errMsg}`,
-              { cause: parseErr },
-            );
+            const clientName =
+              gigaToToolName.get(resolvedFunctionCall.name) ??
+              mapToolNameFromGigaChat(resolvedFunctionCall.name);
+            accumulatedToolCalls.push({
+              type: "toolCall",
+              id: randomUUID(),
+              name: clientName,
+              arguments: parsedArgs,
+            });
           }
-          const clientName =
-            gigaToToolName.get(resolvedFunctionCall.name) ??
-            mapToolNameFromGigaChat(resolvedFunctionCall.name);
-          accumulatedToolCalls.push({
-            type: "toolCall",
-            id: randomUUID(),
-            name: clientName,
-            arguments: parsedArgs,
-          });
         }
 
         const content: AssistantMessage["content"] = [];

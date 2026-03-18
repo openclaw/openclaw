@@ -163,6 +163,71 @@ describe("createGigachatStreamFn tool calling", () => {
     ]);
   });
 
+  it("preserves every streamed function call from a single assistant turn", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream([
+        'data: {"choices":[{"delta":{"function_call":{"name":"llm_"}}}]}',
+        'data: {"choices":[{"delta":{"function_call":{"name":"task"}}}]}',
+        'data: {"choices":[{"delta":{"function_call":{"arguments":"{\\"prompt\\":\\"first\\"}"}},"finish_reason":"function_call"}]}',
+        'data: {"choices":[{"delta":{"function_call":{"name":"__gpt2giga_user_search_web"}}}]}',
+        'data: {"choices":[{"delta":{"function_call":{"arguments":"{\\"query\\":\\"second\\"}"}}}]}',
+        "data: [DONE]",
+      ]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      {
+        messages: [],
+        tools: [
+          {
+            name: "llm-task",
+            description: "Run a task",
+            parameters: {
+              type: "object",
+              properties: {
+                prompt: { type: "string" },
+              },
+            },
+          },
+          {
+            name: "web_search",
+            description: "Search the web",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+            },
+          },
+        ],
+      } as never,
+      { apiKey: "token" } as never,
+    );
+
+    const event = await stream.result();
+
+    expect(event.stopReason).toBe("toolUse");
+    expect(event.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "llm-task",
+        arguments: { prompt: "first" },
+      }),
+      expect.objectContaining({
+        type: "toolCall",
+        name: "web_search",
+        arguments: { query: "second" },
+      }),
+    ]);
+  });
+
   it("parses a final SSE frame even when the stream closes without a trailing newline", async () => {
     request.mockResolvedValueOnce({
       status: 200,
