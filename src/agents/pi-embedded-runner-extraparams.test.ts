@@ -1463,11 +1463,11 @@ describe("applyExtraParamsToAgent", () => {
         providers: {
           google: {
             baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            api: "google-generative-ai",
+            api: "google-generative-ai" as const,
             models: [],
             safetySettings: {
-              harassment: "BLOCK_NONE",
-              dangerousContent: "BLOCK_ONLY_HIGH",
+              harassment: "BLOCK_NONE" as const,
+              dangerousContent: "BLOCK_ONLY_HIGH" as const,
             },
           },
         },
@@ -1522,10 +1522,10 @@ describe("applyExtraParamsToAgent", () => {
         providers: {
           google: {
             baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            api: "google-generative-ai",
+            api: "google-generative-ai" as const,
             models: [],
             safetySettings: {
-              harassment: "BLOCK_NONE",
+              harassment: "BLOCK_NONE" as const,
             },
           },
         },
@@ -1569,10 +1569,10 @@ describe("applyExtraParamsToAgent", () => {
         providers: {
           google: {
             baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            api: "google-generative-ai",
+            api: "google-generative-ai" as const,
             models: [],
             safetySettings: {
-              harassment: "BLOCK_NONE",
+              harassment: "BLOCK_NONE" as const,
             },
           },
         },
@@ -1593,6 +1593,32 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).not.toHaveProperty("config.safetySettings");
   });
 
+  it("enables Z.AI tool_stream for the z.ai provider alias", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [{ role: "user", content: "hello" }],
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "z.ai", "glm-4.7");
+
+    const model = {
+      api: "openai-completions",
+      provider: "z.ai",
+      id: "glm-4.7",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.tool_stream).toBe(true);
+  });
+
   it("injects configured Gemini safety settings from the active provider key", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -1609,10 +1635,10 @@ describe("applyExtraParamsToAgent", () => {
         providers: {
           googleAiStudio: {
             baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            api: "google-generative-ai",
+            api: "google-generative-ai" as const,
             models: [],
             safetySettings: {
-              hateSpeech: "BLOCK_ONLY_HIGH",
+              hateSpeech: "BLOCK_ONLY_HIGH" as const,
             },
           },
         },
@@ -1640,6 +1666,46 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("does not leak configured Gemini safety settings across provider aliases", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        contents: [{ role: "user", parts: [{ text: "hello" }] }],
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            api: "google-generative-ai" as const,
+            models: [],
+            safetySettings: {
+              harassment: "BLOCK_NONE" as const,
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "google", "gemini-3.1-pro-preview");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "google-ai-studio",
+      id: "gemini-3.1-pro-preview",
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("config.safetySettings");
+  });
+
   it("adds OpenRouter attribution headers to stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
@@ -1662,8 +1728,6 @@ describe("applyExtraParamsToAgent", () => {
       "X-Custom": "1",
     });
   });
-
->>>>>>> Config: add Gemini safety settings
   it("passes configured websocket transport through stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {

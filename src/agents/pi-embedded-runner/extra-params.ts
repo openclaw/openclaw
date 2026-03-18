@@ -4,12 +4,12 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import type { SettingsManager } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { findNormalizedProviderValue } from "../provider-id.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
 import { resolveCacheRetention } from "./anthropic-cache-retention.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "./anthropic-family-tool-payload-compat.js";
 import { createBedrockNoCacheWrapper, isAnthropicBedrockModel } from "./bedrock-stream-wrappers.js";
@@ -37,7 +37,6 @@ import {
   resolveOpenAITextVerbosity,
 } from "./openai-stream-wrappers.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
-import { createXaiFastModeWrapper } from "./xai-stream-wrappers.js";
 import { createZaiToolStreamWrapper } from "./zai-stream-wrappers.js";
 
 const GOOGLE_SAFETY_CATEGORY_MAP = {
@@ -261,95 +260,6 @@ function createStreamFnWithExtraParams(
   return wrappedStreamFn;
 }
 
-function isGemini31Model(modelId: string): boolean {
-  const normalized = modelId.toLowerCase();
-  return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
-}
-
-function mapThinkLevelToGoogleThinkingLevel(
-  thinkingLevel: ThinkLevel,
-): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | undefined {
-  switch (thinkingLevel) {
-    case "minimal":
-      return "MINIMAL";
-    case "low":
-      return "LOW";
-    case "medium":
-    case "adaptive":
-      return "MEDIUM";
-    case "high":
-    case "xhigh":
-      return "HIGH";
-    default:
-      return undefined;
-  }
-}
-
-function sanitizeGoogleThinkingPayload(params: {
-  payload: unknown;
-  modelId?: string;
-  thinkingLevel?: ThinkLevel;
-}): void {
-  if (!params.payload || typeof params.payload !== "object") {
-    return;
-  }
-  const payloadObj = params.payload as Record<string, unknown>;
-  const config = payloadObj.config;
-  if (!config || typeof config !== "object") {
-    return;
-  }
-  const configObj = config as Record<string, unknown>;
-  const thinkingConfig = configObj.thinkingConfig;
-  if (!thinkingConfig || typeof thinkingConfig !== "object") {
-    return;
-  }
-  const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
-  const thinkingBudget = thinkingConfigObj.thinkingBudget;
-  if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
-    return;
-  }
-
-  // pi-ai can emit thinkingBudget=-1 for some Gemini 3.1 IDs; a negative budget
-  // is invalid for Google-compatible backends and can lead to malformed handling.
-  delete thinkingConfigObj.thinkingBudget;
-
-  if (
-    typeof params.modelId === "string" &&
-    isGemini31Model(params.modelId) &&
-    params.thinkingLevel &&
-    params.thinkingLevel !== "off" &&
-    thinkingConfigObj.thinkingLevel === undefined
-  ) {
-    const mappedLevel = mapThinkLevelToGoogleThinkingLevel(params.thinkingLevel);
-    if (mappedLevel) {
-      thinkingConfigObj.thinkingLevel = mappedLevel;
-    }
-  }
-}
-
-function createGoogleThinkingPayloadWrapper(
-  baseStreamFn: StreamFn | undefined,
-  thinkingLevel?: ThinkLevel,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const onPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (model.api === "google-generative-ai") {
-          sanitizeGoogleThinkingPayload({
-            payload,
-            modelId: model.id,
-            thinkingLevel,
-          });
-        }
-        return onPayload?.(payload, model);
-      },
-    });
-  };
-}
-
 function resolveConfiguredGoogleSafetySettings(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -373,9 +283,11 @@ function resolveConfiguredGoogleSafetySettings(
 
 function createGoogleSafetySettingsWrapper(
   baseStreamFn: StreamFn | undefined,
+  installedProvider: string,
   safetySettings?: GoogleSafetySetting[],
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
+  const normalizedInstalledProvider = normalizeProviderId(installedProvider);
   return (model, context, options) => {
     const onPayload = options?.onPayload;
     return underlying(model, context, {
@@ -383,6 +295,7 @@ function createGoogleSafetySettingsWrapper(
       onPayload: (payload) => {
         if (
           safetySettings &&
+          normalizeProviderId(model.provider) === normalizedInstalledProvider &&
           model.api === "google-generative-ai" &&
           payload &&
           typeof payload === "object"
@@ -475,7 +388,11 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
   const googleSafetySettings = resolveConfiguredGoogleSafetySettings(ctx.cfg, ctx.provider);
   if (googleSafetySettings) {
     log.debug(`applying Google safety settings for ${ctx.provider}/${ctx.modelId}`);
-    ctx.agent.streamFn = createGoogleSafetySettingsWrapper(ctx.agent.streamFn, googleSafetySettings);
+    ctx.agent.streamFn = createGoogleSafetySettingsWrapper(
+      ctx.agent.streamFn,
+      ctx.provider,
+      googleSafetySettings,
+    );
   }
 
   const wrappedStreamFn = createStreamFnWithExtraParams(
@@ -535,7 +452,7 @@ function applyPostPluginStreamWrappers(
 
   // Enable Z.AI tool_stream for real-time tool call streaming.
   // Enabled by default for Z.AI provider, can be disabled via params.tool_stream: false
-  if (ctx.provider === "zai" || ctx.provider === "z-ai") {
+  if (normalizeProviderId(ctx.provider) === "zai") {
     const toolStreamEnabled = ctx.effectiveExtraParams?.tool_stream !== false;
     if (toolStreamEnabled) {
       log.debug(`enabling Z.AI tool_stream for ${ctx.provider}/${ctx.modelId}`);
