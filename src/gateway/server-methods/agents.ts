@@ -27,7 +27,7 @@ import {
 } from "../../commands/agents.config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import {
-  ensureSessionTranscriptsDirForAgent,
+  ensureManagedSessionsDirForAgent,
   resolveSessionTranscriptsDirForAgent,
 } from "../../config/sessions/paths.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
@@ -524,11 +524,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const agentDir = resolveAgentDir(nextConfig, agentId);
     nextConfig = applyAgentConfig(nextConfig, { agentId, agentDir });
 
-    // Ensure workspace & transcripts exist BEFORE writing config so a failure
-    // here does not leave a broken config entry behind.
+    // Ensure workspace and the resolved managed sessions dir exist BEFORE writing
+    // config so a failure here does not leave a broken config entry behind.
     const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
     await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
-    await ensureSessionTranscriptsDirForAgent(agentId);
+    await ensureManagedSessionsDirForAgent(agentId, { store: nextConfig.session?.store });
 
     await writeConfigFile(nextConfig);
 

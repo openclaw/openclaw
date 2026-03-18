@@ -484,7 +484,9 @@ export async function runConfigureWizard(
           },
         },
       };
-      await ensureWorkspaceAndSessions(workspaceDir, runtime);
+      await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+        sessionStore: nextConfig.session?.store,
+      });
     };
 
     const configureChannelsSection = async () => {

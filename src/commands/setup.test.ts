@@ -68,4 +68,35 @@ describe("setupCommand", () => {
       expect(raw.gateway?.mode).toBe("local");
     });
   });
+
+  it("bootstraps a configured managed session.store template instead of the default sessions dir", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const managedSessionsDir = path.join(home, "managed-sessions", "main");
+      const managedStore = path.join(home, "managed-sessions", "{agentId}", "sessions.json");
+
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          session: {
+            store: managedStore,
+          },
+        }),
+      );
+
+      await setupCommand(undefined, runtime);
+
+      const sessionsMode = (await fs.stat(managedSessionsDir)).mode & 0o777;
+
+      expectPrivateDirMode(sessionsMode);
+      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("managed-sessions/main"));
+    });
+  });
 });
