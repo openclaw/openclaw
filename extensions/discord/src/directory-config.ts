@@ -4,20 +4,13 @@ import {
   toDirectoryEntries,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { inspectDiscordAccount } from "../api.js";
-import type { InspectedDiscordAccount } from "../api.js";
-
-function inspectDiscordDirectoryAccount(
-  params: DirectoryConfigParams,
-): InspectedDiscordAccount | null {
-  return inspectDiscordAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-}
+import { inspectDiscordAccount, type InspectedDiscordAccount } from "../api.js";
 
 export async function listDiscordDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  const account = inspectDiscordDirectoryAccount(params);
+  const account = inspectDiscordAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }) as InspectedDiscordAccount | null;
   if (!account || !("config" in account)) {
     return [];
   }
@@ -39,7 +32,10 @@ export async function listDiscordDirectoryPeersFromConfig(params: DirectoryConfi
 }
 
 export async function listDiscordDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  const account = inspectDiscordDirectoryAccount(params);
+  const account = inspectDiscordAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }) as InspectedDiscordAccount | null;
   if (!account || !("config" in account)) {
     return [];
   }

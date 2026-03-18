@@ -1,4 +1,3 @@
-import { normalizeSlackMessagingTarget } from "openclaw/plugin-sdk/channel-runtime";
 import {
   applyDirectoryQueryAndLimit,
   collectNormalizedDirectoryIds,
@@ -6,18 +5,14 @@ import {
   toDirectoryEntries,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { inspectSlackAccount } from "../api.js";
-import type { InspectedSlackAccount } from "../api.js";
-
-function inspectSlackDirectoryAccount(params: DirectoryConfigParams): InspectedSlackAccount | null {
-  return inspectSlackAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-}
+import { inspectSlackAccount, type InspectedSlackAccount } from "../api.js";
+import { parseSlackTarget } from "./targets.js";
 
 export async function listSlackDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  const account = inspectSlackDirectoryAccount(params);
+  const account = inspectSlackAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }) as InspectedSlackAccount | null;
   if (!account || !("config" in account)) {
     return [];
   }
@@ -35,15 +30,18 @@ export async function listSlackDirectoryPeersFromConfig(params: DirectoryConfigP
         return null;
       }
       const target = `user:${normalizedUserId}`;
-      const normalized = normalizeSlackMessagingTarget(target) ?? target.toLowerCase();
-      return normalized.startsWith("user:") ? normalized : null;
+      const normalized = parseSlackTarget(target, { defaultKind: "user" });
+      return normalized?.kind === "user" ? `user:${normalized.id.toLowerCase()}` : null;
     },
   });
   return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
 }
 
 export async function listSlackDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  const account = inspectSlackDirectoryAccount(params);
+  const account = inspectSlackAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }) as InspectedSlackAccount | null;
   if (!account || !("config" in account)) {
     return [];
   }
@@ -52,8 +50,8 @@ export async function listSlackDirectoryGroupsFromConfig(params: DirectoryConfig
     query: params.query,
     limit: params.limit,
     normalizeId: (raw) => {
-      const normalized = normalizeSlackMessagingTarget(raw) ?? raw.toLowerCase();
-      return normalized.startsWith("channel:") ? normalized : null;
+      const normalized = parseSlackTarget(raw, { defaultKind: "channel" });
+      return normalized?.kind === "channel" ? `channel:${normalized.id.toLowerCase()}` : null;
     },
   });
 }

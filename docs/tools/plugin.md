@@ -175,25 +175,19 @@ Direction:
 
 ### Compatibility signals
 
-OpenClaw treats config validity and plugin migration state as separate axes:
+When you run `openclaw doctor` or `openclaw plugins inspect <id>`, you may see
+one of these labels:
 
-- **config valid** — the config parses and referenced plugins can be resolved
-- **compatibility advisory** — a plugin is still on a supported compatibility
-  path, such as `hook-only`
-- **legacy warning** — a plugin still uses `before_agent_start`
-- **hard error** — the config is invalid or plugin loading/validation fails
+| Signal                     | Meaning                                                      |
+| -------------------------- | ------------------------------------------------------------ |
+| **config valid**           | Config parses fine and plugins resolve                       |
+| **compatibility advisory** | Plugin uses a supported-but-older pattern (e.g. `hook-only`) |
+| **legacy warning**         | Plugin uses `before_agent_start`, which is deprecated        |
+| **hard error**             | Config is invalid or plugin failed to load                   |
 
-Current compatibility guidance:
-
-- `hook-only` is advisory only. It remains a supported compatibility path for
-  existing plugins.
-- `before_agent_start` is the only strong migration warning in the current
-  model.
-- Neither state blocks an existing plugin by itself.
-
-You can see these signals in `openclaw doctor`, `openclaw status`,
-`openclaw status --all`, `openclaw plugins doctor`, and
-`openclaw plugins inspect <id>`.
+Neither `hook-only` nor `before_agent_start` will break your plugin today —
+`hook-only` is advisory, and `before_agent_start` only triggers a warning. These
+signals also appear in `openclaw status --all` and `openclaw plugins doctor`.
 
 ## Architecture
 
@@ -1148,12 +1142,14 @@ authoring plugins:
   intentionally exposes extension-facing helpers:
   `openclaw/plugin-sdk/acpx`, `openclaw/plugin-sdk/bluebubbles`,
   `openclaw/plugin-sdk/feishu`, `openclaw/plugin-sdk/googlechat`,
-  `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/matrix`,
+  `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/lobster`,
+  `openclaw/plugin-sdk/matrix`,
   `openclaw/plugin-sdk/mattermost`, `openclaw/plugin-sdk/memory-core`,
   `openclaw/plugin-sdk/minimax-portal-auth`,
   `openclaw/plugin-sdk/nextcloud-talk`, `openclaw/plugin-sdk/nostr`,
   `openclaw/plugin-sdk/synology-chat`, `openclaw/plugin-sdk/test-utils`,
   `openclaw/plugin-sdk/tlon`, `openclaw/plugin-sdk/twitch`,
+  `openclaw/plugin-sdk/voice-call`,
   `openclaw/plugin-sdk/zalo`, and `openclaw/plugin-sdk/zalouser`.
 
 ## Channel target resolution
@@ -2294,7 +2290,7 @@ Preferred setup split:
 - optional DM allowlist resolution (for example `@username` -> numeric id)
 - optional completion note after setup finishes
 
-### Write a new messaging channel (step‑by‑step)
+### Write a new messaging channel (step-by-step)
 
 Use this when you want a **new chat surface** (a "messaging channel"), not a model provider.
 Model provider docs live under `/providers/*`.

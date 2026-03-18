@@ -230,6 +230,22 @@
       "types": "./dist/plugin-sdk/bluebubbles.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles.js"
     },
+    "./plugin-sdk/copilot-proxy": {
+      "types": "./dist/plugin-sdk/copilot-proxy.d.ts",
+      "default": "./dist/plugin-sdk/copilot-proxy.js"
+    },
+    "./plugin-sdk/device-pair": {
+      "types": "./dist/plugin-sdk/device-pair.d.ts",
+      "default": "./dist/plugin-sdk/device-pair.js"
+    },
+    "./plugin-sdk/diagnostics-otel": {
+      "types": "./dist/plugin-sdk/diagnostics-otel.d.ts",
+      "default": "./dist/plugin-sdk/diagnostics-otel.js"
+    },
+    "./plugin-sdk/diffs": {
+      "types": "./dist/plugin-sdk/diffs.d.ts",
+      "default": "./dist/plugin-sdk/diffs.js"
+    },
     "./plugin-sdk/feishu": {
       "types": "./dist/plugin-sdk/feishu.d.ts",
       "default": "./dist/plugin-sdk/feishu.js"
@@ -241,6 +257,14 @@
     "./plugin-sdk/irc": {
       "types": "./dist/plugin-sdk/irc.d.ts",
       "default": "./dist/plugin-sdk/irc.js"
+    },
+    "./plugin-sdk/llm-task": {
+      "types": "./dist/plugin-sdk/llm-task.d.ts",
+      "default": "./dist/plugin-sdk/llm-task.js"
+    },
+    "./plugin-sdk/lobster": {
+      "types": "./dist/plugin-sdk/lobster.d.ts",
+      "default": "./dist/plugin-sdk/lobster.js"
     },
     "./plugin-sdk/lazy-runtime": {
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
@@ -258,6 +282,10 @@
       "types": "./dist/plugin-sdk/memory-core.d.ts",
       "default": "./dist/plugin-sdk/memory-core.js"
     },
+    "./plugin-sdk/memory-lancedb": {
+      "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
+      "default": "./dist/plugin-sdk/memory-lancedb.js"
+    },
     "./plugin-sdk/minimax-portal-auth": {
       "types": "./dist/plugin-sdk/minimax-portal-auth.d.ts",
       "default": "./dist/plugin-sdk/minimax-portal-auth.js"
@@ -269,6 +297,18 @@
     "./plugin-sdk/nostr": {
       "types": "./dist/plugin-sdk/nostr.d.ts",
       "default": "./dist/plugin-sdk/nostr.js"
+    },
+    "./plugin-sdk/open-prose": {
+      "types": "./dist/plugin-sdk/open-prose.d.ts",
+      "default": "./dist/plugin-sdk/open-prose.js"
+    },
+    "./plugin-sdk/phone-control": {
+      "types": "./dist/plugin-sdk/phone-control.d.ts",
+      "default": "./dist/plugin-sdk/phone-control.js"
+    },
+    "./plugin-sdk/qwen-portal-auth": {
+      "types": "./dist/plugin-sdk/qwen-portal-auth.d.ts",
+      "default": "./dist/plugin-sdk/qwen-portal-auth.js"
     },
     "./plugin-sdk/synology-chat": {
       "types": "./dist/plugin-sdk/synology-chat.d.ts",
@@ -282,6 +322,14 @@
       "types": "./dist/plugin-sdk/test-utils.d.ts",
       "default": "./dist/plugin-sdk/test-utils.js"
     },
+    "./plugin-sdk/talk-voice": {
+      "types": "./dist/plugin-sdk/talk-voice.d.ts",
+      "default": "./dist/plugin-sdk/talk-voice.js"
+    },
+    "./plugin-sdk/thread-ownership": {
+      "types": "./dist/plugin-sdk/thread-ownership.d.ts",
+      "default": "./dist/plugin-sdk/thread-ownership.js"
+    },
     "./plugin-sdk/tlon": {
       "types": "./dist/plugin-sdk/tlon.d.ts",
       "default": "./dist/plugin-sdk/tlon.js"
@@ -289,6 +337,10 @@
     "./plugin-sdk/twitch": {
       "types": "./dist/plugin-sdk/twitch.d.ts",
       "default": "./dist/plugin-sdk/twitch.js"
+    },
+    "./plugin-sdk/voice-call": {
+      "types": "./dist/plugin-sdk/voice-call.d.ts",
+      "default": "./dist/plugin-sdk/voice-call.js"
     },
     "./plugin-sdk/zalo": {
       "types": "./dist/plugin-sdk/zalo.d.ts",
@@ -361,6 +413,14 @@
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
+    },
+    "./plugin-sdk/provider-auth-api-key": {
+      "types": "./dist/plugin-sdk/provider-auth-api-key.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth-api-key.js"
+    },
+    "./plugin-sdk/provider-auth-login": {
+      "types": "./dist/plugin-sdk/provider-auth-login.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth-login.js"
     },
     "./plugin-sdk/provider-catalog": {
       "types": "./dist/plugin-sdk/provider-catalog.d.ts",
@@ -448,10 +508,10 @@
     "android:test:integration": "OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 vitest run --config vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
     "build": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:docker": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
-    "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json || true",
+    "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && pnpm build:plugin-sdk:dts",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
-    "check": "pnpm check:host-env-policy:swift && pnpm format:check && pnpm tsgo && pnpm plugin-sdk:check-exports && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:plugins:no-extension-src-imports && pnpm lint:plugins:no-extension-test-core-imports && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
+    "check": "pnpm check:host-env-policy:swift && pnpm format:check && pnpm tsgo && pnpm plugin-sdk:check-exports && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:plugins:no-extension-src-imports && pnpm lint:plugins:no-extension-test-core-imports && pnpm lint:plugins:no-extension-imports && pnpm lint:extensions:no-src-outside-plugin-sdk && pnpm lint:extensions:no-plugin-sdk-internal && pnpm lint:web-search-provider-boundaries && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
@@ -533,6 +593,8 @@
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
     "release:check": "pnpm config:docs:check && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
+    "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
+    "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
     "start": "node scripts/run-node.mjs",
     "test": "node scripts/test-parallel.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
@@ -596,7 +658,7 @@
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
-    "@mariozechner/pi-agent-core": "0.60.0",
+    "@mariozechner/pi-agent-core": "0.58.0",
     "@mariozechner/pi-ai": "0.60.0",
     "@mariozechner/pi-coding-agent": "0.60.0",
     "@mariozechner/pi-tui": "0.60.0",
@@ -681,6 +743,8 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
+      "@mariozechner/pi-coding-agent>@mariozechner/pi-agent-core": "0.58.0",
+      "@mariozechner/pi-agent-core>@mariozechner/pi-ai": "0.60.0",
       "hono": "4.12.8",
       "@hono/node-server": "1.19.10",
       "fast-xml-parser": "5.5.6",

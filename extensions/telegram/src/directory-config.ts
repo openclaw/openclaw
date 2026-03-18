@@ -6,20 +6,13 @@ import {
   toDirectoryEntries,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { inspectTelegramAccount } from "../api.js";
-import type { InspectedTelegramAccount } from "../api.js";
-
-async function inspectTelegramDirectoryAccount(
-  params: DirectoryConfigParams,
-): Promise<InspectedTelegramAccount | null> {
-  return inspectTelegramAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-}
+import { inspectTelegramAccount, type InspectedTelegramAccount } from "../api.js";
 
 export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  const account = await inspectTelegramDirectoryAccount(params);
+  const account = inspectTelegramAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }) as InspectedTelegramAccount | null;
   if (!account || !("config" in account)) {
     return [];
   }
@@ -41,7 +34,10 @@ export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConf
 }
 
 export async function listTelegramDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  const account = await inspectTelegramDirectoryAccount(params);
+  const account = inspectTelegramAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }) as InspectedTelegramAccount | null;
   if (!account || !("config" in account)) {
     return [];
   }
