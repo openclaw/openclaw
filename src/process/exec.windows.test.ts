@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -114,6 +115,39 @@ describe("windows command wrapper behavior", () => {
       });
     } finally {
       platformSpy.mockRestore();
+    }
+  });
+
+  it("spawns a standalone codex.exe directly when that PATH match exists", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const pathSpy = vi.spyOn(process, "env", "get").mockReturnValue({
+      ...process.env,
+      PATH: 'C:\\Tools;C:\\Other',
+      PATHEXT: ".EXE;.CMD",
+    });
+    vi.spyOn(fs, "existsSync").mockImplementation(
+      (candidate) => String(candidate) === "C:\\Tools\\codex.exe",
+    );
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["codex", "login", "--device-auth"], {
+        timeoutMs: 1000,
+      });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      if (!captured) {
+        throw new Error("expected spawn to be called");
+      }
+      expect(captured[0]).toBe("C:\\Tools\\codex.exe");
+      expect(captured[1]).toEqual(["login", "--device-auth"]);
+      expect(captured[2].windowsVerbatimArguments).toBeUndefined();
+    } finally {
+      platformSpy.mockRestore();
+      pathSpy.mockRestore();
     }
   });
 

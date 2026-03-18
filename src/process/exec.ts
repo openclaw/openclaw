@@ -73,7 +73,8 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
 
 /**
  * Resolves a command for Windows compatibility.
- * On Windows, npm-style shims (like pnpm, yarn, codex) are resolved to .cmd;
+ * On Windows, npm-style shims (like pnpm, yarn, codex) are resolved to the
+ * actual PATH match when present, with a .cmd fallback for npm-style installs;
  * npm/npx are handled by resolveNpmArgvForWindows to avoid spawn EINVAL
  * (no direct .cmd spawn).
  */
