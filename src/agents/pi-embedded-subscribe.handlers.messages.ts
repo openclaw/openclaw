@@ -373,7 +373,19 @@ export function handleMessageEnd(
     }
   };
 
+  // When the assistant message contains tool calls, the text content is
+  // intermediate reasoning (e.g. "Let me read the skill...") that should NOT
+  // be forwarded to the user. Real user-facing replies go through the
+  // messaging tool (路径 B). Suppress block reply for mixed text+toolCall
+  // messages to prevent internal reasoning from leaking to Telegram (TES-642).
+  const hasToolCall =
+    Array.isArray(assistantMessage.content) &&
+    assistantMessage.content.some(
+      (block: Record<string, unknown>) => block?.type === "toolCall" || block?.type === "tool_use",
+    );
+
   if (
+    !hasToolCall &&
     (ctx.state.blockReplyBreak === "message_end" ||
       (ctx.blockChunker ? ctx.blockChunker.hasBuffered() : ctx.state.blockBuffer.length > 0)) &&
     text &&
@@ -408,7 +420,7 @@ export function handleMessageEnd(
     ctx.emitReasoningStream(rawThinking);
   }
 
-  if (ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
+  if (!hasToolCall && ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
 

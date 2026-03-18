@@ -307,14 +307,18 @@ export function extractMessagingToolSend(
       return undefined;
     }
     const toRaw = resolveMessageToolTarget(args);
-    if (!toRaw) {
-      return undefined;
-    }
     const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
     const channelRaw = typeof args.channel === "string" ? args.channel.trim() : "";
     const providerHint = providerRaw || channelRaw;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : "message");
+    // When to/target is omitted (e.g. Telegram DMs with a single chat),
+    // the message is implicitly sent to the originating conversation.
+    // Track it with an empty to so shouldSuppressMessagingToolReplies
+    // can match it against the origin target (TES-642).
+    if (!toRaw) {
+      return { tool: toolName, provider, accountId, to: "" };
+    }
     const to = normalizeTargetForProvider(provider, toRaw);
     return to ? { tool: toolName, provider, accountId, to } : undefined;
   }

@@ -246,13 +246,16 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (targetProvider !== provider) {
       return false;
     }
-    const targetKey = normalizeTargetForProvider(targetProvider, target.to);
-    if (!targetKey) {
-      return false;
-    }
     const targetAccount = normalizeOptionalAccountId(target.accountId);
     if (originAccount && targetAccount && originAccount !== targetAccount) {
       return false;
+    }
+    // When to is empty the message tool was called without an explicit
+    // target, which means it implicitly sent to the originating conversation.
+    // Treat as a match so final payloads are suppressed (TES-642).
+    const targetKey = normalizeTargetForProvider(targetProvider, target.to);
+    if (!targetKey) {
+      return true;
     }
     return targetsMatchForSuppression({
       provider,
