@@ -35,6 +35,7 @@ export * from "../channels/plugins/config-writes.js";
 export * from "../channels/plugins/media-payload.js";
 export * from "../channels/plugins/message-tool-schema.js";
 export * from "../channels/plugins/normalize/signal.js";
+export * from "../channels/plugins/normalize/slack.js";
 export * from "../channels/plugins/normalize/whatsapp.js";
 export * from "../channels/plugins/outbound/direct-text-media.js";
 export * from "../channels/plugins/outbound/interactive.js";

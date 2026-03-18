@@ -47,3 +47,29 @@ export {
 } from "../../src/channels/account-snapshot-fields.js";
 export { resolveTelegramPollVisibility } from "../../src/poll-params.js";
 export { PAIRING_APPROVED_MESSAGE } from "../../src/channels/plugins/pairing-message.js";
+
+// Send / message action helpers
+export {
+  createForumTopicTelegram,
+  deleteMessageTelegram,
+  editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
+  editMessageTelegram,
+  pinMessageTelegram,
+  reactMessageTelegram,
+  renameForumTopicTelegram,
+  sendMessageTelegram,
+  sendPollTelegram,
+  sendStickerTelegram,
+  sendTypingTelegram,
+  unpinMessageTelegram,
+} from "./src/send.js";
+export { resolveTelegramToken } from "./src/token.js";
+export { telegramMessageActions } from "./src/channel-actions.js";
+export { collectTelegramUnmentionedGroupIds, auditTelegramGroupMembership } from "./src/audit.js";
+export {
+  setTelegramThreadBindingIdleTimeoutBySessionKey,
+  setTelegramThreadBindingMaxAgeBySessionKey,
+} from "./src/thread-bindings.js";
+export { monitorTelegramProvider } from "./src/monitor.js";
+export { probeTelegram } from "./src/probe.js";
