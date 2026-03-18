@@ -1395,6 +1395,21 @@ ensure_default_node_active_shell() {
     return 1
 }
 
+try_load_nvm() {
+    # Source nvm before checking Node.js so the installer uses the nvm-managed
+    # version rather than a system-installed Node that may be too old.
+    # This is a no-op if nvm is not installed or already loaded.
+    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+    if [[ -s "${nvm_dir}/nvm.sh" ]]; then
+        # shellcheck source=/dev/null
+        . "${nvm_dir}/nvm.sh" --no-use
+        # Activate the default/current nvm Node version if one is set
+        if command -v nvm >/dev/null 2>&1; then
+            nvm use default --silent 2>/dev/null || nvm use node --silent 2>/dev/null || true
+        fi
+    fi
+}
+
 check_node() {
     if command -v node &> /dev/null; then
         NODE_VERSION="$(node_major_version || true)"
@@ -2340,6 +2355,11 @@ main() {
     install_homebrew
 
     # Step 2: Node.js
+    # Proactively load nvm if available so the installer picks up the nvm-managed
+    # Node instead of a stale system Node (e.g. /usr/bin/node v8) that appears
+    # earlier on PATH. Without this, check_node() fails on the system binary and
+    # install_node() runs unnecessarily, overwriting the user's nvm environment.
+    try_load_nvm
     if ! check_node; then
         install_node
     fi
