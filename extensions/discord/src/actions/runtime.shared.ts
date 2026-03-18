@@ -1,4 +1,4 @@
-import { readStringParam } from "./common.js";
+import { readStringParam } from "../../../../src/agents/tools/common.js";
 
 export function readDiscordParentIdParam(
   params: Record<string, unknown>,
