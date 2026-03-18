@@ -306,6 +306,15 @@ describe("sanitizeToolCallInputs", () => {
       expectedIds: ["call_ok"],
     },
     {
+      name: "accepts namespaced MCP tool names with colon separator",
+      content: [
+        { type: "toolCall", id: "call_ns", name: "vigil-harbor:memory_status", arguments: {} },
+        { type: "toolUse", id: "call_dotted", name: "my.server:some_tool", input: {} },
+      ],
+      options: undefined,
+      expectedIds: ["call_ns", "call_dotted"],
+    },
+    {
       name: "drops unknown tool names when an allowlist is provided",
       content: [
         { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
