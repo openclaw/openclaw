@@ -1037,6 +1037,7 @@
               {
                 "group": "Extensions",
                 "pages": [
+                  "plugins/building-extensions",
                   "plugins/community",
                   "plugins/bundles",
                   "plugins/voice-call",
