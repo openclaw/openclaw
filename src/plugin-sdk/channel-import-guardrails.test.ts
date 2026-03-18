@@ -190,8 +190,8 @@ function collectExtensionSourceFiles(): string[] {
         fullPath.includes(".fixture.") ||
         fullPath.includes(".snap") ||
         fullPath.includes("test-support") ||
-        fullPath.endsWith("/api.ts") ||
-        fullPath.endsWith("/runtime-api.ts")
+        entry.name === "api.ts" ||
+        entry.name === "runtime-api.ts"
       ) {
         continue;
       }
@@ -269,7 +269,7 @@ function collectExtensionFiles(extensionId: string): string[] {
         fullPath.includes(".spec.") ||
         fullPath.includes(".fixture.") ||
         fullPath.includes(".snap") ||
-        fullPath.endsWith("/runtime-api.ts")
+        entry.name === "runtime-api.ts"
       ) {
         continue;
       }
