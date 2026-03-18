@@ -57,7 +57,7 @@ function makeSession(params: {
 }
 
 describe("buildUsageInsightStats", () => {
-  it("clips active time to the selected hours before computing throughput", () => {
+  it("clips active time to the selected hours and hides throughput when totals do not match the slice", () => {
     const sessions = [
       makeSession({
         key: "session-a",
@@ -83,13 +83,15 @@ describe("buildUsageInsightStats", () => {
       selectedDays: [],
       selectedHours: [10],
       timeZone: "utc",
+      throughputTotalsAligned: false,
     });
 
     expect(stats.durationSumMs).toBe(60 * 60 * 1000);
     expect(stats.durationCount).toBe(1);
     expect(stats.avgDurationMs).toBe(60 * 60 * 1000);
-    expect(stats.throughputTokensPerMin).toBeCloseTo(160 / 60);
-    expect(stats.throughputCostPerMin).toBeCloseTo(8 / 60);
+    expect(stats.throughputTotalsAligned).toBe(false);
+    expect(stats.throughputTokensPerMin).toBeUndefined();
+    expect(stats.throughputCostPerMin).toBeUndefined();
   });
 
   it("clips cross-day sessions to the selected calendar day", () => {
@@ -109,10 +111,36 @@ describe("buildUsageInsightStats", () => {
       selectedDays: ["2026-03-16"],
       selectedHours: [],
       timeZone: "utc",
+      throughputTotalsAligned: false,
     });
 
     expect(stats.durationSumMs).toBe(30 * 60 * 1000);
     expect(stats.durationCount).toBe(1);
     expect(stats.avgDurationMs).toBe(30 * 60 * 1000);
+  });
+
+  it("keeps throughput when totals align with the selected window", () => {
+    const session = makeSession({
+      key: "session-a",
+      start: Date.UTC(2026, 2, 16, 10, 0),
+      end: Date.UTC(2026, 2, 16, 10, 30),
+      totalTokens: 60,
+      totalCost: 3,
+    });
+    const totals = createEmptyTotals();
+    totals.totalTokens = 60;
+    totals.totalCost = 3;
+    const aggregates = buildAggregatesFromSessions([session]);
+
+    const stats = buildUsageInsightStats([session], totals, aggregates, {
+      selectedDays: ["2026-03-16"],
+      selectedHours: [],
+      timeZone: "utc",
+      throughputTotalsAligned: true,
+    });
+
+    expect(stats.throughputTotalsAligned).toBe(true);
+    expect(stats.throughputTokensPerMin).toBeCloseTo(2);
+    expect(stats.throughputCostPerMin).toBeCloseTo(0.1);
   });
 });

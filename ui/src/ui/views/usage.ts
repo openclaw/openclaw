@@ -300,6 +300,9 @@ export function renderUsage(props: UsageProps) {
           ? dayFilteredSessions
           : sortedSessions;
   const activeAggregates = buildAggregatesFromSessions(aggregateSessions, props.aggregates);
+  const throughputTotalsAligned =
+    props.selectedHours.length === 0 &&
+    !(props.selectedDays.length > 0 && (props.selectedSessions.length > 0 || hasQuery));
 
   // Filter daily chart data if sessions are selected
   const filteredDaily =
@@ -324,6 +327,7 @@ export function renderUsage(props: UsageProps) {
     selectedDays: props.selectedDays,
     selectedHours: props.selectedHours,
     timeZone: props.timeZone,
+    throughputTotalsAligned,
   });
   const isEmpty = !props.loading && !props.totals && props.sessions.length === 0;
   const hasMissingCost =

@@ -516,6 +516,7 @@ type UsageInsightStats = {
   durationSumMs: number;
   durationCount: number;
   avgDurationMs: number;
+  throughputTotalsAligned: boolean;
   throughputTokensPerMin?: number;
   throughputCostPerMin?: number;
   errorRate: number;
@@ -526,6 +527,7 @@ type UsageInsightFilters = {
   selectedDays: string[];
   selectedHours: number[];
   timeZone: "local" | "utc";
+  throughputTotalsAligned?: boolean;
 };
 
 const getSessionFilteredDurationMs = (
@@ -595,10 +597,15 @@ const buildUsageInsightStats = (
   }
 
   const avgDurationMs = durationCount ? durationSumMs / durationCount : 0;
+  const throughputTotalsAligned = filters.throughputTotalsAligned ?? true;
   const throughputTokensPerMin =
-    totals && durationSumMs > 0 ? totals.totalTokens / (durationSumMs / 60000) : undefined;
+    totals && throughputTotalsAligned && durationSumMs > 0
+      ? totals.totalTokens / (durationSumMs / 60000)
+      : undefined;
   const throughputCostPerMin =
-    totals && durationSumMs > 0 ? totals.totalCost / (durationSumMs / 60000) : undefined;
+    totals && throughputTotalsAligned && durationSumMs > 0
+      ? totals.totalCost / (durationSumMs / 60000)
+      : undefined;
 
   const errorRate = aggregates.messages.total
     ? aggregates.messages.errors / aggregates.messages.total
@@ -617,6 +624,7 @@ const buildUsageInsightStats = (
     durationSumMs,
     durationCount,
     avgDurationMs,
+    throughputTotalsAligned,
     throughputTokensPerMin,
     throughputCostPerMin,
     errorRate,
