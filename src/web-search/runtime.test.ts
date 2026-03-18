@@ -22,7 +22,6 @@ describe("web search runtime", () => {
         signupUrl: "https://example.com/signup",
         credentialPath: "tools.web.search.custom.apiKey",
         autoDetectOrder: 1,
-        credentialPath: "tools.web.search.custom.apiKey",
         getCredentialValue: () => "configured",
         setCredentialValue: () => {},
         createTool: () => ({
