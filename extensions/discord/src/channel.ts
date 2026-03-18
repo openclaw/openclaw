@@ -33,17 +33,18 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
-import { collectDiscordAuditChannelIds } from "./audit.js";
+import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
 import {
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./exec-approvals.js";
+import { monitorDiscordProvider } from "./monitor.js";
 import {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
 } from "./normalize.js";
-import type { DiscordProbe } from "./probe.js";
+import { probeDiscord, type DiscordProbe } from "./probe.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
@@ -76,10 +77,14 @@ function formatDiscordIntents(intents?: {
 }
 
 const discordMessageActions: ChannelMessageActionAdapter = {
+  describeMessageTool: (ctx) =>
+    getDiscordRuntime().channel.discord.messageActions?.describeMessageTool?.(ctx) ?? null,
   listActions: (ctx) =>
     getDiscordRuntime().channel.discord.messageActions?.listActions?.(ctx) ?? [],
   getCapabilities: (ctx) =>
     getDiscordRuntime().channel.discord.messageActions?.getCapabilities?.(ctx) ?? [],
+  getToolSchema: (ctx) =>
+    getDiscordRuntime().channel.discord.messageActions?.getToolSchema?.(ctx) ?? null,
   extractToolSend: (ctx) =>
     getDiscordRuntime().channel.discord.messageActions?.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
@@ -488,11 +493,15 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         silent: silent ?? undefined,
       }),
   },
-  acpBindings: {
-    normalizeConfiguredBindingTarget: ({ conversationId }) =>
+  bindings: {
+    compileConfiguredBinding: ({ conversationId }) =>
       normalizeDiscordAcpConversationId(conversationId),
-    matchConfiguredBinding: ({ bindingConversationId, conversationId, parentConversationId }) =>
-      matchDiscordAcpConversation({ bindingConversationId, conversationId, parentConversationId }),
+    matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+      matchDiscordAcpConversation({
+        bindingConversationId: compiledBinding.conversationId,
+        conversationId,
+        parentConversationId,
+      }),
   },
   status: {
     defaultRuntime: {
@@ -511,7 +520,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     buildChannelSummary: ({ snapshot }) =>
       buildTokenChannelStatusSummary(snapshot, { includeMode: false }),
     probeAccount: async ({ account, timeoutMs }) =>
-      getDiscordRuntime().channel.discord.probeDiscord(account.token, timeoutMs, {
+      probeDiscord(account.token, timeoutMs, {
         includeApplication: true,
       }),
     formatCapabilitiesProbe: ({ probe }) => {
@@ -617,7 +626,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
           elapsedMs: 0,
         };
       }
-      const audit = await getDiscordRuntime().channel.discord.auditChannelPermissions({
+      const audit = await auditDiscordChannelPermissions({
         token: botToken,
         accountId: account.accountId,
         channelIds,
@@ -658,7 +667,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       const token = account.token.trim();
       let discordBotLabel = "";
       try {
-        const probe = await getDiscordRuntime().channel.discord.probeDiscord(token, 2500, {
+        const probe = await probeDiscord(token, 2500, {
           includeApplication: true,
         });
         const username = probe.ok ? probe.bot?.username?.trim() : null;
@@ -686,7 +695,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         }
       }
       ctx.log?.info(`[${account.accountId}] starting provider${discordBotLabel}`);
-      return getDiscordRuntime().channel.discord.monitorDiscordProvider({
+      return monitorDiscordProvider({
         token,
         accountId: account.accountId,
         config: ctx.cfg,

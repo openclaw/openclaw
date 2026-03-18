@@ -1,6 +1,5 @@
 import {
   createPatchedAccountSetupAdapter,
-  formatDocsLink,
   parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,
@@ -14,6 +13,7 @@ import type {
   ChannelSetupWizard,
   ChannelSetupWizardTextInput,
 } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,

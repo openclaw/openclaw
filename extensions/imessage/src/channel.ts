@@ -15,6 +15,7 @@ import {
   resolveIMessageGroupToolPolicy,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/imessage";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
@@ -23,12 +24,7 @@ import { imessageSetupAdapter } from "./setup-core.js";
 import { createIMessagePluginBase, imessageSetupWizard } from "./shared.js";
 import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
 
-let imessageChannelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
-
-async function loadIMessageChannelRuntime() {
-  imessageChannelRuntimePromise ??= import("./channel.runtime.js");
-  return imessageChannelRuntimePromise;
-}
+const loadIMessageChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
 function buildIMessageBaseSessionKey(params: {
   cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];

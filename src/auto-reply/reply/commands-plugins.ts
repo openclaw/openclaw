@@ -4,8 +4,14 @@ import {
   writeConfigFile,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { PluginRecord } from "../../plugins/registry.js";
-import { buildPluginStatusReport, type PluginStatusReport } from "../../plugins/status.js";
+import {
+  buildAllPluginInspectReports,
+  buildPluginInspectReport,
+  buildPluginStatusReport,
+  type PluginStatusReport,
+} from "../../plugins/status.js";
 import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -19,6 +25,44 @@ import { parsePluginsCommand } from "./plugins-commands.js";
 
 function renderJsonBlock(label: string, value: unknown): string {
   return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
+}
+
+function buildPluginInspectJson(params: {
+  id: string;
+  config: OpenClawConfig;
+  report: PluginStatusReport;
+}): {
+  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>;
+  install: PluginInstallRecord | null;
+} | null {
+  const inspect = buildPluginInspectReport({
+    id: params.id,
+    config: params.config,
+    report: params.report,
+  });
+  if (!inspect) {
+    return null;
+  }
+  return {
+    inspect,
+    install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
+  };
+}
+
+function buildAllPluginInspectJson(params: {
+  config: OpenClawConfig;
+  report: PluginStatusReport;
+}): Array<{
+  inspect: ReturnType<typeof buildAllPluginInspectReports>[number];
+  install: PluginInstallRecord | null;
+}> {
+  return buildAllPluginInspectReports({
+    config: params.config,
+    report: params.report,
+  }).map((inspect) => ({
+    inspect,
+    install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
+  }));
 }
 
 function formatPluginLabel(plugin: PluginRecord): string {
@@ -95,7 +139,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     return unauthorized;
   }
   const allowInternalReadOnly =
-    (pluginsCommand.action === "list" || pluginsCommand.action === "show") &&
+    (pluginsCommand.action === "list" || pluginsCommand.action === "inspect") &&
     isInternalMessageChannel(params.command.channel);
   const nonOwner = allowInternalReadOnly ? null : rejectNonOwnerCommand(params, "/plugins");
   if (nonOwner) {
@@ -130,27 +174,38 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  if (pluginsCommand.action === "show") {
+  if (pluginsCommand.action === "inspect") {
     if (!pluginsCommand.name) {
       return {
         shouldContinue: false,
         reply: { text: formatPluginsList(loaded.report) },
       };
     }
-    const plugin = findPlugin(loaded.report, pluginsCommand.name);
-    if (!plugin) {
+    if (pluginsCommand.name.toLowerCase() === "all") {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: renderJsonBlock("🔌 Plugins", buildAllPluginInspectJson(loaded)),
+        },
+      };
+    }
+    const payload = buildPluginInspectJson({
+      id: pluginsCommand.name,
+      config: loaded.config,
+      report: loaded.report,
+    });
+    if (!payload) {
       return {
         shouldContinue: false,
         reply: { text: `🔌 No plugin named "${pluginsCommand.name}" found.` },
       };
     }
-    const install = loaded.config.plugins?.installs?.[plugin.id] ?? null;
     return {
       shouldContinue: false,
       reply: {
-        text: renderJsonBlock(`🔌 Plugin "${plugin.id}"`, {
-          plugin,
-          install,
+        text: renderJsonBlock(`🔌 Plugin "${payload.inspect.plugin.id}"`, {
+          ...payload.inspect,
+          install: payload.install,
         }),
       },
     };

@@ -1,41 +1,18 @@
-import amazonBedrockPlugin from "../../../extensions/amazon-bedrock/index.js";
 import anthropicPlugin from "../../../extensions/anthropic/index.js";
 import bravePlugin from "../../../extensions/brave/index.js";
-import byteplusPlugin from "../../../extensions/byteplus/index.js";
-import cloudflareAiGatewayPlugin from "../../../extensions/cloudflare-ai-gateway/index.js";
-import copilotProxyPlugin from "../../../extensions/copilot-proxy/index.js";
 import elevenLabsPlugin from "../../../extensions/elevenlabs/index.js";
 import firecrawlPlugin from "../../../extensions/firecrawl/index.js";
-import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
 import googlePlugin from "../../../extensions/google/index.js";
-import huggingFacePlugin from "../../../extensions/huggingface/index.js";
-import kilocodePlugin from "../../../extensions/kilocode/index.js";
-import kimiCodingPlugin from "../../../extensions/kimi-coding/index.js";
 import microsoftPlugin from "../../../extensions/microsoft/index.js";
 import minimaxPlugin from "../../../extensions/minimax/index.js";
 import mistralPlugin from "../../../extensions/mistral/index.js";
-import modelStudioPlugin from "../../../extensions/modelstudio/index.js";
 import moonshotPlugin from "../../../extensions/moonshot/index.js";
-import nvidiaPlugin from "../../../extensions/nvidia/index.js";
-import ollamaPlugin from "../../../extensions/ollama/index.js";
 import openAIPlugin from "../../../extensions/openai/index.js";
-import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
-import opencodePlugin from "../../../extensions/opencode/index.js";
-import openRouterPlugin from "../../../extensions/openrouter/index.js";
 import perplexityPlugin from "../../../extensions/perplexity/index.js";
-import qianfanPlugin from "../../../extensions/qianfan/index.js";
-import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
-import sglangPlugin from "../../../extensions/sglang/index.js";
-import syntheticPlugin from "../../../extensions/synthetic/index.js";
-import togetherPlugin from "../../../extensions/together/index.js";
-import venicePlugin from "../../../extensions/venice/index.js";
-import vercelAiGatewayPlugin from "../../../extensions/vercel-ai-gateway/index.js";
-import vllmPlugin from "../../../extensions/vllm/index.js";
-import volcenginePlugin from "../../../extensions/volcengine/index.js";
 import xaiPlugin from "../../../extensions/xai/index.js";
-import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
 import { createCapturedPluginRegistration } from "../captured-registration.js";
+import { resolvePluginProviders } from "../providers.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -74,41 +51,6 @@ type PluginRegistrationContractEntry = {
   webSearchProviderIds: string[];
   toolNames: string[];
 };
-
-const bundledProviderPlugins: RegistrablePlugin[] = [
-  amazonBedrockPlugin,
-  anthropicPlugin,
-  byteplusPlugin,
-  cloudflareAiGatewayPlugin,
-  copilotProxyPlugin,
-  githubCopilotPlugin,
-  googlePlugin,
-  huggingFacePlugin,
-  kilocodePlugin,
-  kimiCodingPlugin,
-  minimaxPlugin,
-  mistralPlugin,
-  modelStudioPlugin,
-  moonshotPlugin,
-  nvidiaPlugin,
-  ollamaPlugin,
-  opencodeGoPlugin,
-  opencodePlugin,
-  openAIPlugin,
-  openRouterPlugin,
-  qianfanPlugin,
-  qwenPortalPlugin,
-  sglangPlugin,
-  syntheticPlugin,
-  togetherPlugin,
-  venicePlugin,
-  vercelAiGatewayPlugin,
-  vllmPlugin,
-  volcenginePlugin,
-  xaiPlugin,
-  xiaomiPlugin,
-  zaiPlugin,
-];
 
 const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unknown }> = [
   { ...bravePlugin, credentialValue: "BSA-test" },
@@ -153,9 +95,29 @@ function buildCapabilityContractRegistry<T>(params: {
 }
 
 export const providerContractRegistry: ProviderContractEntry[] = buildCapabilityContractRegistry({
-  plugins: bundledProviderPlugins,
-  select: (captured) => captured.providers,
+  plugins: [],
+  select: () => [],
 });
+
+const loadedBundledProviderRegistry: ProviderContractEntry[] = resolvePluginProviders({
+  bundledProviderAllowlistCompat: true,
+  bundledProviderVitestCompat: true,
+  cache: false,
+  activate: false,
+})
+  .filter((provider): provider is ProviderPlugin & { pluginId: string } =>
+    Boolean(provider.pluginId),
+  )
+  .map((provider) => ({
+    pluginId: provider.pluginId,
+    provider,
+  }));
+
+providerContractRegistry.splice(
+  0,
+  providerContractRegistry.length,
+  ...loadedBundledProviderRegistry,
+);
 
 export const uniqueProviderContractProviders: ProviderPlugin[] = [
   ...new Map(providerContractRegistry.map((entry) => [entry.provider.id, entry.provider])).values(),
@@ -175,6 +137,19 @@ export function requireProviderContractProvider(providerId: string): ProviderPlu
     throw new Error(`provider contract entry missing for ${providerId}`);
   }
   return provider;
+}
+
+export function resolveProviderContractPluginIdsForProvider(
+  providerId: string,
+): string[] | undefined {
+  const pluginIds = [
+    ...new Set(
+      providerContractRegistry
+        .filter((entry) => entry.provider.id === providerId)
+        .map((entry) => entry.pluginId),
+    ),
+  ];
+  return pluginIds.length > 0 ? pluginIds : undefined;
 }
 
 export function resolveProviderContractProvidersForPluginIds(
@@ -221,7 +196,6 @@ export const imageGenerationProviderContractRegistry: ImageGenerationProviderCon
 const bundledPluginRegistrationList = [
   ...new Map(
     [
-      ...bundledProviderPlugins,
       ...bundledSpeechPlugins,
       ...bundledMediaUnderstandingPlugins,
       ...bundledImageGenerationPlugins,
@@ -230,18 +204,47 @@ const bundledPluginRegistrationList = [
   ).values(),
 ];
 
-export const pluginRegistrationContractRegistry: PluginRegistrationContractEntry[] =
-  bundledPluginRegistrationList.map((plugin) => {
-    const captured = captureRegistrations(plugin);
-    return {
-      pluginId: plugin.id,
-      providerIds: captured.providers.map((provider) => provider.id),
-      speechProviderIds: captured.speechProviders.map((provider) => provider.id),
-      mediaUnderstandingProviderIds: captured.mediaUnderstandingProviders.map(
-        (provider) => provider.id,
-      ),
-      imageGenerationProviderIds: captured.imageGenerationProviders.map((provider) => provider.id),
-      webSearchProviderIds: captured.webSearchProviders.map((provider) => provider.id),
-      toolNames: captured.tools.map((tool) => tool.name),
-    };
-  });
+export const pluginRegistrationContractRegistry: PluginRegistrationContractEntry[] = [
+  ...new Map(
+    providerContractRegistry.map((entry) => [
+      entry.pluginId,
+      {
+        pluginId: entry.pluginId,
+        providerIds: providerContractRegistry
+          .filter((candidate) => candidate.pluginId === entry.pluginId)
+          .map((candidate) => candidate.provider.id),
+        speechProviderIds: [] as string[],
+        mediaUnderstandingProviderIds: [] as string[],
+        imageGenerationProviderIds: [] as string[],
+        webSearchProviderIds: [] as string[],
+        toolNames: [] as string[],
+      },
+    ]),
+  ).values(),
+];
+
+for (const plugin of bundledPluginRegistrationList) {
+  const captured = captureRegistrations(plugin);
+  const existing = pluginRegistrationContractRegistry.find((entry) => entry.pluginId === plugin.id);
+  const next = {
+    pluginId: plugin.id,
+    providerIds: captured.providers.map((provider) => provider.id),
+    speechProviderIds: captured.speechProviders.map((provider) => provider.id),
+    mediaUnderstandingProviderIds: captured.mediaUnderstandingProviders.map(
+      (provider) => provider.id,
+    ),
+    imageGenerationProviderIds: captured.imageGenerationProviders.map((provider) => provider.id),
+    webSearchProviderIds: captured.webSearchProviders.map((provider) => provider.id),
+    toolNames: captured.tools.map((tool) => tool.name),
+  };
+  if (!existing) {
+    pluginRegistrationContractRegistry.push(next);
+    continue;
+  }
+  existing.providerIds = next.providerIds.length > 0 ? next.providerIds : existing.providerIds;
+  existing.speechProviderIds = next.speechProviderIds;
+  existing.mediaUnderstandingProviderIds = next.mediaUnderstandingProviderIds;
+  existing.imageGenerationProviderIds = next.imageGenerationProviderIds;
+  existing.webSearchProviderIds = next.webSearchProviderIds;
+  existing.toolNames = next.toolNames;
+}
