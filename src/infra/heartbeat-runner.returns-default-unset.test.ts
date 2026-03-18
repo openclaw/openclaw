@@ -199,7 +199,7 @@ describe("resolveHeartbeatPrompt", () => {
 });
 
 describe("isHeartbeatEnabledForAgent", () => {
-  it("enables all agents when defaults.heartbeat is configured and no explicit heartbeat entries", () => {
+  it("enables all agents when defaults.heartbeat is configured and no explicit heartbeat", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
@@ -212,16 +212,16 @@ describe("isHeartbeatEnabledForAgent", () => {
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
   });
 
-  it("enables only explicit heartbeat agents when some agents have explicit heartbeat", () => {
+  it("enables agents with explicit heartbeat and inherits defaults for others", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
         list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
       },
     };
-    // When some agents have explicit heartbeat config, only those are enabled
-    // This preserves the opt-in behavior for mixed configurations
-    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
+    // ops has explicit heartbeat -> enabled
+    // main has no explicit heartbeat but defaults exist -> enabled (inherit from defaults)
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
   });
 
@@ -232,8 +232,8 @@ describe("isHeartbeatEnabledForAgent", () => {
         list: [{ id: "main" }, { id: "ops", heartbeat: {} }],
       },
     };
-    // Empty heartbeat object means "opt-in with defaults"
-    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
+    // Empty heartbeat object means "explicitly enabled with defaults merged"
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
   });
 
@@ -246,6 +246,30 @@ describe("isHeartbeatEnabledForAgent", () => {
     // No defaults, no explicit heartbeat -> only default agent
     expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(false);
+  });
+
+  it("enables only explicit heartbeat agents when no defaults", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
+      },
+    };
+    // No defaults -> only default agent (main) and explicit heartbeat agents are enabled
+    // main is default agent -> enabled
+    // ops has explicit heartbeat -> enabled
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
+    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
+  });
+
+  it("enables default agent when defaults.heartbeat exists but no agent list", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+      },
+    };
+    // No agent list -> only default agent exists and should be enabled
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
+    expect(isHeartbeatEnabledForAgent(cfg, undefined)).toBe(true);
   });
 });
 
@@ -524,7 +548,7 @@ describe("runHeartbeatOnce", () => {
     hasActiveWebListener: () => true,
   });
 
-  it("skips when agent heartbeat is not enabled", async () => {
+  it("inherits defaults.heartbeat when agent has no explicit heartbeat", async () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
@@ -532,11 +556,11 @@ describe("runHeartbeatOnce", () => {
       },
     };
 
+    // main has no explicit heartbeat but defaults exist -> enabled (inherit from defaults)
+    // This test verifies the fix for issue #49613
     const res = await runHeartbeatOnce({ cfg, agentId: "main" });
-    expect(res.status).toBe("skipped");
-    if (res.status === "skipped") {
-      expect(res.reason).toBe("disabled");
-    }
+    // With the fix, main should now run (it inherits from defaults)
+    expect(res.status).toBe("ran");
   });
 
   it("skips outside active hours", async () => {
