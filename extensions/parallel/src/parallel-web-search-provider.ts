@@ -14,7 +14,6 @@ import {
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
   setProviderWebSearchPluginConfigValue,
-  type OpenClawConfig,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
@@ -42,10 +41,13 @@ type ParallelSearchResponse = {
 };
 
 function resolveParallelConfig(
-  config?: OpenClawConfig,
+  config?: unknown,
   searchConfig?: SearchConfigRecord,
 ): ParallelConfig {
-  const pluginConfig = resolveProviderWebSearchPluginConfig(config, "parallel");
+  const pluginConfig = resolveProviderWebSearchPluginConfig(
+    config as Record<string, unknown> | undefined,
+    "parallel",
+  );
   if (pluginConfig) {
     return pluginConfig as ParallelConfig;
   }
@@ -129,7 +131,7 @@ function createParallelSchema() {
 }
 
 function createParallelToolDefinition(
-  config?: OpenClawConfig,
+  config?: unknown,
   searchConfig?: SearchConfigRecord,
 ): WebSearchProviderToolDefinition {
   return {
