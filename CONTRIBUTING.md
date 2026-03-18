@@ -6,6 +6,7 @@ Welcome to the lobster tank! 🦞
 
 - **GitHub:** https://github.com/openclaw/openclaw
 - **Vision:** [`VISION.md`](VISION.md)
+- **Documentation:** https://docs.openclaw.ai
 - **Discord:** https://discord.gg/qkhbAGHRBT
 - **X/Twitter:** [@steipete](https://x.com/steipete) / [@openclaw](https://x.com/openclaw)
 
