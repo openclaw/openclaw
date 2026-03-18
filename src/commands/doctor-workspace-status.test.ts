@@ -88,10 +88,10 @@ describe("noteWorkspaceStatus", () => {
       );
       expect(compatibilityCalls).toHaveLength(1);
       expect(String(compatibilityCalls[0]?.[0])).toContain(
-        "legacy-plugin still relies on legacy before_agent_start",
+        "legacy-plugin still uses legacy before_agent_start",
       );
       expect(String(compatibilityCalls[0]?.[0])).toContain(
-        "legacy-plugin is hook-only; this remains supported for compatibility",
+        "legacy-plugin is hook-only. This remains a supported compatibility path",
       );
     } finally {
       noteSpy.mockRestore();
