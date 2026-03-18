@@ -20,8 +20,6 @@ import {
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
-  resolveTelegramGroupRequireMention,
-  resolveTelegramGroupToolPolicy,
   type ChannelPlugin,
   type ChannelMessageActionAdapter,
   type OpenClawConfig,
@@ -38,6 +36,10 @@ import {
   isTelegramExecApprovalClientEnabled,
   resolveTelegramExecApprovalTarget,
 } from "./exec-approvals.js";
+import {
+  resolveTelegramGroupRequireMention,
+  resolveTelegramGroupToolPolicy,
+} from "./group-policy.js";
 import { monitorTelegramProvider } from "./monitor.js";
 import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
 import { sendTelegramPayloadMessages } from "./outbound-adapter.js";
