@@ -33,6 +33,10 @@ describe("parseTuiAliasArgs", () => {
     expect(parseTuiAliasArgs("review check #49141")).toEqual(["review", "check", "#49141"]);
   });
 
+  it("preserves empty quoted arguments", () => {
+    expect(parseTuiAliasArgs('review ""')).toEqual(["review", ""]);
+  });
+
   it("returns null for unterminated quotes", () => {
     expect(parseTuiAliasArgs(`review "oops`)).toBeNull();
   });

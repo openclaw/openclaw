@@ -74,11 +74,13 @@ export function parseTuiAliasArgs(raw: string): string[] | null {
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
+  let tokenStarted = false;
 
   const pushToken = () => {
-    if (buf.length > 0) {
+    if (tokenStarted || buf.length > 0) {
       tokens.push(buf);
       buf = "";
+      tokenStarted = false;
     }
   };
 
@@ -86,10 +88,12 @@ export function parseTuiAliasArgs(raw: string): string[] | null {
     const ch = raw[i];
     if (escaped) {
       buf += ch;
+      tokenStarted = true;
       escaped = false;
       continue;
     }
     if (!inSingle && !inDouble && ch === "\\") {
+      tokenStarted = true;
       escaped = true;
       continue;
     }
@@ -98,6 +102,7 @@ export function parseTuiAliasArgs(raw: string): string[] | null {
         inSingle = false;
       } else {
         buf += ch;
+        tokenStarted = true;
       }
       continue;
     }
@@ -105,6 +110,7 @@ export function parseTuiAliasArgs(raw: string): string[] | null {
       const next = raw[i + 1];
       if (ch === "\\" && isDoubleQuoteEscape(next)) {
         buf += next;
+        tokenStarted = true;
         i += 1;
         continue;
       }
@@ -112,14 +118,17 @@ export function parseTuiAliasArgs(raw: string): string[] | null {
         inDouble = false;
       } else {
         buf += ch;
+        tokenStarted = true;
       }
       continue;
     }
     if (ch === "'") {
+      tokenStarted = true;
       inSingle = true;
       continue;
     }
     if (ch === '"') {
+      tokenStarted = true;
       inDouble = true;
       continue;
     }
@@ -128,6 +137,7 @@ export function parseTuiAliasArgs(raw: string): string[] | null {
       continue;
     }
     buf += ch;
+    tokenStarted = true;
   }
 
   if (escaped || inSingle || inDouble) {

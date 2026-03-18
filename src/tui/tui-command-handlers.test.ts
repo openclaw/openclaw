@@ -276,6 +276,19 @@ describe("tui command handlers", () => {
     expect(refreshAutocomplete).not.toHaveBeenCalled();
   });
 
+  it("rejects empty quoted alias prompts instead of running the alias", async () => {
+    const { handleCommand, addSystem, sendChat } = createHarness({
+      tuiAliases: {
+        review: "existing prompt",
+      },
+    });
+
+    await handleCommand('/alias review ""');
+
+    expect(addSystem).toHaveBeenCalledWith("usage: /alias <name> <prompt> or /alias <name>");
+    expect(sendChat).not.toHaveBeenCalled();
+  });
+
   it("does not delete aliases in memory when remove fails", async () => {
     vi.mocked(saveTuiAliases).mockRejectedValueOnce(new Error("disk full"));
     const { handleCommand, addSystem, refreshAutocomplete, state } = createHarness({
