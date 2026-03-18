@@ -88,3 +88,4 @@ export {
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";
+export { stripMarkdown } from "../line/markdown-to-line.js";

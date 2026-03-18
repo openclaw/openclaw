@@ -21,6 +21,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   runPassiveAccountLifecycle,
+  stripMarkdown,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type ChannelStatusIssue,
@@ -275,10 +276,12 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
       const thread = (threadId ?? replyToId ?? undefined) as string | undefined;
       const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
+      // Strip markdown formatting since Google Chat does not support markdown
+      const plainText = stripMarkdown(text);
       const result = await sendGoogleChatMessage({
         account,
         space,
-        text,
+        text: plainText,
         thread,
       });
       return {
@@ -340,7 +343,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
       const result = await sendGoogleChatMessage({
         account,
         space,
-        text,
+        // Strip markdown formatting since Google Chat does not support markdown
+        text: text ? stripMarkdown(text) : undefined,
         thread,
         attachments: upload.attachmentUploadToken
           ? [{ attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName }]

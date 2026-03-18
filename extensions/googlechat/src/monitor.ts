@@ -6,6 +6,7 @@ import {
   registerWebhookTargetWithPluginRoute,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveWebhookPath,
+  stripMarkdown,
 } from "../runtime-api.js";
 import { type ResolvedGoogleChatAccount } from "./accounts.js";
 import {
@@ -391,8 +392,9 @@ async function deliverGoogleChatReply(params: {
         });
       } catch (err) {
         runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+        // Strip markdown in error-recovery fallback path as well
         const fallbackText = payload.text?.trim()
-          ? payload.text
+          ? stripMarkdown(payload.text)
           : mediaList.length > 1
             ? "Sent attachments."
             : "Sent attachment.";
@@ -410,7 +412,9 @@ async function deliverGoogleChatReply(params: {
     }
     let first = true;
     for (const mediaUrl of mediaList) {
-      const caption = first && !suppressCaption ? payload.text : undefined;
+      // Strip markdown from caption since Google Chat does not support markdown
+      const rawCaption = first && !suppressCaption ? payload.text : undefined;
+      const caption = rawCaption ? stripMarkdown(rawCaption) : undefined;
       first = false;
       try {
         const loaded = await core.channel.media.fetchRemoteMedia({
@@ -450,19 +454,21 @@ async function deliverGoogleChatReply(params: {
     const chunks = core.channel.text.chunkMarkdownTextWithMode(payload.text, chunkLimit, chunkMode);
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
+      // Strip markdown formatting since Google Chat does not support markdown
+      const plainText = stripMarkdown(chunk);
       try {
         // Edit typing message with first chunk if available
         if (i === 0 && typingMessageName) {
           await updateGoogleChatMessage({
             account,
             messageName: typingMessageName,
-            text: chunk,
+            text: plainText,
           });
         } else {
           await sendGoogleChatMessage({
             account,
             space: spaceId,
-            text: chunk,
+            text: plainText,
             thread: payload.replyToId,
           });
         }

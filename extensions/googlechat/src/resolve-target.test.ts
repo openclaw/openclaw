@@ -22,6 +22,7 @@ vi.mock("openclaw/plugin-sdk/googlechat", () => ({
   resolveChannelMediaMaxBytes: vi.fn(),
   resolveGoogleChatGroupRequireMention: vi.fn(),
   setAccountEnabledInConfigSection: vi.fn(),
+  stripMarkdown: (text: string) => text,
 }));
 
 vi.mock("./accounts.js", () => ({

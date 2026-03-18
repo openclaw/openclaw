@@ -339,18 +339,38 @@ export function convertLinksToFlexBubble(links: MarkdownLink[]): FlexBubble {
 
 /**
  * Strip markdown formatting from text (for plain text output)
- * Handles: bold, italic, strikethrough, headers, blockquotes, horizontal rules
+ * Handles: bold, italic, strikethrough, headers, blockquotes, horizontal rules,
+ * fenced code blocks, inline code, and markdown links
+ *
+ * Note: This function is conservative - it only strips formatting that is
+ * unambiguously markdown syntax, avoiding false positives on code identifiers.
  */
 export function stripMarkdown(text: string): string {
   let result = text;
+
+  // Remove fenced code blocks: ```language\ncode\n``` → code content only
+  // Use [^\n]* instead of \w* to support info strings like "c++" or 'ts title="a.ts"'
+  result = result.replace(/```[^\n]*\n?([\s\S]*?)```/g, "$1");
+
+  // Remove markdown links: [text](url) → text
+  // Handle URLs with parentheses using a more robust regex
+  // Match: [text]( followed by URL (which may contain escaped parens) until final )
+  result = result.replace(/\[([^\]]+)\]\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g, "$1");
 
   // Remove bold: **text** or __text__
   result = result.replace(/\*\*(.+?)\*\*/g, "$1");
   result = result.replace(/__(.+?)__/g, "$1");
 
-  // Remove italic: *text* or _text_ (but not already processed)
+  // Remove italic: *text* or _text_
+  // For *text*: only match when * is not adjacent to another * (avoid ***)
   result = result.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "$1");
-  result = result.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, "$1");
+
+  // For _text_: be conservative to avoid corrupting snake_case identifiers
+  // Only match _text_ when underscores are at word boundaries:
+  // - Preceded by whitespace, start of line, or punctuation (not alphanumeric)
+  // - Followed by whitespace, end of line, or punctuation (not alphanumeric)
+  // This preserves identifiers like OPENAI_API_KEY, foo_bar_baz, etc.
+  result = result.replace(/(?<![a-zA-Z0-9])_([^_\n]+?)_(?![a-zA-Z0-9])/g, "$1");
 
   // Remove strikethrough: ~~text~~
   result = result.replace(/~~(.+?)~~/g, "$1");

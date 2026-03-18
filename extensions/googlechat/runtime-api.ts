@@ -105,3 +105,5 @@ export {
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
 } from "../../src/plugin-sdk/webhook-targets.js";
+export { stripMarkdown } from "../../src/line/markdown-to-line.js";
+export { stripMarkdown } from "../../src/line/markdown-to-line.js";
