@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { clearPluginCommands, registerPluginCommand } from "../plugins/commands.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import {
@@ -13,18 +14,8 @@ import {
   buildStatusMessage,
 } from "./status.js";
 
-const { listPluginCommands } = vi.hoisted(() => ({
-  listPluginCommands: vi.fn(
-    (): Array<{ name: string; description: string; pluginId: string }> => [],
-  ),
-}));
-
-vi.mock("../plugins/commands.js", () => ({
-  listPluginCommands,
-}));
-
 afterEach(() => {
-  vi.restoreAllMocks();
+  clearPluginCommands();
 });
 
 describe("buildStatusMessage", () => {
@@ -765,9 +756,13 @@ describe("buildCommandsMessagePaginated", () => {
   });
 
   it("includes plugin commands in the paginated list", () => {
-    listPluginCommands.mockReturnValue([
-      { name: "plugin_cmd", description: "Plugin command", pluginId: "demo-plugin" },
-    ]);
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "plugin_cmd",
+        description: "Plugin command",
+        handler: async () => ({ text: "ok" }),
+      }),
+    ).toEqual({ ok: true });
     const result = buildCommandsMessagePaginated(
       {
         commands: { config: false, debug: false },
