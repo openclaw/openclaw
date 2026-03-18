@@ -325,5 +325,43 @@ describe("bot-native-command-menu", () => {
       // Menu sync succeeds regardless of path validation in writeCachedCommandHash
       expect(setMyCommands).toHaveBeenCalledWith([{ command: "win_test", description: "Win Test" }]);
     });
+
+
+    it("tolerates a throwing resolveCommandHashPath (regression #44199)", async () => {
+      // Force writeCachedCommandHash to hit the error path by injecting a null byte
+      // into OPENCLAW_STATE_DIR. Node.js throws ERR_INVALID_ARG_VALUE on mkdir/writeFile
+      // for paths containing null bytes, exercising the catch branch in writeCachedCommandHash.
+      const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = "/tmp/\x00invalid";
+
+      const setMyCommands = vi.fn(async () => undefined);
+      const deleteMyCommands = vi.fn(async () => undefined);
+      const runtimeLog = vi.fn();
+      const runtimeError = vi.fn();
+
+      try {
+        syncMenuCommandsWithMocks({
+          setMyCommands,
+          deleteMyCommands,
+          runtimeLog,
+          runtimeError,
+          commandsToRegister: [{ command: "regression_44199", description: "Regression test" }],
+          accountId: `acc-regression-${Date.now()}`,
+          botIdentity: "bot-regression",
+        });
+
+        // setMyCommands should still be called even though cache write throws
+        await vi.waitFor(() => { expect(setMyCommands).toHaveBeenCalled(); });
+        expect(setMyCommands).toHaveBeenCalledWith([{ command: "regression_44199", description: "Regression test" }]);
+        // No unhandled error should be propagated
+        expect(runtimeError).not.toHaveBeenCalled();
+      } finally {
+        if (originalStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = originalStateDir;
+        }
+      }
+    });
   });
 });
