@@ -244,6 +244,10 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         docker-ce-cli docker-compose-plugin; \
     fi
 
+# Install Blink CLI — required for blink-* skill scripts (image, video, speech, transcribe, connectors)
+# Version is pinned; update when publishing a new CLI version to npm.
+RUN npm install -g @blinkdotnew/cli@0.1.4
+
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
