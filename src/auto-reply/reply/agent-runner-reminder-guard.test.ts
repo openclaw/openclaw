@@ -29,6 +29,9 @@ describe("hasUnbackedReminderCommitment", () => {
       "I'll remember and remind you tomorrow",
       "I will remember, then follow up later",
       "I'll remember and then ping you about it",
+      "I'll remember and set a reminder for tomorrow",
+      "I will remember, then create a reminder",
+      "I'll remember and make sure to remind you tomorrow",
     ];
 
     for (const text of positives) {
