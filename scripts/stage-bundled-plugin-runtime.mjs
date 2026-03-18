@@ -26,7 +26,7 @@ function isSymlinkPermissionError(error) {
 function copyPathFallback(sourcePath, targetPath) {
   const sourceStat = fs.statSync(sourcePath);
   if (sourceStat.isDirectory()) {
-    fs.cpSync(sourcePath, targetPath, { recursive: true, force: true });
+    fs.cpSync(sourcePath, targetPath, { recursive: true, force: true, dereference: true });
     return;
   }
   fs.copyFileSync(sourcePath, targetPath);
