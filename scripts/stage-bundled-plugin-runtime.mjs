@@ -38,8 +38,16 @@ function symlinkPathWithFallback(sourcePath, targetPath, type) {
   } catch (error) {
     if (error?.code === "EEXIST") {
       removePathIfExists(targetPath);
-      symlinkPath(sourcePath, targetPath, type);
-      return;
+      try {
+        symlinkPath(sourcePath, targetPath, type);
+        return;
+      } catch (retryError) {
+        if (!isSymlinkPermissionError(retryError)) {
+          throw retryError;
+        }
+        copyPathFallback(sourcePath, targetPath);
+        return;
+      }
     }
     if (!isSymlinkPermissionError(error)) {
       throw error;
@@ -147,9 +155,13 @@ function linkPluginNodeModules(params) {
   if (params.distPluginDir) {
     removePathIfExists(path.join(params.distPluginDir, "node_modules"));
   }
+
   if (!fs.existsSync(params.sourcePluginNodeModulesDir)) {
     return;
   }
+
+
+
   if (params.distPluginDir) {
     const distNodeModulesDir = path.join(params.distPluginDir, "node_modules");
     symlinkPathWithFallback(params.sourcePluginNodeModulesDir, distNodeModulesDir, symlinkType());

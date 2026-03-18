@@ -1,12 +1,19 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/telegram";
 import { expect, vi } from "vitest";
+import type { SkillCommandSpec } from "../../../src/agents/skills.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createNativeCommandTestParams as createBaseNativeCommandTestParams,
   createTelegramPrivateCommandContext,
   type NativeCommandTestParams as RegisterTelegramNativeCommandsParams,
 } from "./bot-native-commands.fixture-test-support.js";
+
+const EMPTY_REPLY_COUNTS = {
+  block: 0,
+  final: 0,
+  tool: 0,
+} as const;
 
 type RegisteredCommand = {
   command: string;
@@ -21,7 +28,9 @@ type CreateCommandBotResult = {
 };
 
 const skillCommandMocks = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn(() => []),
+  listSkillCommandsForAgents: vi.fn<
+    (params: { cfg: OpenClawConfig; agentIds?: string[] }) => SkillCommandSpec[]
+  >(() => []),
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
@@ -86,7 +95,7 @@ export function createNativeCommandTestParams(
     enqueueSystemEvent: vi.fn(),
     dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => ({
       queuedFinal: false,
-      counts: {},
+      counts: EMPTY_REPLY_COUNTS,
     })),
     listSkillCommandsForAgents,
     wasSentByBot: vi.fn(() => false),

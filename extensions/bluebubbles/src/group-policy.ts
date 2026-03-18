@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 type BlueBubblesGroupContext = {
   cfg: OpenClawConfig;
