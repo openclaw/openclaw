@@ -6,7 +6,6 @@ import {
 } from "../api.js";
 import {
   listLineAccountIds,
-  normalizeAccountId,
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../runtime-api.js";
