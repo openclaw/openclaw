@@ -9,22 +9,35 @@ import {
   createStatusReactionController,
   DEFAULT_TIMING,
   type StatusReactionAdapter,
-} from "openclaw/plugin-sdk/channels/status-reactions";
-import { createTypingCallbacks } from "openclaw/plugin-sdk/channels/typing";
+} from "openclaw/plugin-sdk/channel-runtime";
+import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import { resolveDiscordPreviewStreamMode } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
-import { resolveDiscordPreviewStreamMode } from "openclaw/plugin-sdk/config/discord-preview-streaming";
-import { logWarn } from "openclaw/plugin-sdk/logger";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/reply-runtime";
+import {
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
+} from "openclaw/plugin-sdk/reply-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/shared/text/reasoning-tags";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import { writePendingInbound } from "../../../../src/infra/pending-inbound-store.js";
+import { logWarn } from "../../../../src/logger.js";
 import { isGatewayDraining } from "../../../../src/process/command-queue.js";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
