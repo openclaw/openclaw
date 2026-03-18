@@ -1131,6 +1131,7 @@
               {
                 "group": "Providers",
                 "pages": [
+                  "providers/aisa",
                   "providers/anthropic",
                   "providers/bedrock",
                   "providers/cloudflare-ai-gateway",
@@ -1753,6 +1754,7 @@
               {
                 "group": "提供商",
                 "pages": [
+                  "zh-CN/providers/aisa",
                   "zh-CN/providers/anthropic",
                   "zh-CN/providers/bedrock",
                   "zh-CN/providers/claude-max-api-proxy",

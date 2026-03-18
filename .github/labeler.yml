@@ -237,6 +237,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/byteplus/**"
+"extensions: aisa":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/aisa/**"
 "extensions: anthropic":
   - changed-files:
       - any-glob-to-any-file:

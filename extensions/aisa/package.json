@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/aisa-provider",
+  "version": "2026.3.18",
+  "private": true,
+  "description": "OpenClaw AIsa provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

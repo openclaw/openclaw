@@ -238,5 +238,9 @@
   {
     "source": "env var",
     "target": "环境变量"
+  },
+  {
+    "source": "AIsa",
+    "target": "AIsa"
   }
 ]
