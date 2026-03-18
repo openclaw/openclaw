@@ -3,7 +3,6 @@ export type { LineConfig } from "../line/types.js";
 export {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
-  normalizeAccountId,
   setSetupChannelEnabled,
   setTopLevelChannelDmPolicyWithAllowFrom,
   splitSetupEntries,
