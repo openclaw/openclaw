@@ -1140,6 +1140,54 @@ authoring plugins:
   `openclaw/plugin-sdk/twitch`, `openclaw/plugin-sdk/voice-call`,
   `openclaw/plugin-sdk/zalo`, and `openclaw/plugin-sdk/zalouser`.
 
+## Channel target resolution
+
+Channel plugins should own channel-specific target semantics. Keep the shared
+outbound host generic and use the messaging adapter surface for provider rules:
+
+- `messaging.inferTargetChatType({ to })` decides whether a normalized target
+  should be treated as `direct`, `group`, or `channel` before directory lookup.
+- `messaging.targetResolver.looksLikeId(raw, normalized)` tells core whether an
+  input should skip straight to id-like resolution instead of directory search.
+- `messaging.targetResolver.resolveTarget(...)` is the plugin fallback when
+  core needs a final provider-owned resolution after normalization or after a
+  directory miss.
+- `messaging.resolveOutboundSessionRoute(...)` owns provider-specific session
+  route construction once a target is resolved.
+
+Recommended split:
+
+- Use `inferTargetChatType` for category decisions that should happen before
+  searching peers/groups.
+- Use `looksLikeId` for “treat this as an explicit/native target id” checks.
+- Use `resolveTarget` for provider-specific normalization fallback, not for
+  broad directory search.
+- Keep provider-native ids like chat ids, thread ids, JIDs, handles, and room
+  ids inside `target` values or provider-specific params, not in generic SDK
+  fields.
+
+## Config-backed directories
+
+Plugins that derive directory entries from config should keep that logic in the
+plugin and reuse the shared helpers from
+`openclaw/plugin-sdk/directory-runtime`.
+
+Use this when a channel needs config-backed peers/groups such as:
+
+- allowlist-driven DM peers
+- configured channel/group maps
+- account-scoped static directory fallbacks
+
+The shared helpers in `directory-runtime` only handle generic operations:
+
+- query filtering
+- limit application
+- deduping/normalization helpers
+- building `ChannelDirectoryEntry[]`
+
+Channel-specific account inspection and id normalization should stay in the
+plugin implementation.
+
 ## Provider catalogs
 
 Provider plugins can define model catalogs for inference with

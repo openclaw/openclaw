@@ -392,6 +392,10 @@ export type ChannelMessagingAdapter = {
     threadId?: string | number;
     chatType?: ChatType;
   } | null;
+  /**
+   * Lightweight chat-type inference used before directory lookup so plugins can
+   * steer peer-vs-group resolution without reimplementing host search flow.
+   */
   inferTargetChatType?: (params: { to: string }) => ChatType | undefined;
   buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
   enableInteractiveReplies?: (params: {
@@ -402,6 +406,10 @@ export type ChannelMessagingAdapter = {
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
+    /**
+     * Plugin-owned fallback for explicit/native targets or post-directory-miss
+     * resolution. This should complement directory lookup, not duplicate it.
+     */
     resolveTarget?: (params: {
       cfg: OpenClawConfig;
       accountId?: string | null;
@@ -420,6 +428,10 @@ export type ChannelMessagingAdapter = {
     display?: string;
     kind?: ChannelDirectoryEntryKind;
   }) => string;
+  /**
+   * Provider-specific session-route builder used after target resolution.
+   * Keep session-key orchestration in core and channel-native routing rules here.
+   */
   resolveOutboundSessionRoute?: (params: {
     cfg: OpenClawConfig;
     agentId: string;
