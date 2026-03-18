@@ -49,6 +49,27 @@ bash scripts/animate.sh "Gentle camera pan across the scene" \
   "https://example.com/photo.jpg" "fal-ai/veo3.1/image-to-video" "6s"
 ```
 
+## Animate a LOCAL file (user uploaded a photo via Telegram/Discord/Slack)
+When a user sends you a photo attachment, OpenClaw saves it to disk. Use `animate-file.sh` — it uploads the file first and then animates it.
+```bash
+bash scripts/animate-file.sh \
+  "Add gentle motion, camera slowly panning right" \
+  "/data/agents/default/agent/photo.jpg"
+```
+
+## Animate a local file with specific model and duration
+```bash
+bash scripts/animate-file.sh \
+  "Dramatic cinematic movement, slow zoom in" \
+  "/data/agents/default/agent/photo.jpg" \
+  "fal-ai/veo3.1/image-to-video" "8s" "16:9"
+```
+
+## Find where OpenClaw saved an attachment
+```bash
+ls -lt /data/agents/default/agent/ | head -10
+```
+
 ## Generate without audio
 ```bash
 bash scripts/generate.sh "A timelapse of a city at night" \

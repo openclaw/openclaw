@@ -44,6 +44,23 @@ bash scripts/edit.sh "Make this look like a watercolor painting" "https://exampl
 bash scripts/edit.sh "Add snow to this landscape" "https://example.com/landscape.jpg" "fal-ai/nano-banana-pro/edit"
 ```
 
+## Edit a LOCAL file (user uploaded a photo via Telegram/Discord/Slack)
+When a user sends you a photo, OpenClaw saves it to disk. Use `upload-file.sh` first to get a URL, then edit it.
+```bash
+# Step 1: Upload the local file to get a public URL
+UPLOAD=$(bash scripts/upload-file.sh "/data/agents/default/agent/photo.jpg")
+URL=$(echo "$UPLOAD" | python3 -c "import json,sys; print(json.loads(sys.stdin.read())['url'])")
+
+# Step 2: Edit the image using the URL
+bash scripts/edit.sh "Make this a professional studio headshot with dark background" "$URL"
+```
+
+## Find where OpenClaw saved an attachment
+OpenClaw downloads attachments to the agent working directory. Check recent files:
+```bash
+ls -lt /data/agents/default/agent/ | head -10
+```
+
 ## Models available
 | Model | Best for |
 |-------|---------|

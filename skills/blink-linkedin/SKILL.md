@@ -86,6 +86,20 @@ Or use the convenience script (one command):
 bash scripts/post-with-image.sh "Check out this image!" "https://example.com/photo.jpg"
 ```
 
+## Post a LOCAL photo to LinkedIn (user uploaded via Telegram/Discord/Slack)
+```bash
+# Step 1: Upload local file to get a URL (requires blink-image skill)
+UPLOAD=$(bash /path/to/blink-image/scripts/upload-file.sh "/data/agents/default/agent/photo.jpg")
+URL=$(echo "$UPLOAD" | python3 -c "import json,sys; print(json.loads(sys.stdin.read())['url'])")
+
+# Optional Step 2: Edit the photo (e.g. make it a professional headshot)
+EDITED=$(bash /path/to/blink-image/scripts/edit.sh "Professional studio headshot, dark background, clean look" "$URL")
+FINAL_URL=$(echo "$EDITED" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d['result']['data'][0]['url'])")
+
+# Step 3: Post to LinkedIn
+bash scripts/post-with-image.sh "Excited to share my new professional photo!" "$FINAL_URL"
+```
+
 ## Generate an image with blink-image and post to LinkedIn
 ```bash
 # Generate image
