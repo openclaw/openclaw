@@ -1,11 +1,11 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../../config/config.js";
-import { createDiscordActionGate } from "../../plugin-sdk/discord.js";
-import { readStringParam } from "./common.js";
-import { handleDiscordGuildAction } from "./discord-actions-guild.js";
-import { handleDiscordMessagingAction } from "./discord-actions-messaging.js";
-import { handleDiscordModerationAction } from "./discord-actions-moderation.js";
-import { handleDiscordPresenceAction } from "./discord-actions-presence.js";
+import { readStringParam } from "../../../../src/agents/tools/common.js";
+import type { OpenClawConfig } from "../../../../src/config/config.js";
+import { createDiscordActionGate } from "../accounts.js";
+import { handleDiscordGuildAction } from "./runtime.guild.js";
+import { handleDiscordMessagingAction } from "./runtime.messaging.js";
+import { handleDiscordModerationAction } from "./runtime.moderation.js";
+import { handleDiscordPresenceAction } from "./runtime.presence.js";
 
 const messagingActions = new Set([
   "react",
