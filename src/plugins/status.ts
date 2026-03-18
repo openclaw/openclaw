@@ -33,6 +33,11 @@ export type PluginCompatibilityNotice = {
   message: string;
 };
 
+export type PluginCompatibilitySummary = {
+  noticeCount: number;
+  pluginCount: number;
+};
+
 export type PluginInspectReport = {
   workspaceDir?: string;
   plugin: PluginRegistry["plugins"][number];
@@ -288,9 +293,7 @@ export function buildPluginCompatibilityWarnings(params?: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): string[] {
-  return buildAllPluginInspectReports(params).flatMap((inspect) =>
-    inspect.compatibility.map((warning) => `${warning.pluginId} ${warning.message}`),
-  );
+  return buildPluginCompatibilityNotices(params).map(formatPluginCompatibilityNotice);
 }
 
 export function buildPluginCompatibilityNotices(params?: {
@@ -300,4 +303,17 @@ export function buildPluginCompatibilityNotices(params?: {
   report?: PluginStatusReport;
 }): PluginCompatibilityNotice[] {
   return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
+}
+
+export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {
+  return `${notice.pluginId} ${notice.message}`;
+}
+
+export function summarizePluginCompatibility(
+  notices: PluginCompatibilityNotice[],
+): PluginCompatibilitySummary {
+  return {
+    noticeCount: notices.length,
+    pluginCount: new Set(notices.map((notice) => notice.pluginId)).size,
+  };
 }
