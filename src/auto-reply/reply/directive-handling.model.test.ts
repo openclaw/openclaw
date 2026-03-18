@@ -12,6 +12,7 @@ import {
   maybeHandleModelDirectiveInfo,
   resolveModelSelectionFromDirective,
 } from "./directive-handling.model.js";
+import { persistInlineDirectives } from "./directive-handling.persist.js";
 
 // Mock dependencies for directive handling persistence.
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -319,6 +320,184 @@ describe("/model chat UX", () => {
       isDefault: false,
     });
     expect(resolved.profileOverride).toBeUndefined();
+  });
+
+  it("persists inferred numeric auth-profile overrides for mixed-content messages", async () => {
+    setAuthProfiles({
+      "20251001": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-test",
+      },
+    });
+
+    const directives = parseInlineDirectives("/model openai/gpt-4o@20251001 hello");
+    const sessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const sessionStore = { "agent:main:dm:1": sessionEntry };
+
+    await persistInlineDirectives({
+      directives,
+      effectiveModelDirective: directives.rawModelDirective,
+      cfg: baseConfig(),
+      agentDir: TEST_AGENT_DIR,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:dm:1",
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys: new Set(["openai/gpt-4o", "openai/gpt-4o@20251001"]),
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: baseConfig().agents?.defaults,
+    });
+
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(sessionEntry.authProfileOverride).toBe("20251001");
+  });
+
+  it("persists alias-based numeric auth-profile overrides for mixed-content messages", async () => {
+    setAuthProfiles({
+      "20251001": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-test",
+      },
+    });
+
+    const aliasIndex: ModelAliasIndex = {
+      byAlias: new Map([["gpt", { alias: "gpt", ref: { provider: "openai", model: "gpt-4o" } }]]),
+      byKey: new Map([["openai/gpt-4o", ["gpt"]]]),
+    };
+    const directives = parseInlineDirectives("/model gpt@20251001 hello");
+    const sessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const sessionStore = { "agent:main:dm:1": sessionEntry };
+
+    await persistInlineDirectives({
+      directives,
+      effectiveModelDirective: directives.rawModelDirective,
+      cfg: baseConfig(),
+      agentDir: TEST_AGENT_DIR,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:dm:1",
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex,
+      allowedModelKeys: new Set(["openai/gpt-4o"]),
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: baseConfig().agents?.defaults,
+    });
+
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(sessionEntry.authProfileOverride).toBe("20251001");
+  });
+
+  it("persists providerless numeric auth-profile overrides for mixed-content messages", async () => {
+    setAuthProfiles({
+      "20251001": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-test",
+      },
+    });
+
+    const directives = parseInlineDirectives("/model gpt-4o@20251001 hello");
+    const sessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const sessionStore = { "agent:main:dm:1": sessionEntry };
+
+    await persistInlineDirectives({
+      directives,
+      effectiveModelDirective: directives.rawModelDirective,
+      cfg: baseConfig(),
+      agentDir: TEST_AGENT_DIR,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:dm:1",
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys: new Set(["openai/gpt-4o"]),
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: baseConfig().agents?.defaults,
+    });
+
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(sessionEntry.authProfileOverride).toBe("20251001");
+  });
+
+  it("persists explicit auth profiles after @YYYYMMDD version suffixes in mixed-content messages", async () => {
+    setAuthProfiles({
+      work: {
+        type: "api_key",
+        provider: "custom",
+        key: "sk-test",
+      },
+    });
+
+    const directives = parseInlineDirectives(
+      "/model custom/vertex-ai_claude-haiku-4-5@20251001@work hello",
+    );
+    const sessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const sessionStore = { "agent:main:dm:1": sessionEntry };
+
+    await persistInlineDirectives({
+      directives,
+      effectiveModelDirective: directives.rawModelDirective,
+      cfg: baseConfig(),
+      agentDir: TEST_AGENT_DIR,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:dm:1",
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys: new Set(["custom/vertex-ai_claude-haiku-4-5@20251001"]),
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: baseConfig().agents?.defaults,
+    });
+
+    expect(sessionEntry.providerOverride).toBe("custom");
+    expect(sessionEntry.modelOverride).toBe("vertex-ai_claude-haiku-4-5@20251001");
+    expect(sessionEntry.authProfileOverride).toBe("work");
   });
 });
 
