@@ -59,6 +59,7 @@ export type {
   ChannelMessageActionDiscoveryContext,
   ChannelMessageActionContext,
   ChannelMessagingAdapter,
+  ChannelMessageToolDiscovery,
   ChannelMeta,
   ChannelMessageToolSchemaContribution,
   ChannelOutboundTargetMode,
