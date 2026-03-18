@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { lookupContextTokens } from "../../agents/context.js";
@@ -9,10 +13,6 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import {
-  hasOutboundReplyContent,
-  resolveSendableOutboundReplyParts,
-} from "../../plugin-sdk/reply-payload.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";

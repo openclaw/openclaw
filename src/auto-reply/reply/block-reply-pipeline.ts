@@ -1,5 +1,5 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";

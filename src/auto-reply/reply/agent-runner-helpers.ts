@@ -1,9 +1,9 @@
-import { loadSessionStore } from "../../config/sessions.js";
-import { isAudioFileName } from "../../media/mime.js";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
-} from "../../plugin-sdk/reply-payload.js";
+} from "openclaw/plugin-sdk/reply-payload";
+import { loadSessionStore } from "../../config/sessions.js";
+import { isAudioFileName } from "../../media/mime.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { scheduleFollowupDrain } from "./queue.js";
