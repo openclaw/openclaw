@@ -1,1 +1,2 @@
-export * from "./src/setup-surface.js";
+export * from "openclaw/plugin-sdk/nostr";
+export * from "./setup-api.js";

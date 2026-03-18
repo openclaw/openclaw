@@ -6,6 +6,7 @@ import {
   listRuntimeImageGenerationProviders,
 } from "../../image-generation/runtime.js";
 import type {
+  ImageGenerationProvider,
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
@@ -36,8 +37,20 @@ import {
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
-const MAX_INPUT_IMAGES = 4;
+const MAX_INPUT_IMAGES = 5;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
+const SUPPORTED_ASPECT_RATIOS = new Set([
+  "1:1",
+  "2:3",
+  "3:2",
+  "3:4",
+  "4:3",
+  "4:5",
+  "5:4",
+  "9:16",
+  "16:9",
+  "21:9",
+]);
 
 const ImageGenerateToolSchema = Type.Object({
   action: Type.Optional(
@@ -60,10 +73,22 @@ const ImageGenerateToolSchema = Type.Object({
   model: Type.Optional(
     Type.String({ description: "Optional provider/model override, e.g. openai/gpt-image-1." }),
   ),
+  filename: Type.Optional(
+    Type.String({
+      description:
+        "Optional output filename hint. OpenClaw preserves the basename and saves under its managed media directory.",
+    }),
+  ),
   size: Type.Optional(
     Type.String({
       description:
         "Optional size hint like 1024x1024, 1536x1024, 1024x1536, 1024x1792, or 1792x1024.",
+    }),
+  ),
+  aspectRatio: Type.Optional(
+    Type.String({
+      description:
+        "Optional aspect ratio hint: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9.",
     }),
   ),
   resolution: Type.Optional(
@@ -162,6 +187,19 @@ function normalizeResolution(raw: string | undefined): ImageGenerationResolution
   throw new ToolInputError("resolution must be one of 1K, 2K, or 4K");
 }
 
+function normalizeAspectRatio(raw: string | undefined): string | undefined {
+  const normalized = raw?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (SUPPORTED_ASPECT_RATIOS.has(normalized)) {
+    return normalized;
+  }
+  throw new ToolInputError(
+    "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
+  );
+}
+
 function normalizeReferenceImages(args: Record<string, unknown>): string[] {
   const imageCandidates: string[] = [];
   if (typeof args.image === "string") {
@@ -190,6 +228,121 @@ function normalizeReferenceImages(args: Record<string, unknown>): string[] {
     );
   }
   return normalized;
+}
+
+function parseImageGenerationModelRef(
+  raw: string | undefined,
+): { provider: string; model: string } | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === trimmed.length - 1) {
+    return null;
+  }
+  return {
+    provider: trimmed.slice(0, slashIndex).trim(),
+    model: trimmed.slice(slashIndex + 1).trim(),
+  };
+}
+
+function resolveSelectedImageGenerationProvider(params: {
+  config?: OpenClawConfig;
+  imageGenerationModelConfig: ToolModelConfig;
+  modelOverride?: string;
+}): ImageGenerationProvider | undefined {
+  const selectedRef =
+    parseImageGenerationModelRef(params.modelOverride) ??
+    parseImageGenerationModelRef(params.imageGenerationModelConfig.primary);
+  if (!selectedRef) {
+    return undefined;
+  }
+  return listRuntimeImageGenerationProviders({ config: params.config }).find(
+    (provider) =>
+      provider.id === selectedRef.provider ||
+      (provider.aliases ?? []).includes(selectedRef.provider),
+  );
+}
+
+function validateImageGenerationCapabilities(params: {
+  provider: ImageGenerationProvider | undefined;
+  count: number;
+  inputImageCount: number;
+  size?: string;
+  aspectRatio?: string;
+  resolution?: ImageGenerationResolution;
+}) {
+  const provider = params.provider;
+  if (!provider) {
+    return;
+  }
+  const isEdit = params.inputImageCount > 0;
+  const modeCaps = isEdit ? provider.capabilities.edit : provider.capabilities.generate;
+  const geometry = provider.capabilities.geometry;
+  const maxCount = modeCaps.maxCount ?? MAX_COUNT;
+  if (params.count > maxCount) {
+    throw new ToolInputError(
+      `${provider.id} ${isEdit ? "edit" : "generate"} supports at most ${maxCount} output image${maxCount === 1 ? "" : "s"}.`,
+    );
+  }
+
+  if (isEdit) {
+    if (!provider.capabilities.edit.enabled) {
+      throw new ToolInputError(`${provider.id} does not support reference-image edits.`);
+    }
+    const maxInputImages = provider.capabilities.edit.maxInputImages ?? MAX_INPUT_IMAGES;
+    if (params.inputImageCount > maxInputImages) {
+      throw new ToolInputError(
+        `${provider.id} edit supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
+      );
+    }
+  }
+
+  if (params.size) {
+    if (!modeCaps.supportsSize) {
+      throw new ToolInputError(
+        `${provider.id} ${isEdit ? "edit" : "generate"} does not support size overrides.`,
+      );
+    }
+    if ((geometry?.sizes?.length ?? 0) > 0 && !geometry?.sizes?.includes(params.size)) {
+      throw new ToolInputError(
+        `${provider.id} ${isEdit ? "edit" : "generate"} size must be one of ${geometry?.sizes?.join(", ")}.`,
+      );
+    }
+  }
+
+  if (params.aspectRatio) {
+    if (!modeCaps.supportsAspectRatio) {
+      throw new ToolInputError(
+        `${provider.id} ${isEdit ? "edit" : "generate"} does not support aspectRatio overrides.`,
+      );
+    }
+    if (
+      (geometry?.aspectRatios?.length ?? 0) > 0 &&
+      !geometry?.aspectRatios?.includes(params.aspectRatio)
+    ) {
+      throw new ToolInputError(
+        `${provider.id} ${isEdit ? "edit" : "generate"} aspectRatio must be one of ${geometry?.aspectRatios?.join(", ")}.`,
+      );
+    }
+  }
+
+  if (params.resolution) {
+    if (!modeCaps.supportsResolution) {
+      throw new ToolInputError(
+        `${provider.id} ${isEdit ? "edit" : "generate"} does not support resolution overrides.`,
+      );
+    }
+    if (
+      (geometry?.resolutions?.length ?? 0) > 0 &&
+      !geometry?.resolutions?.includes(params.resolution)
+    ) {
+      throw new ToolInputError(
+        `${provider.id} ${isEdit ? "edit" : "generate"} resolution must be one of ${geometry?.resolutions?.join("/")}.`,
+      );
+    }
+  }
 }
 
 type ImageGenerateSandboxConfig = {
@@ -357,25 +510,25 @@ export function createImageGenerateTool(options?: {
             ...(provider.label ? { label: provider.label } : {}),
             ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
             models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
-            ...(provider.supportedSizes ? { supportedSizes: [...provider.supportedSizes] } : {}),
-            ...(provider.supportedResolutions
-              ? { supportedResolutions: [...provider.supportedResolutions] }
-              : {}),
-            ...(typeof provider.supportsImageEditing === "boolean"
-              ? { supportsImageEditing: provider.supportsImageEditing }
-              : {}),
+            capabilities: provider.capabilities,
           }),
         );
         const lines = providers.flatMap((provider) => {
           const caps: string[] = [];
-          if (provider.supportsImageEditing) {
-            caps.push("editing");
+          if (provider.capabilities.edit.enabled) {
+            const maxRefs = provider.capabilities.edit.maxInputImages;
+            caps.push(
+              `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}`,
+            );
           }
-          if ((provider.supportedResolutions?.length ?? 0) > 0) {
-            caps.push(`resolutions ${provider.supportedResolutions?.join("/")}`);
+          if ((provider.capabilities.geometry?.resolutions?.length ?? 0) > 0) {
+            caps.push(`resolutions ${provider.capabilities.geometry?.resolutions?.join("/")}`);
           }
-          if ((provider.supportedSizes?.length ?? 0) > 0) {
-            caps.push(`sizes ${provider.supportedSizes?.join(", ")}`);
+          if ((provider.capabilities.geometry?.sizes?.length ?? 0) > 0) {
+            caps.push(`sizes ${provider.capabilities.geometry?.sizes?.join(", ")}`);
+          }
+          if ((provider.capabilities.geometry?.aspectRatios?.length ?? 0) > 0) {
+            caps.push(`aspect ratios ${provider.capabilities.geometry?.aspectRatios?.join(", ")}`);
           }
           const modelLine =
             provider.models.length > 0
@@ -396,7 +549,9 @@ export function createImageGenerateTool(options?: {
       const prompt = readStringParam(params, "prompt", { required: true });
       const imageInputs = normalizeReferenceImages(params);
       const model = readStringParam(params, "model");
+      const filename = readStringParam(params, "filename");
       const size = readStringParam(params, "size");
+      const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
       const explicitResolution = normalizeResolution(readStringParam(params, "resolution"));
       const count = resolveRequestedCount(params);
       const loadedReferenceImages = await loadReferenceImages({
@@ -412,6 +567,19 @@ export function createImageGenerateTool(options?: {
           : inputImages.length > 0
             ? await inferResolutionFromInputImages(inputImages)
             : undefined);
+      const selectedProvider = resolveSelectedImageGenerationProvider({
+        config: effectiveCfg,
+        imageGenerationModelConfig,
+        modelOverride: model,
+      });
+      validateImageGenerationCapabilities({
+        provider: selectedProvider,
+        count,
+        inputImageCount: inputImages.length,
+        size,
+        aspectRatio,
+        resolution,
+      });
 
       const result = await generateImage({
         cfg: effectiveCfg,
@@ -419,6 +587,7 @@ export function createImageGenerateTool(options?: {
         agentDir: options?.agentDir,
         modelOverride: model,
         size,
+        aspectRatio,
         resolution,
         count,
         inputImages,
@@ -431,7 +600,7 @@ export function createImageGenerateTool(options?: {
             image.mimeType,
             "tool-image-generation",
             undefined,
-            image.fileName,
+            filename || image.fileName,
           ),
         ),
       );
@@ -468,6 +637,8 @@ export function createImageGenerateTool(options?: {
               : {}),
           ...(resolution ? { resolution } : {}),
           ...(size ? { size } : {}),
+          ...(aspectRatio ? { aspectRatio } : {}),
+          ...(filename ? { filename } : {}),
           attempts: result.attempts,
           metadata: result.metadata,
           ...(revisedPrompts.length > 0 ? { revisedPrompts } : {}),

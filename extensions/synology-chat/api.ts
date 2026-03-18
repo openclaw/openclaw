@@ -1,1 +1,2 @@
-export * from "./src/setup-surface.js";
+export * from "openclaw/plugin-sdk/synology-chat";
+export * from "./setup-api.js";
