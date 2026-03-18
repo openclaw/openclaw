@@ -92,7 +92,7 @@ These run inside the agent loop or gateway pipeline:
 - **`session_start` / `session_end`**: session lifecycle boundaries.
 - **`gateway_start` / `gateway_stop`**: gateway lifecycle events.
 
-See [Plugins](/tools/plugin#plugin-hooks) for the hook API and registration details.
+See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook API and registration details.
 
 ## Streaming + partial replies
 
