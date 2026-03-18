@@ -248,9 +248,10 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
   if (!botOpenId) {
     return false;
   }
-  if ((event.message.content ?? "").includes("@_all")) {
-    return true;
-  }
+  // @_all (@所有人) is a broadcast to all human members, not a targeted bot
+  // mention. Treating it as mentioning every bot causes all bots in the group
+  // to respond simultaneously (#49761). Skip the @_all shortcut and fall
+  // through to the standard mention-matching logic below.
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
     return mentions.some((mention) => mention.id.open_id === botOpenId);
