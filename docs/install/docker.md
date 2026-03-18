@@ -51,7 +51,7 @@ From repo root:
 This script:
 
 - builds the gateway image locally (or pulls a remote image if `OPENCLAW_IMAGE` is set)
-- runs the onboarding wizard
+- runs onboarding
 - prints optional provider setup hints
 - starts the gateway via Docker Compose
 - generates a gateway token and writes it to `.env`
@@ -165,12 +165,13 @@ Common tags:
 
 The main Docker image currently uses:
 
-- `node:22-bookworm`
+- `node:24-bookworm`
 
-The docker image now publishes OCI base-image annotations (sha256 is an example):
+The docker image now publishes OCI base-image annotations (sha256 is an example,
+and points at the pinned multi-arch manifest list for that tag):
 
-- `org.opencontainers.image.base.name=docker.io/library/node:22-bookworm`
-- `org.opencontainers.image.base.digest=sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935`
+- `org.opencontainers.image.base.name=docker.io/library/node:24-bookworm`
+- `org.opencontainers.image.base.digest=sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b`
 - `org.opencontainers.image.source=https://github.com/openclaw/openclaw`
 - `org.opencontainers.image.url=https://openclaw.ai`
 - `org.opencontainers.image.documentation=https://docs.openclaw.ai/install/docker`
@@ -407,7 +408,7 @@ To speed up rebuilds, order your Dockerfile so dependency layers are cached.
 This avoids re-running `pnpm install` unless lockfiles change:
 
 ```dockerfile
-FROM node:22-bookworm
+FROM node:24-bookworm
 
 # Install Bun (required for build scripts)
 RUN curl -fsSL https://bun.sh/install | bash
@@ -712,6 +713,7 @@ an optional noVNC observer (headful via Xvfb).
 
 Notes:
 
+- Docker and other headless/container browser flows stay on raw CDP. Chrome MCP `existing-session` is for host-local Chrome, not container takeover.
 - Headful (Xvfb) reduces bot blocking vs headless.
 - Headless can still be used by setting `agents.defaults.sandbox.browser.headless=true`.
 - No full desktop environment (GNOME) is needed; Xvfb provides the display.

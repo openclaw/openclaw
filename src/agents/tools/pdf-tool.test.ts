@@ -10,15 +10,24 @@ import {
   providerSupportsNativePdf,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
-import { createPdfTool, resolvePdfModelConfigForTool } from "./pdf-tool.js";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-  return {
-    ...actual,
-    complete: vi.fn(),
-  };
-});
+const completeMock = vi.hoisted(() => vi.fn());
+
+type PdfToolModule = typeof import("./pdf-tool.js");
+let createPdfTool: PdfToolModule["createPdfTool"];
+let resolvePdfModelConfigForTool: PdfToolModule["resolvePdfModelConfigForTool"];
+
+async function importPdfToolModule(): Promise<PdfToolModule> {
+  vi.resetModules();
+  vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+    return {
+      ...actual,
+      complete: completeMock,
+    };
+  });
+  return import("./pdf-tool.js");
+}
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-"));
@@ -71,7 +80,7 @@ function makeAnthropicAnalyzeParams(
   }> = {},
 ) {
   return {
-    apiKey: "test-key",
+    apiKey: "test-key", // pragma: allowlist secret
     modelId: "claude-opus-4-6",
     prompt: "test",
     pdfs: [TEST_PDF_INPUT],
@@ -89,7 +98,7 @@ function makeGeminiAnalyzeParams(
   }> = {},
 ) {
   return {
-    apiKey: "test-key",
+    apiKey: "test-key", // pragma: allowlist secret
     modelId: "gemini-2.5-pro",
     prompt: "test",
     pdfs: [TEST_PDF_INPUT],
@@ -131,7 +140,7 @@ async function stubPdfToolInfra(
     modelFound?: boolean;
   },
 ) {
-  const webMedia = await import("../../web/media.js");
+  const webMedia = await import("../../media/web-media.js");
   const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA as never);
 
   const modelDiscovery = await import("../pi-model-discovery.js");
@@ -156,7 +165,7 @@ async function stubPdfToolInfra(
   });
 
   const modelAuth = await import("../model-auth.js");
-  vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
+  vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never); // pragma: allowlist secret
   vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
 
   return { loadSpy };
@@ -242,8 +251,10 @@ describe("providerSupportsNativePdf", () => {
 describe("resolvePdfModelConfigForTool", () => {
   const priorFetch = global.fetch;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetAuthEnv();
+    completeMock.mockReset();
+    ({ resolvePdfModelConfigForTool } = await importPdfToolModule());
   });
 
   afterEach(() => {
@@ -321,8 +332,10 @@ describe("resolvePdfModelConfigForTool", () => {
 describe("createPdfTool", () => {
   const priorFetch = global.fetch;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetAuthEnv();
+    completeMock.mockReset();
+    ({ createPdfTool } = await importPdfToolModule());
   });
 
   afterEach(() => {
@@ -484,8 +497,7 @@ describe("createPdfTool", () => {
         images: [],
       });
 
-      const piAi = await import("@mariozechner/pi-ai");
-      vi.mocked(piAi.complete).mockResolvedValue({
+      completeMock.mockResolvedValue({
         role: "assistant",
         stopReason: "stop",
         content: [{ type: "text", text: "fallback summary" }],
@@ -710,6 +722,26 @@ describe("native PDF provider API calls", () => {
     await expect(geminiAnalyzePdf(makeGeminiAnalyzeParams({ apiKey: "" }))).rejects.toThrow(
       "apiKey required",
     );
+  });
+
+  it("geminiAnalyzePdf does not duplicate /v1beta when baseUrl already includes it", async () => {
+    const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
+    const fetchMock = mockFetchResponse({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: "ok" }] } }],
+      }),
+    });
+
+    await geminiAnalyzePdf(
+      makeGeminiAnalyzeParams({
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      }),
+    );
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("/v1beta/models/");
+    expect(url).not.toContain("/v1beta/v1beta");
   });
 });
 

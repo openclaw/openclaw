@@ -3,9 +3,10 @@ import {
   setByteplusApiKey,
   setCloudflareAiGatewayConfig,
   setMoonshotApiKey,
+  setOpencodeZenApiKey,
   setOpenaiApiKey,
   setVolcengineApiKey,
-} from "./onboard-auth.js";
+} from "../plugins/provider-auth-storage.js";
 import {
   createAuthTestLifecycle,
   readAuthProfilesForAgent,
@@ -22,6 +23,7 @@ describe("onboard auth credentials secret refs", () => {
     "CLOUDFLARE_AI_GATEWAY_API_KEY",
     "VOLCANO_ENGINE_API_KEY",
     "BYTEPLUS_API_KEY",
+    "OPENCODE_API_KEY",
   ]);
 
   afterEach(async () => {
@@ -94,7 +96,7 @@ describe("onboard auth credentials secret refs", () => {
       envValue: "sk-moonshot-env",
       profileId: "moonshot:default",
       apply: async (agentDir) => {
-        await setMoonshotApiKey("sk-moonshot-env", agentDir, { secretInputMode: "ref" });
+        await setMoonshotApiKey("sk-moonshot-env", agentDir, { secretInputMode: "ref" }); // pragma: allowlist secret
       },
       expected: {
         keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
@@ -136,10 +138,10 @@ describe("onboard auth credentials secret refs", () => {
   it("preserves cloudflare metadata when storing keyRef", async () => {
     const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-cloudflare-");
     lifecycle.setStateDir(env.stateDir);
-    process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = "cf-secret";
+    process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = "cf-secret"; // pragma: allowlist secret
 
     await setCloudflareAiGatewayConfig("account-1", "gateway-1", "cf-secret", env.agentDir, {
-      secretInputMode: "ref",
+      secretInputMode: "ref", // pragma: allowlist secret
     });
 
     const parsed = await readAuthProfilesForAgent<{
@@ -175,7 +177,7 @@ describe("onboard auth credentials secret refs", () => {
       envValue: "sk-openai-env",
       profileId: "openai:default",
       apply: async (agentDir) => {
-        await setOpenaiApiKey("sk-openai-env", agentDir, { secretInputMode: "ref" });
+        await setOpenaiApiKey("sk-openai-env", agentDir, { secretInputMode: "ref" }); // pragma: allowlist secret
       },
       expected: {
         keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
@@ -187,11 +189,11 @@ describe("onboard auth credentials secret refs", () => {
   it("stores env-backed volcengine and byteplus keys as keyRef in ref mode", async () => {
     const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-volc-byte-");
     lifecycle.setStateDir(env.stateDir);
-    process.env.VOLCANO_ENGINE_API_KEY = "volcengine-secret";
-    process.env.BYTEPLUS_API_KEY = "byteplus-secret";
+    process.env.VOLCANO_ENGINE_API_KEY = "volcengine-secret"; // pragma: allowlist secret
+    process.env.BYTEPLUS_API_KEY = "byteplus-secret"; // pragma: allowlist secret
 
-    await setVolcengineApiKey("volcengine-secret", env.agentDir, { secretInputMode: "ref" });
-    await setByteplusApiKey("byteplus-secret", env.agentDir, { secretInputMode: "ref" });
+    await setVolcengineApiKey("volcengine-secret", env.agentDir, { secretInputMode: "ref" }); // pragma: allowlist secret
+    await setByteplusApiKey("byteplus-secret", env.agentDir, { secretInputMode: "ref" }); // pragma: allowlist secret
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
@@ -206,5 +208,26 @@ describe("onboard auth credentials secret refs", () => {
       keyRef: { source: "env", provider: "default", id: "BYTEPLUS_API_KEY" },
     });
     expect(parsed.profiles?.["byteplus:default"]?.key).toBeUndefined();
+  });
+
+  it("stores shared OpenCode credentials for both runtime providers", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-opencode-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.OPENCODE_API_KEY = "sk-opencode-env"; // pragma: allowlist secret
+
+    await setOpencodeZenApiKey("sk-opencode-env", env.agentDir, {
+      secretInputMode: "ref", // pragma: allowlist secret
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(env.agentDir);
+
+    expect(parsed.profiles?.["opencode:default"]).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
+    });
+    expect(parsed.profiles?.["opencode-go:default"]).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
+    });
   });
 });

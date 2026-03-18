@@ -24,6 +24,36 @@ Compaction **persists** in the session’s JSONL history.
 Use the `agents.defaults.compaction` setting in your `openclaw.json` to configure compaction behavior (mode, target tokens, etc.).
 Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). You can override this with `identifierPolicy: "off"` or provide custom text with `identifierPolicy: "custom"` and `identifierInstructions`.
 
+You can optionally specify a different model for compaction summarization via `agents.defaults.compaction.model`. This is useful when your primary model is a local or small model and you want compaction summaries produced by a more capable model. The override accepts any `provider/model-id` string:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "model": "openrouter/anthropic/claude-sonnet-4-5"
+      }
+    }
+  }
+}
+```
+
+This also works with local models, for example a second Ollama model dedicated to summarization or a fine-tuned compaction specialist:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "model": "ollama/llama3.1:8b"
+      }
+    }
+  }
+}
+```
+
+When unset, compaction uses the agent's primary model.
+
 ## Auto-compaction (default on)
 
 When a session nears or exceeds the model’s context window, OpenClaw triggers auto-compaction and may retry the original request using the compacted context.
@@ -66,6 +96,25 @@ compaction and can run alongside it.
   `store` + `context_management` are enabled.
 
 See [OpenAI provider](/providers/openai) for model params and overrides.
+
+## Custom context engines
+
+Compaction behavior is owned by the active
+[context engine](/concepts/context-engine). The legacy engine uses the built-in
+summarization described above. Plugin engines (selected via
+`plugins.slots.contextEngine`) can implement any compaction strategy — DAG
+summaries, vector retrieval, incremental condensation, etc.
+
+When a plugin engine sets `ownsCompaction: true`, OpenClaw delegates all
+compaction decisions to the engine and does not run built-in auto-compaction.
+
+When `ownsCompaction` is `false` or unset, OpenClaw may still use Pi's
+built-in in-attempt auto-compaction, but the active engine's `compact()` method
+still handles `/compact` and overflow recovery. There is no automatic fallback
+to the legacy engine's compaction path.
+
+If you are building a non-owning context engine, implement `compact()` by
+calling `delegateCompactionToRuntime(...)` from `openclaw/plugin-sdk/core`.
 
 ## Tips
 

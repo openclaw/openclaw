@@ -30,7 +30,11 @@ cd apps/android
 ./gradlew :app:assembleDebug
 ./gradlew :app:installDebug
 ./gradlew :app:testDebugUnitTest
+cd ../..
+bun run android:bundle:release
 ```
+
+`bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds a signed release `.aab`.
 
 ## Kotlin Lint + Format
 
@@ -211,7 +215,7 @@ What it does:
 - Reads `node.describe` command list from the selected Android node.
 - Invokes advertised non-interactive commands.
 - Skips `screen.record` in this suite (Android requires interactive per-invocation screen-capture consent).
-- Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send`, `notifications.actions`, `app.update`).
+- Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send` and `notifications.actions`).
 
 Common failure quick-fixes:
 

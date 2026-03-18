@@ -1,5 +1,5 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { PollInput } from "openclaw/plugin-sdk/matrix";
+import type { PollInput } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../runtime.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { enqueueSend } from "./send-queue.js";
@@ -92,7 +92,7 @@ export async function sendMessageMatrix(
           buffer: media.buffer,
           contentType: media.contentType,
           fileName: media.fileName,
-          kind: media.kind,
+          kind: media.kind ?? "unknown",
         });
         const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
         const { useVoice } = resolveMatrixVoiceDecision({

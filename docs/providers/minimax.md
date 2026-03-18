@@ -31,19 +31,18 @@ MiniMax highlights these improvements in M2.5:
 
 - **Speed:** `MiniMax-M2.5-highspeed` is the official fast tier in MiniMax docs.
 - **Cost:** MiniMax pricing lists the same input cost and a higher output cost for highspeed.
-- **Compatibility:** OpenClaw still accepts legacy `MiniMax-M2.5-Lightning` configs, but prefer
-  `MiniMax-M2.5-highspeed` for new setup.
+- **Current model IDs:** use `MiniMax-M2.5` or `MiniMax-M2.5-highspeed`.
 
 ## Choose a setup
 
-### MiniMax OAuth (Coding Plan) — recommended
+### MiniMax OAuth (Coding Plan) - recommended
 
 **Best for:** quick setup with MiniMax Coding Plan via OAuth, no API key required.
 
 Enable the bundled OAuth plugin and authenticate:
 
 ```bash
-openclaw plugins enable minimax-portal-auth  # skip if already loaded.
+openclaw plugins enable minimax  # skip if already loaded.
 openclaw gateway restart  # restart if gateway is already running
 openclaw onboard --auth-choice minimax-portal
 ```
@@ -53,7 +52,7 @@ You will be prompted to select an endpoint:
 - **Global** - International users (`api.minimax.io`)
 - **CN** - Users in China (`api.minimaxi.com`)
 
-See [MiniMax OAuth plugin README](https://github.com/openclaw/openclaw/tree/main/extensions/minimax-portal-auth) for details.
+See [MiniMax plugin README](https://github.com/openclaw/openclaw/tree/main/extensions/minimax) for details.
 
 ### MiniMax M2.5 (API key)
 
@@ -152,7 +151,7 @@ Configure manually via `openclaw.json`:
           {
             id: "minimax-m2.5-gs32",
             name: "MiniMax M2.5 GS32",
-            reasoning: false,
+            reasoning: true,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 196608,
@@ -195,7 +194,7 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 
 ## Troubleshooting
 
-### “Unknown model: minimax/MiniMax-M2.5”
+### "Unknown model: minimax/MiniMax-M2.5"
 
 This usually means the **MiniMax provider isn’t configured** (no provider entry
 and no MiniMax auth profile/env key found). A fix for this detection is in
@@ -210,7 +209,6 @@ Make sure the model id is **case‑sensitive**:
 
 - `minimax/MiniMax-M2.5`
 - `minimax/MiniMax-M2.5-highspeed`
-- `minimax/MiniMax-M2.5-Lightning` (legacy)
 
 Then recheck with:
 

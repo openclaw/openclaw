@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
-import { stripMarkdown } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import {
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
+import type { OpenClawConfig } from "./runtime-api.js";
+import { stripMarkdown } from "./runtime-api.js";
 import { warnBlueBubbles } from "./runtime.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
@@ -106,6 +106,19 @@ function resolvePrivateApiDecision(params: {
     throwEffectDisabledError,
     warningMessage: `Private API status unknown; sending without ${requested}. Run a status probe to restore private-api features.`,
   };
+}
+
+async function parseBlueBubblesMessageResponse(res: Response): Promise<BlueBubblesSendResult> {
+  const body = await res.text();
+  if (!body) {
+    return { messageId: "ok" };
+  }
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return { messageId: extractBlueBubblesMessageId(parsed) };
+  } catch {
+    return { messageId: "ok" };
+  }
 }
 
 type BlueBubblesChatRecord = Record<string, unknown>;
@@ -342,16 +355,7 @@ async function createNewChatWithMessage(params: {
     }
     throw new Error(`BlueBubbles create chat failed (${res.status}): ${errorText || "unknown"}`);
   }
-  const body = await res.text();
-  if (!body) {
-    return { messageId: "ok" };
-  }
-  try {
-    const parsed = JSON.parse(body) as unknown;
-    return { messageId: extractBlueBubblesMessageId(parsed) };
-  } catch {
-    return { messageId: "ok" };
-  }
+  return parseBlueBubblesMessageResponse(res);
 }
 
 export async function sendMessageBlueBubbles(
@@ -464,14 +468,5 @@ export async function sendMessageBlueBubbles(
     const errorText = await res.text();
     throw new Error(`BlueBubbles send failed (${res.status}): ${errorText || "unknown"}`);
   }
-  const body = await res.text();
-  if (!body) {
-    return { messageId: "ok" };
-  }
-  try {
-    const parsed = JSON.parse(body) as unknown;
-    return { messageId: extractBlueBubblesMessageId(parsed) };
-  } catch {
-    return { messageId: "ok" };
-  }
+  return parseBlueBubblesMessageResponse(res);
 }

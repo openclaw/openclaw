@@ -1,4 +1,7 @@
+import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { CommandLane } from "../../process/lanes.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -234,7 +237,8 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
-    const job = createJob(state, input);
+    const normalizedInput = normalizeCronCreateDeliveryInput(input);
+    const job = createJob(state, normalizedInput);
     state.store?.jobs.push(job);
 
     // Defensive: recompute all next-run times to ensure consistency
@@ -337,8 +341,43 @@ export async function remove(state: CronServiceState, id: string) {
   });
 }
 
-export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
-  const prepared = await locked(state, async () => {
+type PreparedManualRun =
+  | {
+      ok: true;
+      ran: false;
+      reason: "already-running" | "not-due";
+    }
+  | {
+      ok: true;
+      ran: true;
+      jobId: string;
+      startedAt: number;
+      executionJob: CronJob;
+    }
+  | { ok: false };
+
+type ManualRunDisposition =
+  | Extract<PreparedManualRun, { ran: false }>
+  | { ok: true; runnable: true };
+
+type ManualRunPreflightResult =
+  | { ok: false }
+  | Extract<PreparedManualRun, { ran: false }>
+  | {
+      ok: true;
+      runnable: true;
+      job: CronJob;
+      now: number;
+    };
+
+let nextManualRunId = 1;
+
+async function inspectManualRunPreflight(
+  state: CronServiceState,
+  id: string,
+  mode?: "due" | "force",
+): Promise<ManualRunPreflightResult> {
+  return await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
     // Normalize job tick state (clears stale runningAtMs markers) before
@@ -354,31 +393,70 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     if (!due) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
+    return { ok: true, runnable: true, job, now } as const;
+  });
+}
 
+async function inspectManualRunDisposition(
+  state: CronServiceState,
+  id: string,
+  mode?: "due" | "force",
+): Promise<ManualRunDisposition | { ok: false }> {
+  const result = await inspectManualRunPreflight(state, id, mode);
+  if (!result.ok) {
+    return result;
+  }
+  if ("reason" in result) {
+    return result;
+  }
+  return { ok: true, runnable: true } as const;
+}
+
+async function prepareManualRun(
+  state: CronServiceState,
+  id: string,
+  mode?: "due" | "force",
+): Promise<PreparedManualRun> {
+  const preflight = await inspectManualRunPreflight(state, id, mode);
+  if (!preflight.ok) {
+    return preflight;
+  }
+  if ("reason" in preflight) {
+    return {
+      ok: true,
+      ran: false,
+      reason: preflight.reason,
+    } as const;
+  }
+  return await locked(state, async () => {
     // Reserve this run under lock, then execute outside lock so read ops
     // (`list`, `status`) stay responsive while the run is in progress.
-    job.state.runningAtMs = now;
+    const job = findJobOrThrow(state, id);
+    if (typeof job.state.runningAtMs === "number") {
+      return { ok: true, ran: false, reason: "already-running" as const };
+    }
+    job.state.runningAtMs = preflight.now;
     job.state.lastError = undefined;
     // Persist the running marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
-    emit(state, { jobId: job.id, action: "started", runAtMs: now });
-    const executionJob = JSON.parse(JSON.stringify(job)) as typeof job;
+    emit(state, { jobId: job.id, action: "started", runAtMs: preflight.now });
+    const executionJob = JSON.parse(JSON.stringify(job)) as CronJob;
     return {
       ok: true,
       ran: true,
       jobId: job.id,
-      startedAt: now,
+      startedAt: preflight.now,
       executionJob,
     } as const;
   });
+}
 
-  if (!prepared.ran) {
-    return prepared;
-  }
-  if (!prepared.executionJob || typeof prepared.startedAt !== "number") {
-    return { ok: false } as const;
-  }
+async function finishPreparedManualRun(
+  state: CronServiceState,
+  prepared: Extract<PreparedManualRun, { ran: true }>,
+  mode?: "due" | "force",
+): Promise<void> {
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
   const jobId = prepared.jobId;
@@ -459,8 +537,52 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     await persist(state);
     armTimer(state);
   });
+}
 
+export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
+  const prepared = await prepareManualRun(state, id, mode);
+  if (!prepared.ok || !prepared.ran) {
+    return prepared;
+  }
+  await finishPreparedManualRun(state, prepared, mode);
   return { ok: true, ran: true } as const;
+}
+
+export async function enqueueRun(state: CronServiceState, id: string, mode?: "due" | "force") {
+  const disposition = await inspectManualRunDisposition(state, id, mode);
+  if (!disposition.ok || !("runnable" in disposition && disposition.runnable)) {
+    return disposition;
+  }
+
+  const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
+  void enqueueCommandInLane(
+    CommandLane.Cron,
+    async () => {
+      const result = await run(state, id, mode);
+      if (result.ok && "ran" in result && !result.ran) {
+        state.deps.log.info(
+          { jobId: id, runId, reason: result.reason },
+          "cron: queued manual run skipped before execution",
+        );
+      }
+      return result;
+    },
+    {
+      warnAfterMs: 5_000,
+      onWait: (waitMs, queuedAhead) => {
+        state.deps.log.warn(
+          { jobId: id, runId, waitMs, queuedAhead },
+          "cron: queued manual run waiting for an execution slot",
+        );
+      },
+    },
+  ).catch((err) => {
+    state.deps.log.error(
+      { jobId: id, runId, err: String(err) },
+      "cron: queued manual run background execution failed",
+    );
+  });
+  return { ok: true, enqueued: true, runId } as const;
 }
 
 export function wakeNow(

@@ -60,8 +60,12 @@
       "destination": "/concepts/compaction"
     },
     {
+      "source": "/context-engine",
+      "destination": "/concepts/context-engine"
+    },
+    {
       "source": "/cron",
-      "destination": "/cron-jobs"
+      "destination": "/automation/cron-jobs"
     },
     {
       "source": "/minimax",
@@ -102,6 +106,10 @@
     {
       "source": "/opencode",
       "destination": "/providers/opencode"
+    },
+    {
+      "source": "/opencode-go",
+      "destination": "/providers/opencode-go"
     },
     {
       "source": "/qianfan",
@@ -465,7 +473,7 @@
     },
     {
       "source": "/mac/release",
-      "destination": "/platforms/mac/release"
+      "destination": "/reference/RELEASING"
     },
     {
       "source": "/mac/remote",
@@ -505,11 +513,11 @@
     },
     {
       "source": "/model",
-      "destination": "/models"
+      "destination": "/concepts/models"
     },
     {
       "source": "/model/",
-      "destination": "/models"
+      "destination": "/concepts/models"
     },
     {
       "source": "/models",
@@ -526,10 +534,6 @@
     {
       "source": "/onboarding",
       "destination": "/start/onboarding"
-    },
-    {
-      "source": "/onboarding-config-protocol",
-      "destination": "/experiments/onboarding-config-protocol"
     },
     {
       "source": "/pairing",
@@ -552,10 +556,6 @@
       "destination": "/concepts/presence"
     },
     {
-      "source": "/proposals/model-config",
-      "destination": "/experiments/proposals/model-config"
-    },
-    {
       "source": "/provider-routing",
       "destination": "/channels/channel-routing"
     },
@@ -574,10 +574,6 @@
     {
       "source": "/remote-gateway-readme",
       "destination": "/gateway/remote-gateway-readme"
-    },
-    {
-      "source": "/research/memory",
-      "destination": "/experiments/research/memory"
     },
     {
       "source": "/rpc",
@@ -872,6 +868,7 @@
                 "group": "Hosting and deployment",
                 "pages": [
                   "vps",
+                  "install/kubernetes",
                   "install/fly",
                   "install/hetzner",
                   "install/gcp",
@@ -947,6 +944,7 @@
                   "concepts/agent-loop",
                   "concepts/system-prompt",
                   "concepts/context",
+                  "concepts/context-engine",
                   "concepts/agent-workspace",
                   "concepts/oauth"
                 ]
@@ -1004,7 +1002,8 @@
                   "tools/loop-detection",
                   "tools/reactions",
                   "tools/thinking",
-                  "tools/web"
+                  "tools/web",
+                  "tools/btw"
                 ]
               },
               {
@@ -1012,7 +1011,6 @@
                 "pages": [
                   "tools/browser",
                   "tools/browser-login",
-                  "tools/chrome-extension",
                   "tools/browser-linux-troubleshooting"
                 ]
               },
@@ -1040,10 +1038,12 @@
                 "group": "Extensions",
                 "pages": [
                   "plugins/community",
+                  "plugins/bundles",
                   "plugins/voice-call",
                   "plugins/zalouser",
                   "plugins/manifest",
                   "plugins/agent-tools",
+                  "tools/capability-cookbook",
                   "prose"
                 ]
               },
@@ -1111,6 +1111,7 @@
                   "providers/nvidia",
                   "providers/ollama",
                   "providers/openai",
+                  "providers/opencode-go",
                   "providers/opencode",
                   "providers/openrouter",
                   "providers/qianfan",
@@ -1159,7 +1160,6 @@
                   "platforms/mac/permissions",
                   "platforms/mac/remote",
                   "platforms/mac/signing",
-                  "platforms/mac/release",
                   "platforms/mac/bundled-gateway",
                   "platforms/mac/xpc",
                   "platforms/mac/skills",
@@ -1235,7 +1235,6 @@
                 "group": "Security",
                 "pages": [
                   "security/formal-verification",
-                  "security/README",
                   "security/THREAT-MODEL-ATLAS",
                   "security/CONTRIBUTING-THREAT-MODEL"
                 ]
@@ -1345,23 +1344,8 @@
                 "pages": ["reference/credits"]
               },
               {
-                "group": "Release notes",
+                "group": "Release policy",
                 "pages": ["reference/RELEASING", "reference/test"]
-              },
-              {
-                "group": "Experiments",
-                "pages": [
-                  "design/kilo-gateway-integration",
-                  "experiments/onboarding-config-protocol",
-                  "experiments/plans/acp-thread-bound-agents",
-                  "experiments/plans/acp-unified-streaming-refactor",
-                  "experiments/plans/browser-evaluate-cdp-refactor",
-                  "experiments/plans/openresponses-gateway",
-                  "experiments/plans/pty-process-supervision",
-                  "experiments/plans/session-binding-channel-agnostic",
-                  "experiments/research/memory",
-                  "experiments/proposals/model-config"
-                ]
               }
             ]
           },
@@ -1591,7 +1575,6 @@
                   "zh-CN/tools/apply-patch",
                   "zh-CN/brave-search",
                   "zh-CN/perplexity",
-                  "zh-CN/tools/diffs",
                   "zh-CN/tools/elevated",
                   "zh-CN/tools/exec",
                   "zh-CN/tools/exec-approvals",
@@ -1608,7 +1591,6 @@
                 "pages": [
                   "zh-CN/tools/browser",
                   "zh-CN/tools/browser-login",
-                  "zh-CN/tools/chrome-extension",
                   "zh-CN/tools/browser-linux-troubleshooting"
                 ]
               },
@@ -1745,7 +1727,6 @@
                   "zh-CN/platforms/mac/permissions",
                   "zh-CN/platforms/mac/remote",
                   "zh-CN/platforms/mac/signing",
-                  "zh-CN/platforms/mac/release",
                   "zh-CN/platforms/mac/bundled-gateway",
                   "zh-CN/platforms/mac/xpc",
                   "zh-CN/platforms/mac/skills",
@@ -1928,29 +1909,8 @@
                 "pages": ["zh-CN/reference/credits"]
               },
               {
-                "group": "发布说明",
+                "group": "发布策略",
                 "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
-              },
-              {
-                "group": "实验性功能",
-                "pages": [
-                  "zh-CN/experiments/onboarding-config-protocol",
-                  "zh-CN/experiments/plans/openresponses-gateway",
-                  "zh-CN/experiments/plans/cron-add-hardening",
-                  "zh-CN/experiments/plans/group-policy-hardening",
-                  "zh-CN/experiments/research/memory",
-                  "zh-CN/experiments/proposals/model-config"
-                ]
-              },
-              {
-                "group": "重构方案",
-                "pages": [
-                  "zh-CN/refactor/clawnet",
-                  "zh-CN/refactor/exec-host",
-                  "zh-CN/refactor/outbound-session-mirroring",
-                  "zh-CN/refactor/plugin-sdk",
-                  "zh-CN/refactor/strict-config"
-                ]
               }
             ]
           },

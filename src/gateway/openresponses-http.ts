@@ -8,10 +8,10 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
-import type { ImageContent } from "../commands/agent/types.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -35,6 +35,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveGatewayRequestContext } from "./http-utils.js";
+import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
   CreateResponseBodySchema,
   type CreateResponseBody,
@@ -69,14 +70,6 @@ type ResolvedResponsesLimits = {
   images: InputImageLimits;
 };
 
-function normalizeHostnameAllowlist(values: string[] | undefined): string[] | undefined {
-  if (!values || values.length === 0) {
-    return undefined;
-  }
-  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 function resolveResponsesLimits(
   config: GatewayHttpResponsesConfig | undefined,
 ): ResolvedResponsesLimits {
@@ -91,11 +84,11 @@ function resolveResponsesLimits(
         : DEFAULT_MAX_URL_PARTS,
     files: {
       ...fileLimits,
-      urlAllowlist: normalizeHostnameAllowlist(files?.urlAllowlist),
+      urlAllowlist: normalizeInputHostnameAllowlist(files?.urlAllowlist),
     },
     images: {
       allowUrl: images?.allowUrl ?? true,
-      urlAllowlist: normalizeHostnameAllowlist(images?.urlAllowlist),
+      urlAllowlist: normalizeInputHostnameAllowlist(images?.urlAllowlist),
       allowedMimes: normalizeMimeList(images?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
       maxBytes: images?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
       maxRedirects: images?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
@@ -263,6 +256,7 @@ async function runResponsesAgentCommand(params: {
       bestEffortDeliver: false,
       // HTTP API callers are authenticated operator clients for this gateway context.
       senderIsOwner: true,
+      allowModelOverride: true,
     },
     defaultRuntime,
     params.deps,

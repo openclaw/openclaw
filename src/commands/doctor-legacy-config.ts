@@ -15,6 +15,8 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   changes: string[];
 } {
   const changes: string[] = [];
+  const NANO_BANANA_SKILL_KEY = "nano-banana-pro";
+  const NANO_BANANA_MODEL = "google/gemini-3-pro-image-preview";
   let next: OpenClawConfig = cfg;
 
   const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -291,6 +293,67 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     }
   };
 
+  const normalizeLegacyBrowserProfiles = () => {
+    const rawBrowser = next.browser;
+    if (!isRecord(rawBrowser)) {
+      return;
+    }
+
+    const browser = structuredClone(rawBrowser);
+    let browserChanged = false;
+
+    if ("relayBindHost" in browser) {
+      delete browser.relayBindHost;
+      browserChanged = true;
+      changes.push(
+        "Removed browser.relayBindHost (legacy Chrome extension relay setting; host-local Chrome now uses Chrome MCP existing-session attach).",
+      );
+    }
+
+    const rawProfiles = browser.profiles;
+    if (!isRecord(rawProfiles)) {
+      if (!browserChanged) {
+        return;
+      }
+      next = { ...next, browser };
+      return;
+    }
+
+    const profiles = { ...rawProfiles };
+    let profilesChanged = false;
+    for (const [profileName, rawProfile] of Object.entries(rawProfiles)) {
+      if (!isRecord(rawProfile)) {
+        continue;
+      }
+      const rawDriver = typeof rawProfile.driver === "string" ? rawProfile.driver.trim() : "";
+      if (rawDriver !== "extension") {
+        continue;
+      }
+      profiles[profileName] = {
+        ...rawProfile,
+        driver: "existing-session",
+      };
+      profilesChanged = true;
+      changes.push(
+        `Moved browser.profiles.${profileName}.driver "extension" → "existing-session" (Chrome MCP attach).`,
+      );
+    }
+
+    if (profilesChanged) {
+      browser.profiles = profiles;
+      browserChanged = true;
+    }
+
+    if (!browserChanged) {
+      return;
+    }
+
+    next = {
+      ...next,
+      browser,
+    };
+  };
+
   const seedMissingDefaultAccountsFromSingleAccountBase = () => {
     const channels = next.channels as Record<string, unknown> | undefined;
     if (!channels) {
@@ -365,6 +428,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   normalizeProvider("slack");
   normalizeProvider("discord");
   seedMissingDefaultAccountsFromSingleAccountBase();
+  normalizeLegacyBrowserProfiles();
 
   const normalizeBrowserSsrFPolicyAlias = () => {
     const rawBrowser = next.browser;
@@ -409,7 +473,132 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     );
   };
 
+  const normalizeLegacyNanoBananaSkill = () => {
+    type ModelProviderEntry = Partial<
+      NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
+    >;
+    type ModelsConfigPatch = Partial<NonNullable<OpenClawConfig["models"]>>;
+
+    const rawSkills = next.skills;
+    if (!isRecord(rawSkills)) {
+      return;
+    }
+
+    let skillsChanged = false;
+    let skills = structuredClone(rawSkills);
+
+    if (Array.isArray(skills.allowBundled)) {
+      const allowBundled = skills.allowBundled.filter(
+        (value) => typeof value !== "string" || value.trim() !== NANO_BANANA_SKILL_KEY,
+      );
+      if (allowBundled.length !== skills.allowBundled.length) {
+        if (allowBundled.length === 0) {
+          delete skills.allowBundled;
+          changes.push(`Removed skills.allowBundled entry for ${NANO_BANANA_SKILL_KEY}.`);
+        } else {
+          skills.allowBundled = allowBundled;
+          changes.push(`Removed ${NANO_BANANA_SKILL_KEY} from skills.allowBundled.`);
+        }
+        skillsChanged = true;
+      }
+    }
+
+    const rawEntries = skills.entries;
+    if (!isRecord(rawEntries)) {
+      if (skillsChanged) {
+        next = { ...next, skills };
+      }
+      return;
+    }
+
+    const rawLegacyEntry = rawEntries[NANO_BANANA_SKILL_KEY];
+    if (!isRecord(rawLegacyEntry)) {
+      if (skillsChanged) {
+        next = { ...next, skills };
+      }
+      return;
+    }
+
+    const existingImageGenerationModel = next.agents?.defaults?.imageGenerationModel;
+    if (existingImageGenerationModel === undefined) {
+      next = {
+        ...next,
+        agents: {
+          ...next.agents,
+          defaults: {
+            ...next.agents?.defaults,
+            imageGenerationModel: {
+              primary: NANO_BANANA_MODEL,
+            },
+          },
+        },
+      };
+      changes.push(
+        `Moved skills.entries.${NANO_BANANA_SKILL_KEY} → agents.defaults.imageGenerationModel.primary (${NANO_BANANA_MODEL}).`,
+      );
+    }
+
+    const legacyEnv = isRecord(rawLegacyEntry.env) ? rawLegacyEntry.env : undefined;
+    const legacyEnvApiKey =
+      typeof legacyEnv?.GEMINI_API_KEY === "string" ? legacyEnv.GEMINI_API_KEY.trim() : "";
+    const legacyApiKey =
+      legacyEnvApiKey ||
+      (typeof rawLegacyEntry.apiKey === "string"
+        ? rawLegacyEntry.apiKey.trim()
+        : rawLegacyEntry.apiKey && isRecord(rawLegacyEntry.apiKey)
+          ? structuredClone(rawLegacyEntry.apiKey)
+          : undefined);
+
+    const rawModels = (
+      isRecord(next.models) ? structuredClone(next.models) : {}
+    ) as ModelsConfigPatch;
+    const rawProviders = (
+      isRecord(rawModels.providers) ? { ...rawModels.providers } : {}
+    ) as Record<string, ModelProviderEntry>;
+    const rawGoogle = (
+      isRecord(rawProviders.google) ? { ...rawProviders.google } : {}
+    ) as ModelProviderEntry;
+    const hasGoogleApiKey = rawGoogle.apiKey !== undefined;
+    if (!hasGoogleApiKey && legacyApiKey) {
+      rawGoogle.apiKey = legacyApiKey;
+      rawProviders.google = rawGoogle;
+      rawModels.providers = rawProviders as NonNullable<OpenClawConfig["models"]>["providers"];
+      next = {
+        ...next,
+        models: rawModels as OpenClawConfig["models"],
+      };
+      changes.push(
+        `Moved skills.entries.${NANO_BANANA_SKILL_KEY}.${legacyEnvApiKey ? "env.GEMINI_API_KEY" : "apiKey"} → models.providers.google.apiKey.`,
+      );
+    }
+
+    const entries = { ...rawEntries };
+    delete entries[NANO_BANANA_SKILL_KEY];
+    if (Object.keys(entries).length === 0) {
+      delete skills.entries;
+      changes.push(`Removed legacy skills.entries.${NANO_BANANA_SKILL_KEY}.`);
+    } else {
+      skills.entries = entries;
+      changes.push(`Removed legacy skills.entries.${NANO_BANANA_SKILL_KEY}.`);
+    }
+    skillsChanged = true;
+
+    if (Object.keys(skills).length === 0) {
+      const { skills: _ignored, ...rest } = next;
+      next = rest;
+      return;
+    }
+
+    if (skillsChanged) {
+      next = {
+        ...next,
+        skills,
+      };
+    }
+  };
+
   normalizeBrowserSsrFPolicyAlias();
+  normalizeLegacyNanoBananaSkill();
 
   const legacyAckReaction = cfg.messages?.ackReaction?.trim();
   const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;

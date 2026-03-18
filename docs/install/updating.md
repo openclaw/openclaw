@@ -22,7 +22,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 
 Notes:
 
-- Add `--no-onboard` if you don’t want the onboarding wizard to run again.
+- Add `--no-onboard` if you don’t want onboarding to run again.
 - For **source installs**, use:
 
   ```bash
@@ -65,7 +65,25 @@ openclaw update --channel dev
 openclaw update --channel stable
 ```
 
-Use `--tag <dist-tag|version>` for a one-off install tag/version.
+Use `--tag <dist-tag|version|spec>` for a one-off package target override.
+
+For the current GitHub `main` head via a package-manager install:
+
+```bash
+openclaw update --tag main
+```
+
+Manual equivalents:
+
+```bash
+npm i -g github:openclaw/openclaw#main
+```
+
+```bash
+pnpm add -g github:openclaw/openclaw#main
+```
+
+You can also pass an explicit package spec to `--tag` for one-off updates (for example a GitHub ref or tarball URL).
 
 See [Development channels](/install/development-channels) for channel semantics and release notes.
 
@@ -250,7 +268,7 @@ git checkout main
 git pull
 ```
 
-## If you’re stuck
+## If you are stuck
 
 - Run `openclaw doctor` again and read the output carefully (it often tells you the fix).
 - Check: [Troubleshooting](/gateway/troubleshooting)

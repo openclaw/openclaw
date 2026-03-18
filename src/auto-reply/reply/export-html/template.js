@@ -665,6 +665,10 @@
     return div.innerHTML;
   }
 
+  function escapeHtmlAttr(text) {
+    return escapeHtml(text).replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+  }
+
   // Validate image fields before interpolating data URLs.
   const SAFE_IMAGE_MIME_RE = /^image\/(png|jpeg|gif|webp|svg\+xml|bmp|tiff|avif)$/i;
   const SAFE_BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
@@ -1712,6 +1716,22 @@
     return text.replace(/<(?=[a-zA-Z/])/g, "&lt;");
   }
 
+  const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
+
+  function normalizeMarkdownImageLabel(text) {
+    const trimmed = typeof text === "string" ? text.trim() : "";
+    return trimmed || "image";
+  }
+
+  function renderMarkdownImage(token) {
+    const label = normalizeMarkdownImageLabel(token?.text);
+    const href = typeof token?.href === "string" ? token.href.trim() : "";
+    if (!INLINE_DATA_IMAGE_RE.test(href)) {
+      return escapeHtml(label);
+    }
+    return `<img src="${escapeHtmlAttr(href)}" alt="${escapeHtmlAttr(label)}">`;
+  }
+
   // Configure marked with syntax highlighting and HTML escaping for text
   marked.use({
     breaks: true,
@@ -1749,6 +1769,9 @@
       // Raw HTML blocks/inline HTML: escape to prevent script execution.
       html(token) {
         return escapeHtml(token.text);
+      },
+      image(token) {
+        return renderMarkdownImage(token);
       },
     },
   });

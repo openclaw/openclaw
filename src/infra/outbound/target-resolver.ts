@@ -40,6 +40,61 @@ export async function resolveChannelTarget(params: {
   return resolveMessagingTarget(params);
 }
 
+export async function maybeResolveIdLikeTarget(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  input: string;
+  accountId?: string | null;
+  preferredKind?: TargetResolveKind;
+}): Promise<ResolvedMessagingTarget | undefined> {
+  const raw = normalizeChannelTargetInput(params.input);
+  if (!raw) {
+    return undefined;
+  }
+  return await maybeResolvePluginTarget(params, { requireIdLike: true });
+}
+
+async function maybeResolvePluginTarget(
+  params: {
+    cfg: OpenClawConfig;
+    channel: ChannelId;
+    input: string;
+    accountId?: string | null;
+    preferredKind?: TargetResolveKind;
+  },
+  options?: { requireIdLike?: boolean },
+): Promise<ResolvedMessagingTarget | undefined> {
+  const raw = normalizeChannelTargetInput(params.input);
+  if (!raw) {
+    return undefined;
+  }
+  const plugin = getChannelPlugin(params.channel);
+  const resolver = plugin?.messaging?.targetResolver;
+  if (!resolver?.resolveTarget) {
+    return undefined;
+  }
+  const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
+  if (options?.requireIdLike && resolver.looksLikeId && !resolver.looksLikeId(raw, normalized)) {
+    return undefined;
+  }
+  const resolved = await resolver.resolveTarget({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    input: raw,
+    normalized,
+    preferredKind: params.preferredKind,
+  });
+  if (!resolved) {
+    return undefined;
+  }
+  return {
+    to: resolved.to,
+    kind: resolved.kind,
+    display: resolved.display,
+    source: resolved.source ?? "normalized",
+  };
+}
+
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
 
@@ -158,17 +213,22 @@ function detectTargetKind(
   if (!trimmed) {
     return "group";
   }
+  const inferredChatType = getChannelPlugin(channel)?.messaging?.inferTargetChatType?.({ to: raw });
+  if (inferredChatType === "direct") {
+    return "user";
+  }
+  if (inferredChatType === "channel") {
+    return "channel";
+  }
+  if (inferredChatType === "group") {
+    return "group";
+  }
 
   if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^user:/i.test(trimmed)) {
     return "user";
   }
   if (trimmed.startsWith("#") || /^channel:/i.test(trimmed)) {
     return "group";
-  }
-
-  // For some channels (e.g., BlueBubbles/iMessage), bare phone numbers are almost always DM targets.
-  if ((channel === "bluebubbles" || channel === "imessage") && /^\+?\d{6,}$/.test(trimmed)) {
-    return "user";
   }
 
   return "group";
@@ -372,11 +432,6 @@ export async function resolveMessagingTarget(params: {
       return true;
     }
     if (/^\+?\d{6,}$/.test(trimmed)) {
-      // BlueBubbles/iMessage phone numbers should usually resolve via the directory to a DM chat,
-      // otherwise the provider may pick an existing group containing that handle.
-      if (params.channel === "bluebubbles" || params.channel === "imessage") {
-        return false;
-      }
       return true;
     }
     if (trimmed.includes("@thread")) {
@@ -388,6 +443,19 @@ export async function resolveMessagingTarget(params: {
     return false;
   };
   if (looksLikeTargetId()) {
+    const resolvedIdLikeTarget = await maybeResolveIdLikeTarget({
+      cfg: params.cfg,
+      channel: params.channel,
+      input: raw,
+      accountId: params.accountId,
+      preferredKind: params.preferredKind,
+    });
+    if (resolvedIdLikeTarget) {
+      return {
+        ok: true,
+        target: resolvedIdLikeTarget,
+      };
+    }
     return buildNormalizedResolveResult({
       channel: params.channel,
       raw,
@@ -440,18 +508,18 @@ export async function resolveMessagingTarget(params: {
       candidates: match.entries,
     };
   }
-  // For iMessage-style channels, allow sending directly to the normalized handle
-  // even if the directory doesn't contain an entry yet.
-  if (
-    (params.channel === "bluebubbles" || params.channel === "imessage") &&
-    /^\+?\d{6,}$/.test(query)
-  ) {
-    return buildNormalizedResolveResult({
-      channel: params.channel,
-      raw,
-      normalized,
-      kind,
-    });
+  const resolvedFallbackTarget = await maybeResolvePluginTarget({
+    cfg: params.cfg,
+    channel: params.channel,
+    input: raw,
+    accountId: params.accountId,
+    preferredKind: params.preferredKind,
+  });
+  if (resolvedFallbackTarget) {
+    return {
+      ok: true,
+      target: resolvedFallbackTarget,
+    };
   }
 
   return {
