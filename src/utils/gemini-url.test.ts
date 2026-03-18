@@ -22,57 +22,45 @@ describe("normalizeGeminiBaseUrl", () => {
     );
   });
 
-  it("preserves existing /v1beta in baseUrl", () => {
-    expect(normalizeGeminiBaseUrl("https://proxy.example.com/v1beta", DEFAULT_FALLBACK)).toBe(
-      "https://proxy.example.com/v1beta",
-    );
-  });
-
-  it("preserves existing /v1beta with trailing slash", () => {
-    expect(normalizeGeminiBaseUrl("https://proxy.example.com/v1beta/", DEFAULT_FALLBACK)).toBe(
-      "https://proxy.example.com/v1beta",
-    );
-  });
-
-  it("preserves existing /v1 in baseUrl", () => {
-    expect(normalizeGeminiBaseUrl("https://proxy.example.com/v1", DEFAULT_FALLBACK)).toBe(
-      "https://proxy.example.com/v1",
-    );
-  });
-
-  it("preserves existing /v2 in baseUrl", () => {
-    expect(normalizeGeminiBaseUrl("https://proxy.example.com/v2", DEFAULT_FALLBACK)).toBe(
-      "https://proxy.example.com/v2",
-    );
-  });
-
-  it("appends /v1beta when baseUrl has no version segment", () => {
+  it("preserves URL verbatim without injecting any versions", () => {
     expect(normalizeGeminiBaseUrl("https://proxy.example.com", DEFAULT_FALLBACK)).toBe(
-      "https://proxy.example.com/v1beta",
+      "https://proxy.example.com",
     );
   });
 
-  it("appends /v1beta when baseUrl is bare domain with trailing slash", () => {
+  it("strips single trailing slash", () => {
     expect(normalizeGeminiBaseUrl("https://proxy.example.com/", DEFAULT_FALLBACK)).toBe(
-      "https://proxy.example.com/v1beta",
+      "https://proxy.example.com",
     );
-  });
-
-  it("strips /openai suffix before checking version", () => {
-    expect(normalizeGeminiBaseUrl("https://proxy.example.com/openai", DEFAULT_FALLBACK)).toBe(
-      "https://proxy.example.com/v1beta",
-    );
-  });
-
-  it("strips /openai suffix and preserves version segment", () => {
-    expect(
-      normalizeGeminiBaseUrl("https://proxy.example.com/v1beta/openai", DEFAULT_FALLBACK),
-    ).toBe("https://proxy.example.com/v1beta");
   });
 
   it("strips multiple trailing slashes", () => {
     expect(normalizeGeminiBaseUrl("https://proxy.example.com///", DEFAULT_FALLBACK)).toBe(
-      "https://proxy.example.com/v1beta",
+      "https://proxy.example.com",
+    );
+  });
+
+  it("strips /openai suffix from proxy compat layer", () => {
+    expect(normalizeGeminiBaseUrl("https://proxy.example.com/openai", DEFAULT_FALLBACK)).toBe(
+      "https://proxy.example.com",
+    );
+  });
+
+  it("strips /openai suffix and trailing slashes", () => {
+    expect(normalizeGeminiBaseUrl("https://proxy.example.com/openai/", DEFAULT_FALLBACK)).toBe(
+      "https://proxy.example.com",
+    );
+  });
+
+  it("does not strip /openai when it is not the very last segment", () => {
+    expect(
+      normalizeGeminiBaseUrl("https://proxy.example.com/openai/v1beta", DEFAULT_FALLBACK),
+    ).toBe("https://proxy.example.com/openai/v1beta");
+  });
+
+  it("handles valid custom proxy with embedded /v1 segment verbatim", () => {
+    expect(normalizeGeminiBaseUrl("https://proxy.example.com/v1/openai", DEFAULT_FALLBACK)).toBe(
+      "https://proxy.example.com/v1",
     );
   });
 
@@ -82,33 +70,9 @@ describe("normalizeGeminiBaseUrl", () => {
     ).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
-  it("handles baseUrl with path segments but no version", () => {
-    expect(normalizeGeminiBaseUrl("https://proxy.example.com/gemini/api", DEFAULT_FALLBACK)).toBe(
-      "https://proxy.example.com/gemini/api/v1beta",
-    );
-  });
-
-  it("does not double-append /v1beta to fallback that already has it", () => {
-    expect(
-      normalizeGeminiBaseUrl(undefined, "https://generativelanguage.googleapis.com/v1beta"),
-    ).toBe("https://generativelanguage.googleapis.com/v1beta");
-  });
-
-  it("does not strip /openai when it is not a trailing segment", () => {
-    expect(
-      normalizeGeminiBaseUrl("https://proxy.example.com/openai/v1beta", DEFAULT_FALLBACK),
-    ).toBe("https://proxy.example.com/openai/v1beta");
-  });
-
-  it("does not strip /openai when followed by other path", () => {
-    expect(normalizeGeminiBaseUrl("https://proxy.example.com/openai/v1", DEFAULT_FALLBACK)).toBe(
-      "https://proxy.example.com/openai/v1",
-    );
-  });
-
-  it("appends /v1beta to fallback without version segment", () => {
+  it("handles fallback that does not have a version segment correctly", () => {
     expect(normalizeGeminiBaseUrl(undefined, "https://generativelanguage.googleapis.com")).toBe(
-      "https://generativelanguage.googleapis.com/v1beta",
+      "https://generativelanguage.googleapis.com",
     );
   });
 });
