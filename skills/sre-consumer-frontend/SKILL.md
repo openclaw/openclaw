@@ -163,4 +163,4 @@ consumer-bug-preflight.sh prd "Can't repay USDT from Safe app"
 
 ## Reference
 
-See `morpho-sre/references/consumer-frontend-guide.md` for the full consumer frontend playbook (if available), and `morpho-sre` SKILL.md section "Consumer Frontend Investigation" for the canonical rules.
+See `morpho-sre/references/consumer-frontend-guide.md` for the full consumer frontend playbook.

@@ -126,4 +126,4 @@ In these cases, name the PR candidate (repo, path, title, validation) in the thr
 
 ## Reference
 
-See `morpho-sre/references/auto-remediation-guide.md` for the full auto-remediation playbook (if available), and `morpho-sre` SKILL.md section "Auto Remediation PR" for the canonical rules.
+See `morpho-sre/references/auto-remediation-guide.md` for the full auto-remediation playbook.

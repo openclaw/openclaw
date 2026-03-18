@@ -161,4 +161,4 @@ Specialist agents return a single JSON object (no markdown fences). Fixer agents
 
 ## Reference
 
-See `morpho-sre/references/sentinel-operations.md` for the full sentinel operations playbook (if available), and `morpho-sre` SKILL.md sections "Sentinel Snapshot", "Sentinel Triage", "Subagent Team Pattern", and "Agent-Specific Modes" for the canonical rules.
+See `morpho-sre/references/sentinel-operations.md` for the full sentinel operations playbook.

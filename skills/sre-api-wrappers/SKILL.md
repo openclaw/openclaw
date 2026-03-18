@@ -101,7 +101,7 @@ grafana-api.sh GET '/api/dashboards/uid/<uid>'
 grafana-api.sh POST /api/dashboards/db /tmp/dashboard-payload.json
 ```
 
-See `morpho-sre` SKILL.md section "Grafana Dashboard Assistance" for full discovery flow.
+See `morpho-sre/references/grafana-operations.md` for the full Grafana discovery flow.
 
 ## Wiz
 
