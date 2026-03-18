@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/twitch";
 import { afterEach, beforeEach, vi } from "vitest";
+import type { OpenClawConfig } from "../api.js";
 
 export const BASE_TWITCH_TEST_ACCOUNT = {
   username: "testbot",
