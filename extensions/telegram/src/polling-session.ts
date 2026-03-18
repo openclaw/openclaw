@@ -186,20 +186,6 @@ export class TelegramPollingSession {
       return "ready";
     }
     try {
-      // Check if a webhook is actually active before calling deleteWebhook.
-      // On startup with multiple accounts all going through the same SOCKS proxy,
-      // firing deleteWebhook in parallel causes burst failures. Bots in polling
-      // mode typically have no webhook set, so we can skip the POST entirely.
-      const webhookInfo = await withTelegramApiErrorLogging({
-        operation: "getWebhookInfo",
-        runtime: this.opts.runtime,
-        fn: () => bot.api.getWebhookInfo(),
-      });
-      if (!webhookInfo.url) {
-        // No webhook is active; nothing to clean up.
-        this.#webhookCleared = true;
-        return "ready";
-      }
       await withTelegramApiErrorLogging({
         operation: "deleteWebhook",
         runtime: this.opts.runtime,
