@@ -10,12 +10,8 @@ public enum TalkPromptBuilder: Sendable {
             "Talk Mode active. Reply in a concise, spoken tone.",
         ]
 
-        if let sttBackendName {
-            lines.append("STT: \(sttBackendName).")
-        }
-        if let sttBackendDebugHint, !sttBackendDebugHint.isEmpty {
-            lines.append("(\(sttBackendDebugHint))")
-        }
+        // Do not inject sttBackendName / sttBackendDebugHint into the prompt; the model would
+        // otherwise mention them in replies (e.g. "I'm using ExecuTorch...").
 
         if includeVoiceDirectiveHint {
             lines.append(
@@ -31,5 +27,18 @@ public enum TalkPromptBuilder: Sendable {
         lines.append("")
         lines.append(transcript)
         return lines.joined(separator: "\n")
+    }
+
+    /// Returns only the transcript portion of a Talk Mode prompt for UI display, or the original
+    /// string if it does not look like a Talk Mode prompt. Use when rendering user message bubbles
+    /// so the chat shows only what the user said, not the system instructions.
+    public static func displayText(fromPrompt prompt: String) -> String {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains("Talk Mode active."),
+              let range = trimmed.range(of: "\n\n")
+        else { return prompt }
+        let before = String(trimmed[..<range.lowerBound])
+        guard before.hasPrefix("Talk Mode active.") else { return prompt }
+        return String(trimmed[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

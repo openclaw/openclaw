@@ -27,11 +27,28 @@ final class TalkPromptBuilderTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Talk Mode active."))
     }
 
-    func testBuildIncludesSttBackendWhenProvided() {
+    func testBuildDoesNotIncludeSttBackendInPrompt() {
         let prompt = TalkPromptBuilder.build(
             transcript: "Hi",
             interruptedAtSeconds: nil,
             sttBackendName: "ExecuTorch Parakeet-TDT")
-        XCTAssertTrue(prompt.contains("STT: ExecuTorch Parakeet-TDT."))
+        XCTAssertFalse(prompt.contains("ExecuTorch"), "STT backend must not appear in prompt so the model does not mention it")
+        XCTAssertTrue(prompt.hasSuffix("\n\nHi"))
+    }
+
+    func testDisplayTextStripsTalkModePrefix() {
+        let fullPrompt = TalkPromptBuilder.build(
+            transcript: "Hello, can you hear me?",
+            interruptedAtSeconds: nil,
+            includeVoiceDirectiveHint: true)
+        let display = TalkPromptBuilder.displayText(fromPrompt: fullPrompt)
+        XCTAssertEqual(display, "Hello, can you hear me?")
+        XCTAssertFalse(display.contains("Talk Mode active"))
+        XCTAssertFalse(display.contains("ElevenLabs"))
+    }
+
+    func testDisplayTextReturnsOriginalWhenNotTalkModePrompt() {
+        let plain = "Just a normal user message."
+        XCTAssertEqual(TalkPromptBuilder.displayText(fromPrompt: plain), plain)
     }
 }
