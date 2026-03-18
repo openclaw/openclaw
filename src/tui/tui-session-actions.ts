@@ -121,16 +121,19 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const resolveModelSelection = (entry?: SessionInfoEntry) => {
+    // User-set model override always takes priority over the session's
+    // last-resolved model (which reflects whatever model ran the most recent
+    // turn — heartbeat flash-lite, compaction sonnet, etc.).
+    const overrideModel = entry?.modelOverride?.trim();
+    if (overrideModel) {
+      const overrideProvider = entry?.providerOverride?.trim() || state.sessionInfo.modelProvider;
+      return { modelProvider: overrideProvider, model: overrideModel };
+    }
     if (entry?.modelProvider || entry?.model) {
       return {
         modelProvider: entry.modelProvider ?? state.sessionInfo.modelProvider,
         model: entry.model ?? state.sessionInfo.model,
       };
-    }
-    const overrideModel = entry?.modelOverride?.trim();
-    if (overrideModel) {
-      const overrideProvider = entry?.providerOverride?.trim() || state.sessionInfo.modelProvider;
-      return { modelProvider: overrideProvider, model: overrideModel };
     }
     return {
       modelProvider: state.sessionInfo.modelProvider,
