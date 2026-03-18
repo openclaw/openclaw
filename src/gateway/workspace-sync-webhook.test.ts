@@ -24,7 +24,7 @@ function createMockResponse() {
 
 describe("Workspace Sync Webhook Handler", () => {
   beforeEach(() => {
-    vi.spyOn(configModule, "loadConfig").mockResolvedValue({} as unknown as OpenClawConfig);
+    vi.spyOn(configModule, "loadConfig").mockReturnValue({} as unknown as OpenClawConfig);
     vi.spyOn(syncModule, "pullAndApplyWorkspaceSync").mockResolvedValue({
       ok: true,
       filesUpdated: ["SOUL.md"],
@@ -36,7 +36,7 @@ describe("Workspace Sync Webhook Handler", () => {
   });
 
   it("returns 403 if feature is disabled", async () => {
-    vi.mocked(configModule.loadConfig).mockResolvedValue({
+    vi.mocked(configModule.loadConfig).mockReturnValue({
       agents: { defaults: { workspaceSync: { enabled: false } } },
     } as unknown as OpenClawConfig);
 
@@ -51,7 +51,7 @@ describe("Workspace Sync Webhook Handler", () => {
   });
 
   it("returns 403 if webhook is disabled", async () => {
-    vi.mocked(configModule.loadConfig).mockResolvedValue({
+    vi.mocked(configModule.loadConfig).mockReturnValue({
       agents: { defaults: { workspaceSync: { enabled: true, webhook: { enabled: false } } } },
     } as unknown as OpenClawConfig);
 
@@ -65,7 +65,7 @@ describe("Workspace Sync Webhook Handler", () => {
   });
 
   it("returns 401 if token is missing", async () => {
-    vi.mocked(configModule.loadConfig).mockResolvedValue({
+    vi.mocked(configModule.loadConfig).mockReturnValue({
       agents: {
         defaults: { workspaceSync: { enabled: true, webhook: { enabled: true, token: "secret" } } },
       },
@@ -80,7 +80,7 @@ describe("Workspace Sync Webhook Handler", () => {
   });
 
   it("returns 401 if token is invalid", async () => {
-    vi.mocked(configModule.loadConfig).mockResolvedValue({
+    vi.mocked(configModule.loadConfig).mockReturnValue({
       agents: {
         defaults: { workspaceSync: { enabled: true, webhook: { enabled: true, token: "secret" } } },
       },
@@ -95,7 +95,7 @@ describe("Workspace Sync Webhook Handler", () => {
   });
 
   it("authenticates via specific webhook token", async () => {
-    vi.mocked(configModule.loadConfig).mockResolvedValue({
+    vi.mocked(configModule.loadConfig).mockReturnValue({
       agents: {
         defaults: {
           workspaceSync: { enabled: true, webhook: { enabled: true, token: "specific-secret" } },
@@ -113,7 +113,7 @@ describe("Workspace Sync Webhook Handler", () => {
   });
 
   it("authenticates via global hooks token fallback", async () => {
-    vi.mocked(configModule.loadConfig).mockResolvedValue({
+    vi.mocked(configModule.loadConfig).mockReturnValue({
       hooks: { token: "global-secret" },
       agents: { defaults: { workspaceSync: { enabled: true, webhook: { enabled: true } } } },
     } as unknown as OpenClawConfig);
@@ -128,7 +128,7 @@ describe("Workspace Sync Webhook Handler", () => {
   });
 
   it("handles sync errors properly (returns 500)", async () => {
-    vi.mocked(configModule.loadConfig).mockResolvedValue({
+    vi.mocked(configModule.loadConfig).mockReturnValue({
       agents: {
         defaults: { workspaceSync: { enabled: true, webhook: { enabled: true, token: "secret" } } },
       },

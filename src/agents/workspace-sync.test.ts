@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,7 +18,7 @@ import {
 } from "./workspace.js";
 
 function buildCryptoHash(data: string) {
-  return require("node:crypto").createHash("sha256").update(data).digest("hex");
+  return crypto.createHash("sha256").update(data).digest("hex");
 }
 
 describe("Workspace Sync Service", () => {

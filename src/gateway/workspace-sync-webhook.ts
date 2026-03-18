@@ -1,9 +1,22 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import crypto from "node:crypto";
 import { pullAndApplyWorkspaceSync } from "../agents/workspace-sync.js";
 import { loadConfig } from "../config/config.js";
 import { getChildLogger } from "../logging/logger.js";
 
 const logger = getChildLogger({ subsystem: "workspace-sync-webhook" });
+
+/**
+ * Constant-time string comparison to prevent timing attacks.
+ */
+function safeCompare(provided: string, expected: string): boolean {
+  if (provided.length !== expected.length) {
+    // Compare against itself to ensure consistent timing
+    crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(provided));
+    return false;
+  }
+  return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+}
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
@@ -26,13 +39,13 @@ async function validateToken(request: IncomingMessage): Promise<boolean> {
 
   // 1. Check specific workspace webhook token
   const webhookToken = config.agents?.defaults?.workspaceSync?.webhook?.token;
-  if (webhookToken && token === webhookToken) {
+  if (webhookToken && safeCompare(token, webhookToken)) {
     return true;
   }
 
   // 2. Fallback to global hooks token if no specific token is set
   const globalHookToken = config.hooks?.token;
-  if (!webhookToken && globalHookToken && token === globalHookToken) {
+  if (!webhookToken && globalHookToken && safeCompare(token, globalHookToken)) {
     return true;
   }
 

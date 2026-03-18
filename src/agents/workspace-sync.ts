@@ -129,7 +129,8 @@ export async function pullWorkspaceManifest(
       sha256: manifest.sha256,
     };
   } catch (err) {
-    throw new Error("Failed to pull workspace manifest", { cause: err });
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to pull workspace manifest: ${reason}`, { cause: err });
   }
 }
 

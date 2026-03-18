@@ -788,6 +788,15 @@ export function createGatewayHttpServer(opts: {
         : null;
       const requestStages: GatewayHttpRequestStage[] = [
         {
+          name: "workspace-sync",
+          run: async () => {
+            if (req.method !== "POST" || requestPath !== "/hooks/workspace-sync") {
+              return false;
+            }
+            return handleWorkspaceSyncWebhook(req, res, trustedProxies);
+          },
+        },
+        {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
         },
@@ -804,15 +813,6 @@ export function createGatewayHttpServer(opts: {
         {
           name: "slack",
           run: () => handleSlackHttpRequest(req, res),
-        },
-        {
-          name: "workspace-sync",
-          run: async () => {
-            if (req.method !== "POST" || requestPath !== "/hooks/workspace-sync") {
-              return false;
-            }
-            return handleWorkspaceSyncWebhook(req, res, trustedProxies);
-          },
         },
       ];
       if (openResponsesEnabled) {
