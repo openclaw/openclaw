@@ -414,6 +414,10 @@
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
     },
+    "./plugin-sdk/provider-auth-api-key": {
+      "types": "./dist/plugin-sdk/provider-auth-api-key.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth-api-key.js"
+    },
     "./plugin-sdk/provider-auth-login": {
       "types": "./dist/plugin-sdk/provider-auth-login.d.ts",
       "default": "./dist/plugin-sdk/provider-auth-login.js"
