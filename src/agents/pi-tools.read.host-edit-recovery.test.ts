@@ -61,6 +61,8 @@ describe("createHostWorkspaceEditTool post-write recovery", () => {
       : [];
     const textBlock = content.find((b) => b?.type === "text" && typeof b.text === "string");
     expect(textBlock?.text).toContain("Successfully replaced text");
+    // isError must be explicitly false so the framework does not surface a false failure notification
+    expect((result as { isError?: unknown }).isError).toBe(false);
   });
 
   it("rethrows when file on disk does not contain newText", async () => {

@@ -63,6 +63,7 @@ export function wrapHostEditToolWithPostWriteRecovery(
             oldText !== undefined && oldText.length > 0 && content.includes(oldText);
           if (hasNew && !stillHasOld) {
             return {
+              isError: false,
               content: [
                 {
                   type: "text",
