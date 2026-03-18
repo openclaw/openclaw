@@ -46,6 +46,23 @@ export type ModelCompatConfig = SupportedOpenAICompatFields & {
 
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
 
+export const GOOGLE_SAFETY_THRESHOLDS = [
+  "OFF",
+  "BLOCK_NONE",
+  "BLOCK_ONLY_HIGH",
+  "BLOCK_MEDIUM_AND_ABOVE",
+  "BLOCK_LOW_AND_ABOVE",
+] as const;
+
+export type GoogleSafetyThreshold = (typeof GOOGLE_SAFETY_THRESHOLDS)[number];
+
+export type GoogleSafetySettingsConfig = {
+  harassment?: GoogleSafetyThreshold;
+  hateSpeech?: GoogleSafetyThreshold;
+  sexuallyExplicit?: GoogleSafetyThreshold;
+  dangerousContent?: GoogleSafetyThreshold;
+};
+
 export type ModelDefinitionConfig = {
   id: string;
   name: string;
@@ -69,6 +86,7 @@ export type ModelProviderConfig = {
   apiKey?: SecretInput;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
+  safetySettings?: GoogleSafetySettingsConfig;
   injectNumCtxForOpenAICompat?: boolean;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;

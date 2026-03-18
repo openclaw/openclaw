@@ -152,6 +152,69 @@ describe("web search provider config", () => {
   });
 });
 
+describe("models.providers.google.safetySettings", () => {
+  function buildGoogleProviderConfig(
+    safetySettings?: Record<string, unknown>,
+    providerKey = "google",
+  ) {
+    return {
+      models: {
+        providers: {
+          [providerKey]: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            api: "google-generative-ai",
+            models: [],
+            ...(safetySettings ? { safetySettings } : {}),
+          },
+        },
+      },
+    };
+  }
+
+  it("accepts configured Gemini safety thresholds", () => {
+    const res = validateConfigObject(
+      buildGoogleProviderConfig({
+        harassment: "BLOCK_NONE",
+        hateSpeech: "BLOCK_ONLY_HIGH",
+        sexuallyExplicit: "BLOCK_MEDIUM_AND_ABOVE",
+        dangerousContent: "OFF",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts safety settings on non-google provider keys using Gemini api", () => {
+    const res = validateConfigObject(
+      buildGoogleProviderConfig(
+        {
+          harassment: "BLOCK_NONE",
+        },
+        "google-ai-studio",
+      ),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid Gemini safety threshold values", () => {
+    const res = validateConfigObject(
+      buildGoogleProviderConfig({
+        harassment: "BLOCK_EVERYTHING",
+      }),
+    );
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) => issue.path === "models.providers.google.safetySettings.harassment",
+        ),
+      ).toBe(true);
+    }
+  });
+});
+
 describe("talk.voiceAliases", () => {
   it("accepts a string map of voice aliases", () => {
     const res = validateConfigObject({

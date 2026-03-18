@@ -1446,6 +1446,224 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
   });
+
+  it("injects configured Google safety settings into Gemini payload config", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        contents: [{ role: "user", parts: [{ text: "hello" }] }],
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            api: "google-generative-ai",
+            models: [],
+            safetySettings: {
+              harassment: "BLOCK_NONE",
+              dangerousContent: "BLOCK_ONLY_HIGH",
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "google", "gemini-3.1-pro-preview");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "google",
+      id: "gemini-3.1-pro-preview",
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.config).toEqual({
+      safetySettings: [
+        {
+          category: "HARM_CATEGORY_HARASSMENT",
+          threshold: "BLOCK_NONE",
+        },
+        {
+          category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+          threshold: "BLOCK_ONLY_HIGH",
+        },
+      ],
+    });
+  });
+
+  it("preserves explicit Google safety settings already present on the payload", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        config: {
+          safetySettings: [
+            {
+              category: "HARM_CATEGORY_HARASSMENT",
+              threshold: "OFF",
+            },
+          ],
+        },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            api: "google-generative-ai",
+            models: [],
+            safetySettings: {
+              harassment: "BLOCK_NONE",
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "google", "gemini-3.1-pro-preview");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "google",
+      id: "gemini-3.1-pro-preview",
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.config).toEqual({
+      safetySettings: [
+        {
+          category: "HARM_CATEGORY_HARASSMENT",
+          threshold: "OFF",
+        },
+      ],
+    });
+  });
+
+  it("does not inject configured Google safety settings into Gemini CLI payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        contents: [{ role: "user", parts: [{ text: "hello" }] }],
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            api: "google-generative-ai",
+            models: [],
+            safetySettings: {
+              harassment: "BLOCK_NONE",
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "google-gemini-cli", "gemini-3.1-pro-preview");
+
+    const model = {
+      api: "google-gemini-cli",
+      provider: "google-gemini-cli",
+      id: "gemini-3.1-pro-preview",
+    } as Model<"google-gemini-cli">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("config.safetySettings");
+  });
+
+  it("injects configured Gemini safety settings from the active provider key", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        contents: [{ role: "user", parts: [{ text: "hello" }] }],
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = {
+      models: {
+        providers: {
+          googleAiStudio: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            api: "google-generative-ai",
+            models: [],
+            safetySettings: {
+              hateSpeech: "BLOCK_ONLY_HIGH",
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "google-ai-studio", "gemini-3.1-pro-preview");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "google-ai-studio",
+      id: "gemini-3.1-pro-preview",
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.config).toEqual({
+      safetySettings: [
+        {
+          category: "HARM_CATEGORY_HATE_SPEECH",
+          threshold: "BLOCK_ONLY_HIGH",
+        },
+      ],
+    });
+  });
+
+  it("adds OpenRouter attribution headers to stream options", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toEqual({
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Categories": "cli-agent",
+      "X-Custom": "1",
+    });
+  });
+
+>>>>>>> Config: add Gemini safety settings
   it("passes configured websocket transport through stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {

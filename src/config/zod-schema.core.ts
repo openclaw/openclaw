@@ -7,7 +7,7 @@ import {
   isValidFileSecretRefId,
 } from "../secrets/ref-contract.js";
 import type { ModelCompatConfig } from "./types.models.js";
-import { MODEL_APIS } from "./types.models.js";
+import { GOOGLE_SAFETY_THRESHOLDS, MODEL_APIS } from "./types.models.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -255,6 +255,15 @@ export const ModelProviderSchema = z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
     api: ModelApiSchema.optional(),
+    safetySettings: z
+      .object({
+        harassment: z.enum(GOOGLE_SAFETY_THRESHOLDS).optional(),
+        hateSpeech: z.enum(GOOGLE_SAFETY_THRESHOLDS).optional(),
+        sexuallyExplicit: z.enum(GOOGLE_SAFETY_THRESHOLDS).optional(),
+        dangerousContent: z.enum(GOOGLE_SAFETY_THRESHOLDS).optional(),
+      })
+      .strict()
+      .optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
