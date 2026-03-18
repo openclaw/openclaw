@@ -205,19 +205,19 @@ export type PluginRuntimeChannel = {
     sendMessageIMessage: typeof import("../../../extensions/imessage/runtime-api.js").sendMessageIMessage;
   };
   whatsapp: {
-    getActiveWebListener: typeof import("../../../extensions/whatsapp/runtime-api.js").getActiveWebListener;
-    getWebAuthAgeMs: typeof import("../../../extensions/whatsapp/runtime-api.js").getWebAuthAgeMs;
-    logoutWeb: typeof import("../../../extensions/whatsapp/runtime-api.js").logoutWeb;
-    logWebSelfId: typeof import("../../../extensions/whatsapp/runtime-api.js").logWebSelfId;
-    readWebSelfId: typeof import("../../../extensions/whatsapp/runtime-api.js").readWebSelfId;
-    webAuthExists: typeof import("../../../extensions/whatsapp/runtime-api.js").webAuthExists;
-    sendMessageWhatsApp: typeof import("../../../extensions/whatsapp/runtime-api.js").sendMessageWhatsApp;
-    sendPollWhatsApp: typeof import("../../../extensions/whatsapp/runtime-api.js").sendPollWhatsApp;
-    loginWeb: typeof import("../../../extensions/whatsapp/runtime-api.js").loginWeb;
-    startWebLoginWithQr: typeof import("../../../extensions/whatsapp/login-qr-api.js").startWebLoginWithQr;
-    waitForWebLogin: typeof import("../../../extensions/whatsapp/login-qr-api.js").waitForWebLogin;
+    getActiveWebListener: typeof import("openclaw/plugin-sdk/whatsapp").getActiveWebListener;
+    getWebAuthAgeMs: typeof import("openclaw/plugin-sdk/whatsapp").getWebAuthAgeMs;
+    logoutWeb: typeof import("openclaw/plugin-sdk/whatsapp").logoutWeb;
+    logWebSelfId: typeof import("openclaw/plugin-sdk/whatsapp").logWebSelfId;
+    readWebSelfId: typeof import("openclaw/plugin-sdk/whatsapp").readWebSelfId;
+    webAuthExists: typeof import("openclaw/plugin-sdk/whatsapp").webAuthExists;
+    sendMessageWhatsApp: typeof import("openclaw/plugin-sdk/whatsapp").sendMessageWhatsApp;
+    sendPollWhatsApp: typeof import("openclaw/plugin-sdk/whatsapp").sendPollWhatsApp;
+    loginWeb: typeof import("openclaw/plugin-sdk/whatsapp").loginWeb;
+    startWebLoginWithQr: typeof import("openclaw/plugin-sdk/whatsapp-login-qr").startWebLoginWithQr;
+    waitForWebLogin: typeof import("openclaw/plugin-sdk/whatsapp-login-qr").waitForWebLogin;
     monitorWebChannel: typeof import("../../channels/web/index.js").monitorWebChannel;
-    handleWhatsAppAction: typeof import("../../../extensions/whatsapp/action-runtime-api.js").handleWhatsAppAction;
+    handleWhatsAppAction: typeof import("openclaw/plugin-sdk/whatsapp-action-runtime").handleWhatsAppAction;
     createLoginTool: typeof import("./runtime-whatsapp-login-tool.js").createRuntimeWhatsAppLoginTool;
   };
   line: {

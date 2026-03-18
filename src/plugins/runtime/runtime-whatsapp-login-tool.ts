@@ -1,1 +1,1 @@
-export { createWhatsAppLoginTool as createRuntimeWhatsAppLoginTool } from "../../../extensions/whatsapp/runtime-api.js";
+export { createWhatsAppLoginTool as createRuntimeWhatsAppLoginTool } from "openclaw/plugin-sdk/whatsapp";

@@ -29,6 +29,8 @@ import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as testingSdk from "openclaw/plugin-sdk/testing";
 import * as voiceCallSdk from "openclaw/plugin-sdk/voice-call";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
+import * as whatsappActionRuntimeSdk from "openclaw/plugin-sdk/whatsapp-action-runtime";
+import * as whatsappLoginQrSdk from "openclaw/plugin-sdk/whatsapp-login-qr";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -295,6 +297,15 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof whatsappSdk.resolveWhatsAppOutboundTarget).toBe("function");
     expect(typeof whatsappSdk.resolveWhatsAppMentionStripRegexes).toBe("function");
     expect("resolveWhatsAppMentionStripPatterns" in whatsappSdk).toBe(false);
+  });
+
+  it("exports WhatsApp QR login helpers from the dedicated subpath", () => {
+    expect(typeof whatsappLoginQrSdk.startWebLoginWithQr).toBe("function");
+    expect(typeof whatsappLoginQrSdk.waitForWebLogin).toBe("function");
+  });
+
+  it("exports WhatsApp action runtime helpers from the dedicated subpath", () => {
+    expect(typeof whatsappActionRuntimeSdk.handleWhatsAppAction).toBe("function");
   });
 
   it("exports Feishu helpers", async () => {
