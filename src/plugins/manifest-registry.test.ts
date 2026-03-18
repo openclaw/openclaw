@@ -667,6 +667,58 @@ describe("loadPluginManifestRegistry", () => {
     ).toBe(fs.realpathSync(matrixB));
   });
 
+  it("invalidates cache when installs record changes (stale suppression regression)", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "stale-install", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "stale-install",
+        rootDir: bundledDir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "stale-install",
+        rootDir: globalDir,
+        origin: "global",
+      }),
+    ];
+
+    const env = {
+      ...process.env,
+      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "60000",
+    };
+
+    // First call: no installs record → duplicate warning expected
+    const first = loadPluginManifestRegistry({
+      cache: true,
+      env,
+      candidates,
+    });
+    expect(countDuplicateWarnings(first)).toBe(1);
+
+    // Second call: installs record added → warning should be suppressed (cache must not be reused)
+    const second = loadPluginManifestRegistry({
+      cache: true,
+      env,
+      candidates,
+      config: {
+        plugins: {
+          installs: {
+            "stale-install": {
+              source: "npm",
+              installPath: globalDir,
+            },
+          },
+        },
+      },
+    });
+    expect(countDuplicateWarnings(second)).toBe(0);
+  });
+
   it("does not reuse cached load-path manifests across env home changes", () => {
     const homeA = makeTempDir();
     const homeB = makeTempDir();
