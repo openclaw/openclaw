@@ -9,6 +9,7 @@ import {
   createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
+  createAttachedChannelResultAdapter,
   createChannelDirectoryAdapter,
   createTextPairingAdapter,
   listResolvedDirectoryEntriesFromSources,
@@ -271,23 +272,21 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
     chunker: (text, limit) => getIrcRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 350,
-    sendText: async ({ cfg, to, text, accountId, replyToId }) => {
-      const result = await sendMessageIrc(to, text, {
-        cfg: cfg as CoreConfig,
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-      });
-      return { channel: "irc", ...result };
-    },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) => {
-      const combined = mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text;
-      const result = await sendMessageIrc(to, combined, {
-        cfg: cfg as CoreConfig,
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-      });
-      return { channel: "irc", ...result };
-    },
+    ...createAttachedChannelResultAdapter({
+      channel: "irc",
+      sendText: async ({ cfg, to, text, accountId, replyToId }) =>
+        await sendMessageIrc(to, text, {
+          cfg: cfg as CoreConfig,
+          accountId: accountId ?? undefined,
+          replyTo: replyToId ?? undefined,
+        }),
+      sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
+        await sendMessageIrc(to, mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text, {
+          cfg: cfg as CoreConfig,
+          accountId: accountId ?? undefined,
+          replyTo: replyToId ?? undefined,
+        }),
+    }),
   },
   status: {
     defaultRuntime: {

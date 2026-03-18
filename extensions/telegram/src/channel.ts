@@ -5,8 +5,11 @@ import {
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
+  attachChannelToResult,
+  createAttachedChannelResultAdapter,
   createChannelDirectoryAdapter,
   createPairingPrefixStripper,
+  createTopLevelChannelReplyToModeResolver,
   createTextPairingAdapter,
   normalizeMessageChannel,
   type OutboundSendDeps,
@@ -358,7 +361,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     resolveToolPolicy: resolveTelegramGroupToolPolicy,
   },
   threading: {
-    resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "off",
+    resolveReplyToMode: createTopLevelChannelReplyToModeResolver("telegram"),
     resolveAutoThreadId: ({ to, toolContext, replyToId }) =>
       replyToId ? undefined : resolveTelegramAutoThreadId({ to, toolContext }),
   },
@@ -496,34 +499,22 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
           forceDocument,
         }),
       });
-      return { channel: "telegram", ...result };
+      return attachChannelToResult("telegram", result);
     },
-    sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
-      const result = await sendTelegramOutbound({
-        cfg,
-        to,
-        text,
-        accountId,
-        deps,
-        replyToId,
-        threadId,
-        silent,
-      });
-      return { channel: "telegram", ...result };
-    },
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaLocalRoots,
-      accountId,
-      deps,
-      replyToId,
-      threadId,
-      silent,
-    }) => {
-      const result = await sendTelegramOutbound({
+    ...createAttachedChannelResultAdapter({
+      channel: "telegram",
+      sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) =>
+        await sendTelegramOutbound({
+          cfg,
+          to,
+          text,
+          accountId,
+          deps,
+          replyToId,
+          threadId,
+          silent,
+        }),
+      sendMedia: async ({
         cfg,
         to,
         text,
@@ -534,17 +525,28 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         replyToId,
         threadId,
         silent,
-      });
-      return { channel: "telegram", ...result };
-    },
-    sendPoll: async ({ cfg, to, poll, accountId, threadId, silent, isAnonymous }) =>
-      await getTelegramRuntime().channel.telegram.sendPollTelegram(to, poll, {
-        cfg,
-        accountId: accountId ?? undefined,
-        messageThreadId: parseTelegramThreadId(threadId),
-        silent: silent ?? undefined,
-        isAnonymous: isAnonymous ?? undefined,
-      }),
+      }) =>
+        await sendTelegramOutbound({
+          cfg,
+          to,
+          text,
+          mediaUrl,
+          mediaLocalRoots,
+          accountId,
+          deps,
+          replyToId,
+          threadId,
+          silent,
+        }),
+      sendPoll: async ({ cfg, to, poll, accountId, threadId, silent, isAnonymous }) =>
+        await getTelegramRuntime().channel.telegram.sendPollTelegram(to, poll, {
+          cfg,
+          accountId: accountId ?? undefined,
+          messageThreadId: parseTelegramThreadId(threadId),
+          silent: silent ?? undefined,
+          isAnonymous: isAnonymous ?? undefined,
+        }),
+    }),
   },
   status: {
     defaultRuntime: {

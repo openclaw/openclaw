@@ -94,6 +94,7 @@ export { createPersistentDedupe } from "./persistent-dedupe.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
 export {
   createNormalizedOutboundDeliverer,
+  deliverFormattedTextWithAttachments,
   formatTextWithAttachmentLinks,
   resolveOutboundMediaUrls,
 } from "./reply-payload.js";
