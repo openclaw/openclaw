@@ -1,10 +1,30 @@
 import type { DedupeEntry } from "../server-shared.js";
 
+/** Per-run usage and cost metadata for external orchestrators. */
+export type AgentWaitUsageMeta = {
+  sessionId?: string;
+  usage?: {
+    input: number;
+    output: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  };
+  lastCallUsage?: {
+    input: number;
+    output: number;
+  };
+  costUsd?: number;
+  provider?: string;
+  model?: string;
+};
+
 export type AgentWaitTerminalSnapshot = {
   status: "ok" | "error" | "timeout";
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  /** Optional per-run usage/cost metadata for external orchestrators. */
+  meta?: AgentWaitUsageMeta;
 };
 
 const AGENT_WAITERS_BY_RUN_ID = new Map<string, Set<() => void>>();
@@ -62,6 +82,69 @@ function notifyWaiters(runId: string): void {
   }
 }
 
+function extractUsageMeta(payload: Record<string, unknown> | undefined): AgentWaitUsageMeta | undefined {
+  if (!payload) {
+    return undefined;
+  }
+  const raw = payload.meta as Record<string, unknown> | undefined;
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const meta: AgentWaitUsageMeta = {};
+  let hasAnyField = false;
+
+  const rawUsage = raw.usage as Record<string, unknown> | undefined;
+  if (rawUsage && typeof rawUsage === "object") {
+    const input = asFiniteNumber(rawUsage.input);
+    const output = asFiniteNumber(rawUsage.output);
+    const cacheRead = asFiniteNumber(rawUsage.cacheRead);
+    const cacheWrite = asFiniteNumber(rawUsage.cacheWrite);
+    if (input !== undefined || output !== undefined || cacheRead !== undefined || cacheWrite !== undefined) {
+      meta.usage = {
+        input: input ?? 0,
+        output: output ?? 0,
+        ...(cacheRead !== undefined ? { cacheRead } : {}),
+        ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+      };
+      hasAnyField = true;
+    }
+  }
+
+  const rawLastCall = raw.lastCallUsage as Record<string, unknown> | undefined;
+  if (rawLastCall && typeof rawLastCall === "object") {
+    const input = asFiniteNumber(rawLastCall.input);
+    const output = asFiniteNumber(rawLastCall.output);
+    if (input !== undefined || output !== undefined) {
+      meta.lastCallUsage = {
+        input: input ?? 0,
+        output: output ?? 0,
+      };
+      hasAnyField = true;
+    }
+  }
+
+  const costUsd = asFiniteNumber(raw.costUsd);
+  if (costUsd !== undefined) {
+    meta.costUsd = costUsd;
+    hasAnyField = true;
+  }
+
+  if (typeof raw.sessionId === "string" && raw.sessionId) {
+    meta.sessionId = raw.sessionId;
+    hasAnyField = true;
+  }
+  if (typeof raw.provider === "string" && raw.provider) {
+    meta.provider = raw.provider;
+    hasAnyField = true;
+  }
+  if (typeof raw.model === "string" && raw.model) {
+    meta.model = raw.model;
+    hasAnyField = true;
+  }
+
+  return hasAnyField ? meta : undefined;
+}
+
 export function readTerminalSnapshotFromDedupeEntry(
   entry: DedupeEntry,
 ): AgentWaitTerminalSnapshot | null {
@@ -72,6 +155,7 @@ export function readTerminalSnapshotFromDedupeEntry(
         endedAt?: unknown;
         error?: unknown;
         summary?: unknown;
+        meta?: unknown;
       }
     | undefined;
   const status = typeof payload?.status === "string" ? payload.status : undefined;
@@ -87,6 +171,7 @@ export function readTerminalSnapshotFromDedupeEntry(
       : typeof payload?.summary === "string"
         ? payload.summary
         : entry.error?.message;
+  const meta = extractUsageMeta(payload as Record<string, unknown> | undefined);
 
   if (status === "ok" || status === "timeout") {
     return {
@@ -94,6 +179,7 @@ export function readTerminalSnapshotFromDedupeEntry(
       startedAt,
       endedAt,
       error: status === "timeout" ? errorMessage : undefined,
+      meta,
     };
   }
   if (status === "error" || !entry.ok) {
@@ -102,6 +188,7 @@ export function readTerminalSnapshotFromDedupeEntry(
       startedAt,
       endedAt,
       error: errorMessage,
+      meta,
     };
   }
   return null;
