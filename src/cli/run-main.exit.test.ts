@@ -164,22 +164,22 @@ describe("runCli exit behavior", () => {
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 
-  it("does not route ACP logs to stderr for interactive client mode options", async () => {
+  it("routes ACP logs to stderr for interactive client mode with options", async () => {
     await runCli(["node", "openclaw", "acp", "client", "--cwd", "/tmp"]);
 
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 
-  it("does not route ACP logs to stderr when acp option-value resembles a subcommand", async () => {
+  it("routes ACP logs to stderr for acp option-value session", async () => {
     await runCli(["node", "openclaw", "acp", "--session", "client"]);
 
-    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not route ACP logs to stderr for acp session-label option values that look like 'client'", async () => {
+  it("routes ACP logs to stderr for acp session-label option value", async () => {
     await runCli(["node", "openclaw", "acp", "--session-label", "client"]);
 
-    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
   });
 
   it("routes ACP stdout logging even when acp includes option values", async () => {

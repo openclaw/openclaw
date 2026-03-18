@@ -136,19 +136,29 @@ export async function runCli(argv: string[] = process.argv) {
     const acpCommandArgs =
       primary === "acp"
         ? getCommandPositionalsWithRootOptions(parseArgv, {
-          commandPath: ["acp"],
-          booleanFlags: ["--require-existing", "--reset-session", "--no-prefix-cwd", "--verbose", "-v"],
-          valueFlags: [
-            "--url",
-            "--token",
-            "--token-file",
-            "--password",
-            "--password-file",
-            "--session",
-            "--session-label",
-            "--provenance",
-          ],
-        })
+            commandPath: ["acp"],
+            booleanFlags: [
+              "--require-existing",
+              "--reset-session",
+              "--no-prefix-cwd",
+              "--verbose",
+              "-v",
+              "--server-verbose",
+            ],
+            valueFlags: [
+              "--url",
+              "--token",
+              "--token-file",
+              "--password",
+              "--password-file",
+              "--session",
+              "--session-label",
+              "--provenance",
+              "--cwd",
+              "--server",
+              "--server-args",
+            ],
+          })
         : null;
     const isAcpClient = acpCommandArgs?.[0] === "client";
 
