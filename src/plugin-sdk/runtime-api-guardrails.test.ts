@@ -152,7 +152,7 @@ function readExportStatements(path: string): string[] {
 }
 
 describe("runtime api guardrails", () => {
-  it("keeps runtime api seams on an explicit export allowlist", () => {
+  it("keeps runtime api surfaces on an explicit export allowlist", () => {
     const runtimeApiFiles = collectRuntimeApiFiles();
     expect(runtimeApiFiles).toEqual(
       expect.arrayContaining(Object.keys(RUNTIME_API_EXPORT_GUARDS).toSorted()),

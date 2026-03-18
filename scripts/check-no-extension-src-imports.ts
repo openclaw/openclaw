@@ -75,7 +75,7 @@ function main() {
       console.error(`- ${relative}`);
     }
     console.error(
-      "Publish a focused openclaw/plugin-sdk/<subpath> seam or use the extension's own public barrel instead.",
+      "Publish a focused openclaw/plugin-sdk/<subpath> surface or use the extension's own public barrel instead.",
     );
     process.exit(1);
   }
