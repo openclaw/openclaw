@@ -3,6 +3,7 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
+import { resolveBundledWebSearchPluginIds } from "./bundled-web-search.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { getActivePluginRegistry } from "./runtime.js";
@@ -41,25 +42,11 @@ function resolveBundledWebSearchCompatPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
 }): string[] {
-  const registry = loadOpenClawPlugins({
-    config: {
-      ...params.config,
-      plugins: {
-        enabled: true,
-      },
-    },
+  return resolveBundledWebSearchPluginIds({
+    config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    cache: false,
-    activate: false,
-    logger: createPluginLoaderLogger(log),
   });
-  const bundledPluginIds = new Set(
-    registry.plugins.filter((plugin) => plugin.origin === "bundled").map((plugin) => plugin.id),
-  );
-  return [...new Set(registry.webSearchProviders.map((entry) => entry.pluginId))]
-    .filter((pluginId) => bundledPluginIds.has(pluginId))
-    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function withBundledWebSearchVitestCompat(params: {
