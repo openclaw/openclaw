@@ -252,7 +252,10 @@ function collectCoreSourceFiles(): string[] {
         fullPath.includes(".test.") ||
         fullPath.includes(".spec.") ||
         fullPath.includes(".fixture.") ||
-        fullPath.includes(".snap")
+        fullPath.includes(".snap") ||
+        // src/plugin-sdk is the curated bridge layer; validate its contracts with dedicated
+        // plugin-sdk guardrails instead of the generic "core should not touch extensions" rule.
+        fullPath.includes(`${resolve(ROOT_DIR, "plugin-sdk")}/`)
       ) {
         continue;
       }
