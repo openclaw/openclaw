@@ -167,9 +167,10 @@ describe("doctor state integrity oauth dir checks", () => {
 
   it("does not mark cron run sessions with stale sessionFile as orphans", async () => {
     clearSessionStoreCacheForTest();
-    const sessionsDir = path.join(tempHome, ".openclaw", "agents", "main", "sessions");
-    const storePath = path.join(sessionsDir, "sessions.json");
-    fs.mkdirSync(sessionsDir, { recursive: true });
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, tempHome);
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
     const sessions = {
       "agent:main:cron:reply-bot:run:run-123": {
         sessionId: "run-123",
@@ -180,7 +181,6 @@ describe("doctor state integrity oauth dir checks", () => {
     fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
     fs.writeFileSync(path.join(sessionsDir, "run-123.jsonl"), '{"type":"message"}\n');
     const filesBefore = fs.readdirSync(sessionsDir);
-    const cfg: OpenClawConfig = {};
     const confirmSkipInNonInteractive = vi.fn(async () => false);
     await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
     const filesAfter = fs.readdirSync(sessionsDir);
