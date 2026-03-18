@@ -421,7 +421,12 @@ export function attachGatewayWsMessageHandler(params: {
               host: requestHost ?? "n/a",
               reason: originCheck.reason,
             });
-            sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage);
+            sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
+              details: {
+                code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+                reason: originCheck.reason,
+              },
+            });
             close(1008, truncateCloseReason(errorMessage));
             return;
           }
@@ -526,7 +531,10 @@ export function attachGatewayWsMessageHandler(params: {
             hasSharedAuth,
             isLocalClient,
           });
-          if (!device && decision.kind !== "allow") {
+          // Shared token/password auth can bypass pairing for trusted operators, but
+          // device-less clients must not keep self-declared scopes unless the
+          // operator explicitly chose a local break-glass Control UI mode.
+          if (!device && (!isControlUi || decision.kind !== "allow" || trustedProxyAuthOk)) {
             clearUnboundScopes();
           }
           if (decision.kind === "allow") {
@@ -673,7 +681,13 @@ export function attachGatewayWsMessageHandler(params: {
             hasBrowserOriginHeader,
             sharedAuthOk,
             authMethod,
-          }) || shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk, trustedProxyAuthOk);
+          }) ||
+          shouldSkipControlUiPairing(
+            controlUiAuthPolicy,
+            role,
+            trustedProxyAuthOk,
+            resolvedAuth.mode,
+          );
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {

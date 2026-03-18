@@ -21,6 +21,8 @@ vi.mock("../../infra/push-apns.js", () => ({
 }));
 
 import {
+  type ApnsPushResult,
+  type ApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   normalizeApnsEnvironment,
@@ -31,6 +33,63 @@ import {
 } from "../../infra/push-apns.js";
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
+
+const DEFAULT_DIRECT_REGISTRATION = {
+  nodeId: "ios-node-1",
+  transport: "direct",
+  token: "abcd",
+  topic: "ai.openclaw.ios",
+  environment: "sandbox",
+  updatedAtMs: 1,
+} as const;
+
+const DEFAULT_RELAY_REGISTRATION = {
+  nodeId: "ios-node-1",
+  transport: "relay",
+  relayHandle: "relay-handle-123",
+  sendGrant: "send-grant-123",
+  installationId: "install-123",
+  topic: "ai.openclaw.ios",
+  environment: "production",
+  distribution: "official",
+  updatedAtMs: 1,
+  tokenDebugSuffix: "abcd1234",
+} as const;
+
+function directRegistration(
+  overrides: Partial<Extract<ApnsRegistration, { transport: "direct" }>> = {},
+): Extract<ApnsRegistration, { transport: "direct" }> {
+  return { ...DEFAULT_DIRECT_REGISTRATION, ...overrides };
+}
+
+function relayRegistration(
+  overrides: Partial<Extract<ApnsRegistration, { transport: "relay" }>> = {},
+): Extract<ApnsRegistration, { transport: "relay" }> {
+  return { ...DEFAULT_RELAY_REGISTRATION, ...overrides };
+}
+
+function mockDirectAuth() {
+  vi.mocked(resolveApnsAuthConfigFromEnv).mockResolvedValue({
+    ok: true,
+    value: {
+      teamId: "TEAM123",
+      keyId: "KEY123",
+      privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
+    },
+  });
+}
+
+function apnsResult(overrides: Partial<ApnsPushResult>): ApnsPushResult {
+  return {
+    ok: true,
+    status: 200,
+    tokenSuffix: "1234abcd",
+    topic: "ai.openclaw.ios",
+    environment: "sandbox",
+    transport: "direct",
+    ...overrides,
+  };
+}
 
 function createInvokeParams(params: Record<string, unknown>) {
   const respond = vi.fn();
@@ -85,31 +144,10 @@ describe("push.test handler", () => {
   });
 
   it("sends push test when registration and auth are available", async () => {
-    vi.mocked(loadApnsRegistration).mockResolvedValue({
-      nodeId: "ios-node-1",
-      transport: "direct",
-      token: "abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      updatedAtMs: 1,
-    });
-    vi.mocked(resolveApnsAuthConfigFromEnv).mockResolvedValue({
-      ok: true,
-      value: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
-      },
-    });
+    vi.mocked(loadApnsRegistration).mockResolvedValue(directRegistration());
+    mockDirectAuth();
     vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
-    vi.mocked(sendApnsAlert).mockResolvedValue({
-      ok: true,
-      status: 200,
-      tokenSuffix: "1234abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      transport: "direct",
-    });
+    vi.mocked(sendApnsAlert).mockResolvedValue(apnsResult({}));
 
     const { respond, invoke } = createInvokeParams({
       nodeId: "ios-node-1",
@@ -137,18 +175,9 @@ describe("push.test handler", () => {
         },
       },
     });
-    vi.mocked(loadApnsRegistration).mockResolvedValue({
-      nodeId: "ios-node-1",
-      transport: "relay",
-      relayHandle: "relay-handle-123",
-      sendGrant: "send-grant-123",
-      installationId: "install-1",
-      topic: "ai.openclaw.ios",
-      environment: "production",
-      distribution: "official",
-      updatedAtMs: 1,
-      tokenDebugSuffix: "abcd1234",
-    });
+    vi.mocked(loadApnsRegistration).mockResolvedValue(
+      relayRegistration({ installationId: "install-1" }),
+    );
     vi.mocked(resolveApnsRelayConfigFromEnv).mockReturnValue({
       ok: true,
       value: {
@@ -157,14 +186,13 @@ describe("push.test handler", () => {
       },
     });
     vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
-    vi.mocked(sendApnsAlert).mockResolvedValue({
-      ok: true,
-      status: 200,
-      tokenSuffix: "abcd1234",
-      topic: "ai.openclaw.ios",
-      environment: "production",
-      transport: "relay",
-    });
+    vi.mocked(sendApnsAlert).mockResolvedValue(
+      apnsResult({
+        tokenSuffix: "abcd1234",
+        environment: "production",
+        transport: "relay",
+      }),
+    );
 
     const { respond, invoke } = createInvokeParams({
       nodeId: "ios-node-1",
@@ -192,32 +220,17 @@ describe("push.test handler", () => {
   });
 
   it("clears stale registrations after invalid token push-test failures", async () => {
-    vi.mocked(loadApnsRegistration).mockResolvedValue({
-      nodeId: "ios-node-1",
-      transport: "direct",
-      token: "abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      updatedAtMs: 1,
-    });
-    vi.mocked(resolveApnsAuthConfigFromEnv).mockResolvedValue({
-      ok: true,
-      value: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
-      },
-    });
+    const registration = directRegistration();
+    vi.mocked(loadApnsRegistration).mockResolvedValue(registration);
+    mockDirectAuth();
     vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
-    vi.mocked(sendApnsAlert).mockResolvedValue({
-      ok: false,
-      status: 400,
-      reason: "BadDeviceToken",
-      tokenSuffix: "1234abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      transport: "direct",
-    });
+    vi.mocked(sendApnsAlert).mockResolvedValue(
+      apnsResult({
+        ok: false,
+        status: 400,
+        reason: "BadDeviceToken",
+      }),
+    );
     vi.mocked(shouldClearStoredApnsRegistration).mockReturnValue(true);
 
     const { invoke } = createInvokeParams({
@@ -229,30 +242,13 @@ describe("push.test handler", () => {
 
     expect(clearApnsRegistrationIfCurrent).toHaveBeenCalledWith({
       nodeId: "ios-node-1",
-      registration: {
-        nodeId: "ios-node-1",
-        transport: "direct",
-        token: "abcd",
-        topic: "ai.openclaw.ios",
-        environment: "sandbox",
-        updatedAtMs: 1,
-      },
+      registration,
     });
   });
 
   it("does not clear relay registrations after invalidation-shaped failures", async () => {
-    vi.mocked(loadApnsRegistration).mockResolvedValue({
-      nodeId: "ios-node-1",
-      transport: "relay",
-      relayHandle: "relay-handle-123",
-      sendGrant: "send-grant-123",
-      installationId: "install-123",
-      topic: "ai.openclaw.ios",
-      environment: "production",
-      distribution: "official",
-      updatedAtMs: 1,
-      tokenDebugSuffix: "abcd1234",
-    });
+    const registration = relayRegistration();
+    vi.mocked(loadApnsRegistration).mockResolvedValue(registration);
     vi.mocked(resolveApnsRelayConfigFromEnv).mockReturnValue({
       ok: true,
       value: {
@@ -261,15 +257,15 @@ describe("push.test handler", () => {
       },
     });
     vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
-    vi.mocked(sendApnsAlert).mockResolvedValue({
+    const result = apnsResult({
       ok: false,
       status: 410,
       reason: "Unregistered",
       tokenSuffix: "abcd1234",
-      topic: "ai.openclaw.ios",
       environment: "production",
       transport: "relay",
     });
+    vi.mocked(sendApnsAlert).mockResolvedValue(result);
     vi.mocked(shouldClearStoredApnsRegistration).mockReturnValue(false);
 
     const { invoke } = createInvokeParams({
@@ -280,59 +276,25 @@ describe("push.test handler", () => {
     await invoke();
 
     expect(shouldClearStoredApnsRegistration).toHaveBeenCalledWith({
-      registration: {
-        nodeId: "ios-node-1",
-        transport: "relay",
-        relayHandle: "relay-handle-123",
-        sendGrant: "send-grant-123",
-        installationId: "install-123",
-        topic: "ai.openclaw.ios",
-        environment: "production",
-        distribution: "official",
-        updatedAtMs: 1,
-        tokenDebugSuffix: "abcd1234",
-      },
-      result: {
-        ok: false,
-        status: 410,
-        reason: "Unregistered",
-        tokenSuffix: "abcd1234",
-        topic: "ai.openclaw.ios",
-        environment: "production",
-        transport: "relay",
-      },
+      registration,
+      result,
       overrideEnvironment: null,
     });
     expect(clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();
   });
 
   it("does not clear direct registrations when push.test overrides the environment", async () => {
-    vi.mocked(loadApnsRegistration).mockResolvedValue({
-      nodeId: "ios-node-1",
-      transport: "direct",
-      token: "abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      updatedAtMs: 1,
-    });
-    vi.mocked(resolveApnsAuthConfigFromEnv).mockResolvedValue({
-      ok: true,
-      value: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
-      },
-    });
+    const registration = directRegistration();
+    vi.mocked(loadApnsRegistration).mockResolvedValue(registration);
+    mockDirectAuth();
     vi.mocked(normalizeApnsEnvironment).mockReturnValue("production");
-    vi.mocked(sendApnsAlert).mockResolvedValue({
+    const result = apnsResult({
       ok: false,
       status: 400,
       reason: "BadDeviceToken",
-      tokenSuffix: "1234abcd",
-      topic: "ai.openclaw.ios",
       environment: "production",
-      transport: "direct",
     });
+    vi.mocked(sendApnsAlert).mockResolvedValue(result);
     vi.mocked(shouldClearStoredApnsRegistration).mockReturnValue(false);
 
     const { invoke } = createInvokeParams({
@@ -344,23 +306,8 @@ describe("push.test handler", () => {
     await invoke();
 
     expect(shouldClearStoredApnsRegistration).toHaveBeenCalledWith({
-      registration: {
-        nodeId: "ios-node-1",
-        transport: "direct",
-        token: "abcd",
-        topic: "ai.openclaw.ios",
-        environment: "sandbox",
-        updatedAtMs: 1,
-      },
-      result: {
-        ok: false,
-        status: 400,
-        reason: "BadDeviceToken",
-        tokenSuffix: "1234abcd",
-        topic: "ai.openclaw.ios",
-        environment: "production",
-        transport: "direct",
-      },
+      registration,
+      result,
       overrideEnvironment: "production",
     });
     expect(clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();

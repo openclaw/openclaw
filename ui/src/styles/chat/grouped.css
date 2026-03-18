@@ -194,10 +194,31 @@ img.chat-avatar {
   padding-right: 36px;
 }
 
-.chat-copy-btn {
+.chat-bubble-actions {
   position: absolute;
   top: 6px;
   right: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+
+.chat-bubble:hover .chat-bubble-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .chat-bubble-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.chat-copy-btn,
+.chat-expand-btn {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--muted);
@@ -206,11 +227,7 @@ img.chat-avatar {
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    opacity 120ms ease-out,
-    background 120ms ease-out;
+  transition: background 120ms ease-out;
 }
 
 .chat-copy-btn__icon {
@@ -250,12 +267,8 @@ img.chat-avatar {
   opacity: 1;
 }
 
-.chat-bubble:hover .chat-copy-btn {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.chat-copy-btn:hover {
+.chat-copy-btn:hover,
+.chat-expand-btn:hover {
   background: var(--bg-hover);
 }
 
@@ -265,33 +278,37 @@ img.chat-avatar {
 }
 
 .chat-copy-btn[data-error="1"] {
-  opacity: 1;
-  pointer-events: auto;
   border-color: var(--danger-subtle);
   background: var(--danger-subtle);
   color: var(--danger);
 }
 
 .chat-copy-btn[data-copied="1"] {
-  opacity: 1;
-  pointer-events: auto;
   border-color: var(--ok-subtle);
   background: var(--ok-subtle);
   color: var(--ok);
 }
 
-.chat-copy-btn:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
+.chat-copy-btn:focus-visible,
+.chat-expand-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-@media (hover: none) {
-  .chat-copy-btn {
-    opacity: 1;
-    pointer-events: auto;
-  }
+.chat-expand-btn__icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.chat-expand-btn__icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* Light mode: restore borders */
@@ -401,15 +418,23 @@ img.chat-avatar {
 .chat-delete-confirm {
   position: absolute;
   bottom: calc(100% + 6px);
-  left: 0;
   background: var(--card, #1a1a1a);
   border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
   border-radius: var(--radius-md, 8px);
   padding: 12px;
   min-width: 200px;
+  max-width: calc(100vw - 48px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   z-index: 100;
   animation: scale-in 0.15s ease-out;
+}
+
+.chat-delete-confirm--left {
+  right: 0;
+}
+
+.chat-delete-confirm--right {
+  left: 0;
 }
 
 .chat-delete-confirm__text {
