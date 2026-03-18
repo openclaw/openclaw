@@ -96,6 +96,7 @@ RUN pnpm ui:build
 # Prune dev dependencies and strip build-only metadata before copying
 # runtime assets into the final image.
 FROM build AS runtime-assets
+RUN CI=true pnpm prune --prod
 
 # Test stage: keep dev dependencies for running tests
 FROM build AS test-runner

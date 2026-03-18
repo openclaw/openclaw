@@ -1007,11 +1007,9 @@ export async function runEmbeddedPiAgent(
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
           });
 
-          // Handle deferred active-run cleanup from attempt and store for finally block
+          // Hold deferred cleanup until the outer lifecycle ends so retries and
+          // backoff windows still count as an active run.
           currentDeferredCleanup = attempt.clearDeferredActiveRun;
-          if (currentDeferredCleanup) {
-            currentDeferredCleanup();
-          }
 
           const {
             aborted,
