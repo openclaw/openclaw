@@ -44,10 +44,12 @@ const CHROME_MCP_OVERLAY_ATTR = "data-openclaw-mcp-overlay";
 
 async function clearChromeMcpOverlay(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
 }): Promise<void> {
   await evaluateChromeMcpScript({
     profileName: params.profileName,
+    userDataDir: params.userDataDir,
     targetId: params.targetId,
     fn: `() => {
       document.querySelectorAll("[${CHROME_MCP_OVERLAY_ATTR}]").forEach((node) => node.remove());
@@ -58,12 +60,14 @@ async function clearChromeMcpOverlay(params: {
 
 async function renderChromeMcpLabels(params: {
   profileName: string;
+  userDataDir?: string;
   targetId: string;
   refs: string[];
 }): Promise<{ labels: number; skipped: number }> {
   const refList = JSON.stringify(params.refs);
   const result = await evaluateChromeMcpScript({
     profileName: params.profileName,
+    userDataDir: params.userDataDir,
     targetId: params.targetId,
     args: params.refs,
     fn: `(...elements) => {
@@ -231,6 +235,7 @@ export function registerBrowserAgentSnapshotRoutes(
           await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
           const result = await navigateChromeMcpPage({
             profileName: profileCtx.profile.name,
+            userDataDir: profileCtx.profile.userDataDir,
             targetId: tab.targetId,
             url,
           });
@@ -322,6 +327,7 @@ export function registerBrowserAgentSnapshotRoutes(
           }
           const buffer = await takeChromeMcpScreenshot({
             profileName: profileCtx.profile.name,
+            userDataDir: profileCtx.profile.userDataDir,
             targetId: tab.targetId,
             uid: ref,
             fullPage,
@@ -406,6 +412,7 @@ export function registerBrowserAgentSnapshotRoutes(
         }
         const snapshot = await takeChromeMcpSnapshot({
           profileName: profileCtx.profile.name,
+          userDataDir: profileCtx.profile.userDataDir,
           targetId: tab.targetId,
         });
         if (plan.format === "aria") {
@@ -430,12 +437,14 @@ export function registerBrowserAgentSnapshotRoutes(
           const refs = Object.keys(built.refs);
           const labelResult = await renderChromeMcpLabels({
             profileName: profileCtx.profile.name,
+            userDataDir: profileCtx.profile.userDataDir,
             targetId: tab.targetId,
             refs,
           });
           try {
             const labeled = await takeChromeMcpScreenshot({
               profileName: profileCtx.profile.name,
+              userDataDir: profileCtx.profile.userDataDir,
               targetId: tab.targetId,
               format: "png",
             });
@@ -465,6 +474,7 @@ export function registerBrowserAgentSnapshotRoutes(
           } finally {
             await clearChromeMcpOverlay({
               profileName: profileCtx.profile.name,
+              userDataDir: profileCtx.profile.userDataDir,
               targetId: tab.targetId,
             });
           }

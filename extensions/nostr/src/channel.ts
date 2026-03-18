@@ -1,4 +1,8 @@
 import {
+  buildPassiveChannelStatusSummary,
+  buildTrafficStatusSummary,
+} from "../../shared/channel-status-summary.js";
+import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
@@ -6,17 +10,14 @@ import {
   formatPairingApproveHint,
   mapAllowFromEntries,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/nostr";
-import {
-  buildPassiveChannelStatusSummary,
-  buildTrafficStatusSummary,
-} from "../../shared/channel-status-summary.js";
+} from "../api.js";
 import type { NostrProfile } from "./config-schema.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { normalizePubkey, startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
 import { getNostrRuntime } from "./runtime.js";
+import { nostrSetupAdapter, nostrSetupWizard } from "./setup-surface.js";
 import {
   listNostrAccountIds,
   resolveDefaultNostrAccountId,
@@ -47,6 +48,8 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   },
   reload: { configPrefixes: ["channels.nostr"] },
   configSchema: buildChannelConfigSchema(NostrConfigSchema),
+  setup: nostrSetupAdapter,
+  setupWizard: nostrSetupWizard,
 
   config: {
     listAccountIds: (cfg) => listNostrAccountIds(cfg),

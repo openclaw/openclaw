@@ -1,5 +1,7 @@
 import { listChannelDocks } from "../channels/dock.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -46,14 +48,14 @@ function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefiniti
   };
 }
 
-type ChannelDock = ReturnType<typeof listChannelDocks>[number];
+type ChannelPlugin = ReturnType<typeof listChannelPlugins>[number];
 
-function defineDockCommand(dock: ChannelDock): ChatCommandDefinition {
+function defineDockCommand(plugin: ChannelPlugin): ChatCommandDefinition {
   return defineChatCommand({
-    key: `dock:${dock.id}`,
-    nativeName: `dock_${dock.id}`,
-    description: `Switch to ${dock.id} for replies.`,
-    textAliases: [`/dock-${dock.id}`, `/dock_${dock.id}`],
+    key: `dock:${plugin.id}`,
+    nativeName: `dock_${plugin.id}`,
+    description: `Switch to ${plugin.id} for replies.`,
+    textAliases: [`/dock-${plugin.id}`, `/dock_${plugin.id}`],
     category: "docks",
   });
 }
@@ -469,6 +471,56 @@ function buildChatCommands(): ChatCommandDefinition[] {
       formatArgs: COMMAND_ARG_FORMATTERS.config,
     }),
     defineChatCommand({
+      key: "mcp",
+      nativeName: "mcp",
+      description: "Show or set OpenClaw MCP servers.",
+      textAlias: "/mcp",
+      category: "management",
+      args: [
+        {
+          name: "action",
+          description: "show | get | set | unset",
+          type: "string",
+          choices: ["show", "get", "set", "unset"],
+        },
+        {
+          name: "path",
+          description: "MCP server name",
+          type: "string",
+        },
+        {
+          name: "value",
+          description: "JSON config for set",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsParsing: "none",
+      formatArgs: COMMAND_ARG_FORMATTERS.mcp,
+    }),
+    defineChatCommand({
+      key: "plugins",
+      nativeName: "plugins",
+      description: "List, show, enable, or disable plugins.",
+      textAliases: ["/plugins", "/plugin"],
+      category: "management",
+      args: [
+        {
+          name: "action",
+          description: "list | show | get | enable | disable",
+          type: "string",
+          choices: ["list", "show", "get", "enable", "disable"],
+        },
+        {
+          name: "path",
+          description: "Plugin id or name",
+          type: "string",
+        },
+      ],
+      argsParsing: "none",
+      formatArgs: COMMAND_ARG_FORMATTERS.plugins,
+    }),
+    defineChatCommand({
       key: "debug",
       nativeName: "debug",
       description: "Set runtime debug overrides.",
@@ -758,9 +810,9 @@ function buildChatCommands(): ChatCommandDefinition[] {
         },
       ],
     }),
-    ...listChannelDocks()
-      .filter((dock) => dock.capabilities.nativeCommands)
-      .map((dock) => defineDockCommand(dock)),
+    ...listChannelPlugins()
+      .filter((plugin) => plugin.capabilities.nativeCommands)
+      .map((plugin) => defineDockCommand(plugin)),
   ];
 
   registerAlias(commands, "whoami", "/id");
@@ -796,9 +848,9 @@ export function getNativeCommandSurfaces(): Set<string> {
     return cachedNativeCommandSurfaces;
   }
   cachedNativeCommandSurfaces = new Set(
-    listChannelDocks()
-      .filter((dock) => dock.capabilities.nativeCommands)
-      .map((dock) => dock.id),
+    listChannelPlugins()
+      .filter((plugin) => plugin.capabilities.nativeCommands)
+      .map((plugin) => plugin.id),
   );
   cachedNativeCommandSurfacesPluginRegistryVersion = registryVersion;
   return cachedNativeCommandSurfaces;

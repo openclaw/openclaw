@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
-} from "../../test-utils/start-account-lifecycle.js";
+} from "../../../test/helpers/extensions/start-account-lifecycle.js";
 import type { ResolvedIrcAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({

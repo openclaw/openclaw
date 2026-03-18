@@ -1,11 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveStateDir } from "../../../../src/config/paths.js";
-import { loadJsonFile, saveJsonFile } from "../../../../src/infra/json-file.js";
-import {
-  normalizeAccountId,
-  resolveAgentIdFromSessionKey,
-} from "../../../../src/routing/session-key.js";
+import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
+import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
   DEFAULT_THREAD_BINDING_MAX_AGE_MS,
@@ -183,6 +180,8 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
     typeof value.maxAgeMs === "number" && Number.isFinite(value.maxAgeMs)
       ? Math.max(0, Math.floor(value.maxAgeMs))
       : undefined;
+  const metadata =
+    value.metadata && typeof value.metadata === "object" ? { ...value.metadata } : undefined;
   const legacyExpiresAt =
     typeof (value as { expiresAt?: unknown }).expiresAt === "number" &&
     Number.isFinite((value as { expiresAt?: unknown }).expiresAt)
@@ -222,6 +221,7 @@ function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBin
     lastActivityAt,
     idleTimeoutMs: migratedIdleTimeoutMs,
     maxAgeMs: migratedMaxAgeMs,
+    metadata,
   };
 }
 

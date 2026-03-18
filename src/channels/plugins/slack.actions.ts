@@ -1,15 +1,53 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { handleSlackAction, type SlackActionContext } from "../../agents/tools/slack-actions.js";
 import {
   extractSlackToolSend,
+  isSlackInteractiveRepliesEnabled,
   listSlackMessageActions,
-} from "../../../extensions/slack/src/message-actions.js";
-import { resolveSlackChannelId } from "../../../extensions/slack/src/targets.js";
-import { handleSlackAction, type SlackActionContext } from "../../agents/tools/slack-actions.js";
-import { handleSlackMessageAction } from "../../plugin-sdk/slack-message-actions.js";
-import type { ChannelMessageActionAdapter } from "./types.js";
+  resolveSlackChannelId,
+  handleSlackMessageAction,
+} from "../../plugin-sdk/slack.js";
+import { createSlackMessageToolBlocksSchema } from "./message-tool-schema.js";
+import type { ChannelMessageActionAdapter, ChannelMessageToolDiscovery } from "./types.js";
 
-export function createSlackActions(providerId: string): ChannelMessageActionAdapter {
+type SlackActionInvoke = (
+  action: Record<string, unknown>,
+  cfg: unknown,
+  toolContext: unknown,
+) => Promise<AgentToolResult<unknown>>;
+
+export function createSlackActions(
+  providerId: string,
+  options?: { invoke?: SlackActionInvoke },
+): ChannelMessageActionAdapter {
+  function describeMessageTool({
+    cfg,
+  }: Parameters<
+    NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
+  >[0]): ChannelMessageToolDiscovery {
+    const actions = listSlackMessageActions(cfg);
+    const capabilities = new Set<"blocks" | "interactive">();
+    if (actions.includes("send")) {
+      capabilities.add("blocks");
+    }
+    if (isSlackInteractiveRepliesEnabled({ cfg })) {
+      capabilities.add("interactive");
+    }
+    return {
+      actions,
+      capabilities: Array.from(capabilities),
+      schema: actions.includes("send")
+        ? {
+            properties: {
+              blocks: createSlackMessageToolBlocksSchema(),
+            },
+          }
+        : null,
+    };
+  }
+
   return {
-    listActions: ({ cfg }) => listSlackMessageActions(cfg),
+    describeMessageTool,
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     handleAction: async (ctx) => {
       return await handleSlackMessageAction({
@@ -18,10 +56,12 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
         normalizeChannelId: resolveSlackChannelId,
         includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) =>
-          await handleSlackAction(action, cfg, {
-            ...(toolContext as SlackActionContext | undefined),
-            mediaLocalRoots: ctx.mediaLocalRoots,
-          }),
+          await (options?.invoke
+            ? options.invoke(action, cfg, toolContext)
+            : handleSlackAction(action, cfg, {
+                ...(toolContext as SlackActionContext | undefined),
+                mediaLocalRoots: ctx.mediaLocalRoots,
+              })),
       });
     },
   };

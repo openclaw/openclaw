@@ -1,12 +1,15 @@
+import type { TopLevelComponents } from "@buape/carbon";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PollInput } from "../../polls.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { ChatType } from "../chat-type.js";
 import type { ChatChannelId } from "../registry.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
+import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type ChannelId = ChatChannelId | (string & {});
 
@@ -18,9 +21,47 @@ export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
 
 export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
 
+/**
+ * Discovery-time inputs passed to channel action adapters when the core is
+ * asking what an agent should be allowed to see. This is intentionally
+ * smaller than execution context: it carries routing/account scope, but no
+ * tool params or runtime handles.
+ */
+export type ChannelMessageActionDiscoveryContext = {
+  cfg: OpenClawConfig;
+  currentChannelId?: string | null;
+  currentChannelProvider?: string | null;
+  currentThreadTs?: string | null;
+  currentMessageId?: string | number | null;
+  accountId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
+  requesterSenderId?: string | null;
+};
+
+/**
+ * Plugin-owned schema fragments for the shared `message` tool.
+ * `current-channel` means expose the fields only when that provider is the
+ * active runtime channel. `all-configured` keeps the fields visible even while
+ * another configured channel is active, which is useful for cross-channel
+ * sends from cron or isolated agents.
+ */
+export type ChannelMessageToolSchemaContribution = {
+  properties: Record<string, TSchema>;
+  visibility?: "current-channel" | "all-configured";
+};
+
+export type ChannelMessageToolDiscovery = {
+  actions?: readonly ChannelMessageActionName[] | null;
+  capabilities?: readonly ChannelMessageCapability[] | null;
+  schema?: ChannelMessageToolSchemaContribution | ChannelMessageToolSchemaContribution[] | null;
+};
+
 export type ChannelSetupInput = {
   name?: string;
   token?: string;
+  privateKey?: string;
   tokenFile?: string;
   botToken?: string;
   appToken?: string;
@@ -46,6 +87,7 @@ export type ChannelSetupInput = {
   initialSyncLimit?: number;
   ship?: string;
   url?: string;
+  relayUrls?: string;
   code?: string;
   groupChannels?: string[];
   dmAllowlist?: string[];
@@ -209,6 +251,11 @@ export type ChannelSecurityContext<ResolvedAccount = unknown> = {
 };
 
 export type ChannelMentionAdapter = {
+  stripRegexes?: (params: {
+    ctx: MsgContext;
+    cfg: OpenClawConfig | undefined;
+    agentId?: string;
+  }) => RegExp[];
   stripPatterns?: (params: {
     ctx: MsgContext;
     cfg: OpenClawConfig | undefined;
@@ -227,6 +274,38 @@ export type ChannelStreamingAdapter = {
     minChars: number;
     idleMs: number;
   };
+};
+
+export type ChannelCrossContextComponentsFactory = (params: {
+  originLabel: string;
+  message: string;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) => TopLevelComponents[];
+
+export type ChannelReplyTransport = {
+  replyToId?: string | null;
+  threadId?: string | number | null;
+};
+
+export type ChannelFocusedBindingContext = {
+  conversationId: string;
+  parentConversationId?: string;
+  placement: "current" | "child";
+  labelNoun: string;
+};
+
+export type ChannelOutboundSessionRoute = {
+  sessionKey: string;
+  baseSessionKey: string;
+  peer: {
+    kind: ChatType;
+    id: string;
+  };
+  chatType: "direct" | "group" | "channel";
+  from: string;
+  to: string;
+  threadId?: string | number;
 };
 
 export type ChannelThreadingAdapter = {
@@ -252,6 +331,24 @@ export type ChannelThreadingAdapter = {
     context: ChannelThreadingContext;
     hasRepliedRef?: { value: boolean };
   }) => ChannelThreadingToolContext | undefined;
+  resolveAutoThreadId?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    to: string;
+    toolContext?: ChannelThreadingToolContext;
+    replyToId?: string | null;
+  }) => string | undefined;
+  resolveReplyTransport?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    threadId?: string | number | null;
+    replyToId?: string | null;
+  }) => ChannelReplyTransport | null;
+  resolveFocusedBinding?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    context: ChannelThreadingContext;
+  }) => ChannelFocusedBindingContext | null;
 };
 
 export type ChannelThreadingContext = {
@@ -285,6 +382,18 @@ export type ChannelThreadingToolContext = {
 
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  parseExplicitTarget?: (params: { raw: string }) => {
+    to: string;
+    threadId?: string | number;
+    chatType?: ChatType;
+  } | null;
+  inferTargetChatType?: (params: { to: string }) => ChatType | undefined;
+  buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
+  enableInteractiveReplies?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => boolean;
+  hasStructuredReplyPayload?: (params: { payload: ReplyPayload }) => boolean;
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
@@ -306,6 +415,20 @@ export type ChannelMessagingAdapter = {
     display?: string;
     kind?: ChannelDirectoryEntryKind;
   }) => string;
+  resolveOutboundSessionRoute?: (params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    accountId?: string | null;
+    target: string;
+    resolvedTarget?: {
+      to: string;
+      kind: ChannelDirectoryEntryKind | "channel";
+      display?: string;
+      source: "normalized" | "directory";
+    };
+    replyToId?: string | null;
+    threadId?: string | number | null;
+  }) => ChannelOutboundSessionRoute | Promise<ChannelOutboundSessionRoute | null> | null;
 };
 
 export type ChannelAgentPromptAdapter = {
@@ -338,6 +461,9 @@ export type ChannelMessageActionContext = {
    * never be sourced from tool/model-controlled params.
    */
   requesterSenderId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
   gateway?: {
     url?: string;
     token?: string;
@@ -358,15 +484,42 @@ export type ChannelToolSend = {
 
 export type ChannelMessageActionAdapter = {
   /**
+   * Preferred unified discovery surface for the shared `message` tool.
+   * When provided, this is authoritative and should return the scoped actions,
+   * capabilities, and schema fragments together so they cannot drift.
+   */
+  describeMessageTool?: (
+    params: ChannelMessageActionDiscoveryContext,
+  ) => ChannelMessageToolDiscovery | null | undefined;
+  /**
    * Advertise agent-discoverable actions for this channel.
+   * Legacy fallback used when `describeMessageTool` is not implemented.
    * Keep this aligned with any gated capability checks. Poll discovery is
    * not inferred from `outbound.sendPoll`, so channels that want agents to
    * create polls should include `"poll"` here when enabled.
    */
-  listActions?: (params: { cfg: OpenClawConfig }) => ChannelMessageActionName[];
+  listActions?: (params: ChannelMessageActionDiscoveryContext) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
-  supportsButtons?: (params: { cfg: OpenClawConfig }) => boolean;
-  supportsCards?: (params: { cfg: OpenClawConfig }) => boolean;
+  getCapabilities?: (
+    params: ChannelMessageActionDiscoveryContext,
+  ) => readonly ChannelMessageCapability[];
+  /**
+   * Extend the shared `message` tool schema with channel-owned fields.
+   * Legacy fallback used when `describeMessageTool` is not implemented.
+   * Keep this aligned with `listActions` and `getCapabilities` so the exposed
+   * schema matches what the channel can actually execute in the current scope.
+   */
+  getToolSchema?: (
+    params: ChannelMessageActionDiscoveryContext,
+  ) =>
+    | ChannelMessageToolSchemaContribution
+    | ChannelMessageToolSchemaContribution[]
+    | null
+    | undefined;
+  requiresTrustedRequesterSender?: (params: {
+    action: ChannelMessageActionName;
+    toolContext?: ChannelThreadingToolContext;
+  }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };

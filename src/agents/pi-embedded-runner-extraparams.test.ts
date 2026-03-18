@@ -1,6 +1,73 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  const {
+    createOpenRouterSystemCacheWrapper,
+    createOpenRouterWrapper,
+    isProxyReasoningUnsupported,
+  } = await import("./pi-embedded-runner/proxy-stream-wrappers.js");
+
+  return {
+    ...actual,
+    prepareProviderExtraParams: (params: {
+      provider: string;
+      context: { extraParams?: Record<string, unknown> };
+    }) => {
+      if (params.provider !== "openai-codex") {
+        return undefined;
+      }
+      const transport = params.context.extraParams?.transport;
+      if (transport === "auto" || transport === "sse" || transport === "websocket") {
+        return params.context.extraParams;
+      }
+      return {
+        ...params.context.extraParams,
+        transport: "auto",
+      };
+    },
+    wrapProviderStreamFn: (params: {
+      provider: string;
+      context: {
+        modelId: string;
+        thinkingLevel?: import("../auto-reply/thinking.js").ThinkLevel;
+        extraParams?: Record<string, unknown>;
+        streamFn?: StreamFn;
+      };
+    }) => {
+      if (params.provider !== "openrouter") {
+        return params.context.streamFn;
+      }
+
+      const providerRouting =
+        params.context.extraParams?.provider != null &&
+        typeof params.context.extraParams.provider === "object"
+          ? (params.context.extraParams.provider as Record<string, unknown>)
+          : undefined;
+      let streamFn = params.context.streamFn;
+      if (providerRouting) {
+        const underlying = streamFn;
+        streamFn = (model, context, options) =>
+          (underlying as StreamFn)(
+            {
+              ...model,
+              compat: { ...model.compat, openRouterRouting: providerRouting },
+            },
+            context,
+            options,
+          );
+      }
+
+      const skipReasoningInjection =
+        params.context.modelId === "auto" || isProxyReasoningUnsupported(params.context.modelId);
+      const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
+      return createOpenRouterSystemCacheWrapper(createOpenRouterWrapper(streamFn, thinkingLevel));
+    },
+  };
+});
+
 import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
 import { log } from "./pi-embedded-runner/logger.js";
 
@@ -841,7 +908,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("does not rewrite tool schema for kimi-coding (native Anthropic format)", () => {
+  it("does not rewrite tool schema for Kimi (native Anthropic format)", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -864,12 +931,12 @@ describe("applyExtraParamsToAgent", () => {
     };
     const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "kimi-coding", "k2p5", undefined, "low");
+    applyExtraParamsToAgent(agent, undefined, "kimi", "kimi-code", undefined, "low");
 
     const model = {
       api: "anthropic-messages",
-      provider: "kimi-coding",
-      id: "k2p5",
+      provider: "kimi",
+      id: "kimi-code",
       baseUrl: "https://api.kimi.com/coding/",
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
@@ -1093,7 +1160,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.headers).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": "OpenClaw",
+      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Categories": "cli-agent",
       "X-Custom": "1",
     });
   });

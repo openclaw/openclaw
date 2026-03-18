@@ -1,12 +1,12 @@
 import type { Bot } from "grammy";
-import type { HistoryEntry } from "../../../src/auto-reply/reply/history.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   DmPolicy,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "../../../src/config/types.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-runtime";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 
 export type TelegramMediaRef = {

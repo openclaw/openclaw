@@ -136,37 +136,6 @@ describe("BrowserProfilesService", () => {
     );
   });
 
-  it("rejects driver=extension with non-loopback cdpUrl", async () => {
-    const resolved = resolveBrowserConfig({});
-    const { ctx } = createCtx(resolved);
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const service = createBrowserProfilesService(ctx);
-
-    await expect(
-      service.createProfile({
-        name: "chrome-remote",
-        driver: "extension",
-        cdpUrl: "http://10.0.0.42:9222",
-      }),
-    ).rejects.toThrow(/loopback cdpUrl host/i);
-  });
-
-  it("rejects driver=extension without an explicit cdpUrl", async () => {
-    const resolved = resolveBrowserConfig({});
-    const { ctx } = createCtx(resolved);
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const service = createBrowserProfilesService(ctx);
-
-    await expect(
-      service.createProfile({
-        name: "chrome-extension",
-        driver: "extension",
-      }),
-    ).rejects.toThrow(/requires an explicit loopback cdpUrl/i);
-  });
-
   it("creates existing-session profiles as attach-only local entries", async () => {
     const resolved = resolveBrowserConfig({});
     const { ctx, state } = createCtx(resolved);
@@ -181,6 +150,7 @@ describe("BrowserProfilesService", () => {
     expect(result.transport).toBe("chrome-mcp");
     expect(result.cdpPort).toBeNull();
     expect(result.cdpUrl).toBeNull();
+    expect(result.userDataDir).toBeNull();
     expect(result.isRemote).toBe(false);
     expect(state.resolved.profiles["chrome-live"]).toEqual({
       driver: "existing-session",
@@ -201,27 +171,65 @@ describe("BrowserProfilesService", () => {
     );
   });
 
-  it("allows driver=existing-session when cdpUrl is provided as an MCP target", async () => {
+  it("rejects driver=existing-session when cdpUrl is provided", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx } = createCtx(resolved);
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+
+    await expect(
+      service.createProfile({
+        name: "chrome-live",
+        driver: "existing-session",
+        cdpUrl: "http://127.0.0.1:9222",
+      }),
+    ).rejects.toThrow(/does not accept cdpUrl/i);
+  });
+
+  it("creates existing-session profiles with an explicit userDataDir", async () => {
     const resolved = resolveBrowserConfig({});
     const { ctx, state } = createCtx(resolved);
     vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
 
+    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
+    const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
+    fs.mkdirSync(userDataDir, { recursive: true });
+
     const service = createBrowserProfilesService(ctx);
     const result = await service.createProfile({
-      name: "chrome-live",
+      name: "brave-live",
       driver: "existing-session",
-      cdpUrl: "http://127.0.0.1:9222",
+      userDataDir,
     });
 
     expect(result.transport).toBe("chrome-mcp");
-    expect(result.cdpUrl).toBeNull();
-    expect(result.isRemote).toBe(false);
-    expect(state.resolved.profiles["chrome-live"]).toEqual({
-      cdpUrl: "http://127.0.0.1:9222",
+    expect(result.userDataDir).toBe(userDataDir);
+    expect(state.resolved.profiles["brave-live"]).toEqual({
       driver: "existing-session",
       attachOnly: true,
+      userDataDir,
       color: expect.any(String),
     });
+  });
+
+  it("rejects userDataDir for non-existing-session profiles", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx } = createCtx(resolved);
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
+    const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
+    fs.mkdirSync(userDataDir, { recursive: true });
+
+    const service = createBrowserProfilesService(ctx);
+
+    await expect(
+      service.createProfile({
+        name: "brave-live",
+        userDataDir,
+      }),
+    ).rejects.toThrow(/driver=existing-session is required/i);
   });
 
   it("deletes remote profiles without stopping or removing local data", async () => {

@@ -293,7 +293,7 @@ describe("wrapFetchWithAbortSignal", () => {
   });
 
   it("exposes a no-op preconnect when the source fetch has none", () => {
-    const fetchImpl = vi.fn(async () => ({ ok: true }) as Response) as typeof fetch;
+    const fetchImpl = withFetchPreconnect(vi.fn(async () => ({ ok: true }) as Response));
     const wrapped = wrapFetchWithAbortSignal(fetchImpl) as typeof fetch & {
       preconnect: (url: string, init?: { credentials?: RequestCredentials }) => unknown;
     };

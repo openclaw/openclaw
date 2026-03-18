@@ -1,28 +1,25 @@
-import { appendCronStyleCurrentTimeLine } from "../../../../src/agents/current-time.js";
-import { resolveHeartbeatReplyPayload } from "../../../../src/auto-reply/heartbeat-reply-payload.js";
-import {
-  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  resolveHeartbeatPrompt,
-  stripHeartbeatToken,
-} from "../../../../src/auto-reply/heartbeat.js";
-import { getReplyFromConfig } from "../../../../src/auto-reply/reply.js";
-import { HEARTBEAT_TOKEN } from "../../../../src/auto-reply/tokens.js";
-import { resolveWhatsAppHeartbeatRecipients } from "../../../../src/channels/plugins/whatsapp-heartbeat.js";
-import { loadConfig } from "../../../../src/config/config.js";
+import { appendCronStyleCurrentTimeLine } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveWhatsAppHeartbeatRecipients } from "openclaw/plugin-sdk/channel-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
   resolveSessionKey,
   resolveStorePath,
   updateSessionStore,
-} from "../../../../src/config/sessions.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import { emitHeartbeatEvent, resolveIndicatorType } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveHeartbeatVisibility } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveHeartbeatReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
-  emitHeartbeatEvent,
-  resolveIndicatorType,
-} from "../../../../src/infra/heartbeat-events.js";
-import { resolveHeartbeatVisibility } from "../../../../src/infra/heartbeat-visibility.js";
-import { getChildLogger } from "../../../../src/logging.js";
-import { redactIdentifier } from "../../../../src/logging/redact-identifier.js";
-import { normalizeMainKey } from "../../../../src/routing/session-key.js";
+  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  resolveHeartbeatPrompt,
+  stripHeartbeatToken,
+} from "openclaw/plugin-sdk/reply-runtime";
+import { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
+import { HEARTBEAT_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
+import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
+import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
 import { newConnectionId } from "../reconnect.js";
 import { sendMessageWhatsApp } from "../send.js";
 import { formatError } from "../session.js";
