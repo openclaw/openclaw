@@ -84,7 +84,11 @@ import {
 import { runWithReconnect } from "./reconnect.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import { sendMessageMattermost } from "./send.js";
-import { cleanupSlashCommands } from "./slash-commands.js";
+import {
+  cleanupSlashCommands,
+  isSlashCommandsEnabled,
+  resolveSlashCommandConfig,
+} from "./slash-commands.js";
 import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";
 
 export {
@@ -269,6 +273,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const botUserId = botUser.id;
   const botUsername = botUser.username?.trim() || undefined;
   runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
+  const slashEnabled = isSlashCommandsEnabled(resolveSlashCommandConfig(account.config.commands));
 
   await registerMattermostMonitorSlashCommands({
     client,
