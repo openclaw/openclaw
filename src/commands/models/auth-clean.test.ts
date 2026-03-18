@@ -1,0 +1,860 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
+
+// ---- hoisted mocks ---------------------------------------------------------
+
+const mocks = vi.hoisted(() => ({
+  resolveDefaultAgentId: vi.fn(() => "main"),
+  resolveAgentDir: vi.fn((_cfg: unknown, _id: unknown) => "/home/user/.openclaw/agents/main/agent"),
+  ensureAuthProfileStore: vi.fn(),
+  updateAuthProfileStoreWithLock: vi.fn(),
+  loadAgentLocalAuthProfileStore: vi.fn(),
+  loadModelsConfig: vi.fn(),
+  resolveKnownAgentId: vi.fn<() => string | null>(() => null),
+}));
+
+vi.mock("../../agents/agent-scope.js", () => ({
+  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+  resolveAgentDir: mocks.resolveAgentDir,
+}));
+
+vi.mock("../../agents/auth-profiles.js", () => ({
+  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+}));
+
+vi.mock("../../agents/auth-profiles/store.js", () => ({
+  updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
+  loadAgentLocalAuthProfileStore: mocks.loadAgentLocalAuthProfileStore,
+}));
+
+vi.mock("./load-config.js", () => ({
+  loadModelsConfig: mocks.loadModelsConfig,
+}));
+
+vi.mock("./shared.js", () => ({
+  resolveKnownAgentId: mocks.resolveKnownAgentId,
+}));
+
+// ---- helpers ----------------------------------------------------------------
+
+const { modelsAuthCleanCommand } = await import("./auth-clean.js");
+
+function makeRuntime(): RuntimeEnv & { logs: string[] } {
+  const logs: string[] = [];
+  const runtime = {
+    logs,
+    log: (msg: string) => {
+      logs.push(msg);
+    },
+    error: vi.fn(),
+    exit: vi.fn(),
+  };
+  return runtime as unknown as RuntimeEnv & { logs: string[] };
+}
+
+function makeCfg(
+  profileIds: string[] = ["anthropic:me.com", "anthropic:gmail"],
+  orderIds: string[] = [],
+): OpenClawConfig {
+  const profiles: Record<string, { provider: string; mode: string }> = {};
+  for (const id of profileIds) {
+    const provider = id.split(":")[0] ?? "anthropic";
+    profiles[id] = { provider, mode: "token" };
+  }
+  const order: Record<string, string[]> = {};
+  if (orderIds.length > 0) {
+    order["anthropic"] = orderIds;
+  }
+  return { auth: { profiles, ...(orderIds.length > 0 ? { order } : {}) } } as OpenClawConfig;
+}
+
+function makeStore(profileIds: string[], extras: Partial<AuthProfileStore> = {}): AuthProfileStore {
+  const profiles: AuthProfileStore["profiles"] = {};
+  for (const id of profileIds) {
+    const provider = id.split(":")[0] ?? "anthropic";
+    profiles[id] = { type: "token", provider, token: `sk-${id}` };
+  }
+  return { version: 1, profiles, ...extras };
+}
+
+/**
+ * Capture what the updater closure does when called with a given store.
+ * updateAuthProfileStoreWithLock calls params.updater(freshStore) internally;
+ * this helper simulates that so we can inspect mutations.
+ */
+function captureUpdater(storeSeed: AuthProfileStore): {
+  result: AuthProfileStore;
+  returned: boolean;
+} {
+  let captured: AuthProfileStore | undefined;
+  let returned = false;
+
+  mocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
+    async (params: { updater: (s: AuthProfileStore) => boolean }) => {
+      const clone = structuredClone(storeSeed);
+      returned = params.updater(clone);
+      captured = clone;
+      return returned ? clone : null;
+    },
+  );
+
+  return {
+    get result() {
+      return captured!;
+    },
+    get returned() {
+      return returned;
+    },
+  };
+}
+
+// ---- tests ------------------------------------------------------------------
+
+describe("modelsAuthCleanCommand", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("removes stale profiles from profiles, usageStats, and lastGood", async () => {
+    const store = makeStore(["anthropic:me.com", "anthropic:gmail", "anthropic:manual"], {
+      usageStats: {
+        "anthropic:manual": { lastUsed: 1000, errorCount: 1 },
+        "anthropic:me.com": { lastUsed: 2000, errorCount: 0 },
+      },
+      lastGood: { anthropic: "anthropic:manual" },
+    });
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com", "anthropic:gmail"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    const capture = captureUpdater(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
+
+    expect(capture.result.profiles).not.toHaveProperty("anthropic:manual");
+    expect(capture.result.profiles).toHaveProperty("anthropic:me.com");
+    expect(capture.result.profiles).toHaveProperty("anthropic:gmail");
+    expect(capture.result.usageStats).not.toHaveProperty("anthropic:manual");
+    expect(capture.result.usageStats).toHaveProperty("anthropic:me.com");
+    expect(capture.result.lastGood).not.toHaveProperty("anthropic");
+  });
+
+  it("keeps profile referenced only in store.order even when not in cfg", async () => {
+    // anthropic:manual is in store.profiles and store.order, but NOT in cfg.
+    // The fix ensures store.order-referenced profiles are treated as configured (kept).
+    const store = makeStore(["anthropic:me.com", "anthropic:manual"], {
+      order: { anthropic: ["anthropic:manual"] },
+    });
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
+
+    // manual is kept because it's in store.order — no write needed
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toContain("Nothing to clean");
+  });
+
+  it("keeps all store.order-referenced profiles alongside cfg-configured ones", async () => {
+    // anthropic:manual is in store.order (set via 'models auth order set') but not in cfg.
+    // It must be protected, so nothing is stale and the lock is never acquired.
+    const store = makeStore(["anthropic:me.com", "anthropic:gmail", "anthropic:manual"], {
+      order: { anthropic: ["anthropic:me.com", "anthropic:manual"] },
+    });
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com", "anthropic:gmail"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
+
+    // All three profiles are kept (me.com/gmail via cfg, manual via store.order)
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toContain("Nothing to clean");
+  });
+
+  it("--dry-run does not call updateAuthProfileStoreWithLock", async () => {
+    const store = makeStore(["anthropic:me.com", "anthropic:manual"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    await modelsAuthCleanCommand({ dryRun: true }, makeRuntime());
+
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("--dry-run passes readOnly:true to ensureAuthProfileStore (default agent)", async () => {
+    const store = makeStore(["anthropic:me.com", "anthropic:manual"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    await modelsAuthCleanCommand({ dryRun: true }, makeRuntime());
+
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ readOnly: true }),
+    );
+  });
+
+  it("--dry-run passes readOnly:true to loadAgentLocalAuthProfileStore (non-default agent)", async () => {
+    const store = makeStore(["anthropic:me.com"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.resolveKnownAgentId.mockReturnValueOnce("worker");
+    mocks.resolveAgentDir.mockReturnValueOnce("/home/user/.openclaw/agents/worker/agent");
+    mocks.loadAgentLocalAuthProfileStore.mockReturnValue(store);
+
+    await modelsAuthCleanCommand({ agent: "worker", dryRun: true }, makeRuntime());
+
+    expect(mocks.loadAgentLocalAuthProfileStore).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ readOnly: true }),
+    );
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("probe uses readOnly:true; migration trigger uses readOnly:false after guards pass (default agent)", async () => {
+    // #2915530629: probe must always use readOnly:true — never open a write-capable
+    // store before guards pass. After guards pass, a separate write-enabled call
+    // (readOnly:false) triggers legacy auth.json migration before
+    // updateAuthProfileStoreWithLock's ensureAuthStoreFile can create an empty
+    // placeholder. (#2914491523, #2914711181)
+    const store = makeStore(["anthropic:me.com", "anthropic:stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    captureUpdater(store);
+
+    await modelsAuthCleanCommand({}, makeRuntime()); // no dryRun
+
+    // Probe call: readOnly:true (always, even for non-dryRun)
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ readOnly: true }),
+    );
+    // Migration trigger call: readOnly:false (after guards pass, before lock)
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ readOnly: false }),
+    );
+  });
+
+  it("probe uses readOnly:true; migration trigger uses readOnly:false after guards pass (non-default agent)", async () => {
+    // #2915530629: same as default agent path — probe is always readOnly:true;
+    // migration trigger uses readOnly:false after guards pass. (#2914491523, #2914711181)
+    // #2915653312: migration trigger must also pass skipInheritance:true so that
+    // the main-agent fallback inside loadAuthProfileStoreForAgent is suppressed —
+    // without it, a subagent with no local store would clone main credentials
+    // before cleanup, causing scope bleed and a misleading no-op.
+    const store = makeStore(["anthropic:agent-profile", "anthropic:agent-stale"]);
+    const workerAgentDir = "/home/user/.openclaw/agents/worker/agent";
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:agent-profile"]));
+    mocks.resolveKnownAgentId.mockReturnValueOnce("worker");
+    mocks.resolveAgentDir.mockReturnValueOnce(workerAgentDir);
+    mocks.loadAgentLocalAuthProfileStore.mockReturnValue(store);
+    captureUpdater(store);
+
+    await modelsAuthCleanCommand({ agent: "worker" }, makeRuntime()); // no dryRun
+
+    // Probe call: readOnly:true (always, even for non-dryRun); agentDir is the
+    // worker-specific path, not the main agent path.
+    expect(mocks.loadAgentLocalAuthProfileStore).toHaveBeenCalledWith(
+      workerAgentDir,
+      expect.objectContaining({ readOnly: true }),
+    );
+    // Migration trigger call: readOnly:false (after guards pass, before lock).
+    // Must pass skipInheritance:true to prevent the main-agent fallback from
+    // cloning main profiles into the worker file before cleanup. (#2915653312)
+    expect(mocks.loadAgentLocalAuthProfileStore).toHaveBeenCalledWith(
+      workerAgentDir,
+      expect.objectContaining({ readOnly: false, skipInheritance: true }),
+    );
+  });
+
+  it("keeps profiles referenced only in store.order (not in cfg.auth.profiles or cfg.auth.order)", async () => {
+    // anthropic:store-override is in store.order (set via 'models auth order set')
+    // but NOT in openclaw.json auth.profiles or auth.order — must be treated as kept
+    const store = makeStore(["anthropic:me.com", "anthropic:store-override"], {
+      order: { anthropic: ["anthropic:me.com", "anthropic:store-override"] },
+    });
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    // Both profiles are kept — no stale entries — lock not acquired
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("removes profiles not in cfg or store.order even when store.order exists", async () => {
+    // anthropic:manual is in neither cfg nor store.order — should be removed
+    // anthropic:store-override is in store.order — should be kept
+    const store = makeStore(["anthropic:me.com", "anthropic:store-override", "anthropic:manual"], {
+      order: { anthropic: ["anthropic:me.com", "anthropic:store-override"] },
+    });
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    const capture = captureUpdater(store);
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    expect(capture.result.profiles).not.toHaveProperty("anthropic:manual");
+    expect(capture.result.profiles).toHaveProperty("anthropic:me.com");
+    expect(capture.result.profiles).toHaveProperty("anthropic:store-override");
+  });
+
+  it("--dry-run logs the plan without writing", async () => {
+    const store = makeStore(["anthropic:me.com", "anthropic:manual"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    const combined = runtime.logs.join("\n");
+    expect(combined).toContain("anthropic:manual");
+    expect(combined).toContain("dry run");
+  });
+
+  it("does nothing when all store profiles are configured", async () => {
+    const store = makeStore(["anthropic:me.com", "anthropic:gmail"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com", "anthropic:gmail"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
+
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toContain("Nothing to clean");
+  });
+
+  it("treats profiles referenced in auth.order as configured (not stale)", async () => {
+    // anthropic:legacy is in auth.order but not in auth.profiles — should be preserved
+    const store = makeStore(["anthropic:me.com", "anthropic:legacy"]);
+
+    const cfg = makeCfg(["anthropic:me.com"], ["anthropic:me.com", "anthropic:legacy"]);
+    mocks.loadModelsConfig.mockResolvedValue(cfg);
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    // Nothing stale — updateAuthProfileStoreWithLock should not be called
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("throws when openclaw.json has no configured auth and store has profiles", async () => {
+    const store = makeStore(["anthropic:me.com"]);
+
+    mocks.loadModelsConfig.mockResolvedValue({ auth: {} } as OpenClawConfig);
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    await expect(modelsAuthCleanCommand({}, makeRuntime())).rejects.toThrow(
+      /no configured auth profiles/i,
+    );
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("--dry-run with no configured auth logs warning instead of throwing", async () => {
+    const store = makeStore(["anthropic:me.com"]);
+
+    mocks.loadModelsConfig.mockResolvedValue({ auth: {} } as OpenClawConfig);
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toMatch(/warning/i);
+  });
+
+  it("--json emits plan object then {ok, removed} result after write", async () => {
+    const store = makeStore(["anthropic:me.com", "anthropic:manual"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    captureUpdater(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ json: true }, runtime);
+
+    expect(runtime.logs.length).toBe(2);
+    const plan = JSON.parse(runtime.logs[0]);
+    const result = JSON.parse(runtime.logs[1]);
+
+    expect(plan).toMatchObject({ toRemove: ["anthropic:manual"], dryRun: false });
+    expect(result).toMatchObject({ ok: true, removed: 1 });
+  });
+
+  it("--json --dry-run emits only the plan object", async () => {
+    const store = makeStore(["anthropic:me.com", "anthropic:manual"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ json: true, dryRun: true }, runtime);
+
+    expect(runtime.logs.length).toBe(1);
+    const plan = JSON.parse(runtime.logs[0]);
+    expect(plan).toMatchObject({ toRemove: ["anthropic:manual"], dryRun: true });
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("reports actualRemoved from inside the lock, not the pre-lock estimate", async () => {
+    // Simulate gateway concurrently removing anthropic:manual before lock acquired
+    const store = makeStore(["anthropic:me.com", "anthropic:manual"]);
+    const storeAtLockTime = makeStore(["anthropic:me.com"]); // manual already gone
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    // updater receives the already-cleaned store
+    mocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
+      async (params: { updater: (s: AuthProfileStore) => boolean }) => {
+        const clone = structuredClone(storeAtLockTime);
+        params.updater(clone);
+        return clone; // something returned = success
+      },
+    );
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
+
+    // actualRemoved should be 0 (nothing was there to delete under the lock)
+    expect(runtime.logs.join("\n")).toContain("Removed 0 stale profile(s)");
+  });
+
+  it("throws when updateAuthProfileStoreWithLock returns null (lock busy)", async () => {
+    const store = makeStore(["anthropic:me.com", "anthropic:manual"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    mocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null);
+
+    await expect(modelsAuthCleanCommand({}, makeRuntime())).rejects.toThrow(/lock busy/i);
+  });
+
+  it("non-default agent: excludes main-only profiles from toRemove", async () => {
+    // The agent-local store has agent-profile (configured) and agent-stale (not configured).
+    // The merged view returned by ensureAuthProfileStore also includes main-only-profile,
+    // which exists only in the main store and is NOT configured.
+    // toRemove must contain only agent-stale (from the agent-local store),
+    // NOT main-only-profile (which lives in the main store and must not be touched).
+    const agentLocalStore = makeStore(["anthropic:agent-profile", "anthropic:agent-stale"]);
+    const mergedStore = makeStore([
+      "anthropic:agent-profile",
+      "anthropic:agent-stale",
+      "anthropic:main-only-profile", // exists in main store only, not agent-local
+    ]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:agent-profile"]));
+    // Non-default agent: resolveKnownAgentId returns "worker", default is "main"
+    mocks.resolveKnownAgentId.mockReturnValueOnce("worker");
+    mocks.resolveAgentDir.mockReturnValueOnce("/home/user/.openclaw/agents/worker/agent");
+    // ensureAuthProfileStore is NOT called for non-default agents (loadAgentLocalAuthProfileStore is)
+    mocks.loadAgentLocalAuthProfileStore.mockReturnValue(agentLocalStore);
+    // The updater receives the merged store (simulating what updateAuthProfileStoreWithLock
+    // would pass in production after calling ensureAuthProfileStore internally).
+    const capture = captureUpdater(mergedStore);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ agent: "worker" }, runtime);
+
+    // toRemove was computed from agentLocalStore only: ["anthropic:agent-stale"]
+    expect(capture.result.profiles).not.toHaveProperty("anthropic:agent-stale");
+    expect(capture.result.profiles).toHaveProperty("anthropic:agent-profile");
+    // main-only-profile was never in toRemove, so the updater left it intact
+    expect(capture.result.profiles).toHaveProperty("anthropic:main-only-profile");
+    // ensureAuthProfileStore should not have been called for profile-set computation
+    expect(mocks.ensureAuthProfileStore).not.toHaveBeenCalled();
+  });
+
+  // ---- Fix: agent media profiles without top-level tools.media (P1 #2912273297) ----
+
+  it("collects agent-level media profiles even when cfg.tools.media is absent", async () => {
+    // Arrange: no top-level tools.media, but one agent override references a profile.
+    // Without the fix, collectMediaProfileIds() returned early on !media and the
+    // agent-level profile was treated as stale and added to toRemove.
+    const store = makeStore(["anthropic:me.com", "anthropic:media-agent"]);
+
+    mocks.loadModelsConfig.mockResolvedValue({
+      ...makeCfg(["anthropic:me.com"]),
+      // Deliberately omit tools.media at the top level
+      agents: {
+        list: [
+          {
+            id: "worker",
+            tools: {
+              media: {
+                models: [{ model: "gpt-4o", profile: "anthropic:media-agent" }],
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
+
+    // anthropic:media-agent is in an agent's tools.media override — must be kept
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toContain("Nothing to clean");
+  });
+
+  it("collects agent preferredProfile references without top-level tools.media", async () => {
+    // preferredProfile (not just profile) must also be picked up from agent overrides
+    const store = makeStore(["anthropic:me.com", "anthropic:preferred-agent"]);
+
+    mocks.loadModelsConfig.mockResolvedValue({
+      ...makeCfg(["anthropic:me.com"]),
+      agents: {
+        list: [
+          {
+            id: "worker",
+            tools: {
+              media: {
+                image: {
+                  models: [{ model: "gpt-4o", preferredProfile: "anthropic:preferred-agent" }],
+                },
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
+
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toContain("Nothing to clean");
+  });
+
+  // ---- Fix: agentLocalOnly prevents credential scope bleed (Aisle High) ----
+
+  it("non-default agent: passes agentLocalOnly:true to updateAuthProfileStoreWithLock", async () => {
+    // Ensures the write path uses agent-local-only loading, preventing main-store
+    // profiles from being persisted into the agent-local auth-profiles.json file.
+    const agentLocalStore = makeStore(["anthropic:agent-profile", "anthropic:agent-stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:agent-profile"]));
+    mocks.resolveKnownAgentId.mockReturnValueOnce("worker");
+    mocks.resolveAgentDir.mockReturnValueOnce("/home/user/.openclaw/agents/worker/agent");
+    mocks.loadAgentLocalAuthProfileStore.mockReturnValue(agentLocalStore);
+    captureUpdater(agentLocalStore);
+
+    await modelsAuthCleanCommand({ agent: "worker" }, makeRuntime());
+
+    expect(mocks.updateAuthProfileStoreWithLock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentLocalOnly: true }),
+    );
+  });
+
+  it("non-main agent: pre-lock readOnly:false migration trigger passes agent-specific agentDir, not main path (#2915653312)", async () => {
+    // Guard: the pre-lock readOnly:false migration trigger must explicitly pass the
+    // agent-specific agentDir to loadAgentLocalAuthProfileStore — not the default
+    // (main) path and not undefined.  Without the explicit agentDir, the call
+    // resolves to the main agent's auth-profiles.json and cleanup silently operates
+    // on the wrong store (scope bleed, misleading no-op). (#2915653312)
+    const workerAgentDir = "/home/user/.openclaw/agents/worker/agent";
+    const mainAgentDir = "/home/user/.openclaw/agents/main/agent"; // default mock value
+    const store = makeStore(["anthropic:worker-profile", "anthropic:worker-stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:worker-profile"]));
+    mocks.resolveKnownAgentId.mockReturnValueOnce("worker");
+    mocks.resolveAgentDir.mockReturnValueOnce(workerAgentDir);
+    mocks.loadAgentLocalAuthProfileStore.mockReturnValue(store);
+    captureUpdater(store);
+
+    await modelsAuthCleanCommand({ agent: "worker" }, makeRuntime());
+
+    // Every call to loadAgentLocalAuthProfileStore must use the worker-specific
+    // agentDir — never the main agent dir and never undefined (which would also
+    // resolve to the main dir).
+    const calls = mocks.loadAgentLocalAuthProfileStore.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    for (const [dir] of calls) {
+      expect(dir).toBe(workerAgentDir);
+      expect(dir).not.toBe(mainAgentDir);
+      expect(dir).not.toBeUndefined();
+    }
+  });
+
+  it("default agent: does not set agentLocalOnly on updateAuthProfileStoreWithLock", async () => {
+    // Default agent uses the merged store (ensureAuthProfileStore path) — no agentLocalOnly.
+    const store = makeStore(["anthropic:me.com", "anthropic:stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    captureUpdater(store);
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    const call = mocks.updateAuthProfileStoreWithLock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call?.agentLocalOnly).toBeFalsy();
+  });
+
+  it("non-main agent as configured default: agentLocalOnly:true even when agentId === defaultAgentId", async () => {
+    // Regression: when a config sets a non-main agent as default (e.g. agents.list[0].default=true
+    // with id "custom-agent"), the old code used (agentId === defaultAgentId) which was true,
+    // disabling agentLocalOnly and causing main-store profiles to be written into the agent-local
+    // file (scope bleed). The fix compares resolved agentDir paths against the main agent
+    // directory instead of comparing agentId strings.
+    const agentLocalStore = makeStore(["anthropic:agent-profile", "anthropic:agent-stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:agent-profile"]));
+    // "custom-agent" is the configured default (not the main agent)
+    mocks.resolveDefaultAgentId.mockReturnValueOnce("custom-agent");
+    // No --agent flag: resolveKnownAgentId returns null (default mock) → agentId = "custom-agent"
+    // First resolveAgentDir call: agentDir for "custom-agent"
+    mocks.resolveAgentDir.mockReturnValueOnce("/home/user/.openclaw/agents/custom-agent/agent");
+    // Second resolveAgentDir call: mainAgentDir for DEFAULT_AGENT_ID ("main")
+    // falls through to default mock → "/home/user/.openclaw/agents/main/agent"
+    mocks.loadAgentLocalAuthProfileStore.mockReturnValue(agentLocalStore);
+    captureUpdater(agentLocalStore);
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    // agentLocalOnly must be true: custom-agent's dir != main agent dir
+    expect(mocks.updateAuthProfileStoreWithLock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentLocalOnly: true }),
+    );
+    // loadAgentLocalAuthProfileStore must be used, NOT ensureAuthProfileStore
+    expect(mocks.loadAgentLocalAuthProfileStore).toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStore).not.toHaveBeenCalled();
+  });
+
+  // ---- Fix: sanitize ANSI escape codes in profile ID output (Aisle Low) ----
+
+  it("strips ANSI escape sequences from profile IDs in --dry-run output", async () => {
+    // A profile ID containing an ANSI color sequence must not reach the terminal raw.
+    const maliciousId = "anthropic:\x1b[31mred\x1b[0m";
+    const store = makeStore([maliciousId]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:safe"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    const combined = runtime.logs.join("\n");
+    // ANSI escape sequences must be stripped
+    expect(combined).not.toContain("\x1b[31m");
+    expect(combined).not.toContain("\x1b[0m");
+    // The non-malicious text should still appear
+    expect(combined).toContain("anthropic:");
+    expect(combined).toContain("red");
+  });
+
+  it("strips newlines from profile IDs in --dry-run output to prevent log forging", async () => {
+    // A profile ID "anthropic:legit\nINJECTED LINE" must not produce a separate
+    // log entry that starts with "INJECTED LINE" (i.e., must not forge a new line).
+    // After sanitization the \n is removed and the injected text is concatenated
+    // to the profile ID rather than appearing as a standalone forged log entry.
+    const maliciousId = "anthropic:legit\nINJECTED LINE";
+    const store = makeStore([maliciousId]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:safe"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    // No log call should start with the injected text (that would mean log forging)
+    for (const line of runtime.logs) {
+      expect(line).not.toMatch(/^\s*INJECTED LINE/);
+    }
+    // The sanitized prefix (before the stripped \n) should still appear
+    expect(runtime.logs.some((line) => line.includes("anthropic:legit"))).toBe(true);
+  });
+
+  it("strips private CSI escape sequences (e.g. cursor hide) from profile IDs", async () => {
+    // Private CSI sequences like \x1b[?25l (cursor hide) contain a '?' parameter
+    // prefix not matched by the old [0-9;]* pattern — they must be stripped.
+    const maliciousId = "anthropic:\x1b[?25lhidden\x1b[?25h";
+    const store = makeStore([maliciousId]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:safe"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    const combined = runtime.logs.join("\n");
+    // Private CSI sequences must be stripped
+    expect(combined).not.toContain("\x1b[?25l");
+    expect(combined).not.toContain("\x1b[?25h");
+    // The non-escape text should still appear
+    expect(combined).toContain("anthropic:");
+    expect(combined).toContain("hidden");
+  });
+
+  it("strips OSC escape sequences (e.g. window title) from profile IDs", async () => {
+    // OSC sequences like \x1b]0;title\x07 set terminal window titles; they are
+    // not matched by CSI-only patterns and must be stripped to prevent injection.
+    const maliciousId = "anthropic:\x1b]0;injected-title\x07name";
+    const store = makeStore([maliciousId]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:safe"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    const combined = runtime.logs.join("\n");
+    // OSC sequence must be stripped
+    expect(combined).not.toContain("\x1b]0;");
+    expect(combined).not.toContain("\x07");
+    // The non-escape text should still appear
+    expect(combined).toContain("anthropic:");
+    expect(combined).toContain("name");
+  });
+
+  // ---- Fix: empty-config guard must use cfg-derived IDs only, not store.order (#2921223519) ----
+
+  it("empty-config guard fires even when store.order has IDs (guard is cfg-derived only)", async () => {
+    // Regression: store.order IDs were previously included in configuredProfiles before
+    // the guard check. When openclaw.json has no auth config but store.order has entries,
+    // configuredProfiles.size > 0 and the guard silently passes — allowing every profile
+    // not in store.order to be deleted in a store-only setup.
+    // Fix: guard uses configDerivedProfileIds (cfg-only), so store.order IDs cannot
+    // defeat it. (#2921223519)
+    const store = makeStore(["anthropic:me.com", "anthropic:gmail"], {
+      order: { anthropic: ["anthropic:me.com"] }, // store.order with IDs
+    });
+
+    // openclaw.json has NO auth config (empty auth object — no profiles, no order)
+    mocks.loadModelsConfig.mockResolvedValue({ auth: {} } as OpenClawConfig);
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    // Must throw (not silently proceed) because cfg has no auth config
+    await expect(modelsAuthCleanCommand({}, makeRuntime())).rejects.toThrow(
+      /no configured auth profiles/i,
+    );
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("empty-config guard: --dry-run warns even when store.order has IDs", async () => {
+    // Same scenario as above but with --dry-run: must warn rather than throw,
+    // even when store.order IDs are present. (#2921223519)
+    const store = makeStore(["anthropic:me.com"], {
+      order: { anthropic: ["anthropic:me.com"] },
+    });
+
+    mocks.loadModelsConfig.mockResolvedValue({ auth: {} } as OpenClawConfig);
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toMatch(/warning/i);
+  });
+
+  // ---- Fix: store.order empty-array pruning ----
+
+  it("updater: removes stale id from store.order[provider] and deletes the key when empty", async () => {
+    // When a profile is stale (not in configuredProfiles at probe time), but happens
+    // to appear in store.order at lock time (e.g. added concurrently), the updater
+    // must remove it from the order array. When that removal leaves the array empty,
+    // the provider key must be deleted (not left as []).
+    //
+    // Scenario: probe store has no order → stale is in toRemove.
+    // Lock-time store has order: { anthropic: ["anthropic:stale"] }.
+    // After updater runs: anthropic key deleted, order object deleted.
+    const probeStore = makeStore(["anthropic:me.com", "anthropic:stale"]);
+    // No store.order at probe → stale not added to configuredProfiles → in toRemove
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(probeStore);
+
+    let capturedStore: AuthProfileStore | undefined;
+    mocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
+      async (params: { updater: (s: AuthProfileStore) => boolean }) => {
+        // Simulate lock-time store with order added concurrently
+        const lockStore: AuthProfileStore = {
+          version: 1,
+          profiles: structuredClone(probeStore.profiles),
+          order: { anthropic: ["anthropic:stale"] },
+        };
+        params.updater(lockStore);
+        capturedStore = lockStore;
+        return lockStore;
+      },
+    );
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    expect(capturedStore?.profiles).not.toHaveProperty("anthropic:stale");
+    // anthropic key deleted (filtered to []) → order object deleted (no remaining keys)
+    expect(capturedStore).not.toHaveProperty("order");
+  });
+
+  it("updater: deletes store.order entirely when all provider entries are emptied", async () => {
+    // When every provider key in store.order is emptied after pruning stale ids,
+    // the order object itself must be deleted (not left as an empty {}).
+    // Scenario: two providers' order arrays each contain only stale.
+    const probeStore = makeStore(["anthropic:me.com", "anthropic:stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(probeStore);
+
+    let capturedStore: AuthProfileStore | undefined;
+    mocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
+      async (params: { updater: (s: AuthProfileStore) => boolean }) => {
+        const lockStore: AuthProfileStore = {
+          version: 1,
+          profiles: structuredClone(probeStore.profiles),
+          order: {
+            anthropic: ["anthropic:stale"],
+            openai: ["anthropic:stale"], // both entries contain only the stale id
+          },
+        };
+        params.updater(lockStore);
+        capturedStore = lockStore;
+        return lockStore;
+      },
+    );
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    // Both provider keys emptied → order object itself must be deleted
+    expect(capturedStore).not.toHaveProperty("order");
+  });
+
+  it("strips a bare trailing ESC byte (\\x1b with nothing after it) from profile IDs", async () => {
+    // A lone \x1b at the end of a string has no sequence character following it,
+    // so the previous regex (requiring [\s\S] — at least one char after ESC)
+    // would leave it unsanitized. The fix uses [\s\S]? (0 or 1 chars) so a
+    // trailing bare ESC is also consumed and removed.
+    const maliciousId = "anthropic:myprofile\x1b";
+    const store = makeStore([maliciousId]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:safe"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    const combined = runtime.logs.join("\n");
+    // The bare trailing ESC byte must be stripped
+    expect(combined).not.toContain("\x1b");
+    // The non-escape text should still appear
+    expect(combined).toContain("anthropic:");
+    expect(combined).toContain("myprofile");
+  });
+});

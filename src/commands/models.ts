@@ -10,6 +10,7 @@ export {
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
 } from "./models/auth.js";
+export { modelsAuthCleanCommand } from "./models/auth-clean.js";
 export {
   modelsAuthOrderClearCommand,
   modelsAuthOrderGetCommand,

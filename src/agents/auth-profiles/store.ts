@@ -24,6 +24,7 @@ type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
   readOnly?: boolean;
+  skipInheritance?: boolean;
 };
 
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
@@ -144,6 +145,7 @@ function normalizeSecretBackedField(params: {
 
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
+  agentLocalOnly?: boolean;
   updater: (store: AuthProfileStore) => boolean;
 }): Promise<AuthProfileStore | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
@@ -151,10 +153,9 @@ export async function updateAuthProfileStoreWithLock(params: {
 
   try {
     return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-      // Locked writers must reload from disk, not from any runtime snapshot.
-      // Otherwise a live gateway can overwrite fresher CLI/config-auth writes
-      // with stale in-memory auth state during usage/cooldown updates.
-      const store = loadAuthProfileStoreForAgent(params.agentDir);
+      const store = params.agentLocalOnly
+        ? loadAgentLocalAuthProfileStore(params.agentDir)
+        : ensureAuthProfileStore(params.agentDir);
       const shouldSave = params.updater(store);
       if (shouldSave) {
         saveAuthProfileStore(store, params.agentDir);
@@ -453,15 +454,12 @@ function shouldLogAuthStoreTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 }
 
-function syncExternalCliCredentialsTimed(
-  store: AuthProfileStore,
-  options?: Parameters<typeof syncExternalCliCredentials>[1],
-): boolean {
+function syncExternalCliCredentialsTimed(store: AuthProfileStore): boolean {
   if (!shouldLogAuthStoreTiming()) {
-    return syncExternalCliCredentials(store, options);
+    return syncExternalCliCredentials(store);
   }
   const startMs = Date.now();
-  const mutated = syncExternalCliCredentials(store, options);
+  const mutated = syncExternalCliCredentials(store);
   log.info(
     `auth-store stage=external-cli-sync elapsedMs=${Date.now() - startMs} mutated=${mutated}`,
   );
@@ -509,15 +507,21 @@ function loadAuthProfileStoreForAgent(
   if (asStore) {
     // Runtime secret activation must remain read-only:
     // sync external CLI credentials in-memory, but never persist while readOnly.
-    syncExternalCliCredentialsTimed(asStore, { log: !readOnly });
+    const synced = syncExternalCliCredentialsTimed(asStore);
+    if (synced && !readOnly) {
+      saveJsonFile(authPath, asStore);
+    }
     if (!readOnly) {
       writeCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath), asStore);
     }
     return asStore;
   }
 
-  // Fallback: inherit auth-profiles from main agent if subagent has none
-  if (agentDir && !readOnly) {
+  // Fallback: inherit auth-profiles from main agent if subagent has none.
+  // Skipped when skipInheritance:true (e.g. auth-clean pre-lock migration trigger)
+  // to prevent materialising main credentials in the subagent file before cleanup
+  // runs — that would cause scope bleed and a misleading no-op clean. (#2915653312)
+  if (agentDir && !readOnly && !options?.skipInheritance) {
     const mainAuthPath = resolveAuthStorePath(); // without agentDir = main
     const mainRaw = loadJsonFile(mainAuthPath);
     const mainStore = coerceAuthStore(mainRaw);
@@ -542,7 +546,7 @@ function loadAuthProfileStoreForAgent(
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
   // Keep external CLI credentials visible in runtime even during read-only loads.
-  syncExternalCliCredentialsTimed(store, { log: !readOnly });
+  const syncedCli = syncExternalCliCredentialsTimed(store);
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
   const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth);
   if (shouldWrite) {
@@ -587,13 +591,25 @@ export function loadAuthProfileStoreForRuntime(
   return mergeAuthProfileStores(mainStore, store);
 }
 
+/**
+ * Load auth-profile store for a specific agent directory without inheriting
+ * from the main agent. Used by `models auth clean` to inspect per-agent
+ * credentials independently.
+ */
+export function loadAgentLocalAuthProfileStore(
+  agentDir?: string,
+  options?: LoadAuthProfileStoreOptions,
+): AuthProfileStore {
+  return loadAuthProfileStoreForAgent(agentDir, { ...options, skipInheritance: true });
+}
+
 export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore {
   return loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, allowKeychainPrompt: false });
 }
 
 export function ensureAuthProfileStore(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean },
+  options?: { allowKeychainPrompt?: boolean; readOnly?: boolean },
 ): AuthProfileStore {
   const runtimeStore = resolveRuntimeAuthProfileStore(agentDir);
   if (runtimeStore) {
