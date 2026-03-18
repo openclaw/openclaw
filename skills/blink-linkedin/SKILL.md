@@ -125,3 +125,106 @@ bash scripts/post-with-video.sh "Watch our latest demo!" "https://example.com/de
 - Video formats supported: MP4 (max 200MB, H.264 encoded)
 - `w_member_social` scope (already included) covers both image and video posts
 - Videos may take a few seconds to process on LinkedIn before the post appears
+
+---
+
+## Read your own posts
+
+First get your person ID from `/me`, then list your posts:
+
+```bash
+# Step 1: Get your person ID
+PERSON_INFO=$(bash scripts/call.sh /me GET)
+PERSON_ID=$(echo "$PERSON_INFO" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d['data']['id'])")
+
+# Step 2: List your posts
+ENCODED_URN=$(python3 -c "import urllib.parse; print(urllib.parse.quote('urn:li:person:' + '$PERSON_ID', safe=''))")
+bash scripts/call.sh "/ugcPosts?q=authors&authors=List($ENCODED_URN)&sortBy=LAST_MODIFIED" GET
+```
+
+This returns your recent posts with their URNs (e.g. `urn:li:ugcPost:1234567890`).
+
+---
+
+## Read comments on your post
+
+```bash
+# POST_URN format: urn:li:ugcPost:1234567890
+ENCODED_URN=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$POST_URN', safe=''))")
+bash scripts/call.sh "rest/socialActions/$ENCODED_URN/comments" GET
+```
+
+Returns list of comments with `commentUrn`, `actor`, `message.text`, and `likesSummary`.
+
+---
+
+## Comment on a post (yours or anyone's)
+
+```bash
+# Get your person ID first
+PERSON_INFO=$(bash scripts/call.sh /me GET)
+PERSON_ID=$(echo "$PERSON_INFO" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d['data']['id'])")
+
+# POST_URN: urn:li:ugcPost:1234567890
+ENCODED_URN=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$POST_URN', safe=''))")
+bash scripts/call.sh "rest/socialActions/$ENCODED_URN/comments" POST '{
+  "actor": "urn:li:person:PERSON_ID",
+  "object": "POST_URN",
+  "message": {"text": "Great post! Really insightful."}
+}'
+```
+
+Or use the convenience script:
+```bash
+bash scripts/comment.sh "urn:li:ugcPost:1234567890" "Great post! Really insightful."
+```
+
+---
+
+## Reply to a comment (nested comment)
+
+```bash
+bash scripts/call.sh "rest/socialActions/$ENCODED_URN/comments" POST '{
+  "actor": "urn:li:person:PERSON_ID",
+  "object": "POST_URN",
+  "message": {"text": "Thanks for your response!"},
+  "parentComment": "COMMENT_URN"
+}'
+```
+
+---
+
+## Like a post
+
+```bash
+PERSON_INFO=$(bash scripts/call.sh /me GET)
+PERSON_ID=$(echo "$PERSON_INFO" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d['data']['id'])")
+ENCODED_URN=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$POST_URN', safe=''))")
+bash scripts/call.sh "rest/socialActions/$ENCODED_URN/likes" POST '{
+  "actor": "urn:li:person:PERSON_ID",
+  "object": "POST_URN"
+}'
+```
+
+Or use the convenience script:
+```bash
+bash scripts/like.sh "urn:li:ugcPost:1234567890"
+```
+
+---
+
+## Delete a post (your own only)
+
+```bash
+bash scripts/call.sh "/ugcPosts/urn%3Ali%3AugcPost%3A1234567890" DELETE
+```
+
+---
+
+## Key notes on URNs
+- Post URN: `urn:li:ugcPost:1234567890` — from creating a post or listing own posts
+- Activity URN: `urn:li:activity:1234567890` — alternative form LinkedIn sometimes returns
+- Comment URN: `urn:li:comment:(urn:li:activity:123456789,9876543210)` — from reading comments
+- URNs must be URL-encoded when used in path segments: `urn:li:ugcPost:123` → `urn%3Ali%3AugcPost%3A123`
+- For `rest/socialActions` paths: the URI path uses URL-encoded URN
+- Reading comments only works on posts you authored (LinkedIn API restriction)
