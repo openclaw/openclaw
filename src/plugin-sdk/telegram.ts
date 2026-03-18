@@ -46,14 +46,13 @@ export {
   resolveConfiguredFromCredentialStatuses,
 } from "../channels/account-snapshot-fields.js";
 export {
-  listTelegramDirectoryGroupsFromConfig,
-  listTelegramDirectoryPeersFromConfig,
-} from "../channels/plugins/directory-config.js";
-
-export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
+export {
+  listTelegramDirectoryGroupsFromConfig,
+  listTelegramDirectoryPeersFromConfig,
+} from "../../extensions/telegram/src/directory-config.js";
 export {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
