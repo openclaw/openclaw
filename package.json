@@ -410,6 +410,10 @@
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
     },
+    "./plugin-sdk/windows-spawn": {
+      "types": "./dist/plugin-sdk/windows-spawn.d.ts",
+      "default": "./dist/plugin-sdk/windows-spawn.js"
+    },
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
@@ -485,6 +489,10 @@
     "./plugin-sdk/state-paths": {
       "types": "./dist/plugin-sdk/state-paths.d.ts",
       "default": "./dist/plugin-sdk/state-paths.js"
+    },
+    "./plugin-sdk/temp-path": {
+      "types": "./dist/plugin-sdk/temp-path.d.ts",
+      "default": "./dist/plugin-sdk/temp-path.js"
     },
     "./plugin-sdk/tool-send": {
       "types": "./dist/plugin-sdk/tool-send.d.ts",
@@ -634,6 +642,7 @@
     "test:parallels:windows": "bash scripts/e2e/parallels-windows-smoke.sh",
     "test:perf:budget": "node scripts/test-perf-budget.mjs",
     "test:perf:hotspots": "node scripts/test-hotspots.mjs",
+    "test:perf:update-timings": "node scripts/test-update-timings.mjs",
     "test:sectriage": "pnpm exec vitest run --config vitest.gateway.config.ts && vitest run --config vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",

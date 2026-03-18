@@ -6,6 +6,7 @@ import type {
   SetSessionModeRequest,
 } from "@agentclientprotocol/sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { listThinkingLevels } from "../auto-reply/thinking.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
@@ -302,14 +303,9 @@ describe("acp session UX bridge behavior", () => {
     const result = await agent.loadSession(createLoadSessionRequest("agent:main:work"));
 
     expect(result.modes?.currentModeId).toBe("high");
-    expect(result.modes?.availableModes.map((mode) => mode.id)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "adaptive",
-    ]);
+    expect(result.modes?.availableModes.map((mode) => mode.id)).toEqual(
+      listThinkingLevels("openai", "gpt-5.4"),
+    );
     expect(result.configOptions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

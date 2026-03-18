@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as imageGenerationRuntime from "../../image-generation/runtime.js";
 import * as imageOps from "../../media/image-ops.js";
 import * as mediaStore from "../../media/store.js";
-import * as webMedia from "../../plugin-sdk/web-media.js";
+import * as webMedia from "../../media/web-media.js";
 import {
   createImageGenerateTool,
   resolveImageGenerationModelConfigForTool,
