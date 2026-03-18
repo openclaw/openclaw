@@ -3,7 +3,6 @@ import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
 import {
-  formatThinkingLevels,
   formatXHighModelHint,
   normalizeThinkLevel,
   resolvePreferredOpenClawTmpDir,
@@ -44,6 +43,9 @@ type PluginCfg = {
   maxTokens?: number;
   timeoutMs?: number;
 };
+
+const INVALID_THINKING_LEVELS_HINT =
+  "off, minimal, low, medium, high, adaptive, and xhigh where supported";
 
 export function createLlmTaskTool(api: OpenClawPluginApi) {
   return {
@@ -125,7 +127,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const thinkLevel = thinkingRaw ? normalizeThinkLevel(thinkingRaw) : undefined;
       if (thinkingRaw && !thinkLevel) {
         throw new Error(
-          `Invalid thinking level "${thinkingRaw}". Use one of: ${formatThinkingLevels(provider, model)}.`,
+          `Invalid thinking level "${thinkingRaw}". Use one of: ${INVALID_THINKING_LEVELS_HINT}.`,
         );
       }
       if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
