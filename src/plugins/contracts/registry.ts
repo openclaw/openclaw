@@ -59,7 +59,7 @@ const BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS = [
   "openai",
   "zai",
 ] as const;
-const BUNDLED_IMAGE_GENERATION_PLUGIN_IDS = ["google", "openai"] as const;
+const BUNDLED_IMAGE_GENERATION_PLUGIN_IDS = ["fal", "google", "openai"] as const;
 
 export const providerContractRegistry: ProviderContractEntry[] = [];
 
