@@ -392,6 +392,18 @@ const TtsMicrosoftConfigSchema = z
   })
   .strict()
   .optional();
+const TtsMiniMaxConfigSchema = z
+  .object({
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    baseUrl: z.string().optional(),
+    model: z.string().optional(),
+    voiceId: z.string().optional(),
+    speed: z.number().min(0.5).max(2).optional(),
+    volume: z.number().min(0).max(2).optional(),
+    pitch: z.number().min(-24).max(24).optional(),
+  })
+  .strict()
+  .optional();
 export const TtsConfigSchema = z
   .object({
     auto: TtsAutoSchema.optional(),
@@ -447,6 +459,7 @@ export const TtsConfigSchema = z
       .optional(),
     edge: TtsMicrosoftConfigSchema,
     microsoft: TtsMicrosoftConfigSchema,
+    minimax: TtsMiniMaxConfigSchema,
     prefsPath: z.string().optional(),
     maxTextLength: z.number().int().min(1).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),

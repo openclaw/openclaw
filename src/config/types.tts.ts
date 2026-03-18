@@ -93,6 +93,16 @@ export type TtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  /** MiniMax speech configuration. */
+  minimax?: {
+    apiKey?: SecretInput;
+    baseUrl?: string;
+    model?: string;
+    voiceId?: string;
+    speed?: number;
+    volume?: number;
+    pitch?: number;
+  };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
   /** Hard cap for text sent to TTS (chars). */
