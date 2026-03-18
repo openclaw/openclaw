@@ -101,6 +101,64 @@ describe("session path safety", () => {
     }
   });
 
+  it("preserves logical session paths when the sessions dir is a symlink", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-symlink-logical-session-"));
+    const realRoot = path.join(tmpDir, "real-state");
+    const aliasRoot = path.join(tmpDir, "alias-state");
+    try {
+      fs.mkdirSync(realRoot, { recursive: true });
+      fs.symlinkSync(realRoot, aliasRoot, "dir");
+      const logicalSessionsDir = path.join(aliasRoot, "agents", "main", "sessions");
+      fs.mkdirSync(logicalSessionsDir, { recursive: true });
+      const logicalTranscript = path.join(logicalSessionsDir, "sess-1.jsonl");
+      fs.writeFileSync(logicalTranscript, "");
+
+      const resolved = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: logicalTranscript },
+        { sessionsDir: logicalSessionsDir },
+      );
+
+      expect(resolved).toBe(logicalTranscript);
+      expect(fs.realpathSync(resolved)).toBe(
+        fs.realpathSync(path.join(realRoot, "agents", "main", "sessions", "sess-1.jsonl")),
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("maps stored real session paths back to the logical symlinked sessions dir", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-symlink-real-session-"));
+    const realRoot = path.join(tmpDir, "real-state");
+    const aliasRoot = path.join(tmpDir, "alias-state");
+    try {
+      fs.mkdirSync(realRoot, { recursive: true });
+      fs.symlinkSync(realRoot, aliasRoot, "dir");
+      const logicalSessionsDir = path.join(aliasRoot, "agents", "main", "sessions");
+      fs.mkdirSync(logicalSessionsDir, { recursive: true });
+      const logicalTranscript = path.join(logicalSessionsDir, "sess-1.jsonl");
+      fs.writeFileSync(logicalTranscript, "");
+      const storedRealTranscript = fs.realpathSync(logicalTranscript);
+
+      const resolved = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: storedRealTranscript },
+        { sessionsDir: logicalSessionsDir },
+      );
+
+      expect(resolved).toBe(logicalTranscript);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back when sessionFile is a symlink that escapes sessions dir", () => {
     if (process.platform === "win32") {
       return;
