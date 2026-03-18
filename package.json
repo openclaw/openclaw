@@ -98,6 +98,10 @@
       "types": "./dist/plugin-sdk/channel-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-runtime.js"
     },
+    "./plugin-sdk/interactive-runtime": {
+      "types": "./dist/plugin-sdk/interactive-runtime.d.ts",
+      "default": "./dist/plugin-sdk/interactive-runtime.js"
+    },
     "./plugin-sdk/infra-runtime": {
       "types": "./dist/plugin-sdk/infra-runtime.d.ts",
       "default": "./dist/plugin-sdk/infra-runtime.js"
