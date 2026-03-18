@@ -4,7 +4,10 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
-import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
+import {
+  getDiagnosticSessionState,
+  resetDiagnosticSessionStateForTest,
+} from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import {
@@ -312,6 +315,34 @@ describe("before_tool_call loop detection behavior", () => {
       },
       (evt) => evt.level === "warning",
     );
+  });
+
+  it("closes hook-blocked loop-history entries with an error outcome", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockReason: "blocked by policy",
+    });
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "should not run" }],
+      details: { ok: true },
+    });
+    const tool = createWrappedTool("read", execute);
+
+    await expect(
+      tool.execute("blocked-read-finalized", { path: "/forbidden.txt" }, undefined, undefined),
+    ).rejects.toThrow("blocked by policy");
+
+    const sessionState = getDiagnosticSessionState({
+      sessionKey: enabledLoopDetectionContext.sessionKey,
+      sessionId: enabledLoopDetectionContext.agentId,
+    });
+    const blockedEntry = sessionState.toolCallHistory?.find(
+      (call) => call.toolCallId === "blocked-read-finalized",
+    );
+
+    expect(blockedEntry?.resultHash).toMatch(/^error:/);
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("emits warnings for separate browser search storms within the same session", async () => {

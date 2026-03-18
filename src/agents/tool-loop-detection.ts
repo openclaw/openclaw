@@ -183,6 +183,11 @@ type BrowserSearchHistoryEntry = BrowserSearchLoopRecord & {
   timestamp: number;
 };
 
+type BrowserTargetSearchContext = {
+  search?: BrowserSearchLoopRecord;
+  draftQueryHash?: string;
+};
+
 const GOOGLE_SEARCH_HOST_PATTERN = /(^|\.)google\.(?:com|[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/;
 const YANDEX_SEARCH_HOST_PATTERN = /(^|\.)yandex\.(?:com|ru|by|kz|ua|net)$/;
 
@@ -207,6 +212,38 @@ function extractBrowserActKind(params: Record<string, unknown>): string | undefi
     return request.kind;
   }
   return typeof params.kind === "string" ? params.kind : undefined;
+}
+
+function extractBrowserActStringParam(
+  params: Record<string, unknown>,
+  key: "key" | "targetId" | "text",
+): string | undefined {
+  const request = isPlainObject(params.request) ? params.request : undefined;
+  const requestValue = request?.[key];
+  if (typeof requestValue === "string") {
+    const trimmed = requestValue.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  const value = params[key];
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function extractBrowserActBooleanParam(
+  params: Record<string, unknown>,
+  key: "submit",
+): boolean | undefined {
+  const request = isPlainObject(params.request) ? params.request : undefined;
+  const requestValue = request?.[key];
+  if (typeof requestValue === "boolean") {
+    return requestValue;
+  }
+  return typeof params[key] === "boolean" ? params[key] : undefined;
 }
 
 function isBrowserNavigationBoundary(toolName: string, params: unknown): boolean {
@@ -253,6 +290,41 @@ function extractBrowserNavigationUrl(toolName: string, params: unknown): URL | u
   return parsedUrl;
 }
 
+function extractBrowserResultDetails(result: unknown): Record<string, unknown> | undefined {
+  if (!isPlainObject(result) || !isPlainObject(result.details)) {
+    return undefined;
+  }
+  return result.details;
+}
+
+function extractBrowserResultTargetId(result: unknown): string | undefined {
+  const details = extractBrowserResultDetails(result);
+  if (typeof details?.targetId !== "string") {
+    return undefined;
+  }
+  const trimmed = details.targetId.trim();
+  return trimmed || undefined;
+}
+
+function extractBrowserTargetId(
+  toolName: string,
+  params: unknown,
+  result?: unknown,
+): string | undefined {
+  if (toolName !== "browser" || !isPlainObject(params)) {
+    return undefined;
+  }
+  return extractBrowserActStringParam(params, "targetId") ?? extractBrowserResultTargetId(result);
+}
+
+function hashBrowserSearchQuery(query: string): string | undefined {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return digestStable(trimmed.toLowerCase());
+}
+
 function extractBrowserSearchLoopHintFromUrl(parsedUrl: URL): BrowserSearchLoopRecord | undefined {
   const host = normalizeHostname(parsedUrl.hostname);
   const path = parsedUrl.pathname.toLowerCase();
@@ -273,37 +345,141 @@ function extractBrowserSearchLoopHintFromUrl(parsedUrl: URL): BrowserSearchLoopR
   return undefined;
 }
 
-function extractBrowserSearchLoopHint(
+function isSuccessfulToolCallRecord(record: ToolCallRecord): boolean {
+  return typeof record.resultHash === "string" && !record.resultHash.startsWith("error:");
+}
+
+function findRecentBrowserTargetContext(
+  history: ToolCallRecord[] | undefined,
+  targetId: string,
+): BrowserTargetSearchContext {
+  if (!history?.length) {
+    return {};
+  }
+
+  const context: BrowserTargetSearchContext = {};
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const record = history[i];
+    if (!record || !isSuccessfulToolCallRecord(record)) {
+      continue;
+    }
+    const loopHint = record.loopHint;
+    if (!loopHint || loopHint.browserTargetId !== targetId) {
+      continue;
+    }
+    if (loopHint.browserNavigation && !loopHint.browserSearch) {
+      break;
+    }
+    if (!context.draftQueryHash && loopHint.browserSearchDraftQueryHash) {
+      context.draftQueryHash = loopHint.browserSearchDraftQueryHash;
+    }
+    if (!context.search && loopHint.browserSearch) {
+      context.search = loopHint.browserSearch;
+      if (context.draftQueryHash) {
+        break;
+      }
+    }
+  }
+
+  return context;
+}
+
+function extractBrowserSearchDraftQueryHash(toolName: string, params: unknown): string | undefined {
+  if (toolName !== "browser" || !isPlainObject(params) || params.action !== "act") {
+    return undefined;
+  }
+  if (extractBrowserActKind(params) !== "type") {
+    return undefined;
+  }
+  const text = extractBrowserActStringParam(params, "text");
+  return text ? hashBrowserSearchQuery(text) : undefined;
+}
+
+function extractBrowserSubmittedSearchLoopHint(
   toolName: string,
   params: unknown,
+  history: ToolCallRecord[] | undefined,
 ): BrowserSearchLoopRecord | undefined {
-  const parsedUrl = extractBrowserNavigationUrl(toolName, params);
-  if (!parsedUrl) {
+  if (toolName !== "browser" || !isPlainObject(params) || params.action !== "act") {
     return undefined;
   }
 
-  return extractBrowserSearchLoopHintFromUrl(parsedUrl);
+  const actKind = extractBrowserActKind(params);
+  if (actKind !== "type" && actKind !== "press") {
+    return undefined;
+  }
+
+  const targetId = extractBrowserTargetId(toolName, params);
+  if (!targetId) {
+    return undefined;
+  }
+
+  const context = findRecentBrowserTargetContext(history, targetId);
+  const host = context.search?.host;
+  if (!host) {
+    return undefined;
+  }
+
+  if (actKind === "type") {
+    if (extractBrowserActBooleanParam(params, "submit") !== true) {
+      return undefined;
+    }
+    const text = extractBrowserActStringParam(params, "text");
+    const queryHash = text ? hashBrowserSearchQuery(text) : undefined;
+    return queryHash ? { host, queryHash } : undefined;
+  }
+
+  const key = extractBrowserActStringParam(params, "key")?.toLowerCase();
+  if (key !== "enter") {
+    return undefined;
+  }
+  const queryHash = context.draftQueryHash ?? context.search?.queryHash;
+  return queryHash ? { host, queryHash } : undefined;
+}
+
+function extractBrowserSearchLoopHint(
+  toolName: string,
+  params: unknown,
+  history?: ToolCallRecord[],
+): BrowserSearchLoopRecord | undefined {
+  const parsedUrl = extractBrowserNavigationUrl(toolName, params);
+  if (parsedUrl) {
+    return extractBrowserSearchLoopHintFromUrl(parsedUrl);
+  }
+  return extractBrowserSubmittedSearchLoopHint(toolName, params, history);
 }
 
 function extractToolCallLoopHint(
   toolName: string,
   params: unknown,
-  options?: { browserSearchStormEnabled?: boolean },
+  options?: { browserSearchStormEnabled?: boolean; history?: ToolCallRecord[]; result?: unknown },
 ): ToolCallRecord["loopHint"] {
   if (options?.browserSearchStormEnabled === false) {
     return undefined;
   }
-  const navigationUrl = extractBrowserNavigationUrl(toolName, params);
-  if (!navigationUrl && !isBrowserNavigationBoundary(toolName, params)) {
+
+  const browserSearch = extractBrowserSearchLoopHint(toolName, params, options?.history);
+  const browserNavigation = isBrowserNavigationBoundary(toolName, params) || Boolean(browserSearch);
+  const browserTargetId = extractBrowserTargetId(toolName, params, options?.result);
+  const browserSearchDraftQueryHash = extractBrowserSearchDraftQueryHash(toolName, params);
+  if (!browserNavigation && !browserTargetId && !browserSearchDraftQueryHash) {
     return undefined;
   }
-  const browserSearch = navigationUrl
-    ? extractBrowserSearchLoopHintFromUrl(navigationUrl)
-    : undefined;
-  if (browserSearch) {
-    return { browserNavigation: true, browserSearch };
+
+  const loopHint: NonNullable<ToolCallRecord["loopHint"]> = {};
+  if (browserNavigation) {
+    loopHint.browserNavigation = true;
   }
-  return { browserNavigation: true };
+  if (browserSearch) {
+    loopHint.browserSearch = browserSearch;
+  }
+  if (browserSearchDraftQueryHash) {
+    loopHint.browserSearchDraftQueryHash = browserSearchDraftQueryHash;
+  }
+  if (browserTargetId) {
+    loopHint.browserTargetId = browserTargetId;
+  }
+  return loopHint;
 }
 
 function isKnownPollToolCall(toolName: string, params: unknown): boolean {
@@ -605,7 +781,7 @@ export function detectToolCallLoop(
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
   const browserSearch = resolvedConfig.detectors.browserSearchStorm
-    ? extractBrowserSearchLoopHint(toolName, params)
+    ? extractBrowserSearchLoopHint(toolName, params, history)
     : undefined;
 
   if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
@@ -784,6 +960,7 @@ export function recordToolCall(
   params: unknown,
   toolCallId?: string,
   config?: ToolLoopDetectionConfig,
+  runId?: string,
 ): void {
   const resolvedConfig = resolveLoopDetectionConfig(config);
   if (!state.toolCallHistory) {
@@ -794,8 +971,10 @@ export function recordToolCall(
     toolName,
     argsHash: hashToolCall(toolName, params),
     toolCallId,
+    runId,
     loopHint: extractToolCallLoopHint(toolName, params, {
       browserSearchStormEnabled: resolvedConfig.detectors.browserSearchStorm,
+      history: state.toolCallHistory,
     }),
     timestamp: Date.now(),
   });
@@ -814,6 +993,7 @@ export function recordToolCallOutcome(
     toolName: string;
     toolParams: unknown;
     toolCallId?: string;
+    runId?: string;
     result?: unknown;
     error?: unknown;
     config?: ToolLoopDetectionConfig;
@@ -837,6 +1017,8 @@ export function recordToolCallOutcome(
   const argsHash = hashToolCall(params.toolName, params.toolParams);
   const loopHint = extractToolCallLoopHint(params.toolName, params.toolParams, {
     browserSearchStormEnabled: resolvedConfig.detectors.browserSearchStorm,
+    history: state.toolCallHistory,
+    result: params.result,
   });
   let matched = false;
   for (let i = state.toolCallHistory.length - 1; i >= 0; i -= 1) {
@@ -850,8 +1032,12 @@ export function recordToolCallOutcome(
     if (call.resultHash !== undefined) {
       continue;
     }
+    if ((call.runId ?? undefined) !== (params.runId ?? undefined)) {
+      continue;
+    }
     if (params.toolCallId && call.toolCallId === params.toolCallId) {
       call.argsHash = argsHash;
+      call.runId = params.runId;
       call.loopHint = loopHint;
       call.resultHash = resultHash;
       matched = true;
@@ -874,6 +1060,7 @@ export function recordToolCallOutcome(
       toolName: params.toolName,
       argsHash,
       toolCallId: params.toolCallId,
+      runId: params.runId,
       resultHash,
       loopHint,
       timestamp: Date.now(),

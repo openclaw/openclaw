@@ -104,6 +104,7 @@ function createBrowserSearchFixture(
     queryParam?: string;
     action?: "open" | "navigate";
     urlField?: "url" | "targetUrl";
+    targetId?: string;
   },
 ) {
   const path = options?.path ?? "/search";
@@ -116,7 +117,10 @@ function createBrowserSearchFixture(
     params: { action, [urlField]: url },
     result: {
       content: [{ type: "text", text: `results for ${query}` }],
-      details: { url },
+      details: {
+        url,
+        ...(options?.targetId ? { targetId: options.targetId } : {}),
+      },
     },
   } as const;
 }
@@ -139,6 +143,48 @@ function createBrowserActClickFixture(ref = "1") {
     result: {
       content: [{ type: "text", text: `clicked ${ref}` }],
       details: { ok: true },
+    },
+  } as const;
+}
+
+function createBrowserActTypeFixture(
+  query: string,
+  targetId = "tab-search",
+  options?: { submit?: boolean },
+) {
+  return {
+    toolName: "browser",
+    params: {
+      action: "act",
+      request: {
+        kind: "type",
+        targetId,
+        ref: "qbox",
+        text: query,
+        ...(options?.submit !== undefined ? { submit: options.submit } : {}),
+      },
+    },
+    result: {
+      content: [{ type: "text", text: `typed ${query}` }],
+      details: { ok: true, targetId },
+    },
+  } as const;
+}
+
+function createBrowserActPressFixture(key = "Enter", targetId = "tab-search") {
+  return {
+    toolName: "browser",
+    params: {
+      action: "act",
+      request: {
+        kind: "press",
+        targetId,
+        key,
+      },
+    },
+    result: {
+      content: [{ type: "text", text: `pressed ${key}` }],
+      details: { ok: true, targetId },
     },
   } as const;
 }
@@ -393,6 +439,40 @@ describe("tool-loop-detection", () => {
         originalQueryHash,
       );
       expect(state.toolCallHistory?.[0]?.resultHash).toBeDefined();
+    });
+
+    it("does not rewrite unfinished entries when toolCallId collides across runs", () => {
+      const state = createState();
+      const sharedToolCallId = "shared-call";
+
+      recordToolCall(
+        state,
+        "read",
+        { path: "/run-a.txt" },
+        sharedToolCallId,
+        enabledLoopDetectionConfig,
+        "run-a",
+      );
+
+      recordToolCallOutcome(state, {
+        toolName: "read",
+        toolParams: { path: "/run-b.txt" },
+        toolCallId: sharedToolCallId,
+        runId: "run-b",
+        result: {
+          content: [{ type: "text", text: "run b output" }],
+          details: { ok: true },
+        },
+        config: enabledLoopDetectionConfig,
+      });
+
+      expect(state.toolCallHistory).toHaveLength(2);
+      const runAEntry = state.toolCallHistory?.find((call) => call.runId === "run-a");
+      const runBEntry = state.toolCallHistory?.find((call) => call.runId === "run-b");
+      expect(runAEntry?.argsHash).toBe(hashToolCall("read", { path: "/run-a.txt" }));
+      expect(runAEntry?.resultHash).toBeUndefined();
+      expect(runBEntry?.argsHash).toBe(hashToolCall("read", { path: "/run-b.txt" }));
+      expect(runBEntry?.resultHash).toBeDefined();
     });
   });
 
@@ -805,6 +885,108 @@ describe("tool-loop-detection", () => {
 
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
+        expect(loopResult.detector).toBe("browser_search_storm");
+        expect(loopResult.count).toBe(BROWSER_SEARCH_WARNING_THRESHOLD);
+      }
+    });
+
+    it("matches in-tab browser search submissions via act type submit", () => {
+      const state = createState();
+      const targetId = "tab-submit";
+      const openedSearch = createBrowserSearchFixture("submit issue 0", "www.google.com", {
+        targetId,
+      });
+
+      recordSuccessfulCall(
+        state,
+        openedSearch.toolName,
+        openedSearch.params,
+        openedSearch.result,
+        0,
+      );
+
+      for (let i = 1; i < BROWSER_SEARCH_WARNING_THRESHOLD; i += 1) {
+        const typedSearch = createBrowserActTypeFixture(`submit issue ${i}`, targetId, {
+          submit: true,
+        });
+        recordSuccessfulCall(
+          state,
+          typedSearch.toolName,
+          typedSearch.params,
+          typedSearch.result,
+          i,
+        );
+      }
+
+      const current = createBrowserActTypeFixture(
+        `submit issue ${BROWSER_SEARCH_WARNING_THRESHOLD}`,
+        targetId,
+        { submit: true },
+      );
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("browser_search_storm");
+        expect(loopResult.count).toBe(BROWSER_SEARCH_WARNING_THRESHOLD);
+      }
+    });
+
+    it("matches in-tab browser search submissions via act press Enter", () => {
+      const state = createState();
+      const targetId = "tab-enter";
+      const openedSearch = createBrowserSearchFixture("enter issue 0", "www.google.com", {
+        targetId,
+      });
+      recordSuccessfulCall(
+        state,
+        openedSearch.toolName,
+        openedSearch.params,
+        openedSearch.result,
+        0,
+      );
+
+      for (let i = 1; i < BROWSER_SEARCH_WARNING_THRESHOLD; i += 1) {
+        const draft = createBrowserActTypeFixture(`enter issue ${i}`, targetId, {
+          submit: false,
+        });
+        const press = createBrowserActPressFixture("Enter", targetId);
+        recordSuccessfulCall(state, draft.toolName, draft.params, draft.result, i * 2 - 1);
+        recordSuccessfulCall(state, press.toolName, press.params, press.result, i * 2);
+      }
+
+      const currentDraft = createBrowserActTypeFixture(
+        `enter issue ${BROWSER_SEARCH_WARNING_THRESHOLD}`,
+        targetId,
+        {
+          submit: false,
+        },
+      );
+      recordSuccessfulCall(
+        state,
+        currentDraft.toolName,
+        currentDraft.params,
+        currentDraft.result,
+        BROWSER_SEARCH_WARNING_THRESHOLD * 2 - 1,
+      );
+
+      const current = createBrowserActPressFixture("Enter", targetId);
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
         expect(loopResult.detector).toBe("browser_search_storm");
         expect(loopResult.count).toBe(BROWSER_SEARCH_WARNING_THRESHOLD);
       }

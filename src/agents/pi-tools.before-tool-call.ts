@@ -78,6 +78,7 @@ async function recordLoopOutcome(args: {
       toolName: args.toolName,
       toolParams: args.toolParams,
       toolCallId: args.toolCallId,
+      runId: args.ctx.runId,
       result: args.result,
       error: args.error,
       config: args.ctx.loopDetection,
@@ -133,6 +134,7 @@ async function applyLoopProtection(args: {
           args.toolParams,
           args.toolCallId,
           args.ctx.loopDetection,
+          args.ctx.runId,
         );
       }
       return {
@@ -163,6 +165,7 @@ async function applyLoopProtection(args: {
     args.toolParams,
     args.toolCallId,
     args.ctx.loopDetection,
+    args.ctx.runId,
   );
   return {};
 }
@@ -207,12 +210,22 @@ export async function runBeforeToolCallHook(args: {
           toolCallId: args.toolCallId,
           recordAttemptOnCritical: true,
         });
+        const blockedReason =
+          loopProtectionResult.blockedReason ||
+          hookResult.blockReason ||
+          "Tool call blocked by plugin hook";
+        // Hook-blocked attempts should still close out their history rows as failures so later
+        // runs with colliding provider toolCallIds cannot rewrite stale unfinished entries.
+        await recordLoopOutcome({
+          ctx: args.ctx,
+          toolName,
+          toolParams: effectiveParams,
+          toolCallId: args.toolCallId,
+          error: blockedReason,
+        });
         return {
           blocked: true,
-          reason:
-            loopProtectionResult.blockedReason ||
-            hookResult.blockReason ||
-            "Tool call blocked by plugin hook",
+          reason: blockedReason,
         };
       }
 

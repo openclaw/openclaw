@@ -19,12 +19,15 @@ export type BrowserSearchLoopHint = {
 export type ToolCallLoopHint = {
   browserNavigation?: boolean;
   browserSearch?: BrowserSearchLoopHint;
+  browserSearchDraftQueryHash?: string;
+  browserTargetId?: string;
 };
 
 export type ToolCallRecord = {
   toolName: string;
   argsHash: string;
   toolCallId?: string;
+  runId?: string;
   resultHash?: string;
   loopHint?: ToolCallLoopHint;
   timestamp: number;
