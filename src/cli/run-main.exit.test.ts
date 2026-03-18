@@ -158,6 +158,18 @@ describe("runCli exit behavior", () => {
     expect(registerCoreCliByNameMock).toHaveBeenCalled();
   });
 
+  it("does not route ACP logs to stderr for interactive client mode", async () => {
+    await runCli(["node", "openclaw", "acp", "client"]);
+
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+  });
+
+  it("does not route ACP logs to stderr for interactive client mode options", async () => {
+    await runCli(["node", "openclaw", "acp", "client", "--cwd", "/tmp"]);
+
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+  });
+
   it("routes ACP stdout logging even when acp includes option values", async () => {
     registerSubCliByNameMock.mockImplementation(() => {});
 
