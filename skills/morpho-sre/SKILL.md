@@ -56,6 +56,12 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - If an incident thread drifts into unrelated design/history questions, redirect that discussion to a DM or new thread instead of mixing it into RCA.
 - Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack context. Wait for net-new evidence, mitigation, validation, or a PR URL before replying.
 - Reply with conclusions only. This applies to ALL bot communications — Slack threads, Slack DMs, channel posts, PR comments, Linear comments, and any other output surface. Never include investigation steps, intermediate reasoning, tool output summaries, or step-by-step analysis. Every message must read as a polished summary, not a live investigation log. All investigation work happens silently; only the final answer is sent.
+- Fix PR gate — when RCA confidence is high:
+  1. First, search for an existing open PR that already fixes the issue: `gh search prs --repo <owner/repo> --state open --match title,body --limit 10 -- "<keyword>"`. Also check recent merged PRs that may not yet be deployed.
+  2. If an existing fix PR exists: link it in the reply under `*Fix PR:*` with its status (open/merged/deployed).
+  3. If no existing fix PR exists and the fix is scoped and reversible: create one via `autofix-pr.sh` and post the URL in the reply.
+  4. If the fix is not PR-ready: name the concrete PR candidate (repo, path, title, validation) under `*Suggested PR:*`.
+  5. Never finish a high-confidence RCA without either linking an existing fix or proposing one.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
 - Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run `gh repo view <owner/repo>` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement — do not split into acknowledge-then-fail-later.
 - If a human challenges or contradicts a technical claim in any thread (incident, bug-report, or general), immediately re-investigate with fresh live evidence. If a human questions the proposed fix or PR in-thread, re-open RCA before defending the fix. Respond in the same thread with updated evidence, a revised conclusion, or an explicit confirmation/disproof statement. Never go silent after a challenge.
@@ -102,6 +108,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - `posthog-mcp.sh` project keys map to specific frontend apps (landing, vmv1, data, markets-v2, curator-v1, curator-v2)
 - When running `erpc-context.sh`, if Vault auth fails, continue with Helm values + upstream docs — do not guess live config
 - `autofix-pr.sh` can exit non-zero after creating the PR if the Linear labeling step fails — always check GitHub for the PR before retrying
+- Always search for existing fix PRs before creating a new one — a recent merged PR may already contain the fix but not yet be deployed (check ArgoCD sync status)
 - `pods.metrics.k8s.io` is Forbidden for the incident-readonly SA — do not retry it
 - Before posting a Slack reply, verify the message contains at least one `*Evidence:*` fact or `*Mitigation:*` action — if not, buffer until you have substantive content
 

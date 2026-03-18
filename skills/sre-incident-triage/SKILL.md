@@ -44,8 +44,19 @@ After the header, include:
 - `*Mitigation:*` reversible fix + rollback
 - `*Validate:*` 2-3 checks
 - `*Next:*` owner/action
+- `*Fix PR:*` link to existing fix PR (open or recently merged) | or PR URL created via `autofix-pr.sh` | or `*Suggested PR:*` with repo/path/title if not yet PR-ready
 
 Put unrelated warnings under `*Also watching:*`.
+
+### Fix PR Gate (High-Confidence RCA)
+
+When RCA confidence is high, always check for existing fix PRs before proposing a new one:
+
+1. Search open + recent merged PRs: `gh search prs --repo <owner/repo> --state open --match title,body --limit 10 -- "<keyword>"`
+2. If found: link it under `*Fix PR:*` with status
+3. If not found and fix is scoped/reversible: create via `autofix-pr.sh`
+4. If not PR-ready: name concrete candidate under `*Suggested PR:*`
+5. Never finish a high-confidence RCA without linking or proposing a fix
 
 ### Formatting Rules
 
