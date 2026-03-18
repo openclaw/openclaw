@@ -1,6 +1,5 @@
 import type { FailoverReason } from "../agents/pi-embedded-helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { CronJobBase } from "./types-shared.js";
 
 export type CronSchedule =
   | { kind: "at"; at: string }
@@ -117,8 +116,6 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
-
 export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
 
 type CronAgentTurnPayloadFields = {
@@ -137,10 +134,6 @@ type CronAgentTurnPayloadFields = {
   to?: string;
   bestEffortDeliver?: boolean;
 };
-
-type CronAgentTurnPayload = {
-  kind: "agentTurn";
-} & CronAgentTurnPayloadFields;
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
