@@ -18,8 +18,8 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/qwen-portal-auth", async () => {
-  const actual = await vi.importActual<object>("openclaw/plugin-sdk/qwen-portal-auth");
+vi.mock("../../plugin-sdk/qwen-portal-auth.js", async () => {
+  const actual = await vi.importActual<object>("../../plugin-sdk/qwen-portal-auth.js");
   return {
     ...actual,
     refreshQwenPortalCredentials: refreshQwenPortalCredentialsMock,
