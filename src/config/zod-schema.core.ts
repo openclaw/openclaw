@@ -192,7 +192,14 @@ export const ModelCompatSchema = z
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
-    thinkingFormat: z.union([z.literal("openai"), z.literal("zai"), z.literal("qwen")]).optional(),
+    thinkingFormat: z
+      .union([
+        z.literal("openai"),
+        z.literal("zai"),
+        z.literal("qwen"),
+        z.literal("qwen-chat-template"),
+      ])
+      .optional(),
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
