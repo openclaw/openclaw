@@ -197,9 +197,10 @@ export async function channelsAddCommand(
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
     });
+    // Prefer the setup plugin (has applyAccountConfig) over the runtime plugin.
     return (
-      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
-      snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin
+      snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin ??
+      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin
     );
   };
 

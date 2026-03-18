@@ -2,7 +2,12 @@ import {
   getActivePluginRegistryVersion,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeAnyChannelId } from "../registry.js";
+import {
+  CHAT_CHANNEL_ORDER,
+  type ChatChannelId,
+  normalizeAnyChannelId,
+  normalizeChatChannelId,
+} from "../registry.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
 function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
@@ -78,5 +83,9 @@ export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
 }
 
 export function normalizeChannelId(raw?: string | null): ChannelId | null {
-  return normalizeAnyChannelId(raw);
+  // Try registry-based resolution first (handles external plugins and aliases).
+  // Fall back to the static built-in channel list so that well-known bundled
+  // channels (e.g. "discord") resolve without pre-loading the plugin registry,
+  // which is intentionally skipped for `channels add` and `onboard`.
+  return normalizeAnyChannelId(raw) ?? normalizeChatChannelId(raw);
 }
