@@ -3,17 +3,17 @@ import {
   createTopLevelChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
+  buildPassiveChannelStatusSummary,
+  buildTrafficStatusSummary,
+} from "../../shared/channel-status-summary.js";
+import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/nostr";
-import {
-  buildPassiveChannelStatusSummary,
-  buildTrafficStatusSummary,
-} from "../../shared/channel-status-summary.js";
+} from "../runtime-api.js";
 import type { NostrProfile } from "./config-schema.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";

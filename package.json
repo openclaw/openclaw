@@ -314,10 +314,6 @@
       "types": "./dist/plugin-sdk/synology-chat.d.ts",
       "default": "./dist/plugin-sdk/synology-chat.js"
     },
-    "./plugin-sdk/talk-voice": {
-      "types": "./dist/plugin-sdk/talk-voice.d.ts",
-      "default": "./dist/plugin-sdk/talk-voice.js"
-    },
     "./plugin-sdk/testing": {
       "types": "./dist/plugin-sdk/testing.d.ts",
       "default": "./dist/plugin-sdk/testing.js"
@@ -325,6 +321,10 @@
     "./plugin-sdk/test-utils": {
       "types": "./dist/plugin-sdk/test-utils.d.ts",
       "default": "./dist/plugin-sdk/test-utils.js"
+    },
+    "./plugin-sdk/talk-voice": {
+      "types": "./dist/plugin-sdk/talk-voice.d.ts",
+      "default": "./dist/plugin-sdk/talk-voice.js"
     },
     "./plugin-sdk/thread-ownership": {
       "types": "./dist/plugin-sdk/thread-ownership.d.ts",
@@ -414,6 +414,14 @@
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
     },
+    "./plugin-sdk/provider-auth-api-key": {
+      "types": "./dist/plugin-sdk/provider-auth-api-key.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth-api-key.js"
+    },
+    "./plugin-sdk/provider-auth-login": {
+      "types": "./dist/plugin-sdk/provider-auth-login.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth-login.js"
+    },
     "./plugin-sdk/provider-catalog": {
       "types": "./dist/plugin-sdk/provider-catalog.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog.js"
@@ -481,6 +489,10 @@
     "./plugin-sdk/tool-send": {
       "types": "./dist/plugin-sdk/tool-send.d.ts",
       "default": "./dist/plugin-sdk/tool-send.js"
+    },
+    "./plugin-sdk/secret-input-schema": {
+      "types": "./dist/plugin-sdk/secret-input-schema.d.ts",
+      "default": "./dist/plugin-sdk/secret-input-schema.js"
     },
     "./cli-entry": "./openclaw.mjs"
   },

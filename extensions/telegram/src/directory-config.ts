@@ -6,15 +6,13 @@ import {
   toDirectoryEntries,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { inspectReadOnlyChannelAccount } from "../../../src/channels/read-only-account-inspect.js";
-import type { InspectedTelegramAccount } from "../../../src/channels/read-only-account-inspect.telegram.runtime.js";
+import { inspectTelegramAccount, type InspectedTelegramAccount } from "../api.js";
 
 export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  const account = (await inspectReadOnlyChannelAccount({
-    channelId: "telegram",
+  const account = inspectTelegramAccount({
     cfg: params.cfg,
     accountId: params.accountId,
-  })) as InspectedTelegramAccount | null;
+  }) as InspectedTelegramAccount | null;
   if (!account || !("config" in account)) {
     return [];
   }
@@ -36,11 +34,10 @@ export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConf
 }
 
 export async function listTelegramDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  const account = (await inspectReadOnlyChannelAccount({
-    channelId: "telegram",
+  const account = inspectTelegramAccount({
     cfg: params.cfg,
     accountId: params.accountId,
-  })) as InspectedTelegramAccount | null;
+  }) as InspectedTelegramAccount | null;
   if (!account || !("config" in account)) {
     return [];
   }

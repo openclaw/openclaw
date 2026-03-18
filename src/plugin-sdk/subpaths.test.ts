@@ -23,6 +23,7 @@ import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as testingSdk from "openclaw/plugin-sdk/testing";
+import * as voiceCallSdk from "openclaw/plugin-sdk/voice-call";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
@@ -42,6 +43,20 @@ const bundledExtensionSubpathLoaders = pluginSdkSubpaths.map((id: string) => ({
   load: () => importPluginSdkSubpath(`openclaw/plugin-sdk/${id}`),
 }));
 
+const trimmedLegacyExtensionSubpaths = [
+  "copilot-proxy",
+  "device-pair",
+  "diagnostics-otel",
+  "diffs",
+  "llm-task",
+  "memory-lancedb",
+  "open-prose",
+  "phone-control",
+  "qwen-portal-auth",
+  "talk-voice",
+  "thread-ownership",
+] as const;
+
 const asExports = (mod: object) => mod as Record<string, unknown>;
 const ircSdk = await import("openclaw/plugin-sdk/irc");
 const feishuSdk = await import("openclaw/plugin-sdk/feishu");
@@ -57,6 +72,7 @@ const mattermostSdk = await import("openclaw/plugin-sdk/mattermost");
 const nextcloudTalkSdk = await import("openclaw/plugin-sdk/nextcloud-talk");
 const twitchSdk = await import("openclaw/plugin-sdk/twitch");
 const accountHelpersSdk = await import("openclaw/plugin-sdk/account-helpers");
+const lobsterSdk = await import("openclaw/plugin-sdk/lobster");
 
 describe("plugin-sdk subpath exports", () => {
   it("exports compat helpers", () => {
@@ -169,7 +185,7 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
   });
 
-  it("exports the public testing seam", () => {
+  it("exports the public testing surface", () => {
     expect(typeof testingSdk.removeAckReactionAfterReply).toBe("function");
     expect(typeof testingSdk.shouldAckReaction).toBe("function");
   });
@@ -268,7 +284,7 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof googlechatSdk.resolveGoogleChatGroupRequireMention).toBe("function");
   });
 
-  it("keeps the Google Chat runtime seam aligned with the public SDK subpath", async () => {
+  it("keeps the Google Chat runtime surface aligned with the public SDK subpath", async () => {
     const googlechatRuntimeApi = await import("../../extensions/googlechat/runtime-api.js");
 
     expect(typeof googlechatRuntimeApi.buildChannelConfigSchema).toBe("function");
@@ -299,9 +315,19 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof tlonSdk.tlonSetupAdapter).toBe("object");
   });
 
-  it("exports acpx helpers", async () => {
+  it("exports ACPX runtime backend helpers", async () => {
     expect(typeof acpxSdk.listKnownProviderAuthEnvVarNames).toBe("function");
     expect(typeof acpxSdk.omitEnvKeysCaseInsensitive).toBe("function");
+  });
+
+  it("exports Lobster helpers", async () => {
+    expect(typeof lobsterSdk.definePluginEntry).toBe("function");
+    expect(typeof lobsterSdk.materializeWindowsSpawnProgram).toBe("function");
+  });
+
+  it("exports Voice Call helpers", () => {
+    expect(typeof voiceCallSdk.definePluginEntry).toBe("function");
+    expect(typeof voiceCallSdk.resolveOpenAITtsInstructions).toBe("function");
   });
 
   it("resolves bundled extension subpaths", async () => {
@@ -309,6 +335,12 @@ describe("plugin-sdk subpath exports", () => {
       const mod = await load();
       expect(typeof mod).toBe("object");
       expect(mod, `subpath ${id} should resolve`).toBeTruthy();
+    }
+  });
+
+  it("does not advertise trimmed legacy extension helper surfaces", () => {
+    for (const id of trimmedLegacyExtensionSubpaths) {
+      expect(pluginSdkSubpaths).not.toContain(id);
     }
   });
 
