@@ -772,13 +772,36 @@ export async function runCronIsolatedAgentTurn(params: {
       deliveryAttempted:
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
     };
-    if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
+    // When the agent task itself had a fatal error AND delivery also returned a
+    // non-ok result, prefer the delivery-level error details (e.g. permanent
+    // target misconfiguration).  In all other cases derive the run status from
+    // the agent task outcome so that a successful task is never marked "error"
+    // due to a *best-effort* delivery failure.  Fixes #49826.
+    //
+    // However, when delivery is NOT best-effort and delivery failed, the run
+    // must still report "error" — the caller explicitly opted into strict
+    // delivery semantics.
+    if (hasFatalErrorPayload && deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;
     }
-    return resolveRunOutcome({
-      delivered: deliveryResult.result.delivered,
-      deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
-    });
+    if (!hasFatalErrorPayload && deliveryResult.result.status !== "ok" && !deliveryBestEffort) {
+      return resultWithDeliveryMeta;
+    }
+    // Abort/timeout errors must always surface even for best-effort delivery:
+    // the run was killed mid-flight, so treating it as "ok" would let one-shot
+    // jobs be deleted and suppress back-off for recurring jobs.  Fixes P1
+    // review thread on #49880.
+    if (isAborted() && deliveryResult.result.status !== "ok") {
+      return resultWithDeliveryMeta;
+    }
+    // Agent task succeeded — return the delivery result which preserves
+    // enriched summary/outputText from dispatchCronDelivery (e.g.
+    // sub-agent synthesis), overriding status to reflect the agent outcome.
+    return {
+      ...resultWithDeliveryMeta,
+      status: "ok" as const,
+      error: undefined,
+    };
   }
   const delivered = deliveryResult.delivered;
   const deliveryAttempted = deliveryResult.deliveryAttempted;
