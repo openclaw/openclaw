@@ -279,18 +279,24 @@ function resolveBrowserBaseUrl(params: {
   return undefined;
 }
 
+function resolveBrowserProfileContext(profileName: string | undefined) {
+  const cfg = loadConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  return {
+    resolved,
+    profile: profileName ? resolveProfile(resolved, profileName) : undefined,
+  };
+}
+
 function shouldPreferHostForProfile(profileName: string | undefined) {
   if (!profileName) {
     return false;
   }
-  const cfg = loadConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const profile = resolveProfile(resolved, profileName);
+  const { profile } = resolveBrowserProfileContext(profileName);
   if (!profile) {
     return false;
   }
-  const capabilities = getBrowserProfileCapabilities(profile);
-  return capabilities.usesChromeMcp;
+  return getBrowserProfileCapabilities(profile).usesChromeMcp;
 }
 
 const DEFAULT_HOST_EXISTING_SESSION_MANAGE_TIMEOUT_MS = 45_000;
@@ -298,18 +304,40 @@ const HOST_EXISTING_SESSION_MANAGE_ACTIONS = new Set([
   "status",
   "start",
   "stop",
+  "profiles",
   "tabs",
   "open",
   "focus",
   "close",
 ]);
 
+function shouldUseHostExistingSessionManageTimeout(params: {
+  action: string;
+  profileName?: string;
+}) {
+  const { resolved, profile } = resolveBrowserProfileContext(params.profileName);
+  const effectiveProfile = profile ?? resolveProfile(resolved, resolved.defaultProfile);
+
+  if (effectiveProfile && getBrowserProfileCapabilities(effectiveProfile).usesChromeMcp) {
+    return true;
+  }
+
+  if (params.action === "profiles") {
+    return Object.keys(resolved.profiles).some((name) => {
+      const candidate = resolveProfile(resolved, name);
+      return candidate ? getBrowserProfileCapabilities(candidate).usesChromeMcp : false;
+    });
+  }
+
+  return false;
+}
+
 function resolveBrowserToolManageTimeoutMs(params: {
   action: string;
   requestedTimeoutMs?: number;
   baseUrl?: string;
   hasProxyRequest: boolean;
-  usesHostOnlyProfile: boolean;
+  usesHostExistingSessionFlow: boolean;
 }) {
   if (typeof params.requestedTimeoutMs === "number") {
     return params.requestedTimeoutMs;
@@ -317,7 +345,7 @@ function resolveBrowserToolManageTimeoutMs(params: {
   if (params.hasProxyRequest || params.baseUrl) {
     return undefined;
   }
-  if (!params.usesHostOnlyProfile) {
+  if (!params.usesHostExistingSessionFlow) {
     return undefined;
   }
   return HOST_EXISTING_SESSION_MANAGE_ACTIONS.has(params.action)
@@ -416,12 +444,16 @@ export function createBrowserTool(opts?: {
             return proxy.result;
           }
         : null;
+      const usesHostExistingSessionFlow = shouldUseHostExistingSessionManageTimeout({
+        action,
+        profileName: profile,
+      });
       const toolTimeoutMs = resolveBrowserToolManageTimeoutMs({
         action,
         requestedTimeoutMs,
         baseUrl,
         hasProxyRequest: Boolean(proxyRequest),
-        usesHostOnlyProfile,
+        usesHostExistingSessionFlow,
       });
 
       switch (action) {

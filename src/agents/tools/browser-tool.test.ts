@@ -467,6 +467,36 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
+  it("uses the longer default timeout for host profiles when defaultProfile is existing-session", async () => {
+    setResolvedBrowserProfiles(
+      {
+        user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      },
+      "user",
+    );
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "status" });
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ profile: undefined, timeoutMs: 45_000 }),
+    );
+  });
+
+  it("uses the longer default timeout for host profiles when listing profiles with an existing-session profile present", async () => {
+    setResolvedBrowserProfiles({
+      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "profiles" });
+
+    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ timeoutMs: 45_000 }),
+    );
+  });
+
   it("keeps sandbox status on the client fast-fail defaults when timeoutMs is omitted", async () => {
     const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
     await tool.execute?.("call-1", { action: "status", target: "sandbox" });
