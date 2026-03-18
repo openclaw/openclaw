@@ -783,6 +783,7 @@
 .cron-workspace-main {
   display: grid;
   gap: 16px;
+  min-width: 0;
 }
 
 .cron-workspace-form {
@@ -1498,6 +1499,8 @@
   font-weight: 600;
   font-size: 15px;
   letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .cron-job {
@@ -1549,6 +1552,8 @@
 .cron-job-detail-value {
   font-size: 13px;
   line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .cron-job-state {
@@ -1575,6 +1580,8 @@
   color: var(--text);
   font-size: 12px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cron-job-status-pill {
