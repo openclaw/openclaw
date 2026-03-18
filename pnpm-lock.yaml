@@ -346,6 +346,8 @@ importers:
 
   extensions/elevenlabs: {}
 
+  extensions/fal: {}
+
   extensions/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':
