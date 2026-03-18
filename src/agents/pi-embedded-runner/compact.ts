@@ -113,6 +113,10 @@ export type CompactEmbeddedPiSessionParams = {
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  requesterSenderId?: string;
   authProfileId?: string;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
@@ -658,10 +662,14 @@ export async function compactEmbeddedPiSessionDirect(
       ? listChannelSupportedActions({
           cfg: params.config,
           channel: runtimeChannel,
+          currentChannelId: params.currentChannelId,
+          currentThreadTs: params.currentThreadTs,
+          currentMessageId: params.currentMessageId,
           accountId: params.agentAccountId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
           agentId: sessionAgentId,
+          requesterSenderId: params.requesterSenderId,
         })
       : undefined;
     const messageToolHints = runtimeChannel
