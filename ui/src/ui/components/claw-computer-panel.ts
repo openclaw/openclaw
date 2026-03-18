@@ -59,8 +59,74 @@ export class ClawComputerPanel extends LitElement {
   private tempIsFloating = false;
   // canvas 的比例（用于悬浮模式缩放时保持）
   private canvasRatio = 16 / 9;
+  private resizeObserver: ResizeObserver | null = null;
+  private readonly TOOLBAR_SPACE = 50;
+
+  @state() private activeTool = "vnc"; // vnc, browser, images
 
   @property({ type: Boolean }) enabled = false;
+
+  private setupResizeObserver() {
+    if (this.resizeObserver) {
+      return;
+    }
+    this.resizeObserver = new ResizeObserver(() => {
+      this.clampDockedOffset();
+    });
+    this.resizeObserver.observe(this);
+  }
+
+  private cleanupResizeObserver() {
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = null;
+    }
+  }
+
+  private clampDockedOffset() {
+    if (this.isFloating || !this.shadowRoot) {
+      return;
+    }
+
+    const screen = this.shadowRoot.querySelector(".screen");
+    if (!screen) {
+      return;
+    }
+
+    const hostHeight = this.offsetHeight;
+    const screenHeight = screen.offsetHeight;
+
+    // 计算允许的最大垂直偏移量（上下边界）
+    // 默认居中时，screenTop = (hostHeight - screenHeight) / 2
+    // maxUp = -screenTop (移动到最顶部)
+    // maxDown = screenTop (移动到最底部)
+    const centerTop = (hostHeight - screenHeight) / 2;
+
+    // 允许的偏移范围是 [-centerTop, centerTop]
+    // 但如果 screenHeight > hostHeight，centerTop 是负数
+    // 此时 screenTop 是负数，说明 screen 顶部在 host 顶部上方
+    // 此时允许的偏移量应该让 screen 能够覆盖 host
+    // 但我们的 UI 逻辑是 screen 应该包含在 host 内（通过 max-height: 100%）
+    // 所以理论上 screenHeight <= hostHeight
+
+    const maxOffset = Math.max(0, centerTop);
+
+    // 如果当前偏移量超出了允许范围，进行钳制
+    if (Math.abs(this.dockedOffsetY) > maxOffset) {
+      // 这里的逻辑是：
+      // 如果 dockedOffsetY > maxOffset，说明向下偏移太多，需要减少到 maxOffset
+      // 如果 dockedOffsetY < -maxOffset，说明向上偏移太多，需要增加到 -maxOffset
+
+      // 我们需要使用 this.TOOLBAR_SPACE 来限制 maxUpOffset
+      const maxUpOffset = this.TOOLBAR_SPACE - centerTop; // 负值，如果 TOOLBAR_SPACE < centerTop
+
+      // 注意：dockedOffsetY 是正数表示向下偏移，负数表示向上偏移
+      // 所以我们希望 dockedOffsetY >= maxUpOffset
+      // 同时 dockedOffsetY <= centerTop (maxDownOffset)
+
+      this.dockedOffsetY = Math.max(maxUpOffset, Math.min(centerTop, this.dockedOffsetY));
+    }
+  }
 
   updated(changedProperties: Map<string, unknown>) {
     if (changedProperties.has("enabled")) {
@@ -238,6 +304,58 @@ export class ClawComputerPanel extends LitElement {
       box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     }
 
+    /* Top Toolbar */
+    .top-toolbar {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 8px;
+      padding: 6px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      z-index: 100;
+      pointer-events: auto;
+    }
+
+    .toolbar-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+    }
+
+    .toolbar-btn:hover {
+      background: var(--bg-hover);
+      color: var(--text);
+    }
+
+    .toolbar-btn.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+
+    .toolbar-btn svg {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2px;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
     .drag-handle {
       position: absolute;
       top: 0;
@@ -339,6 +457,49 @@ export class ClawComputerPanel extends LitElement {
       <div class="container">
         ${!this.isConnected ? html`<div class="status-overlay">${this.status}</div>` : null}
         <div class="screen-container">
+          <!-- Top Toolbar (Dock Mode Icons) - Fixed at top of container -->
+          ${
+            !displayFloating
+              ? html`
+                <div class="top-toolbar">
+                  <button
+                    class="toolbar-btn ${this.activeTool === "vnc" ? "active" : ""}"
+                    @click=${() => this.setActiveTool("vnc")}
+                    title="Remote Desktop"
+                  >
+                    <svg viewBox="0 0 24 24">
+                      <rect width="20" height="14" x="2" y="3" rx="2" />
+                      <line x1="8" x2="16" y1="21" y2="21" />
+                      <line x1="12" x2="12" y1="17" y2="21" />
+                    </svg>
+                  </button>
+                  <button
+                    class="toolbar-btn ${this.activeTool === "browser" ? "active" : ""}"
+                    @click=${() => this.setActiveTool("browser")}
+                    title="Browser"
+                  >
+                    <svg viewBox="0 0 24 24">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="2" x2="22" y1="12" y2="12" />
+                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                    </svg>
+                  </button>
+                  <button
+                    class="toolbar-btn ${this.activeTool === "images" ? "active" : ""}"
+                    @click=${() => this.setActiveTool("images")}
+                    title="Images"
+                  >
+                    <svg viewBox="0 0 24 24">
+                      <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+                      <circle cx="9" cy="9" r="2" />
+                      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+                    </svg>
+                  </button>
+                </div>
+              `
+              : null
+          }
+
           <div
             ${ref(this.screenRef)}
             class="screen ${displayFloating ? "floating" : ""}"
@@ -373,6 +534,11 @@ export class ClawComputerPanel extends LitElement {
   private handleClose = () => {
     this.dispatchEvent(new CustomEvent("close", { bubbles: true, composed: true }));
   };
+
+  private setActiveTool(tool: string) {
+    this.activeTool = tool;
+    console.log("Active tool changed to:", tool);
+  }
 
   private handleDragStart = (e: MouseEvent) => {
     if (this.isResizing) {
@@ -535,12 +701,15 @@ export class ClawComputerPanel extends LitElement {
 
       // 计算最高和最低不能超过多少
       // 当 screen 居中时，初始顶部位置是 (hostHeight - screenHeight) / 2
-      const initialTop = (hostHeight - screenHeight) / 2;
+      const centerTop = (hostHeight - screenHeight) / 2;
 
-      // 最高：screen 顶部 = host 顶部 → 偏移量 = 0 - initialTop = -initialTop
-      const maxUpOffset = -initialTop;
+      // 允许的最上偏移量 (offset = TOOLBAR_SPACE - centerTop)
+      // 必须使用 this.TOOLBAR_SPACE
+      const maxUpOffset = this.TOOLBAR_SPACE - centerTop;
 
-      const maxDownOffset = hostHeight - screenHeight - initialTop;
+      // 允许的最下偏移量 (offset = centerTop)
+      // 保持原来的逻辑，底部贴合容器底部
+      const maxDownOffset = centerTop;
 
       let newOffsetY = this.initialRect.offsetY + dy;
 
@@ -574,17 +743,28 @@ export class ClawComputerPanel extends LitElement {
   private handleDragEnd = (e: MouseEvent) => {
     // 根据松手位置决定是否永久切换到悬浮模式
     const hostRect = this.getBoundingClientRect();
-    if (e.clientX < hostRect.left) {
-      // 在左侧松手，永久切换到悬浮模式
-      this.isFloating = true;
-      // 触发事件告诉父组件关闭停靠面板
-      this.dispatchEvent(new CustomEvent("float", { bubbles: true, composed: true }));
+    const isDroppingInDockArea = e.clientX >= hostRect.left;
+
+    if (!isDroppingInDockArea) {
+      // 在左侧（悬浮区域）松手
+      if (!this.isFloating) {
+        // 原本是停靠，现在变悬浮 -> 触发 float
+        this.isFloating = true;
+        this.dispatchEvent(new CustomEvent("float", { bubbles: true, composed: true }));
+      }
     } else {
-      // 在右侧松手，保持停靠模式
-      this.isFloating = false;
-      this.dockedOffsetX = 0;
-      // 触发事件告诉父组件展开停靠面板
-      this.dispatchEvent(new CustomEvent("dock", { bubbles: true, composed: true }));
+      // 在右侧（停靠区域）松手
+      if (this.isFloating) {
+        // 原本是悬浮，现在变停靠 -> 触发 dock
+        this.isFloating = false;
+        this.dockedOffsetX = 0;
+        this.dispatchEvent(new CustomEvent("dock", { bubbles: true, composed: true }));
+      } else {
+        // 原本是停靠，现在还是停靠 -> 只是调整了垂直位置，或者是点击
+        // 不需要触发 dock 事件，以免重置宽度
+        this.isFloating = false;
+        this.dockedOffsetX = 0;
+      }
     }
 
     this.cleanupDragListeners();
@@ -836,6 +1016,7 @@ export class ClawComputerPanel extends LitElement {
   firstUpdated() {
     window.addEventListener("resize", this.handleResize);
     window.addEventListener("blur", this.handleWindowBlur);
+    this.setupResizeObserver();
 
     if (this.enabled && this.vncUrl) {
       setTimeout(() => {
@@ -850,6 +1031,7 @@ export class ClawComputerPanel extends LitElement {
     window.removeEventListener("blur", this.handleWindowBlur);
     this.cleanupDragListeners();
     this.cleanupResizeListeners();
+    this.cleanupResizeObserver();
     this.disconnect();
   }
 }
