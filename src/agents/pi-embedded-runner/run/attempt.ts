@@ -1418,11 +1418,11 @@ export async function runEmbeddedAttempt(
       skillsSnapshot: params.skillsSnapshot,
     });
     restoreSkillEnv = params.skillsSnapshot
-      ? applySkillEnvOverridesFromSnapshot({
+      ? await applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
         })
-      : applySkillEnvOverrides({
+      : await applySkillEnvOverrides({
           skills: skillEntries ?? [],
           config: params.config,
         });

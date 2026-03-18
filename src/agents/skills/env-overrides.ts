@@ -6,6 +6,7 @@ import { sanitizeEnvVars, validateEnvVarValue } from "../sandbox/sanitize-env-va
 import { resolveSkillConfig } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEntry, SkillSnapshot } from "./types.js";
+import { resolveSecretInputString } from "../../secrets/resolve-secret-input-string.js";
 
 const log = createSubsystemLogger("env-overrides");
 
@@ -133,14 +134,15 @@ function sanitizeSkillEnvOverrides(params: {
   return { allowed, blocked: [...blocked], warnings };
 }
 
-function applySkillConfigEnvOverrides(params: {
+async function applySkillConfigEnvOverrides(params: {
   updates: EnvUpdate[];
   skillConfig: SkillConfig;
+  config: OpenClawConfig;
   primaryEnv?: string | null;
   requiredEnv?: string[] | null;
   skillKey: string;
 }) {
-  const { updates, skillConfig, primaryEnv, requiredEnv, skillKey } = params;
+  const { updates, skillConfig, config, primaryEnv, requiredEnv, skillKey } = params;
   const allowedSensitiveKeys = new Set<string>();
   const normalizedPrimaryEnv = primaryEnv?.trim();
   if (normalizedPrimaryEnv) {
@@ -167,10 +169,12 @@ function applySkillConfigEnvOverrides(params: {
   }
 
   const resolvedApiKey =
-    normalizeResolvedSecretInputString({
+    (await resolveSecretInputString({
+      config,
       value: skillConfig.apiKey,
-      path: `skills.entries.${skillKey}.apiKey`,
-    }) ?? "";
+      env: process.env,
+      normalize: normalizeResolvedSecretInputString,
+    })) ?? "";
   const canInjectPrimaryEnv =
     normalizedPrimaryEnv &&
     (process.env[normalizedPrimaryEnv] === undefined ||
@@ -210,7 +214,7 @@ function createEnvReverter(updates: EnvUpdate[]) {
   };
 }
 
-export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
+export async function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
   const { skills, config } = params;
   const updates: EnvUpdate[] = [];
 
@@ -221,9 +225,10 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
       continue;
     }
 
-    applySkillConfigEnvOverrides({
+    await applySkillConfigEnvOverrides({
       updates,
       skillConfig,
+      config: config ?? {} as OpenClawConfig,
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env,
       skillKey,
@@ -233,7 +238,7 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
   return createEnvReverter(updates);
 }
 
-export function applySkillEnvOverridesFromSnapshot(params: {
+export async function applySkillEnvOverridesFromSnapshot(params: {
   snapshot?: SkillSnapshot;
   config?: OpenClawConfig;
 }) {
@@ -249,9 +254,10 @@ export function applySkillEnvOverridesFromSnapshot(params: {
       continue;
     }
 
-    applySkillConfigEnvOverrides({
+    await applySkillConfigEnvOverrides({
       updates,
       skillConfig,
+      config: config ?? {} as OpenClawConfig,
       primaryEnv: skill.primaryEnv,
       requiredEnv: skill.requiredEnv,
       skillKey: skill.name,
