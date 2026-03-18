@@ -5,7 +5,7 @@ import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-f
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { danger, info, success } from "../globals.js";
+import { danger, info, success, warn } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -437,6 +437,18 @@ export function registerConfigCli(program: Command) {
           strictJson: Boolean(opts.strictJson || opts.json),
         });
         const snapshot = await loadValidConfig();
+
+        // Check if the path already exists in config (warn if creating new key)
+        const existing = getAtPath(snapshot.resolved, parsedPath);
+        if (!existing.found) {
+          defaultRuntime.log(
+            warn(
+              `Config path "${path}" does not exist. Creating new key. ` +
+                `Use "openclaw config validate" to check if the config is valid after this change.`,
+            ),
+          );
+        }
+
         // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
         // instead of snapshot.config (runtime-merged with defaults).
         // This prevents runtime defaults from leaking into the written config file (issue #6070)
