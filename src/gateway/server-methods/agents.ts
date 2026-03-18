@@ -27,7 +27,7 @@ import {
 } from "../../commands/agents.config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import {
-  ensureManagedSessionsDirForAgent,
+  ensureSessionStoreDirForAgent,
   resolveSessionTranscriptsDirForAgent,
 } from "../../config/sessions/paths.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
@@ -528,7 +528,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     // config so a failure here does not leave a broken config entry behind.
     const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
     await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
-    await ensureManagedSessionsDirForAgent(agentId, { store: nextConfig.session?.store });
+    await ensureSessionStoreDirForAgent(agentId, { store: nextConfig.session?.store });
 
     await writeConfigFile(nextConfig);
 

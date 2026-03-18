@@ -190,4 +190,33 @@ describe("ensureWorkspaceAndSessions", () => {
       await expect(fs.stat(defaultSessionsDir)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
+
+  it("does not tighten arbitrary custom session.store parent directories", async () => {
+    if (process.platform === "win32") {
+      expect(true).toBe(true);
+      return;
+    }
+
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const workspaceDir = path.join(home, "workspace");
+      const customDir = path.join(home, "custom-store-root");
+      const customStore = path.join(customDir, "sessions-{agentId}.json");
+
+      await fs.mkdir(customDir, { recursive: true, mode: 0o755 });
+      await fs.chmod(customDir, 0o755);
+
+      await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+        agentId: "coach",
+        sessionStore: customStore,
+      });
+
+      const mode = (await fs.stat(customDir)).mode & 0o777;
+      expect(mode).toBe(0o755);
+    });
+  });
 });

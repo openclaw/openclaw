@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import {
-  ensureManagedSessionsDirForAgent,
+  ensureSessionStoreDirForAgent,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
@@ -299,7 +299,7 @@ export async function ensureWorkspaceAndSessions(
     ensureBootstrapFiles: !options?.skipBootstrap,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
-  const sessionsDir = await ensureManagedSessionsDirForAgent(options?.agentId, {
+  const sessionsDir = await ensureSessionStoreDirForAgent(options?.agentId, {
     store: options?.sessionStore,
   });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);

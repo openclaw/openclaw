@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   ensureAgentWorkspace: vi.fn(async () => {}),
   resolveAgentDir: vi.fn(() => "/agents/test-agent"),
   resolveAgentWorkspaceDir: vi.fn(() => "/workspace/test-agent"),
-  ensureManagedSessionsDirForAgent: vi.fn(async () => "/managed/test-agent"),
+  ensureSessionStoreDirForAgent: vi.fn(async () => "/managed/test-agent"),
   resolveSessionTranscriptsDirForAgent: vi.fn(() => "/transcripts/test-agent"),
   ensureSessionTranscriptsDirForAgent: vi.fn(async () => "/transcripts/test-agent"),
   listAgentsForGateway: vi.fn(() => ({
@@ -65,7 +65,7 @@ vi.mock("../../agents/workspace.js", async () => {
 });
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  ensureManagedSessionsDirForAgent: mocks.ensureManagedSessionsDirForAgent,
+  ensureSessionStoreDirForAgent: mocks.ensureSessionStoreDirForAgent,
   ensureSessionTranscriptsDirForAgent: mocks.ensureSessionTranscriptsDirForAgent,
   resolveSessionTranscriptsDirForAgent: mocks.resolveSessionTranscriptsDirForAgent,
 }));
@@ -298,7 +298,7 @@ describe("agents.create", () => {
     });
     await promise;
 
-    expect(mocks.ensureManagedSessionsDirForAgent).toHaveBeenCalledWith("test-agent", {
+    expect(mocks.ensureSessionStoreDirForAgent).toHaveBeenCalledWith("test-agent", {
       store: "/managed/{agentId}/sessions.json",
     });
     expect(mocks.ensureSessionTranscriptsDirForAgent).not.toHaveBeenCalled();

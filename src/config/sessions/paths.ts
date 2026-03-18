@@ -425,7 +425,7 @@ export async function ensureSessionTranscriptsDirForAgent(
   return await ensurePrivateSessionsDir(sessionsDir);
 }
 
-export function resolveManagedSessionsDirForAgent(
+export function resolveSessionStoreDirForAgent(
   agentId?: string,
   opts?: {
     store?: string;
@@ -435,16 +435,10 @@ export function resolveManagedSessionsDirForAgent(
 ): string {
   const env = opts?.env ?? process.env;
   const homedir = opts?.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir));
-  return path.dirname(
-    resolveStorePath(opts?.store, {
-      agentId,
-      env,
-      homedir,
-    }),
-  );
+  return path.dirname(resolveStorePath(opts?.store, { agentId, env, homedir }));
 }
 
-export async function ensureManagedSessionsDirForAgent(
+export async function ensureSessionStoreDirForAgent(
   agentId?: string,
   opts?: {
     store?: string;
@@ -452,7 +446,24 @@ export async function ensureManagedSessionsDirForAgent(
     homedir?: () => string;
   },
 ): Promise<string> {
-  return await ensurePrivateSessionsDir(resolveManagedSessionsDirForAgent(agentId, opts));
+  const env = opts?.env ?? process.env;
+  const homedir = opts?.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir));
+  const storePath = resolveStorePath(opts?.store, {
+    agentId,
+    env,
+    homedir,
+  });
+  const sessionsDir = path.dirname(storePath);
+  const explicitStoreTemplate = opts?.store?.trim();
+  const hasExplicitPerAgentDirTemplate =
+    !!explicitStoreTemplate &&
+    explicitStoreTemplate.includes("{agentId}") &&
+    path.dirname(explicitStoreTemplate).includes("{agentId}");
+  if (hasExplicitPerAgentDirTemplate || isManagedSessionStorePath(storePath, env, homedir)) {
+    return await ensurePrivateSessionsDir(sessionsDir);
+  }
+  await fsPromises.mkdir(sessionsDir, { recursive: true });
+  return sessionsDir;
 }
 
 export async function ensureSessionDirForFile(
