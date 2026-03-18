@@ -30,6 +30,25 @@ import {
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
+
+/** Providers whose APIs accept `prompt_cache_key` / `prompt_cache_retention`. */
+const PROMPT_CACHE_KEY_PROVIDERS = new Set([
+  "openai",
+  "openai-codex",
+  "opencode",
+  "azure-openai-responses",
+  "github-copilot",
+]);
+
+function createStripPromptCacheFieldsWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      delete payload.prompt_cache_key;
+      delete payload.prompt_cache_retention;
+    });
+}
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -220,6 +239,14 @@ export function applyExtraParamsToAgent(
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
+  }
+
+  // Strip prompt_cache_key/prompt_cache_retention for providers that don't
+  // support OpenAI-style prompt caching. The pi-ai library injects these
+  // fields unconditionally for openai-responses streams, but non-OpenAI
+  // endpoints (e.g. Volcano Engine) reject unknown fields with HTTP 400.
+  if (!PROMPT_CACHE_KEY_PROVIDERS.has(provider)) {
+    agent.streamFn = createStripPromptCacheFieldsWrapper(agent.streamFn);
   }
 
   const anthropicBetas = resolveAnthropicBetas(effectiveExtraParams, provider, modelId);
