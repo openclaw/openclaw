@@ -60,6 +60,27 @@ function dedupeDirectoryIds(ids: string[]): string[] {
   return Array.from(new Set(ids));
 }
 
+export function collectNormalizedDirectoryIds(params: {
+  sources: Iterable<unknown>[];
+  normalizeId: (entry: string) => string | null | undefined;
+}): string[] {
+  const ids = new Set<string>();
+  for (const source of params.sources) {
+    for (const value of source) {
+      const raw = String(value).trim();
+      if (!raw || raw === "*") {
+        continue;
+      }
+      const normalized = params.normalizeId(raw);
+      const trimmed = typeof normalized === "string" ? normalized.trim() : "";
+      if (trimmed) {
+        ids.add(trimmed);
+      }
+    }
+  }
+  return Array.from(ids);
+}
+
 export function listDirectoryUserEntriesFromAllowFrom(params: {
   allowFrom?: readonly unknown[];
   query?: string | null;

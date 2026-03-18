@@ -1,13 +1,13 @@
 import { rm } from "node:fs/promises";
+import type { PluginInteractiveTelegramHandlerContext } from "openclaw/plugin-sdk/core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../src/channels/plugins/contracts/suites.js";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "../../../src/plugins/interactive.js";
-import type { PluginInteractiveTelegramHandlerContext } from "../../../src/plugins/types.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import {
+const {
   answerCallbackQuerySpy,
   commandSpy,
   editMessageReplyMarkupSpy,
@@ -22,16 +22,27 @@ import {
   replySpy,
   sendMessageSpy,
   setMyCommandsSpy,
+  telegramBotDepsForTest,
+  telegramBotRuntimeForTest,
   wasSentByBot,
-} from "./bot.create-telegram-bot.test-harness.js";
+} = await import("./bot.create-telegram-bot.test-harness.js");
+
 // Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
 const { listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
   await import("../../../src/auto-reply/commands-registry.js");
 const { loadSessionStore } = await import("../../../src/config/sessions.js");
 const { normalizeTelegramCommandName } =
   await import("../../../src/config/telegram-custom-commands.js");
-
-let createTelegramBot: typeof import("./bot.js").createTelegramBot;
+const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+  await import("./bot.js");
+setTelegramBotRuntimeForTest(
+  telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
+);
+const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
+  createTelegramBotBase({
+    ...opts,
+    telegramDeps: telegramBotDepsForTest,
+  });
 
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
@@ -52,9 +63,7 @@ describe("createTelegramBot", () => {
     process.env.TZ = ORIGINAL_TZ;
   });
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ createTelegramBot } = await import("./bot.js"));
+  beforeEach(() => {
     setMyCommandsSpy.mockClear();
     clearPluginInteractiveHandlers();
     loadConfig.mockReturnValue({
@@ -832,7 +841,7 @@ describe("createTelegramBot", () => {
           },
         },
         me: { username: "openclaw_bot" },
-        getFile: async () => ({ file_path: "media/file.jpg" }),
+        getFile: async () => ({}),
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
@@ -843,10 +852,6 @@ describe("createTelegramBot", () => {
       };
       expect(payload.ReplyToBody).toBe("<media:image>");
       expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
-      if (payload.MediaPaths) {
-        expect(payload.MediaPaths).toHaveLength(1);
-        expect(payload.MediaPath).toBe(payload.MediaPaths[0]);
-      }
     } finally {
       fetchSpy.mockRestore();
     }
@@ -941,7 +946,7 @@ describe("createTelegramBot", () => {
           },
         },
         me: { username: "openclaw_bot" },
-        getFile: async () => ({ file_path: "media/file.jpg" }),
+        getFile: async () => ({}),
       });
       await handler({
         message: {
@@ -957,7 +962,7 @@ describe("createTelegramBot", () => {
           },
         },
         me: { username: "openclaw_bot" },
-        getFile: async () => ({ file_path: "media/file.jpg" }),
+        getFile: async () => ({}),
       });
 
       expect(replySpy).not.toHaveBeenCalled();

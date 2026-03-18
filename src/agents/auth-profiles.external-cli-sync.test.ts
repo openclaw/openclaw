@@ -51,4 +51,40 @@ describe("syncExternalCliCredentials", () => {
     });
     expect(store.profiles[CODEX_CLI_PROFILE_ID]).toBeUndefined();
   });
+
+  it("refreshes stored Codex expiry from external CLI even when the cached profile looks fresh", () => {
+    const staleExpiry = Date.now() + 30 * 60_000;
+    const freshExpiry = Date.now() + 5 * 24 * 60 * 60_000;
+    mocks.readCodexCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "new-access-token",
+      refresh: "new-refresh-token",
+      expires: freshExpiry,
+      accountId: "acct_456",
+    });
+
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "old-access-token",
+          refresh: "old-refresh-token",
+          expires: staleExpiry,
+          accountId: "acct_456",
+        },
+      },
+    };
+
+    const mutated = syncExternalCliCredentials(store);
+
+    expect(mutated).toBe(true);
+    expect(store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
+      access: "new-access-token",
+      refresh: "new-refresh-token",
+      expires: freshExpiry,
+    });
+  });
 });

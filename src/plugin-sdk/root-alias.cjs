@@ -5,7 +5,6 @@ const fs = require("node:fs");
 
 let monolithicSdk = null;
 let jitiLoader = null;
-let jitiOverrideForTest = null;
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -63,9 +62,6 @@ function resolveControlCommandGate(params) {
 }
 
 function getJiti() {
-  if (jitiOverrideForTest) {
-    return jitiOverrideForTest;
-  }
   if (jitiLoader) {
     return jitiLoader;
   }
@@ -73,13 +69,12 @@ function getJiti() {
   const { createJiti } = require("jiti");
   jitiLoader = createJiti(__filename, {
     interopDefault: true,
+    // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
+    // so local plugins do not create a second transpiled OpenClaw core graph.
+    tryNative: true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
   return jitiLoader;
-}
-
-function loadWithJiti(modulePath) {
-  return getJiti()(modulePath);
 }
 
 function loadMonolithicSdk() {
@@ -87,17 +82,19 @@ function loadMonolithicSdk() {
     return monolithicSdk;
   }
 
-  const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "index.js");
+  const jiti = getJiti();
+
+  const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
   if (fs.existsSync(distCandidate)) {
     try {
-      monolithicSdk = loadWithJiti(distCandidate);
+      monolithicSdk = jiti(distCandidate);
       return monolithicSdk;
     } catch {
       // Fall through to source alias if dist is unavailable or stale.
     }
   }
 
-  monolithicSdk = loadWithJiti(path.join(__dirname, "index.ts"));
+  monolithicSdk = jiti(path.join(__dirname, "compat.ts"));
   return monolithicSdk;
 }
 
@@ -112,16 +109,6 @@ function tryLoadMonolithicSdk() {
 const fastExports = {
   emptyPluginConfigSchema,
   resolveControlCommandGate,
-  __unsafeIsMonolithicLoadedForTest: () => monolithicSdk !== null,
-  __unsafeResetMonolithicForTest: () => {
-    monolithicSdk = null;
-    jitiLoader = null;
-    jitiOverrideForTest = null;
-  },
-  __unsafeSetJitiOverrideForTest: (loader) => {
-    jitiOverrideForTest = loader;
-    monolithicSdk = null;
-  },
 };
 
 const target = { ...fastExports };
@@ -162,6 +149,7 @@ function getExportDescriptor(prop) {
     return undefined;
   }
 
+  // Proxy invariants require descriptors returned for dynamic properties to be configurable.
   return {
     ...descriptor,
     configurable: true,
@@ -184,9 +172,8 @@ rootExports = new Proxy(target, {
   },
   ownKeys() {
     const keys = new Set(Reflect.ownKeys(target));
-    const monolithic = getMonolithicSdk();
-    if (monolithic) {
-      for (const key of Reflect.ownKeys(monolithic)) {
+    if (monolithicSdk && typeof monolithicSdk === "object") {
+      for (const key of Reflect.ownKeys(monolithicSdk)) {
         if (!keys.has(key)) {
           keys.add(key);
         }

@@ -41,6 +41,10 @@ vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
 
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
+  getCachedSticker: () => null,
+  getCacheStats: () => ({ count: 0 }),
+  searchStickers: () => [],
+  getAllCachedStickers: () => [],
   describeStickerImage: vi.fn(),
 }));
 
@@ -331,6 +335,29 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({
         silent: false,
         replies: [expect.objectContaining({ isError: true })],
+      }),
+    );
+  });
+
+  it("keeps fallback replies silent after an error reply is skipped", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.(
+        { text: "oops", isError: true },
+        { kind: "final", reason: "empty" },
+      );
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { silentErrorReplies: true },
+    });
+
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        silent: true,
+        replies: [expect.objectContaining({ text: expect.any(String) })],
       }),
     );
   });

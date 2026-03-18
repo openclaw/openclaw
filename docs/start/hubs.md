@@ -19,7 +19,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Getting Started](/start/getting-started)
 - [Quick start](/start/quickstart)
 - [Onboarding](/start/onboarding)
-- [Wizard](/start/wizard)
+- [Onboarding (CLI)](/start/wizard)
 - [Setup](/start/setup)
 - [Dashboard (local Gateway)](http://127.0.0.1:18789/)
 - [Help](/help)
@@ -175,12 +175,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Templates: SOUL](/reference/templates/SOUL)
 - [Templates: TOOLS](/reference/templates/TOOLS)
 - [Templates: USER](/reference/templates/USER)
-
-## Experiments (exploratory)
-
-- [Onboarding config protocol](/experiments/onboarding-config-protocol)
-- [Research: memory](/experiments/research/memory)
-- [Model config exploration](/experiments/proposals/model-config)
 
 ## Project
 

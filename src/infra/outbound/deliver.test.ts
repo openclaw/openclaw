@@ -80,7 +80,10 @@ vi.mock("../../logging/subsystem.js", () => ({
   },
 }));
 
-const { deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js");
+type DeliverModule = typeof import("./deliver.js");
+
+let deliverOutboundPayloads: DeliverModule["deliverOutboundPayloads"];
+let normalizeOutboundPayloads: DeliverModule["normalizeOutboundPayloads"];
 
 const telegramChunkConfig: OpenClawConfig = {
   channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
@@ -90,13 +93,13 @@ const whatsappChunkConfig: OpenClawConfig = {
   channels: { whatsapp: { textChunkLimit: 4000 } },
 };
 
-type DeliverOutboundArgs = Parameters<typeof deliverOutboundPayloads>[0];
+type DeliverOutboundArgs = Parameters<DeliverModule["deliverOutboundPayloads"]>[0];
 type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
 type DeliverSession = DeliverOutboundArgs["session"];
 
 async function deliverWhatsAppPayload(params: {
   sendWhatsApp: NonNullable<
-    NonNullable<Parameters<typeof deliverOutboundPayloads>[0]["deps"]>["sendWhatsApp"]
+    NonNullable<Parameters<DeliverModule["deliverOutboundPayloads"]>[0]["deps"]>["sendWhatsApp"]
   >;
   payload: DeliverOutboundPayload;
   cfg?: OpenClawConfig;
@@ -198,7 +201,9 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 }
 
 describe("deliverOutboundPayloads", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();
