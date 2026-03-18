@@ -4,9 +4,9 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { MarkdownConfigSchema } from "openclaw/plugin-sdk/zalo";
 import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
+import { MarkdownConfigSchema } from "./runtime-api.js";
 
 const zaloAccountSchema = z.object({
   name: z.string().optional(),

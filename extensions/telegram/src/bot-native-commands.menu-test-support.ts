@@ -1,6 +1,7 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/telegram";
 import { expect, vi } from "vitest";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createNativeCommandTestParams as createBaseNativeCommandTestParams,
   createTelegramPrivateCommandContext,
@@ -78,10 +79,23 @@ export function createNativeCommandTestParams(
   cfg: OpenClawConfig,
   params: Partial<RegisterTelegramNativeCommandsParams> = {},
 ): RegisterTelegramNativeCommandsParams {
+  const telegramDeps: TelegramBotDeps = {
+    loadConfig: vi.fn(() => ({})),
+    resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/sessions.json"),
+    readChannelAllowFromStore: vi.fn(async () => []),
+    enqueueSystemEvent: vi.fn(),
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => ({
+      queuedFinal: false,
+      counts: {},
+    })),
+    listSkillCommandsForAgents,
+    wasSentByBot: vi.fn(() => false),
+  };
   return createBaseNativeCommandTestParams({
     cfg,
     runtime: params.runtime ?? ({} as RuntimeEnv),
     nativeSkillsEnabled: true,
+    telegramDeps,
     ...params,
   });
 }

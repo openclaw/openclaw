@@ -22,8 +22,10 @@ import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { resolvePluginSourceRoots, formatPluginSourceForTable } from "../plugins/source-display.js";
 import {
   buildAllPluginInspectReports,
+  buildPluginCompatibilityNotices,
   buildPluginInspectReport,
   buildPluginStatusReport,
+  formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
 import { resolveUninstallDirectoryTarget, uninstallPlugin } from "../plugins/uninstall.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
@@ -652,6 +654,12 @@ export function registerPluginsCli(program: Command) {
                 : theme.error("error"),
           Shape: inspect.shape,
           Capabilities: formatCapabilityKinds(inspect.capabilities),
+          Compatibility:
+            inspect.compatibility.length > 0
+              ? inspect.compatibility
+                  .map((entry) => (entry.severity === "warn" ? `warn:${entry.code}` : entry.code))
+                  .join(", ")
+              : "none",
           Hooks: formatHookSummary({
             usesLegacyBeforeAgentStart: inspect.usesLegacyBeforeAgentStart,
             typedHookCount: inspect.typedHooks.length,
@@ -667,6 +675,7 @@ export function registerPluginsCli(program: Command) {
               { key: "Status", header: "Status", minWidth: 10 },
               { key: "Shape", header: "Shape", minWidth: 18 },
               { key: "Capabilities", header: "Capabilities", minWidth: 28, flex: true },
+              { key: "Compatibility", header: "Compatibility", minWidth: 24, flex: true },
               { key: "Hooks", header: "Hooks", minWidth: 20, flex: true },
             ],
             rows,
@@ -749,6 +758,12 @@ export function registerPluginsCli(program: Command) {
           inspect.typedHooks.map((entry) =>
             entry.priority == null ? entry.name : `${entry.name} (priority ${entry.priority})`,
           ),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Compatibility warnings",
+          inspect.compatibility.map(formatPluginCompatibilityNotice),
         ),
       );
       lines.push(
@@ -1058,8 +1073,9 @@ export function registerPluginsCli(program: Command) {
       const report = buildPluginStatusReport();
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
+      const compatibility = buildPluginCompatibilityNotices({ report });
 
-      if (errors.length === 0 && diags.length === 0) {
+      if (errors.length === 0 && diags.length === 0 && compatibility.length === 0) {
         defaultRuntime.log("No plugin issues detected.");
         return;
       }
@@ -1079,6 +1095,16 @@ export function registerPluginsCli(program: Command) {
         for (const diag of diags) {
           const target = diag.pluginId ? `${diag.pluginId}: ` : "";
           lines.push(`- ${target}${diag.message}`);
+        }
+      }
+      if (compatibility.length > 0) {
+        if (lines.length > 0) {
+          lines.push("");
+        }
+        lines.push(theme.warn("Compatibility:"));
+        for (const notice of compatibility) {
+          const marker = notice.severity === "warn" ? theme.warn("warn") : theme.muted("info");
+          lines.push(`- ${formatPluginCompatibilityNotice(notice)} [${marker}]`);
         }
       }
       const docs = formatDocsLink("/plugin", "docs.openclaw.ai/plugin");

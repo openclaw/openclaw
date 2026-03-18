@@ -1,16 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { buildGroupChatContext, buildGroupIntro } from "../auto-reply/reply/groups.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
 } from "../auto-reply/reply/inbound-meta.js";
+import type { TemplateContext } from "../auto-reply/templating.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   appendBootstrapPromptWarning,
   analyzeBootstrapBudget,
+  buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
 } from "./bootstrap-budget.js";
+import { resolveBootstrapContextForRun } from "./bootstrap-files.js";
+import { buildEmbeddedSystemPrompt } from "./pi-embedded-runner/system-prompt.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
+import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
 import { buildToolSummaryMap } from "./tool-summaries.js";
 
 export type PromptScenarioTurn = {
@@ -26,38 +34,6 @@ export type PromptScenario = {
   focus: string;
   expectedStableSystemAfterTurnIds: string[];
   turns: PromptScenarioTurn[];
-};
-
-type TemplateCtx = {
-  Provider: string;
-  Surface?: string;
-  OriginatingChannel?: string;
-  OriginatingTo?: string;
-  AccountId?: string;
-  ChatType?: string;
-  GroupSubject?: string;
-  GroupChannel?: string;
-  GroupSpace?: string;
-  SenderId?: string;
-  SenderName?: string;
-  SenderUsername?: string;
-  SenderE164?: string;
-  MessageSid?: string;
-  ReplyToId?: string;
-  ReplyToBody?: string;
-  WasMentioned?: boolean;
-  InboundHistory?: Array<{ sender: string; timestamp: number; body: string }>;
-  Body?: string;
-  BodyStripped?: string;
-};
-
-type BootstrapInjectionStat = {
-  name: string;
-  path: string;
-  missing: boolean;
-  rawChars: number;
-  injectedChars: number;
-  truncated: boolean;
 };
 
 function buildCommonSystemParams(workspaceDir: string) {
@@ -123,14 +99,85 @@ function buildSystemPrompt(params: {
   });
 }
 
-function buildAutoReplyBody(params: { ctx: TemplateCtx; body: string; eventLine?: string }) {
-  return [params.eventLine, buildInboundUserContextPrefix(params.ctx as never), params.body]
+function buildAutoReplyBody(params: { ctx: TemplateContext; body: string; eventLine?: string }) {
+  return [params.eventLine, buildInboundUserContextPrefix(params.ctx), params.body]
     .filter(Boolean)
     .join("\n\n");
 }
 
+async function readContextFiles(workspaceDir: string, fileNames: string[]) {
+  return Promise.all(
+    fileNames.map(async (fileName) => ({
+      path: fileName,
+      content: await fs.readFile(path.join(workspaceDir, fileName), "utf-8"),
+    })),
+  );
+}
+
+function buildAutoReplySystemPrompt(params: {
+  workspaceDir: string;
+  sessionCtx: TemplateContext;
+  includeGroupChatContext?: boolean;
+  includeGroupIntro?: boolean;
+  groupSystemPrompt?: string;
+}) {
+  const extraSystemPromptParts = [
+    buildInboundMetaSystemPrompt(params.sessionCtx),
+    params.includeGroupChatContext ? buildGroupChatContext({ sessionCtx: params.sessionCtx }) : "",
+    params.includeGroupIntro
+      ? buildGroupIntro({
+          cfg: {} as OpenClawConfig,
+          sessionCtx: params.sessionCtx,
+          defaultActivation: "mention",
+          silentToken: SILENT_REPLY_TOKEN,
+        })
+      : "",
+    params.groupSystemPrompt?.trim() ?? "",
+  ].filter(Boolean);
+  return buildSystemPrompt({
+    workspaceDir: params.workspaceDir,
+    extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+  });
+}
+
+function buildToolRichSystemPrompt(params: {
+  workspaceDir: string;
+  skillsPrompt: string;
+  contextFiles: Array<{ path: string; content: string }>;
+}) {
+  const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildCommonSystemParams(
+    params.workspaceDir,
+  );
+  const tools = [
+    "bash",
+    "read",
+    "edit",
+    "grep",
+    "glob",
+    "message",
+    "memory_search",
+    "memory_get",
+    "web_search",
+    "web_fetch",
+  ].map((name) => ({ ...createStubTool(name), description: `${name} tool` }));
+  return buildEmbeddedSystemPrompt({
+    workspaceDir: params.workspaceDir,
+    reasoningTagHint: false,
+    runtimeInfo,
+    tools,
+    modelAliasLines: [],
+    userTimezone,
+    userTime,
+    userTimeFormat,
+    acpEnabled: true,
+    skillsPrompt: params.skillsPrompt,
+    reactionGuidance: { level: "extensive", channel: "Telegram" },
+    contextFiles: params.contextFiles,
+  });
+}
+
 function createDirectScenario(workspaceDir: string): PromptScenario {
-  const baseCtx: TemplateCtx = {
+  const baseCtx: TemplateContext = {
     Provider: "slack",
     Surface: "slack",
     OriginatingChannel: "slack",
@@ -151,15 +198,15 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
       {
         id: "t1",
         label: "Direct turn with reply context",
-        systemPrompt: buildSystemPrompt({
+        systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
-          extraSystemPrompt: buildInboundMetaSystemPrompt({
+          sessionCtx: {
             ...baseCtx,
             MessageSid: "m1",
             ReplyToId: "r1",
             ReplyToBody: "prior message",
             WasMentioned: true,
-          } as never),
+          },
         }),
         bodyPrompt: buildAutoReplyBody({
           ctx: {
@@ -176,13 +223,13 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
       {
         id: "t2",
         label: "Direct turn with new message id",
-        systemPrompt: buildSystemPrompt({
+        systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
-          extraSystemPrompt: buildInboundMetaSystemPrompt({
+          sessionCtx: {
             ...baseCtx,
             MessageSid: "m2",
             ReplyToId: "r2",
-          } as never),
+          },
         }),
         bodyPrompt: buildAutoReplyBody({
           ctx: {
@@ -197,13 +244,13 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
       {
         id: "t3",
         label: "Direct turn with runtime event and think hint",
-        systemPrompt: buildSystemPrompt({
+        systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
-          extraSystemPrompt: buildInboundMetaSystemPrompt({
+          sessionCtx: {
             ...baseCtx,
             MessageSid: "m3",
             ReplyToId: "r3",
-          } as never),
+          },
         }),
         bodyPrompt: buildAutoReplyBody({
           ctx: {
@@ -219,13 +266,13 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
       {
         id: "t4",
         label: "Direct turn after runtime event",
-        systemPrompt: buildSystemPrompt({
+        systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
-          extraSystemPrompt: buildInboundMetaSystemPrompt({
+          sessionCtx: {
             ...baseCtx,
             MessageSid: "m4",
             ReplyToId: "r4",
-          } as never),
+          },
         }),
         bodyPrompt: buildAutoReplyBody({
           ctx: {
@@ -242,7 +289,7 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
 }
 
 function createGroupScenario(workspaceDir: string): PromptScenario {
-  const baseCtx: TemplateCtx = {
+  const baseCtx: TemplateContext = {
     Provider: "slack",
     Surface: "slack",
     OriginatingChannel: "slack",
@@ -251,26 +298,12 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
     ChatType: "group",
     GroupSubject: "ops",
     GroupChannel: "#ops",
+    GroupMembers: "Bob, Cara, Dan, Eve",
     SenderId: "U2",
     SenderName: "Bob",
     Body: "hi",
     BodyStripped: "hi",
   };
-  const inbound1 = buildInboundMetaSystemPrompt({
-    ...baseCtx,
-    MessageSid: "g1",
-    WasMentioned: true,
-    InboundHistory: [{ sender: "Cara", timestamp: 1, body: "status?" }],
-  } as never);
-  const inboundLater = buildInboundMetaSystemPrompt({
-    ...baseCtx,
-    MessageSid: "g2",
-    WasMentioned: false,
-    InboundHistory: [
-      { sender: "Cara", timestamp: 1, body: "status?" },
-      { sender: "Dan", timestamp: 2, body: "please help" },
-    ],
-  } as never);
   return {
     scenario: "auto-reply-group",
     focus: "Group chat bootstrap, steady state, and runtime event turns",
@@ -279,11 +312,16 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
       {
         id: "t1",
         label: "First group turn with one-time intro",
-        systemPrompt: buildSystemPrompt({
+        systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
-          extraSystemPrompt: [inbound1, "GROUP_INTRO: You were just activated in this room."].join(
-            "\n\n",
-          ),
+          sessionCtx: {
+            ...baseCtx,
+            MessageSid: "g1",
+            WasMentioned: true,
+            InboundHistory: [{ sender: "Cara", timestamp: 1, body: "status?" }],
+          },
+          includeGroupChatContext: true,
+          includeGroupIntro: true,
         }),
         bodyPrompt: buildAutoReplyBody({
           ctx: {
@@ -299,9 +337,18 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
       {
         id: "t2",
         label: "Steady-state group turn",
-        systemPrompt: buildSystemPrompt({
+        systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
-          extraSystemPrompt: inboundLater,
+          sessionCtx: {
+            ...baseCtx,
+            MessageSid: "g2",
+            WasMentioned: false,
+            InboundHistory: [
+              { sender: "Cara", timestamp: 1, body: "status?" },
+              { sender: "Dan", timestamp: 2, body: "please help" },
+            ],
+          },
+          includeGroupChatContext: true,
         }),
         bodyPrompt: buildAutoReplyBody({
           ctx: {
@@ -320,9 +367,18 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
       {
         id: "t3",
         label: "Group turn with runtime event",
-        systemPrompt: buildSystemPrompt({
+        systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
-          extraSystemPrompt: inboundLater,
+          sessionCtx: {
+            ...baseCtx,
+            MessageSid: "g2",
+            WasMentioned: false,
+            InboundHistory: [
+              { sender: "Cara", timestamp: 1, body: "status?" },
+              { sender: "Dan", timestamp: 2, body: "please help" },
+            ],
+          },
+          includeGroupChatContext: true,
         }),
         bodyPrompt: buildAutoReplyBody({
           ctx: {
@@ -351,24 +407,10 @@ async function createToolRichScenario(workspaceDir: string): Promise<PromptScena
     "<skill><name>release</name><description>Release OpenClaw safely.</description><location>/skills/release/SKILL.md</location></skill>",
     "</available_skills>",
   ].join("\n");
-  const contextFiles = [
-    {
-      path: "AGENTS.md",
-      content: await fs.readFile(path.join(workspaceDir, "AGENTS.md"), "utf-8"),
-    },
-    {
-      path: "TOOLS.md",
-      content: await fs.readFile(path.join(workspaceDir, "TOOLS.md"), "utf-8"),
-    },
-    {
-      path: "SOUL.md",
-      content: await fs.readFile(path.join(workspaceDir, "SOUL.md"), "utf-8"),
-    },
-  ];
-  const systemPrompt = buildSystemPrompt({
+  const contextFiles = await readContextFiles(workspaceDir, ["AGENTS.md", "TOOLS.md", "SOUL.md"]);
+  const systemPrompt = buildToolRichSystemPrompt({
     workspaceDir,
     skillsPrompt,
-    reactionGuidance: { level: "extensive", channel: "Telegram" },
     contextFiles,
   });
   return {
@@ -424,33 +466,33 @@ async function createToolRichScenario(workspaceDir: string): Promise<PromptScena
 }
 
 async function createBootstrapWarningScenario(workspaceDir: string): Promise<PromptScenario> {
+  const bootstrapConfig = {
+    agents: {
+      defaults: {
+        bootstrapMaxChars: 1_500,
+        bootstrapTotalMaxChars: 2_200,
+      },
+    },
+  } satisfies OpenClawConfig;
   const largeAgents = "# AGENTS.md\n\n" + "Rules.\n".repeat(5_000);
   const largeTools = "# TOOLS.md\n\n" + "Notes.\n".repeat(3_000);
   await writeWorkspaceFile({ dir: workspaceDir, name: "AGENTS.md", content: largeAgents });
   await writeWorkspaceFile({ dir: workspaceDir, name: "TOOLS.md", content: largeTools });
-  const contextFiles = [
-    {
-      path: "AGENTS.md",
-      content: await fs.readFile(path.join(workspaceDir, "AGENTS.md"), "utf-8"),
-    },
-    {
-      path: "TOOLS.md",
-      content: await fs.readFile(path.join(workspaceDir, "TOOLS.md"), "utf-8"),
-    },
-  ];
-  const bootstrapStats: BootstrapInjectionStat[] = contextFiles.map((file, index) => ({
-    name: path.basename(file.path),
-    path: file.path,
-    missing: false,
-    rawChars: file.content.length,
-    injectedChars: index === 0 ? 1500 : 700,
-    truncated: true,
-  }));
-  const analysis = analyzeBootstrapBudget({
-    files: bootstrapStats,
-    bootstrapMaxChars: 1500,
-    bootstrapTotalMaxChars: 2200,
+  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+    workspaceDir,
+    config: bootstrapConfig,
   });
+  const analysis = analyzeBootstrapBudget({
+    files: buildBootstrapInjectionStats({
+      bootstrapFiles,
+      injectedFiles: contextFiles,
+    }),
+    bootstrapMaxChars: bootstrapConfig.agents.defaults.bootstrapMaxChars,
+    bootstrapTotalMaxChars: bootstrapConfig.agents.defaults.bootstrapTotalMaxChars,
+  });
+  if (!analysis.hasTruncation) {
+    throw new Error("bootstrap-warning scenario expected truncated bootstrap context");
+  }
   const warningFirst = buildBootstrapPromptWarning({
     analysis,
     mode: "once",
@@ -565,7 +607,7 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
       OriginatingTo: "D123",
       AccountId: "A1",
       ChatType: "direct",
-    } as never),
+    }),
   });
   return {
     scenario: "maintenance-prompts",
