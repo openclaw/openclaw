@@ -138,8 +138,8 @@ export function stopFeishuMonitorState(accountId?: string): void {
     const server = httpServers.get(accountId);
     if (server) {
       httpServers.delete(accountId);
-      server.closeAllConnections();
       server.close();
+      server.closeAllConnections();
     }
     botOpenIds.delete(accountId);
     botNames.delete(accountId);
@@ -148,8 +148,8 @@ export function stopFeishuMonitorState(accountId?: string): void {
 
   wsClients.clear();
   for (const server of httpServers.values()) {
-    server.closeAllConnections();
     server.close();
+    server.closeAllConnections();
   }
   httpServers.clear();
   botOpenIds.clear();
