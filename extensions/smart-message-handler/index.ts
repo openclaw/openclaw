@@ -45,8 +45,8 @@ import type { ExecutionKind, MessageClassification } from "./src/types.ts";
 // Runtime-only custom phrases added via /smartadd (non-persistent)
 let runtimePhrases: { phrase: string; kind: ExecutionKind }[] = [];
 
-// Last classification result for cross-hook access (before_model_resolve)
-let lastClassification: MessageClassification | null = null;
+// Per-session classification cache to avoid cross-session interference
+const classificationCache = new Map<string, MessageClassification>();
 
 export default function register(api: PluginApi) {
   const config = getConfig(api);
@@ -85,9 +85,7 @@ export default function register(api: PluginApi) {
       }
 
       // 3. recordMessage
-      const messages = event.messages || [];
-      const raw = messages.length > 0 ? messages[messages.length - 1] : undefined;
-      const lastMessage = typeof raw === "string" ? raw : "";
+      const lastMessage = event.prompt || "";
       sessionStore = recordMessage(sessionStore, sessionKey);
       const sessionState = getSession(sessionStore, sessionKey);
 
@@ -113,11 +111,14 @@ export default function register(api: PluginApi) {
       }
 
       // 5. classifyMessage (custom phrases + embedding + keyword scoring)
+      // Reuse classification from before_model_resolve if available (it runs first)
       const effectiveConfig =
         runtimePhrases.length > 0
           ? { ...currentConfig, customPhrases: [...currentConfig.customPhrases, ...runtimePhrases] }
           : currentConfig;
-      let classification = classifyMessage(lastMessage, effectiveConfig);
+      let classification =
+        classificationCache.get(sessionKey) || classifyMessage(lastMessage, effectiveConfig);
+      classificationCache.delete(sessionKey); // consumed; avoid memory leak
 
       // Embedding cache override
       if (currentConfig.embeddingCacheEnabled && isEmbeddingCacheLoaded()) {
@@ -136,7 +137,6 @@ export default function register(api: PluginApi) {
       }
 
       // 6. buildDynamicExecutionSignal (classification XML)
-      lastClassification = classification;
       setLastPrediction(classification.kind);
       logDebug(currentConfig, `Classification:`, classification, api.logger);
 
@@ -175,14 +175,32 @@ export default function register(api: PluginApi) {
     { priority: 10 },
   );
 
-  // Model routing hook: suggest model override based on classification tier
-  api.on("before_model_resolve", (_event, _ctx) => {
+  // Model routing hook: classify directly (runs BEFORE before_prompt_build)
+  api.on("before_model_resolve", (event, ctx) => {
     const currentConfig = getConfig(api);
-    if (!currentConfig.modelRoutingEnabled || !lastClassification) {
+    if (!currentConfig.modelRoutingEnabled) {
       return {};
     }
 
-    const tier = lastClassification.suggested_tier;
+    const lastMessage = event.prompt || "";
+    if (!lastMessage) {
+      return {};
+    }
+
+    // Classify and store in per-session cache for before_prompt_build to reuse
+    const effectiveConfig =
+      runtimePhrases.length > 0
+        ? { ...currentConfig, customPhrases: [...currentConfig.customPhrases, ...runtimePhrases] }
+        : currentConfig;
+    const classification = classifyMessage(lastMessage, effectiveConfig);
+    const sessionKey = ctx.sessionKey || "default";
+    classificationCache.set(sessionKey, classification);
+
+    if (classification.confidence === "low") {
+      return {};
+    }
+
+    const tier = classification.suggested_tier;
     if (tier === "premium" && currentConfig.premiumModel) {
       return { modelOverride: currentConfig.premiumModel };
     }
@@ -296,6 +314,7 @@ export default function register(api: PluginApi) {
       resetFeedback();
       clearEmbeddingCache();
       runtimePhrases = [];
+      classificationCache.clear();
       api.logger.info("Smart message handler service stopped, sessions cleared");
     },
   });

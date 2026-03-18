@@ -33,7 +33,7 @@ export function loadEmbeddingCache(path: string): boolean {
     return false;
   }
   try {
-    const data = JSON.parse(readFileSync(path, "utf-8"));
+    const data = JSON.parse(readFileSync(resolved, "utf-8"));
     if (!data.entries || !Array.isArray(data.entries) || !data.dimension) {
       return false;
     }
