@@ -52,6 +52,10 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI
   - No real keys required
   - Should be fast and stable
+- Scheduler note:
+  - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
+  - Shared unit coverage stays on, but the wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
+  - Refresh the timing snapshot with `pnpm test:perf:update-timings` after major suite shape changes.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
     keep both levels of coverage.

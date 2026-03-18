@@ -1,4 +1,5 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { deliverTextOrMediaReply } from "openclaw/plugin-sdk/reply-payload";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
@@ -44,7 +45,7 @@ export async function deliverReplies(params: {
       continue;
     }
 
-    if (mediaList.length === 0) {
+    if (mediaList.length === 0 && slackBlocks?.length) {
       const trimmed = text.trim();
       if (!trimmed && !slackBlocks?.length) {
         continue;
@@ -59,21 +60,44 @@ export async function deliverReplies(params: {
         ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
         ...(params.identity ? { identity: params.identity } : {}),
       });
-    } else {
-      let first = true;
-      for (const mediaUrl of mediaList) {
-        const caption = first ? text : "";
-        first = false;
-        await sendMessageSlack(params.target, caption, {
+      params.runtime.log?.(`delivered reply to ${params.target}`);
+      continue;
+    }
+
+    const delivered = await deliverTextOrMediaReply({
+      payload,
+      text,
+      chunkText:
+        mediaList.length === 0
+          ? (value) => {
+              const trimmed = value.trim();
+              if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+                return [];
+              }
+              return [trimmed];
+            }
+          : undefined,
+      sendText: async (trimmed) => {
+        await sendMessageSlack(params.target, trimmed, {
+          token: params.token,
+          threadTs,
+          accountId: params.accountId,
+          ...(params.identity ? { identity: params.identity } : {}),
+        });
+      },
+      sendMedia: async ({ mediaUrl, caption }) => {
+        await sendMessageSlack(params.target, caption ?? "", {
           token: params.token,
           mediaUrl,
           threadTs,
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
         });
-      }
+      },
+    });
+    if (delivered !== "empty") {
+      params.runtime.log?.(`delivered reply to ${params.target}`);
     }
-    params.runtime.log?.(`delivered reply to ${params.target}`);
   }
 }
 
