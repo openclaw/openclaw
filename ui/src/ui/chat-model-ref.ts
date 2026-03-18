@@ -19,6 +19,25 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
   return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
 }
 
+export function buildResolvedChatModelValue(model: string, provider?: string | null): string {
+  const trimmedModel = model.trim();
+  if (!trimmedModel) {
+    return "";
+  }
+  const trimmedProvider = provider?.trim();
+  if (!trimmedProvider) {
+    return trimmedModel;
+  }
+  const separator = trimmedModel.indexOf("/");
+  if (separator <= 0) {
+    return buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
+  }
+  const embeddedProvider = trimmedModel.slice(0, separator).trim();
+  return embeddedProvider.toLowerCase() === trimmedProvider.toLowerCase()
+    ? trimmedModel
+    : buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
+}
+
 export function createChatModelOverride(value: string): ChatModelOverride | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -75,7 +94,7 @@ export function resolveServerChatModelValue(
     return "";
   }
   if (trimmedModel.includes("/")) {
-    return trimmedModel;
+    return buildResolvedChatModelValue(trimmedModel, provider);
   }
   const trimmedProvider = provider?.trim();
   if (!trimmedProvider) {
@@ -87,7 +106,7 @@ export function resolveServerChatModelValue(
       entry.provider?.trim().toLowerCase() === trimmedProvider.toLowerCase(),
   );
   return hasExactCatalogMatch
-    ? buildQualifiedChatModelValue(trimmedModel, trimmedProvider)
+    ? buildResolvedChatModelValue(trimmedModel, trimmedProvider)
     : trimmedModel;
 }
 

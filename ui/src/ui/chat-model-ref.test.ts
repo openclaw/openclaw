@@ -44,10 +44,14 @@ describe("chat-model-ref helpers", () => {
   });
 
   it("resolves server session data to qualified option values", () => {
-    expect(resolveServerChatModelValue("gpt-5-mini", "openai", catalog)).toBe(
-      "openai/gpt-5-mini",
-    );
+    expect(resolveServerChatModelValue("gpt-5-mini", "openai", catalog)).toBe("openai/gpt-5-mini");
     expect(resolveServerChatModelValue("alias-only", null, catalog)).toBe("alias-only");
+  });
+
+  it("preserves a distinct provider for slash-containing server model ids", () => {
+    expect(resolveServerChatModelValue("anthropic/claude-haiku-4.5", "openrouter", catalog)).toBe(
+      "openrouter/anthropic/claude-haiku-4.5",
+    );
   });
 
   it("keeps bare server aliases when the current provider does not own that catalog model", () => {

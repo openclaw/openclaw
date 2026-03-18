@@ -265,7 +265,7 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
   });
 
-  it("keeps ambiguous bare /model aliases raw after successful changes", async () => {
+  it("caches the resolved provider for ambiguous bare /model aliases", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.patch") {
         return {
@@ -292,8 +292,8 @@ describe("executeSlashCommand directives", () => {
       model: "glm-5",
     });
     expect(result.sessionPatch?.modelOverride).toEqual({
-      kind: "raw",
-      value: "glm-5",
+      kind: "qualified",
+      value: "astroncodingplan/glm-5",
     });
   });
 

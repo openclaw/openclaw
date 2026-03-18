@@ -16,10 +16,7 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
-import {
-  buildQualifiedChatModelValue,
-  createChatModelOverride,
-} from "../chat-model-ref.ts";
+import { buildResolvedChatModelValue, createChatModelOverride } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   AgentsListResult,
@@ -180,14 +177,15 @@ function resolvePatchedModelOverride(
   if (!requestedOverride || !resolvedModel) {
     return requestedOverride;
   }
-  if (requestedOverride.kind === "raw" && requestedOverride.value === resolvedModel) {
+  const resolvedValue = buildResolvedChatModelValue(resolvedModel, resolved?.modelProvider);
+  if (
+    requestedOverride.kind === "raw" &&
+    requestedOverride.value === resolvedModel &&
+    resolvedValue === resolvedModel
+  ) {
     return requestedOverride;
   }
-  return (
-    createChatModelOverride(
-      buildQualifiedChatModelValue(resolvedModel, resolved?.modelProvider),
-    ) ?? requestedOverride
-  );
+  return createChatModelOverride(resolvedValue) ?? requestedOverride;
 }
 
 async function executeThink(
