@@ -82,13 +82,11 @@ if api_key="$(resolve_api_key)"; then
     fi
   fi
 
-  # API call failed — log and fall through to openclaw agent
-  printf 'codex api key call failed (http %s), falling back to openclaw agent\n' "$http_code" >&2
+  # API call failed — log and fall through to Claude
+  printf 'codex api key call failed (http %s), falling back to claude\n' "$http_code" >&2
   cat "$tmp_err" >&2 2>/dev/null || true
 fi
 
-# --- Fallback: openclaw agent (OAuth) ---
-export RCA_PROVIDER_MODEL="${RCA_PROVIDER_MODEL:-openai-codex/${MODEL}}"
-export RCA_PROVIDER_SESSION_PREFIX="${RCA_PROVIDER_SESSION_PREFIX:-rca-codex}"
-
-exec "${SCRIPT_DIR}/rca-provider-openclaw-agent.sh" "$@"
+# --- Fallback: Claude via openclaw agent ---
+printf 'codex unavailable, falling back to claude provider\n' >&2
+exec "${SCRIPT_DIR}/rca-provider-claude.sh" "$@"
