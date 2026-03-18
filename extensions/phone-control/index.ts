@@ -4,7 +4,7 @@ import {
   definePluginEntry,
   type OpenClawPluginApi,
   type OpenClawPluginService,
-} from "openclaw/plugin-sdk/phone-control";
+} from "./runtime-api.js";
 
 type ArmGroup = "camera" | "screen" | "writes" | "all";
 
