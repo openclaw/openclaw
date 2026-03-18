@@ -384,6 +384,21 @@ export function createTelegramDraftStream(params: {
     }
   };
 
+  let pendingDraftClear: Promise<void> = Promise.resolve();
+  const enqueueDraftClearPreview = (
+    draftId: number | undefined,
+    options?: { skipThread?: boolean },
+  ): void => {
+    if (draftId == null) {
+      return;
+    }
+    pendingDraftClear = pendingDraftClear
+      .catch(() => {
+        // Keep the queue alive even if one clear fails.
+      })
+      .then(() => clearDraftPreview(draftId, options));
+  };
+
   const forceNewMessage = () => {
     // Boundary rotation may call stop() to finalize the previous draft.
     // Re-open the stream lifecycle for the next assistant segment.
@@ -399,7 +414,7 @@ export function createTelegramDraftStream(params: {
       streamDraftId = allocateTelegramDraftId();
     }
     if (previousDraftId != null && previousDraftId !== streamDraftId) {
-      void clearDraftPreview(previousDraftId);
+      enqueueDraftClearPreview(previousDraftId);
     }
     lastSentText = "";
     lastSentParseMode = undefined;
