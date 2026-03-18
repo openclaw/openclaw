@@ -3,7 +3,7 @@ import type {
   DmPolicy,
   GroupPolicy,
   SecretInput,
-} from "openclaw/plugin-sdk/mattermost";
+} from "./runtime-api.js";
 
 export type MattermostReplyToMode = "off" | "first" | "all";
 export type MattermostChatTypeKey = "direct" | "channel" | "group";

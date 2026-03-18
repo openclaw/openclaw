@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/mattermost";
+import type { PluginRuntime } from "./runtime-api.js";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
 const { setRuntime: setMattermostRuntime, getRuntime: getMattermostRuntime } =
