@@ -882,6 +882,7 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       result: sanitizedResult,
+      rawResult: result,
     },
   });
   const endedAt = Date.now();

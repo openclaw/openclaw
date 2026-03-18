@@ -947,6 +947,91 @@ export async function handleOpenResponsesHttpRequest(
       return;
     }
 
+    if (evt.stream === "tool") {
+      const phase = evt.data?.phase as string | undefined;
+      const toolName = evt.data?.name as string | undefined;
+      const toolCallId = evt.data?.toolCallId as string | undefined;
+
+      if (!toolName || !toolCallId) {
+        return;
+      }
+
+      if (phase === "start") {
+        const args = evt.data?.args;
+        const argsStr = args ? JSON.stringify(args) : "{}";
+        const callItemId = `fc_${toolCallId}`;
+        const outputIndex = nextOutputIndex++;
+
+        // Emit function_call output item (what the model asked for)
+        const functionCallItem: OutputItem = {
+          type: "function_call",
+          id: callItemId,
+          call_id: toolCallId,
+          name: toolName,
+          arguments: argsStr,
+          status: "in_progress",
+        };
+
+        writeSseEvent(res, {
+          type: "response.output_item.added",
+          output_index: outputIndex,
+          item: functionCallItem,
+        });
+        return;
+      }
+
+      if (phase === "result") {
+        const isError = evt.data?.isError as boolean | undefined;
+        // Prefer rawResult (unsanitized/untruncated) for HTTP consumers
+        const result = evt.data?.rawResult ?? evt.data?.result;
+        const resultStr =
+          result != null ? (typeof result === "string" ? result : JSON.stringify(result)) : "";
+        const callItemId = `fc_${toolCallId}`;
+        const resultItemId = `fco_${toolCallId}`;
+
+        // Complete the function_call item
+        const completedCallItem: OutputItem = {
+          type: "function_call",
+          id: callItemId,
+          call_id: toolCallId,
+          name: toolName,
+          arguments: "{}",
+          status: "completed",
+        };
+
+        // Find the output_index for this call (use a new index for done event)
+        const doneIndex = nextOutputIndex++;
+
+        writeSseEvent(res, {
+          type: "response.output_item.done",
+          output_index: doneIndex,
+          item: completedCallItem,
+        });
+
+        // Emit function_call_output item (the tool result)
+        const resultOutputIndex = nextOutputIndex++;
+        const resultItem: OutputItem = {
+          type: "function_call_output",
+          id: resultItemId,
+          call_id: toolCallId,
+          output: resultStr,
+          status: isError ? "failed" : "completed",
+        };
+
+        writeSseEvent(res, {
+          type: "response.output_item.added",
+          output_index: resultOutputIndex,
+          item: resultItem,
+        });
+
+        writeSseEvent(res, {
+          type: "response.output_item.done",
+          output_index: resultOutputIndex,
+          item: resultItem,
+        });
+        return;
+      }
+    }
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
