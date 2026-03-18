@@ -23,6 +23,7 @@ import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as testingSdk from "openclaw/plugin-sdk/testing";
+import * as voiceCallSdk from "openclaw/plugin-sdk/voice-call";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
@@ -48,14 +49,12 @@ const trimmedLegacyExtensionSubpaths = [
   "diagnostics-otel",
   "diffs",
   "llm-task",
-  "lobster",
   "memory-lancedb",
   "open-prose",
   "phone-control",
   "qwen-portal-auth",
   "talk-voice",
   "thread-ownership",
-  "voice-call",
 ] as const;
 
 const asExports = (mod: object) => mod as Record<string, unknown>;
@@ -73,6 +72,7 @@ const mattermostSdk = await import("openclaw/plugin-sdk/mattermost");
 const nextcloudTalkSdk = await import("openclaw/plugin-sdk/nextcloud-talk");
 const twitchSdk = await import("openclaw/plugin-sdk/twitch");
 const accountHelpersSdk = await import("openclaw/plugin-sdk/account-helpers");
+const lobsterSdk = await import("openclaw/plugin-sdk/lobster");
 
 describe("plugin-sdk subpath exports", () => {
   it("exports compat helpers", () => {
@@ -318,6 +318,16 @@ describe("plugin-sdk subpath exports", () => {
   it("exports ACPX runtime backend helpers", async () => {
     expect(typeof acpxSdk.listKnownProviderAuthEnvVarNames).toBe("function");
     expect(typeof acpxSdk.omitEnvKeysCaseInsensitive).toBe("function");
+  });
+
+  it("exports Lobster helpers", async () => {
+    expect(typeof lobsterSdk.definePluginEntry).toBe("function");
+    expect(typeof lobsterSdk.materializeWindowsSpawnProgram).toBe("function");
+  });
+
+  it("exports Voice Call helpers", () => {
+    expect(typeof voiceCallSdk.definePluginEntry).toBe("function");
+    expect(typeof voiceCallSdk.resolveOpenAITtsInstructions).toBe("function");
   });
 
   it("resolves bundled extension subpaths", async () => {

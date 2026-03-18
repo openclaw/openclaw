@@ -242,6 +242,10 @@
       "types": "./dist/plugin-sdk/irc.d.ts",
       "default": "./dist/plugin-sdk/irc.js"
     },
+    "./plugin-sdk/lobster": {
+      "types": "./dist/plugin-sdk/lobster.d.ts",
+      "default": "./dist/plugin-sdk/lobster.js"
+    },
     "./plugin-sdk/lazy-runtime": {
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
       "default": "./dist/plugin-sdk/lazy-runtime.js"
@@ -289,6 +293,10 @@
     "./plugin-sdk/twitch": {
       "types": "./dist/plugin-sdk/twitch.d.ts",
       "default": "./dist/plugin-sdk/twitch.js"
+    },
+    "./plugin-sdk/voice-call": {
+      "types": "./dist/plugin-sdk/voice-call.d.ts",
+      "default": "./dist/plugin-sdk/voice-call.js"
     },
     "./plugin-sdk/zalo": {
       "types": "./dist/plugin-sdk/zalo.d.ts",
