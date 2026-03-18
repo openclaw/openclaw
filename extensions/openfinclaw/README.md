@@ -14,48 +14,76 @@ curl -fsSL https://raw.githubusercontent.com/cryptoSUN2049/openFinclaw/main/scri
 openclaw plugins install @openfinclaw/openfinclaw
 ```
 
+## 快速开始（无需 API Key）
+
+```bash
+# 查看排行榜
+openclaw strategy leaderboard
+
+# 查看收益榜 Top 10
+openclaw strategy leaderboard returns --limit 10
+
+# 查看策略详情
+openclaw strategy show <strategy-id> --remote
+```
+
 ## 功能概览
 
-| 功能      | 工具/Skill             | 说明                         |
-| --------- | ---------------------- | ---------------------------- |
-| 策略创建  | `fin-strategy-builder` | 自然语言生成 FEP v1.2 策略包 |
-| 策略验证  | `skill_validate`       | 本地验证策略包格式           |
-| 策略发布  | `skill_publish`        | 发布到 Hub 并自动回测        |
-| 发布查询  | `skill_publish_verify` | 查询发布和回测状态           |
-| 策略 Fork | `skill_fork`           | 从 Hub 下载策略到本地        |
-| 本地列表  | `skill_list_local`     | 列出本地已下载的策略         |
-| 策略详情  | `skill_get_info`       | 获取 Hub 策略详情            |
+| 功能       | 工具                   | 需要 API Key |
+| ---------- | ---------------------- | ------------ |
+| 排行榜查询 | `skill_leaderboard`    | 否           |
+| 策略详情   | `skill_get_info`       | 否           |
+| 本地验证   | `skill_validate`       | 否           |
+| 本地列表   | `skill_list_local`     | 否           |
+| 策略 Fork  | `skill_fork`           | **是**       |
+| 策略发布   | `skill_publish`        | **是**       |
+| 发布查询   | `skill_publish_verify` | **是**       |
 
 ### AI 工具列表
 
-| 工具                   | 说明                              |
-| ---------------------- | --------------------------------- |
-| `skill_publish`        | 发布策略 ZIP 到 Hub，自动触发回测 |
-| `skill_publish_verify` | 查询发布状态和回测报告            |
-| `skill_validate`       | 本地验证策略包（FEP v1.2）        |
-| `skill_fork`           | 从 Hub 下载策略到本地             |
-| `skill_list_local`     | 列出本地策略                      |
-| `skill_get_info`       | 获取 Hub 策略详情                 |
+| 工具                   | 说明                                   | API Key  |
+| ---------------------- | -------------------------------------- | -------- |
+| `skill_leaderboard`    | 查询排行榜（综合/收益/风控/人气/新星） | 不需要   |
+| `skill_get_info`       | 获取 Hub 策略公开详情                  | 不需要   |
+| `skill_validate`       | 本地验证策略包（FEP v1.2）             | 不需要   |
+| `skill_list_local`     | 列出本地策略                           | 不需要   |
+| `skill_fork`           | 从 Hub 下载策略到本地                  | **需要** |
+| `skill_publish`        | 发布策略 ZIP 到 Hub，自动触发回测      | **需要** |
+| `skill_publish_verify` | 查询发布状态和回测报告                 | **需要** |
 
 ## CLI 命令
 
 ```bash
-# 从 Hub Fork 策略
-openfinclaw strategy fork <strategy-id>
+# 查看排行榜（无需 API Key）
+openclaw strategy leaderboard
+openclaw strategy leaderboard returns --limit 10
+
+# 从 Hub Fork 策略（需要 API Key）
+openclaw strategy fork <strategy-id>
 
 # 列出本地策略
-openfinclaw strategy list
+openclaw strategy list
 
 # 查看策略详情
-openfinclaw strategy show <name-or-id> [--remote]
+openclaw strategy show <name-or-id> [--remote]
 
 # 删除本地策略
-openfinclaw strategy remove <name-or-id> --force
+openclaw strategy remove <name-or-id> --force
 ```
+
+### 排行榜类型
+
+| 榜单类型    | 说明           |
+| ----------- | -------------- |
+| `composite` | 综合榜（默认） |
+| `returns`   | 收益榜         |
+| `risk`      | 风控榜         |
+| `popular`   | 人气榜         |
+| `rising`    | 新星榜         |
 
 ## 配置
 
-安装后配置 API Key（从 https://hub.openfinclaw.ai 获取）：
+Fork 和发布策略需要 API Key（从 https://hub.openfinclaw.ai 获取）：
 
 ```bash
 openclaw config set plugins.entries.openfinclaw.config.skillApiKey YOUR_API_KEY
@@ -79,11 +107,11 @@ export SKILL_API_URL=https://hub.openfinclaw.ai
 
 ### 配置选项
 
-| 配置项             | 环境变量                   | 说明         | 默认值                       |
-| ------------------ | -------------------------- | ------------ | ---------------------------- |
-| `skillApiKey`      | `SKILL_API_KEY`            | Hub API Key  | 必填                         |
-| `skillApiUrl`      | `SKILL_API_URL`            | Hub 服务地址 | `https://hub.openfinclaw.ai` |
-| `requestTimeoutMs` | `SKILL_REQUEST_TIMEOUT_MS` | 请求超时     | `60000`                      |
+| 配置项             | 环境变量                   | 说明                         | 默认值                       |
+| ------------------ | -------------------------- | ---------------------------- | ---------------------------- |
+| `skillApiKey`      | `SKILL_API_KEY`            | Hub API Key（Fork/发布需要） | 可选                         |
+| `skillApiUrl`      | `SKILL_API_URL`            | Hub 服务地址                 | `https://hub.openfinclaw.ai` |
+| `requestTimeoutMs` | `SKILL_REQUEST_TIMEOUT_MS` | 请求超时                     | `60000`                      |
 
 ## Skills
 
@@ -124,9 +152,10 @@ Agent:
 ```
 用户: "帮我下载那个收益 453% 的 BTC 策略"
 Agent:
-1. skill_get_info(strategyId) → 查看详情
-2. skill_fork(strategyId) → 下载到本地
-3. 返回本地路径供编辑
+1. skill_leaderboard() → 查看排行榜
+2. skill_get_info(strategyId) → 查看详情
+3. skill_fork(strategyId) → 下载到本地
+4. 返回本地路径供编辑
 ```
 
 ## 本地存储

@@ -4,7 +4,7 @@
 import type { Command } from "commander";
 import { forkStrategy, fetchStrategyInfo } from "./fork.js";
 import { listLocalStrategies, findLocalStrategy, removeLocalStrategy } from "./strategy-storage.js";
-import type { SkillApiConfig } from "./types.js";
+import type { SkillApiConfig, LeaderboardResponse, BoardType } from "./types.js";
 
 type Logger = {
   info: (message: string) => void;
@@ -22,6 +22,80 @@ export function registerStrategyCli(params: {
   const root = program
     .command("strategy")
     .description("Strategy management: fork from Hub, list local, validate");
+
+  // ── strategy leaderboard ──
+  root
+    .command("leaderboard [boardType]")
+    .description("Query strategy leaderboard from Hub (no API key required)")
+    .option("-l, --limit <number>", "Number of results (max 100)", "20")
+    .option("-o, --offset <number>", "Offset for pagination", "0")
+    .action(
+      async (boardType: BoardType = "composite", options: { limit?: string; offset?: string }) => {
+        const limit = Math.min(Math.max(Number(options.limit) || 20, 1), 100);
+        const offset = Math.max(Number(options.offset) || 0, 0);
+
+        const url = new URL(`${config.baseUrl}/api/v1/skill/leaderboard/${boardType}`);
+        url.searchParams.set("limit", String(limit));
+        url.searchParams.set("offset", String(offset));
+
+        try {
+          const response = await fetch(url.toString(), {
+            method: "GET",
+            headers: { Accept: "application/json" },
+            signal: AbortSignal.timeout(config.requestTimeoutMs),
+          });
+
+          if (!response.ok) {
+            console.error(`✗ 请求失败: HTTP ${response.status}`);
+            process.exitCode = 1;
+            return;
+          }
+
+          const data = (await response.json()) as LeaderboardResponse;
+          const boardNames: Record<string, string> = {
+            composite: "综合榜",
+            returns: "收益榜",
+            risk: "风控榜",
+            popular: "人气榜",
+            rising: "新星榜",
+          };
+
+          console.log(
+            `${boardNames[boardType] || boardType} Top ${data.strategies.length} (共 ${data.total} 个策略):`,
+          );
+          console.log("");
+
+          for (const s of data.strategies) {
+            const perf = s.performance || {};
+            const returnStr =
+              typeof perf.returnSincePublish === "number"
+                ? `收益: ${(perf.returnSincePublish * 100).toFixed(1)}%`
+                : "收益: --";
+            const sharpeStr =
+              typeof perf.sharpeRatio === "number"
+                ? `夏普: ${perf.sharpeRatio.toFixed(2)}`
+                : "夏普: --";
+            const ddStr =
+              typeof perf.maxDrawdown === "number"
+                ? `回撤: ${(perf.maxDrawdown * 100).toFixed(1)}%`
+                : "回撤: --";
+            const author = s.author?.displayName || "未知";
+
+            const name = s.name.length > 35 ? s.name.slice(0, 32) + "..." : s.name;
+            console.log(
+              `#${String(s.rank).padStart(2)}  ${name.padEnd(35)}  ${returnStr}  ${sharpeStr}  ${ddStr}  作者: ${author}`,
+            );
+          }
+
+          console.log("");
+          console.log("使用 openclaw strategy show <id> --remote 查看详情");
+          console.log("使用 openclaw strategy fork <id> 下载策略（需要 API Key）");
+        } catch (err) {
+          console.error(`✗ 请求失败: ${err instanceof Error ? err.message : String(err)}`);
+          process.exitCode = 1;
+        }
+      },
+    );
 
   // ── strategy fork ──
   root
@@ -201,10 +275,15 @@ function printStrategyInfo(
     id: string;
     name: string;
     version?: string;
-    author?: { name?: string };
+    author?: { displayName?: string };
     market?: string;
     description?: string;
-    performance?: { totalReturn?: number; sharpe?: number; maxDrawdown?: number; winRate?: number };
+    backtestResult?: {
+      totalReturn?: number;
+      sharpe?: number;
+      maxDrawdown?: number;
+      winRate?: number;
+    };
   },
 ) {
   console.log("策略信息:");
@@ -216,14 +295,14 @@ function printStrategyInfo(
   console.log(`  ID: ${hub.id}`);
   console.log(`  名称: ${hub.name}`);
   if (hub.version) console.log(`  版本: ${hub.version}`);
-  if (hub.author?.name) console.log(`  作者: ${hub.author.name}`);
+  if (hub.author?.displayName) console.log(`  作者: ${hub.author.displayName}`);
   if (hub.market) console.log(`  市场: ${hub.market}`);
   if (hub.description) console.log(`  描述: ${hub.description}`);
 
-  if (hub.performance) {
+  if (hub.backtestResult) {
     console.log("");
     console.log("绩效:");
-    const perf = hub.performance;
+    const perf = hub.backtestResult;
     if (typeof perf.totalReturn === "number") {
       console.log(`  总收益率: ${(perf.totalReturn * 100).toFixed(2)}%`);
     }
@@ -234,7 +313,7 @@ function printStrategyInfo(
       console.log(`  最大回撤: ${(perf.maxDrawdown * 100).toFixed(2)}%`);
     }
     if (typeof perf.winRate === "number") {
-      console.log(`  胜率: ${perf.winRate.toFixed(1)}%`);
+      console.log(`  胜率: ${(perf.winRate * 100).toFixed(1)}%`);
     }
   }
 }

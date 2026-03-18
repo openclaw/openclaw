@@ -50,9 +50,8 @@
 }
 ```
 
-也支持短 ID 或 Hub URL：
+也支持 Hub URL：
 
-- 短 ID: `34a5792f`
 - URL: `https://hub.openfinclaw.ai/strategy/34a5792f-7d20-4a15-90f3-26f1c54fa4a6`
 
 ### 2. Fork 策略

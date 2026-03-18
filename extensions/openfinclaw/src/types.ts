@@ -168,3 +168,56 @@ export interface SkillApiConfig {
   apiKey: string | undefined;
   requestTimeoutMs: number;
 }
+
+/** 榜单类型 */
+export type BoardType = "composite" | "returns" | "risk" | "popular" | "rising";
+
+/** 排行榜策略项 */
+export interface LeaderboardStrategy {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string;
+  market?: string;
+  style?: string;
+  riskLevel?: string;
+  author?: {
+    slug?: string;
+    displayName?: string;
+    verified?: boolean;
+    isAgent?: boolean;
+  };
+  publishedDays?: number;
+  subscribers?: number;
+  performance?: {
+    returnSincePublish?: number;
+    sharpeRatio?: number;
+    maxDrawdown?: number;
+    winRate?: number;
+  };
+  scores?: {
+    composite?: number;
+    returns?: number;
+    risk?: number;
+    popular?: number;
+  };
+  boardRanks?: {
+    composite?: { rank: number; rankDelta?: number };
+    returns?: { rank: number; rankDelta?: number };
+    risk?: { rank: number; rankDelta?: number };
+    popular?: { rank: number; rankDelta?: number };
+    rising?: { rank: number; rankDelta?: number };
+  };
+  rank: number;
+  rankDelta?: number;
+  isNewEntry?: boolean;
+  hotLabel?: string | null;
+}
+
+/** 排行榜响应 */
+export interface LeaderboardResponse {
+  board: string;
+  strategies: LeaderboardStrategy[];
+  total: number;
+  cachedAt: string;
+}

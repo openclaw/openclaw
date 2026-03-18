@@ -23,6 +23,27 @@ metadata:
 
 核心价值：**不要追逐浪潮，创造浪潮。**
 
+## 快速开始
+
+安装完成后，你可以立即开始（无需 API Key）：
+
+```bash
+# 1. 查看排行榜（无需 API Key）
+openclaw strategy leaderboard
+
+# 2. 查看收益榜 Top 10
+openclaw strategy leaderboard returns --limit 10
+
+# 3. 查看策略详情（无需 API Key）
+openclaw strategy show 550e8400-e29b-41d4-a716-446655440001 --remote
+```
+
+或者直接告诉 Agent 你想做什么：
+
+- "帮我看看排行榜有什么好策略" → Agent 会使用 `skill_leaderboard`
+- "这个策略收益怎么样" → Agent 会使用 `skill_get_info`
+- "帮我 Fork 这个策略" → Agent 会使用 `skill_fork`（需要配置 API Key）
+
 ## 安装指南
 
 ### 前置检查
@@ -41,6 +62,8 @@ openclaw --version
 
 ```bash
 openclaw plugins install @openfinclaw/openfinclaw
+
+openclaw plugins enable @openfinclaw/openfinclaw
 ```
 
 安装成功后会显示插件路径，如 `~/.openclaw/extensions/openfinclaw`。
@@ -52,7 +75,7 @@ openclaw plugins install @openfinclaw/openfinclaw
 openclaw plugins list
 
 # 测试命令
-openfinclaw strategy list
+openclaw strategy list
 ```
 
 ### 配置 API Key
@@ -90,28 +113,68 @@ openclaw config set plugins.entries.openfinclaw.config.skillApiKey YOUR_API_KEY
 
 ## 功能概览
 
-openfinclaw 插件提供完整的策略工具链：
+本插件提供两类能力：
 
-| 功能      | Skill                  | 说明                         |
-| --------- | ---------------------- | ---------------------------- |
-| 策略创建  | `fin-strategy-builder` | 自然语言生成 FEP v1.2 策略包 |
-| 策略验证  | `skill_validate`       | 本地验证策略包格式           |
-| 策略发布  | `skill_publish`        | 发布到 Hub 并自动回测        |
-| 发布验证  | `skill_publish_verify` | 查询发布和回测状态           |
-| 策略 Fork | `skill_fork`           | 从 Hub 下载策略到本地        |
-| 本地列表  | `skill_list_local`     | 列出本地已下载的策略         |
-| 策略详情  | `skill_get_info`       | 获取 Hub 策略详情            |
+### Tools（工具）
+
+Agent 可直接调用的函数：
+
+| 工具名                 | 用途                                   | 需要 API Key |
+| ---------------------- | -------------------------------------- | ------------ |
+| `skill_leaderboard`    | 查询排行榜（综合/收益/风控/人气/新星） | 否           |
+| `skill_get_info`       | 获取 Hub 策略公开详情                  | 否           |
+| `skill_validate`       | 本地验证策略包格式（FEP v1.2）         | 否           |
+| `skill_list_local`     | 列出本地已下载的策略                   | 否           |
+| `skill_fork`           | 从 Hub 下载公开策略到本地              | **是**       |
+| `skill_publish`        | 发布策略 ZIP 到 Hub，自动触发回测      | **是**       |
+| `skill_publish_verify` | 查询发布状态和回测报告                 | **是**       |
+
+### Skills（指导文档）
+
+定义 Agent 在特定场景下的行为规范，位于 `skills/` 目录：
+
+| Skill                  | 触发场景                 | 说明                          |
+| ---------------------- | ------------------------ | ----------------------------- |
+| `fin-strategy-builder` | 创建新策略、生成策略代码 | 自然语言 → FEP v1.2 策略包    |
+| `skill-publish`        | 发布策略到服务器         | 验证 → 打包 → 发布 → 查询回测 |
+| `strategy-fork`        | 下载/克隆 Hub 策略       | Fork → 本地编辑 → 发布新版本  |
+| `strategy-pack`        | 创建回测策略包           | 生成 fep.yaml + strategy.py   |
 
 ### 典型工作流
 
 ```
 创建策略 → 验证 → 发布 → Fork → 优化 → 再次发布
     ↓         ↓        ↓        ↓
-fin-strategy-builder  skill_publish  skill_fork
-              skill_validate  skill_publish_verify
+ fin-strategy-builder  skill_publish  skill_fork
+               skill_validate  skill_publish_verify
 ```
 
 ## CLI 命令
+
+### strategy leaderboard
+
+查看 Hub 排行榜（无需 API Key）：
+
+```bash
+# 综合榜 Top 20（默认）
+openclaw strategy leaderboard
+
+# 收益榜 Top 10
+openclaw strategy leaderboard returns --limit 10
+
+# 人气榜第 21-40 名
+openclaw strategy leaderboard popular --offset 20 --limit 20
+```
+
+**榜单类型**：
+
+| 榜单类型    | 说明           | 排序依据         |
+| ----------- | -------------- | ---------------- |
+| `composite` | 综合榜（默认） | FCS 综合分       |
+| `returns`   | 收益榜         | 收益率           |
+| `risk`      | 风控榜         | 风控分           |
+| `popular`   | 人气榜         | 订阅数           |
+| `rising`    | 新星榜         | 30天内新策略收益 |
 
 ### strategy fork
 
@@ -119,19 +182,16 @@ fin-strategy-builder  skill_publish  skill_fork
 
 ```bash
 # 使用策略 ID
-openfinclaw strategy fork 34a5792f-7d20-4a15-90f3-26f1c54fa4a6
-
-# 使用短 ID
-openfinclaw strategy fork 34a5792f
+openclaw strategy fork 34a5792f-7d20-4a15-90f3-26f1c54fa4a6
 
 # 使用 Hub URL
-openfinclaw strategy fork https://hub.openfinclaw.ai/strategy/34a5792f-7d20-4a15-90f3-26f1c54fa4a6
+openclaw strategy fork https://hub.openfinclaw.ai/strategy/34a5792f-7d20-4a15-90f3-26f1c54fa4a6
 
 # 指定日期目录
-openfinclaw strategy fork 34a5792f --date 2026-03-01
+openclaw strategy fork 34a5792f-7d20-4a15-90f3-26f1c54fa4a6 --date 2026-03-01
 
 # 自定义路径
-openfinclaw strategy fork 34a5792f --dir ./my-strategies/
+openclaw strategy fork 34a5792f-7d20-4a15-90f3-26f1c54fa4a6 --dir ./my-strategies/
 ```
 
 ### strategy list
@@ -139,8 +199,8 @@ openfinclaw strategy fork 34a5792f --dir ./my-strategies/
 列出本地策略：
 
 ```bash
-openfinclaw strategy list
-openfinclaw strategy list --json
+openclaw strategy list
+openclaw strategy list --json
 ```
 
 输出示例：
@@ -159,10 +219,10 @@ openfinclaw strategy list --json
 
 ```bash
 # 查看本地策略
-openfinclaw strategy show btc-adaptive-dca-34a5792f
+openclaw strategy show btc-adaptive-dca-34a5792f
 
-# 从 Hub 获取最新信息
-openfinclaw strategy show 34a5792f --remote
+# 从 Hub 获取最新信息（无需 API Key）
+openclaw strategy show 550e8400-e29b-41d4-a716-446655440001 --remote
 ```
 
 ### strategy remove
@@ -170,7 +230,7 @@ openfinclaw strategy show 34a5792f --remote
 删除本地策略：
 
 ```bash
-openfinclaw strategy remove btc-adaptive-dca-34a5792f --force
+openclaw strategy remove btc-adaptive-dca-34a5792f --force
 ```
 
 ## 本地存储结构
@@ -189,26 +249,16 @@ openfinclaw strategy remove btc-adaptive-dca-34a5792f --force
         └── ...
 ```
 
-## 触发场景
+## 触发场景与相关 Skills
 
-当用户提到以下内容时，应引导阅读此 skill：
+当用户提到以下内容时，应引导阅读对应的 Skill：
 
-- "帮我安装 openfinclaw" / "安装 FinClaw"
-- "Hub 是什么" / "hub.openfinclaw.ai 有什么用"
-- "怎么发布策略" / "怎么下载别人的策略"
-- "量化策略" / "策略开发" / "策略分享"
-- "我想 Fork 一个策略" / "下载策略"
-
-## 相关 Skills
-
-根据用户需求引导到对应 skill：
-
-| 用户需求       | 引导 Skill             |
-| -------------- | ---------------------- |
-| 创建新策略     | `fin-strategy-builder` |
-| 发布策略       | `skill-publish`        |
-| 下载/克隆策略  | `strategy-fork`        |
-| 了解策略包格式 | `strategy-pack`        |
+| 触发关键词                     | Skill 目录             | 说明                                    |
+| ------------------------------ | ---------------------- | --------------------------------------- |
+| 创建策略、写策略、生成策略包   | `fin-strategy-builder` | 自然语言 → FEP v1.2 策略包              |
+| 发布策略、上传策略、提交策略   | `skill-publish`        | 验证 → 打包 → 发布到 Hub → 查询回测报告 |
+| Fork 策略、下载策略、克隆策略  | `strategy-fork`        | 从 Hub Fork 策略到本地，支持二次开发    |
+| 策略包格式、FEP 规范、打包回测 | `strategy-pack`        | FEP v1.2 规范详解，打包和校验指南       |
 
 ## 配置选项
 

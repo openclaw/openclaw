@@ -1,6 +1,6 @@
 /**
  * OpenFinClaw — Skill publishing, strategy validation, and fork tools.
- * Tools: skill_publish, skill_publish_verify, skill_validate, skill_fork, skill_list_local, skill_get_info.
+ * Tools: skill_leaderboard, skill_get_info, skill_validate, skill_fork, skill_list_local, skill_publish, skill_publish_verify.
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -9,6 +9,7 @@ import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import { registerStrategyCli } from "./src/cli.js";
 import { forkStrategy, fetchStrategyInfo } from "./src/fork.js";
 import { listLocalStrategies, findLocalStrategy } from "./src/strategy-storage.js";
+import type { BoardType, LeaderboardResponse, LeaderboardStrategy } from "./src/types.js";
 import { validateStrategyPackage } from "./src/validate.js";
 
 /** JSON tool result helper. */
@@ -512,6 +513,127 @@ const openfinclawPlugin = {
       { names: ["skill_validate"] },
     );
 
+    // ── skill_leaderboard ──
+    api.registerTool(
+      {
+        name: "skill_leaderboard",
+        label: "Get Hub leaderboard",
+        description:
+          "Query strategy leaderboard from hub.openfinclaw.ai. No API key required. Board types: composite (default, FCS score), returns (profit), risk (risk control), popular (subscribers), rising (new strategies). Use this to discover top strategies before using skill_get_info or skill_fork.",
+        parameters: Type.Object({
+          boardType: Type.Optional(
+            Type.Unsafe<BoardType>({
+              type: "string",
+              enum: ["composite", "returns", "risk", "popular", "rising"],
+              description:
+                "Leaderboard type: composite (default, FCS score), returns (profit), risk (risk control), popular (subscribers), rising (new strategies within 30 days)",
+            }),
+          ),
+          limit: Type.Optional(
+            Type.Number({
+              description: "Number of results (max 100, default 20)",
+              minimum: 1,
+              maximum: 100,
+            }),
+          ),
+          offset: Type.Optional(
+            Type.Number({
+              description: "Offset for pagination (default 0)",
+              minimum: 0,
+            }),
+          ),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            const boardType = (params.boardType as BoardType) || "composite";
+            const limit = Math.min(Math.max(Number(params.limit) || 20, 1), 100);
+            const offset = Math.max(Number(params.offset) || 0, 0);
+
+            const url = new URL(`${config.baseUrl}/api/v1/skill/leaderboard/${boardType}`);
+            url.searchParams.set("limit", String(limit));
+            url.searchParams.set("offset", String(offset));
+
+            const response = await fetch(url.toString(), {
+              method: "GET",
+              headers: { Accept: "application/json" },
+              signal: AbortSignal.timeout(config.requestTimeoutMs),
+            });
+
+            const rawText = await response.text();
+            let data: unknown;
+
+            if (rawText && rawText.trim().startsWith("{")) {
+              try {
+                data = JSON.parse(rawText);
+              } catch {
+                data = { raw: rawText };
+              }
+            }
+
+            if (response.status < 200 || response.status >= 300) {
+              const errorData = data as { error?: { message?: string }; message?: string };
+              return json({
+                success: false,
+                error: errorData.error?.message ?? errorData.message ?? `HTTP ${response.status}`,
+              });
+            }
+
+            const leaderboard = data as LeaderboardResponse;
+            const boardNames: Record<string, string> = {
+              composite: "综合榜",
+              returns: "收益榜",
+              risk: "风控榜",
+              popular: "人气榜",
+              rising: "新星榜",
+            };
+
+            const lines: string[] = [];
+            lines.push(
+              `${boardNames[boardType] || boardType} Top ${leaderboard.strategies.length} (共 ${leaderboard.total} 个策略):`,
+            );
+            lines.push("");
+
+            for (const s of leaderboard.strategies) {
+              const perf = s.performance || {};
+              const returnStr =
+                typeof perf.returnSincePublish === "number"
+                  ? `收益: ${(perf.returnSincePublish * 100).toFixed(1)}%`
+                  : "收益: --";
+              const sharpeStr =
+                typeof perf.sharpeRatio === "number"
+                  ? `夏普: ${perf.sharpeRatio.toFixed(2)}`
+                  : "夏普: --";
+              const ddStr =
+                typeof perf.maxDrawdown === "number"
+                  ? `回撤: ${(perf.maxDrawdown * 100).toFixed(1)}%`
+                  : "回撤: --";
+              const author = s.author?.displayName || "未知";
+
+              const name = s.name.length > 35 ? s.name.slice(0, 32) + "..." : s.name;
+              lines.push(
+                `#${String(s.rank).padStart(2)}  ${name.padEnd(35)}  ${returnStr}  ${sharpeStr}  ${ddStr}  作者: ${author}`,
+              );
+            }
+
+            lines.push("");
+            lines.push("使用 skill_get_info <id> 查看策略详情");
+            lines.push("使用 skill_fork <id> 下载策略到本地（需要 API Key）");
+
+            return {
+              content: [{ type: "text" as const, text: lines.join("\n") }],
+              details: { success: true, ...leaderboard },
+            };
+          } catch (err) {
+            return json({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        },
+      },
+      { names: ["skill_leaderboard"] },
+    );
+
     // ── skill_fork ──
     api.registerTool(
       {
@@ -522,7 +644,7 @@ const openfinclawPlugin = {
         parameters: Type.Object({
           strategyId: Type.String({
             description:
-              "Strategy ID from Hub (UUID, short ID, or Hub URL like https://hub.openfinclaw.ai/strategy/{id})",
+              "Strategy ID from Hub (UUID or Hub URL like https://hub.openfinclaw.ai/strategy/{id})",
           }),
           name: Type.Optional(
             Type.String({
@@ -683,10 +805,11 @@ const openfinclawPlugin = {
         name: "skill_get_info",
         label: "Get strategy info from Hub",
         description:
-          "Fetch detailed information about a strategy from hub.openfinclaw.ai, including performance metrics (return, sharpe, max drawdown, win rate). Use this before forking to preview the strategy.",
+          "Fetch detailed information about a strategy from hub.openfinclaw.ai. No API key required for public strategies. Returns performance metrics (return, sharpe, max drawdown, win rate). Use this before forking to preview the strategy.",
         parameters: Type.Object({
           strategyId: Type.String({
-            description: "Strategy ID from Hub (UUID, short ID, or Hub URL)",
+            description:
+              "Strategy ID from Hub (UUID or Hub URL like https://hub.openfinclaw.ai/strategy/{id})",
           }),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {

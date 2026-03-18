@@ -2,17 +2,8 @@
 name: fin-strategy-builder
 description: "Strategy builder — turn natural language trading ideas into compliant FEP v1.2 strategy packages for Findoo Backtest (fep.yaml + scripts/strategy.py), with validation and L1/L2 routing."
 metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🏗️",
-        "requires":
-          {
-            "extensions":
-              ["fin-core", "fin-market-data", "fin-shared-types", "fin-strategy-engine"],
-          },
-      },
-  }
+  openclaw:
+    emoji: "🏗️"
 ---
 
 # Strategy Builder (FEP v1.2)
