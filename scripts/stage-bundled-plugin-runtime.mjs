@@ -92,6 +92,15 @@ function linkPluginNodeModules(params) {
     return;
   }
   fs.symlinkSync(params.sourcePluginNodeModulesDir, runtimeNodeModulesDir, symlinkType());
+
+  // Runtime wrappers re-export from dist/extensions/<plugin>/index.js, so Node
+  // resolves bare-specifier dependencies relative to the dist plugin directory.
+  // copy-bundled-plugin-metadata removes dist node_modules; restore the link here.
+  if (params.distPluginDir) {
+    const distNodeModulesDir = path.join(params.distPluginDir, "node_modules");
+    removePathIfExists(distNodeModulesDir);
+    fs.symlinkSync(params.sourcePluginNodeModulesDir, distNodeModulesDir, symlinkType());
+  }
 }
 
 export function stageBundledPluginRuntime(params = {}) {
@@ -121,6 +130,7 @@ export function stageBundledPluginRuntime(params = {}) {
     stagePluginRuntimeOverlay(distPluginDir, runtimePluginDir);
     linkPluginNodeModules({
       runtimePluginDir,
+      distPluginDir,
       sourcePluginNodeModulesDir,
     });
   }
