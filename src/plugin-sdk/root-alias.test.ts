@@ -127,6 +127,20 @@ describe("plugin-sdk root alias", () => {
     expect(Object.getOwnPropertyDescriptor(lazyRootSdk, "slowHelper")).toBeDefined();
   });
 
+  it("forwards delegateCompactionToRuntime through the compat-backed root alias", () => {
+    const delegateCompactionToRuntime = () => "delegated";
+    const lazyModule = loadRootAliasWithStubs({
+      monolithicExports: {
+        delegateCompactionToRuntime,
+      },
+    });
+    const lazyRootSdk = lazyModule.moduleExports;
+
+    expect(typeof lazyRootSdk.delegateCompactionToRuntime).toBe("function");
+    expect(lazyRootSdk.delegateCompactionToRuntime).toBe(delegateCompactionToRuntime);
+    expect("delegateCompactionToRuntime" in lazyRootSdk).toBe(true);
+  });
+
   it("loads legacy root exports through the merged root wrapper", { timeout: 240_000 }, () => {
     expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
     expect(typeof rootSdk.default).toBe("object");
