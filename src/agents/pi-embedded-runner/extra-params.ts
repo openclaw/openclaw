@@ -266,11 +266,11 @@ function createParallelToolCallsWrapper(
   };
 }
 
-function resolveDefaultParallelToolCalls(provider: string): boolean | undefined {
+function resolveDefaultParallelToolCalls(provider: string, modelApi?: string): boolean | undefined {
   // Codex workloads are dominated by tool-heavy coding loops. Defaulting
   // parallel_tool_calls on reduces serialized read/exec round-trips unless the
   // user explicitly overrides it for a model or agent.
-  return provider === "openai-codex" ? true : undefined;
+  return provider === "openai-codex" && modelApi === "openai-codex-responses" ? true : undefined;
 }
 
 /**
@@ -287,6 +287,7 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
+  modelApi?: string,
 ): void {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -425,7 +426,7 @@ export function applyExtraParamsToAgent(
   );
   const resolvedParallelToolCalls =
     rawParallelToolCalls === undefined
-      ? resolveDefaultParallelToolCalls(provider)
+      ? resolveDefaultParallelToolCalls(provider, modelApi)
       : rawParallelToolCalls;
   if (resolvedParallelToolCalls !== undefined) {
     if (typeof resolvedParallelToolCalls === "boolean") {

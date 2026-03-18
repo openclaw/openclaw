@@ -1951,6 +1951,7 @@ export async function runEmbeddedAttempt(
         },
         params.thinkLevel,
         sessionAgentId,
+        params.model.api,
       );
 
       if (cacheTrace) {
