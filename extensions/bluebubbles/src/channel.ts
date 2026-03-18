@@ -34,6 +34,8 @@ import { blueBubblesSetupAdapter } from "./setup-core.js";
 import { blueBubblesSetupWizard } from "./setup-surface.js";
 import {
   extractHandleFromChatGuid,
+  inferBlueBubblesTargetChatType,
+  looksLikeBlueBubblesExplicitTargetId,
   looksLikeBlueBubblesTargetId,
   normalizeBlueBubblesHandle,
   normalizeBlueBubblesMessagingTarget,
@@ -141,10 +143,26 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeBlueBubblesMessagingTarget,
+    inferTargetChatType: ({ to }) => inferBlueBubblesTargetChatType(to),
     resolveOutboundSessionRoute: (params) => resolveBlueBubblesOutboundSessionRoute(params),
     targetResolver: {
-      looksLikeId: looksLikeBlueBubblesTargetId,
+      looksLikeId: looksLikeBlueBubblesExplicitTargetId,
       hint: "<handle|chat_guid:GUID|chat_id:ID|chat_identifier:ID>",
+      resolveTarget: async ({ normalized }) => {
+        const to = normalized?.trim();
+        if (!to) {
+          return null;
+        }
+        const chatType = inferBlueBubblesTargetChatType(to);
+        if (!chatType) {
+          return null;
+        }
+        return {
+          to,
+          kind: chatType === "direct" ? "user" : "group",
+          source: "normalized" as const,
+        };
+      },
     },
     formatTargetDisplay: ({ target, display }) => {
       const shouldParseDisplay = (value: string): boolean => {
