@@ -220,6 +220,75 @@ describe("secrets apply", () => {
     expect(nextEnv).toContain("UNRELATED=value");
   });
 
+  it("skips exec SecretRef checks during dry-run unless explicitly allowed", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const execLogPath = path.join(fixture.rootDir, "exec-calls.log");
+    const execScriptPath = path.join(fixture.rootDir, "resolver.sh");
+    await fs.writeFile(
+      execScriptPath,
+      [
+        "#!/bin/sh",
+        `printf 'x\\n' >> ${JSON.stringify(execLogPath)}`,
+        "cat >/dev/null",
+        'printf \'{"protocolVersion":1,"values":{"providers/openai/apiKey":"sk-openai-exec"}}\'', // pragma: allowlist secret
+      ].join("\n"),
+      { encoding: "utf8", mode: 0o700 },
+    );
+
+    await writeJsonFile(fixture.configPath, {
+      secrets: {
+        providers: {
+          execmain: {
+            source: "exec",
+            command: execScriptPath,
+            jsonOnly: true,
+            timeoutMs: 20_000,
+            noOutputTimeoutMs: 10_000,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: createOpenAiProviderConfig(),
+        },
+      },
+    });
+
+    const plan = createPlan({
+      targets: [
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.openai.apiKey",
+          providerId: "openai",
+          ref: { source: "exec", provider: "execmain", id: "providers/openai/apiKey" },
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    const dryRunSkipped = await runSecretsApply({ plan, env: fixture.env, write: false });
+    expect(dryRunSkipped.mode).toBe("dry-run");
+    expect(dryRunSkipped.skippedExecRefs).toBe(1);
+    await expect(fs.stat(execLogPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const dryRunAllowed = await runSecretsApply({
+      plan,
+      env: fixture.env,
+      write: false,
+      allowExecInDryRun: true,
+    });
+    expect(dryRunAllowed.mode).toBe("dry-run");
+    expect(dryRunAllowed.skippedExecRefs).toBe(0);
+    const callLog = await fs.readFile(execLogPath, "utf8");
+    expect(callLog.split("\n").filter((line) => line.trim().length > 0).length).toBeGreaterThan(0);
+  });
+
   it("applies auth-profiles sibling ref targets to the scoped agent store", async () => {
     const plan: SecretsApplyPlan = {
       version: 1,

@@ -14,6 +14,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
+import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
 import { deletePathStrict, getPath, setPathCreateStrict } from "./path-utils.js";
 import {
   type SecretsApplyPlan,
@@ -54,6 +55,9 @@ type ProjectedState = {
   envRawByPath: Map<string, string>;
   changedFiles: Set<string>;
   warnings: string[];
+  refsChecked: number;
+  skippedExecRefs: number;
+  resolvabilityComplete: boolean;
 };
 
 type ResolvedPlanTargetEntry = {
@@ -77,6 +81,12 @@ export type SecretsApplyResult = {
   mode: "dry-run" | "write";
   changed: boolean;
   changedFiles: string[];
+  checks: {
+    resolvability: boolean;
+    resolvabilityComplete: boolean;
+  };
+  refsChecked: number;
+  skippedExecRefs: number;
   warningCount: number;
   warnings: string[];
 };
@@ -179,6 +189,8 @@ function applyProviderPlanMutations(params: {
 async function projectPlanState(params: {
   plan: SecretsApplyPlan;
   env: NodeJS.ProcessEnv;
+  write: boolean;
+  allowExecInDryRun: boolean;
 }): Promise<ProjectedState> {
   const io = createSecretsConfigIO({ env: params.env });
   const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
@@ -237,11 +249,13 @@ async function projectPlanState(params: {
     enabled: options.scrubEnv,
   });
 
-  await validateProjectedSecretsState({
+  const validation = await validateProjectedSecretsState({
     env: params.env,
     nextConfig,
     resolvedTargets: targetMutations.resolvedTargets,
     authStoreByPath,
+    write: params.write,
+    allowExecInDryRun: params.allowExecInDryRun,
   });
 
   return {
@@ -253,6 +267,9 @@ async function projectPlanState(params: {
     envRawByPath,
     changedFiles,
     warnings,
+    refsChecked: validation.refsChecked,
+    skippedExecRefs: validation.skippedExecRefs,
+    resolvabilityComplete: validation.resolvabilityComplete,
   };
 }
 
@@ -629,14 +646,30 @@ async function validateProjectedSecretsState(params: {
   nextConfig: OpenClawConfig;
   resolvedTargets: ResolvedPlanTargetEntry[];
   authStoreByPath: Map<string, Record<string, unknown>>;
-}): Promise<void> {
+  write: boolean;
+  allowExecInDryRun: boolean;
+}): Promise<{ refsChecked: number; skippedExecRefs: number; resolvabilityComplete: boolean }> {
   const cache = {};
+  let refsChecked = 0;
+  let skippedExecRefs = 0;
   for (const { target, resolved: resolvedTarget } of params.resolvedTargets) {
+    if (!params.write && target.ref.source === "exec" && !params.allowExecInDryRun) {
+      skippedExecRefs += 1;
+      const staticError = getSkippedExecRefStaticError({
+        ref: target.ref,
+        config: params.nextConfig,
+      });
+      if (staticError) {
+        throw new Error(staticError);
+      }
+      continue;
+    }
     const resolved = await resolveSecretRefValue(target.ref, {
       config: params.nextConfig,
       env: params.env,
       cache,
     });
+    refsChecked += 1;
     assertExpectedResolvedSecretValue({
       value: resolved,
       expected: resolvedTarget.entry.expectedResolvedValue,
@@ -651,20 +684,28 @@ async function validateProjectedSecretsState(params: {
   for (const [authStorePath, store] of params.authStoreByPath.entries()) {
     authStoreLookup.set(resolveUserPath(authStorePath), store);
   }
-  await prepareSecretsRuntimeSnapshot({
-    config: params.nextConfig,
-    env: params.env,
-    loadAuthStore: (agentDir?: string) => {
-      const storePath = resolveUserPath(resolveAuthStorePath(agentDir));
-      const override = authStoreLookup.get(storePath);
-      if (override) {
-        return structuredClone(override) as unknown as ReturnType<
-          typeof loadAuthProfileStoreForSecretsRuntime
-        >;
-      }
-      return loadAuthProfileStoreForSecretsRuntime(agentDir);
-    },
-  });
+  if (params.write || params.allowExecInDryRun) {
+    await prepareSecretsRuntimeSnapshot({
+      config: params.nextConfig,
+      env: params.env,
+      loadAuthStore: (agentDir?: string) => {
+        const storePath = resolveUserPath(resolveAuthStorePath(agentDir));
+        const override = authStoreLookup.get(storePath);
+        if (override) {
+          return structuredClone(override) as unknown as ReturnType<
+            typeof loadAuthProfileStoreForSecretsRuntime
+          >;
+        }
+        return loadAuthProfileStoreForSecretsRuntime(agentDir);
+      },
+    });
+  }
+  return {
+    refsChecked,
+    skippedExecRefs,
+    // Dry-run without exec consent intentionally skips full runtime preflight.
+    resolvabilityComplete: params.write || params.allowExecInDryRun,
+  };
 }
 
 function captureFileSnapshot(pathname: string): FileSnapshot {
@@ -701,15 +742,29 @@ export async function runSecretsApply(params: {
   plan: SecretsApplyPlan;
   env?: NodeJS.ProcessEnv;
   write?: boolean;
+  allowExecInDryRun?: boolean;
 }): Promise<SecretsApplyResult> {
   const env = params.env ?? process.env;
-  const projected = await projectPlanState({ plan: params.plan, env });
+  const write = params.write === true;
+  const allowExecInDryRun = write ? true : Boolean(params.allowExecInDryRun);
+  const projected = await projectPlanState({
+    plan: params.plan,
+    env,
+    write,
+    allowExecInDryRun,
+  });
   const changedFiles = [...projected.changedFiles].toSorted();
-  if (!params.write) {
+  if (!write) {
     return {
       mode: "dry-run",
       changed: changedFiles.length > 0,
       changedFiles,
+      checks: {
+        resolvability: true,
+        resolvabilityComplete: projected.resolvabilityComplete,
+      },
+      refsChecked: projected.refsChecked,
+      skippedExecRefs: projected.skippedExecRefs,
       warningCount: projected.warnings.length,
       warnings: projected.warnings,
     };
@@ -719,6 +774,12 @@ export async function runSecretsApply(params: {
       mode: "write",
       changed: false,
       changedFiles: [],
+      checks: {
+        resolvability: true,
+        resolvabilityComplete: true,
+      },
+      refsChecked: projected.refsChecked,
+      skippedExecRefs: 0,
       warningCount: projected.warnings.length,
       warnings: projected.warnings,
     };
@@ -771,6 +832,12 @@ export async function runSecretsApply(params: {
     mode: "write",
     changed: changedFiles.length > 0,
     changedFiles,
+    checks: {
+      resolvability: true,
+      resolvabilityComplete: true,
+    },
+    refsChecked: projected.refsChecked,
+    skippedExecRefs: 0,
     warningCount: projected.warnings.length,
     warnings: projected.warnings,
   };

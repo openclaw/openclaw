@@ -14,9 +14,9 @@ Use `openclaw secrets` to manage SecretRefs and keep the active runtime snapshot
 Command roles:
 
 - `reload`: gateway RPC (`secrets.reload`) that re-resolves refs and swaps runtime snapshot only on full success (no config writes).
-- `audit`: read-only scan of configuration/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift.
+- `audit`: read-only scan of configuration/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift (exec refs are skipped unless `--allow-exec` is set).
 - `configure`: interactive planner for provider setup, target mapping, and preflight (TTY required).
-- `apply`: execute a saved plan (`--dry-run` for validation only), then scrub targeted plaintext residues.
+- `apply`: execute a saved plan (`--dry-run` for validation only; exec refs are skipped unless `--allow-exec` is set), then scrub targeted plaintext residues.
 
 Recommended operator loop:
 
@@ -73,6 +73,7 @@ Header residue note:
 openclaw secrets audit
 openclaw secrets audit --check
 openclaw secrets audit --json
+openclaw secrets audit --allow-exec
 ```
 
 Exit behavior:
@@ -83,6 +84,7 @@ Exit behavior:
 Report shape highlights:
 
 - `status`: `clean | findings | unresolved`
+- `resolution`: `refsChecked`, `skippedExecRefs`, `resolvabilityComplete`
 - `summary`: `plaintextCount`, `unresolvedRefCount`, `shadowedRefCount`, `legacyResidueCount`
 - finding codes:
   - `PLAINTEXT_FOUND`
@@ -115,6 +117,7 @@ Flags:
 - `--providers-only`: configure `secrets.providers` only, skip credential mapping.
 - `--skip-provider-setup`: skip provider setup and map credentials to existing providers.
 - `--agent <id>`: scope `auth-profiles.json` target discovery and writes to one agent store.
+- `--allow-exec`: allow exec SecretRef checks during preflight (may execute provider commands).
 
 Notes:
 
@@ -142,8 +145,16 @@ Apply or preflight a plan generated previously:
 ```bash
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run --allow-exec
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 ```
+
+Dry-run behavior:
+
+- `--dry-run` validates preflight without writing files.
+- exec SecretRef checks are skipped by default in dry-run.
+- use `--allow-exec` with `--dry-run` to opt in to exec provider checks.
+- `--allow-exec` requires `--dry-run`.
 
 Plan contract details (allowed target paths, validation rules, and failure semantics):
 
