@@ -231,10 +231,7 @@ describe("web_search kimi config resolution", () => {
   it("extracts citations from search_results", () => {
     expect(
       extractKimiCitations({
-        search_results: [
-          { url: "https://example.com/one" },
-          { url: "https://example.com/two" },
-        ],
+        search_results: [{ url: "https://example.com/one" }, { url: "https://example.com/two" }],
       }),
     ).toEqual(["https://example.com/one", "https://example.com/two"]);
   });
