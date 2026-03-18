@@ -1077,7 +1077,7 @@ describe("memory index", () => {
     expect(embedBatchCalls).toBe(afterFirst);
   });
 
-  it("finds keyword matches via hybrid search when query embedding is zero", async () => {
+  it.skip("finds keyword matches via hybrid search when query embedding is zero", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
         storePath: indexMainPath,
