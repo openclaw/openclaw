@@ -63,7 +63,11 @@ const apiStub: ApiStub = {
   setMyCommands: vi.fn(async () => undefined),
 };
 
-export const telegramBotRuntimeForTest = {
+export const telegramBotRuntimeForTest: {
+  Bot: new (token: string) => unknown;
+  sequentialize: () => unknown;
+  apiThrottler: () => unknown;
+} = {
   Bot: class {
     api = apiStub;
     use = middlewareUseSpy;

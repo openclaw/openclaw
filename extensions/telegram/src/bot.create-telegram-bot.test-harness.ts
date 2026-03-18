@@ -192,26 +192,26 @@ const grammySpies = vi.hoisted(() => ({
   getFileSpy: vi.fn(async () => ({ file_path: "media/file.jpg" })) as AnyAsyncMock,
 }));
 
-export const {
-  useSpy,
-  middlewareUseSpy,
-  onSpy,
-  stopSpy,
-  commandSpy,
-  botCtorSpy,
-  answerCallbackQuerySpy,
-  sendChatActionSpy,
-  editMessageTextSpy,
-  editMessageReplyMarkupSpy,
-  sendMessageDraftSpy,
-  setMessageReactionSpy,
-  setMyCommandsSpy,
-  getMeSpy,
-  sendMessageSpy,
-  sendAnimationSpy,
-  sendPhotoSpy,
-  getFileSpy,
-} = grammySpies;
+export const useSpy: MockFn<(arg: unknown) => void> = grammySpies.useSpy;
+export const middlewareUseSpy: AnyMock = grammySpies.middlewareUseSpy;
+export const onSpy: AnyMock = grammySpies.onSpy;
+export const stopSpy: AnyMock = grammySpies.stopSpy;
+export const commandSpy: AnyMock = grammySpies.commandSpy;
+export const botCtorSpy: MockFn<
+  (token: string, options?: { client?: { fetch?: typeof fetch } }) => void
+> = grammySpies.botCtorSpy;
+export const answerCallbackQuerySpy: AnyAsyncMock = grammySpies.answerCallbackQuerySpy;
+export const sendChatActionSpy: AnyMock = grammySpies.sendChatActionSpy;
+export const editMessageTextSpy: AnyAsyncMock = grammySpies.editMessageTextSpy;
+export const editMessageReplyMarkupSpy: AnyAsyncMock = grammySpies.editMessageReplyMarkupSpy;
+export const sendMessageDraftSpy: AnyAsyncMock = grammySpies.sendMessageDraftSpy;
+export const setMessageReactionSpy: AnyAsyncMock = grammySpies.setMessageReactionSpy;
+export const setMyCommandsSpy: AnyAsyncMock = grammySpies.setMyCommandsSpy;
+export const getMeSpy: AnyAsyncMock = grammySpies.getMeSpy;
+export const sendMessageSpy: AnyAsyncMock = grammySpies.sendMessageSpy;
+export const sendAnimationSpy: AnyAsyncMock = grammySpies.sendAnimationSpy;
+export const sendPhotoSpy: AnyAsyncMock = grammySpies.sendPhotoSpy;
+export const getFileSpy: AnyAsyncMock = grammySpies.getFileSpy;
 
 const runnerHoisted = vi.hoisted(() => ({
   sequentializeMiddleware: vi.fn(async (_ctx: unknown, next?: () => Promise<void>) => {
@@ -225,7 +225,11 @@ const runnerHoisted = vi.hoisted(() => ({
 export const sequentializeSpy: AnyMock = runnerHoisted.sequentializeSpy;
 export let sequentializeKey: ((ctx: unknown) => string) | undefined;
 export const throttlerSpy: AnyMock = runnerHoisted.throttlerSpy;
-export const telegramBotRuntimeForTest = {
+export const telegramBotRuntimeForTest: {
+  Bot: new (token: string, options?: { client?: { fetch?: typeof fetch } }) => unknown;
+  sequentialize: (keyFn: (ctx: unknown) => string) => unknown;
+  apiThrottler: () => unknown;
+} = {
   Bot: class {
     api = {
       config: { use: grammySpies.useSpy },
