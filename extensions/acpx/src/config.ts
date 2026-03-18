@@ -390,7 +390,10 @@ export function resolveAcpxPluginConfig(params: {
     workspaceDir: params.workspaceDir,
   });
   const allowPluginLocalInstall = command === ACPX_BUNDLED_BIN;
-  const stripProviderAuthEnvVars = command === ACPX_BUNDLED_BIN;
+  // Strip provider auth env vars only when using the bundled acpx binary AND no
+  // custom agentCommand is set. A custom agentCommand is a third-party process
+  // that may rely on env vars like OPENAI_API_KEY for its own auth.
+  const stripProviderAuthEnvVars = command === ACPX_BUNDLED_BIN && !normalized.agentCommand;
   const configuredExpectedVersion = normalized.expectedVersion;
   const expectedVersion =
     configuredExpectedVersion === ACPX_VERSION_ANY

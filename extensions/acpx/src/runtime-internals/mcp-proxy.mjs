@@ -15,7 +15,9 @@ function splitCommandLine(value) {
       escaping = false;
       continue;
     }
-    if (ch === "\\" && quote !== "'") {
+    if (ch === "\\" && quote === null) {
+      // Only treat backslash as an escape when completely unquoted.
+      // Inside double-quoted strings backslashes are literal (Windows paths).
       escaping = true;
       continue;
     }

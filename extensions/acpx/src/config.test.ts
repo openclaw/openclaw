@@ -9,6 +9,7 @@ import {
   createAcpxPluginConfigSchema,
   resolveAcpxPluginRoot,
   resolveAcpxPluginConfig,
+  toAcpMcpServers,
 } from "./config.js";
 
 describe("acpx plugin config parsing", () => {
@@ -72,6 +73,19 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.stripProviderAuthEnvVars).toBe(true);
     expect(resolved.cwd).toBe(path.resolve("/tmp/workspace"));
     expect(resolved.strictWindowsCmdWrapper).toBe(true);
+  });
+
+  it("does not strip provider auth env vars when agentCommand is set", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agentCommand: "npx --yes kilocode@latest",
+      },
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolved.command).toBe(ACPX_BUNDLED_BIN);
+    expect(resolved.stripProviderAuthEnvVars).toBe(false);
+    expect(resolved.agentCommand).toBe("npx --yes kilocode@latest");
   });
 
   it("accepts command override and disables plugin-local auto-install", () => {
