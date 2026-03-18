@@ -130,11 +130,21 @@ describe("slack draft stream initialization", () => {
 });
 
 describe("slack block delivery thread reuse", () => {
-  it("reuses the established thread when first-mode planning is exhausted", () => {
+  it("does not reuse the established thread unless block delivery opts in", () => {
     expect(
       resolveSlackDeliveryThreadTs({
         plannedThreadTs: undefined,
         usedReplyThreadTs: "3000.1",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("reuses the established thread when first-mode block planning is exhausted", () => {
+    expect(
+      resolveSlackDeliveryThreadTs({
+        plannedThreadTs: undefined,
+        usedReplyThreadTs: "3000.1",
+        allowUsedReplyThreadTs: true,
       }),
     ).toBe("3000.1");
   });
@@ -145,6 +155,7 @@ describe("slack block delivery thread reuse", () => {
         forcedThreadTs: "3000.2",
         plannedThreadTs: "3000.3",
         usedReplyThreadTs: "3000.1",
+        allowUsedReplyThreadTs: true,
       }),
     ).toBe("3000.2");
 
@@ -152,6 +163,7 @@ describe("slack block delivery thread reuse", () => {
       resolveSlackDeliveryThreadTs({
         plannedThreadTs: "3000.3",
         usedReplyThreadTs: "3000.1",
+        allowUsedReplyThreadTs: true,
       }),
     ).toBe("3000.3");
   });
