@@ -341,7 +341,7 @@ export function isManagedSessionsDir(
     return false;
   }
 
-  return (
+  if (
     normalizeManagedPathForComparison(
       resolveComparableManagedPath(resolvedSessionsDir),
       compareCaseInsensitively,
@@ -350,6 +350,15 @@ export function isManagedSessionsDir(
       resolveComparableManagedPath(expectedSessionsDir),
       compareCaseInsensitively,
     )
+  ) {
+    return true;
+  }
+
+  const normalizedAgentId = normalizeAgentId(agentId);
+  // Structured custom roots such as /srv/custom/agents/{agentId}/sessions
+  // are still per-agent managed stores even when they live outside OPENCLAW_STATE_DIR.
+  return !(
+    normalizedAgentId === DEFAULT_AGENT_ID && agentId.trim().toLowerCase() !== DEFAULT_AGENT_ID
   );
 }
 

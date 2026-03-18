@@ -448,4 +448,33 @@ describe("isManagedSessionsDir", () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("treats structurally managed custom per-agent roots as managed", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-managed-custom-root-"));
+    try {
+      const stateDir = path.join(tempDir, "state");
+      const customRoot = path.join(tempDir, "custom-root");
+      const customSessionsDir = path.join(customRoot, "agents", "main", "sessions");
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.mkdirSync(customSessionsDir, { recursive: true });
+
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      } as NodeJS.ProcessEnv;
+
+      const { isManagedSessionStorePath, isManagedSessionTranscriptPath, isManagedSessionsDir } =
+        await import("./paths.js");
+
+      expect(isManagedSessionsDir(customSessionsDir, env)).toBe(true);
+      expect(isManagedSessionStorePath(path.join(customSessionsDir, "sessions.json"), env)).toBe(
+        true,
+      );
+      expect(
+        isManagedSessionTranscriptPath(path.join(customSessionsDir, "sess-1.jsonl"), env),
+      ).toBe(true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
