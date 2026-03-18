@@ -37,6 +37,14 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
       (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
     );
   }
+  // When agents.defaults.heartbeat is configured, all listed agents inherit
+  // heartbeat enablement even without an explicit per-agent heartbeat block.
+  if (cfg.agents?.defaults?.heartbeat) {
+    if (list.length === 0) {
+      return resolvedAgentId === resolveDefaultAgentId(cfg);
+    }
+    return list.some((entry) => normalizeAgentId(entry?.id) === resolvedAgentId);
+  }
   return resolvedAgentId === resolveDefaultAgentId(cfg);
 }
 

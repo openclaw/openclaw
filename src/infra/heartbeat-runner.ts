@@ -147,6 +147,16 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
       })
       .filter((entry) => entry.agentId);
   }
+  // When agents.defaults.heartbeat is configured, all listed agents inherit
+  // heartbeat enablement even without an explicit per-agent heartbeat block.
+  if (cfg.agents?.defaults?.heartbeat && list.length > 0) {
+    return list
+      .map((entry) => {
+        const id = normalizeAgentId(entry.id);
+        return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
+      })
+      .filter((entry) => entry.agentId);
+  }
   const fallbackId = resolveDefaultAgentId(cfg);
   return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
 }
