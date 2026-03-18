@@ -10,7 +10,7 @@ import {
   normalizeE164,
   SignalConfigSchema,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/signal";
+} from "./runtime-api.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
