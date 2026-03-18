@@ -259,8 +259,9 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports Google Chat helpers", async () => {
-    expect(typeof googlechatSdk.googlechatSetupWizard).toBe("object");
-    expect(typeof googlechatSdk.googlechatSetupAdapter).toBe("object");
+    expect(typeof googlechatSdk.buildChannelConfigSchema).toBe("function");
+    expect(typeof googlechatSdk.createWebhookInFlightLimiter).toBe("function");
+    expect(typeof googlechatSdk.fetchWithSsrFGuard).toBe("function");
   });
 
   it("exports Zalo helpers", async () => {
