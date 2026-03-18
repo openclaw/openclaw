@@ -9,6 +9,7 @@ import {
   pluginCommandMocks,
   resetPluginCommandMocks,
 } from "../../../test/helpers/extensions/telegram-plugin-command.js";
+import type { TelegramBotDeps } from "./bot-deps.js";
 const skillCommandMocks = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
 }));
@@ -31,10 +32,32 @@ vi.mock("./bot/delivery.js", () => ({
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createCommandBot,
-  createNativeCommandTestParams,
+  createNativeCommandTestParams as createNativeCommandTestParamsBase,
   createPrivateCommandContext,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
+
+function createNativeCommandTestParams(
+  cfg: OpenClawConfig,
+  params: Partial<Parameters<typeof registerTelegramNativeCommands>[0]> = {},
+) {
+  const telegramDeps: TelegramBotDeps = {
+    loadConfig: vi.fn(() => ({})),
+    resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/sessions.json"),
+    readChannelAllowFromStore: vi.fn(async () => []),
+    enqueueSystemEvent: vi.fn(),
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => ({
+      queuedFinal: false,
+      counts: {},
+    })),
+    listSkillCommandsForAgents: skillCommandMocks.listSkillCommandsForAgents,
+    wasSentByBot: vi.fn(() => false),
+  };
+  return createNativeCommandTestParamsBase(cfg, {
+    telegramDeps,
+    ...params,
+  });
+}
 
 describe("registerTelegramNativeCommands", () => {
   beforeEach(() => {
