@@ -3,8 +3,8 @@ import {
   type ActionGate,
   jsonResult,
   readStringParam,
-} from "../../../../src/agents/tools/common.js";
-import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
+  type DiscordActionConfig,
+} from "openclaw/plugin-sdk/discord-core";
 import {
   banMemberDiscord,
   hasAnyGuildPermissionDiscord,
