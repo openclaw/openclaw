@@ -221,6 +221,9 @@ function setResolvedWebSearchApiKey(params: {
     env: params.env,
     bundledAllowlistCompat: true,
   }).find((entry) => entry.id === params.provider);
+  if (provider?.setConfiguredCredentialValue) {
+    provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
+  }
   provider?.setCredentialValue(search, params.value);
 }
 
@@ -318,7 +321,9 @@ export async function resolveRuntimeWebTools(params: {
 
     for (const provider of candidates) {
       const path = keyPathForProvider(provider);
-      const value = provider.getCredentialValue(search);
+      const value =
+        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
+        provider.getCredentialValue(search);
       const resolution = await resolveSecretInputWithEnvFallback({
         sourceConfig: params.sourceConfig,
         context: params.context,
@@ -451,7 +456,9 @@ export async function resolveRuntimeWebTools(params: {
       if (provider.id === searchMetadata.selectedProvider) {
         continue;
       }
-      const value = provider.getCredentialValue(search);
+      const value =
+        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
+        provider.getCredentialValue(search);
       if (!hasConfiguredSecretRef(value, defaults)) {
         continue;
       }
@@ -465,7 +472,9 @@ export async function resolveRuntimeWebTools(params: {
     }
   } else if (search && !searchEnabled) {
     for (const provider of providers) {
-      const value = provider.getCredentialValue(search);
+      const value =
+        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
+        provider.getCredentialValue(search);
       if (!hasConfiguredSecretRef(value, defaults)) {
         continue;
       }
@@ -484,7 +493,9 @@ export async function resolveRuntimeWebTools(params: {
       if (provider.id === configuredProvider) {
         continue;
       }
-      const value = provider.getCredentialValue(search);
+      const value =
+        provider.getConfiguredCredentialValue?.(params.sourceConfig) ??
+        provider.getCredentialValue(search);
       if (!hasConfiguredSecretRef(value, defaults)) {
         continue;
       }
