@@ -97,8 +97,15 @@ function linkPluginNodeModules(params) {
   // resolves bare-specifier dependencies relative to the dist plugin directory.
   // copy-bundled-plugin-metadata removes dist node_modules; restore the link here.
   if (params.distPluginDir) {
+    removePathIfExists(path.join(params.distPluginDir, "node_modules"));
+  }
+  if (!fs.existsSync(params.sourcePluginNodeModulesDir)) {
+    return;
+  }
+  fs.symlinkSync(params.sourcePluginNodeModulesDir, runtimeNodeModulesDir, symlinkType());
+
+  if (params.distPluginDir) {
     const distNodeModulesDir = path.join(params.distPluginDir, "node_modules");
-    removePathIfExists(distNodeModulesDir);
     fs.symlinkSync(params.sourcePluginNodeModulesDir, distNodeModulesDir, symlinkType());
   }
 }
