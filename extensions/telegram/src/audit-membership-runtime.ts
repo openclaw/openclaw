@@ -1,11 +1,11 @@
 import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
+import { resolveTelegramApiBase } from "./api-base.js";
 import type {
   AuditTelegramGroupMembershipParams,
   TelegramGroupMembershipAudit,
   TelegramGroupMembershipAuditEntry,
 } from "./audit.js";
-import { resolveTelegramApiBase } from "./api-base.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 

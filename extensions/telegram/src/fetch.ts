@@ -8,11 +8,11 @@ import {
 } from "openclaw/plugin-sdk/infra-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
+import { resolveTelegramApiHostname } from "./api-base.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
 } from "./network-config.js";
-import { resolveTelegramApiHostname } from "./api-base.js";
 import { getProxyUrlFromFetch } from "./proxy.js";
 
 const log = createSubsystemLogger("telegram/network");
@@ -423,6 +423,7 @@ function createTelegramTransportAttempts(params: {
   defaultDispatcher: ReturnType<typeof createTelegramDispatcher>;
   allowFallback: boolean;
   fallbackPolicy?: PinnedDispatcherPolicy;
+  apiHostname: string;
 }): TelegramTransportAttempt[] {
   const attempts: TelegramTransportAttempt[] = [
     {
@@ -455,7 +456,7 @@ function createTelegramTransportAttempts(params: {
   const fallbackIpPolicy: PinnedDispatcherPolicy = {
     ...fallbackPolicy,
     pinnedHostname: {
-      hostname: TELEGRAM_API_HOSTNAME,
+      hostname: params.apiHostname,
       addresses: [...TELEGRAM_FALLBACK_IPS],
     },
   };
@@ -527,6 +528,7 @@ export function resolveTelegramTransport(
     defaultDispatcher,
     allowFallback: allowStickyFallback,
     fallbackPolicy: fallbackDispatcherPolicy,
+    apiHostname: resolveTelegramApiHostname(),
   });
 
   let stickyAttemptIndex = 0;
