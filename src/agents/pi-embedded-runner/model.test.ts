@@ -5,6 +5,7 @@ vi.mock("../pi-model-discovery.js", () => ({
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
+import { discoverModels } from "../pi-model-discovery.js";
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 
 const mockGetOpenRouterModelCapabilities = vi.fn<
@@ -563,6 +564,61 @@ describe("resolveModel", () => {
       input: ["text", "image"],
       contextWindow: 262144,
       maxTokens: 65536,
+    });
+  });
+
+  it("keeps NVIDIA native ids qualified when fallback config uses exact qualified ids", () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn(() => null),
+      getAll: vi.fn(() => [
+        {
+          ...makeModel("nvidia/llama-3.1-nemotron-70b-instruct"),
+          provider: "nvidia",
+          api: "openai-completions",
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+        },
+      ]),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const cfg = {
+      models: {
+        providers: {
+          nvidia: {
+            baseUrl: "https://integrate.api.nvidia.com/v1",
+            models: [
+              {
+                ...makeModel("nvidia/llama-3.1-nemotron-70b-instruct"),
+                reasoning: true,
+                contextWindow: 128000,
+                maxTokens: 8192,
+                headers: { "X-Model": "special" },
+              },
+            ],
+            headers: { "X-Provider": "provider" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel(
+      "nvidia",
+      "nvidia/llama-3.1-nemotron-70b-instruct",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "nvidia",
+      id: "nvidia/llama-3.1-nemotron-70b-instruct",
+      api: "openai-responses",
+      reasoning: true,
+      contextWindow: 128000,
+      maxTokens: 8192,
+    });
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Provider": "provider",
+      "X-Model": "special",
     });
   });
 

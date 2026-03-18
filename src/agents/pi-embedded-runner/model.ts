@@ -252,10 +252,31 @@ function stripSameProviderPrefix(params: { provider: string; modelId: string }):
     : modelId;
 }
 
-function resolveSameProviderModelIds(params: { provider: string; modelId: string }) {
+function providerHasQualifiedNativeModelIds(params: {
+  provider: string;
+  modelRegistry: Pick<ModelRegistry, "getAll"> | Partial<Pick<ModelRegistry, "getAll">>;
+}): boolean {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (!normalizedProvider) {
+    return false;
+  }
+  const prefix = `${normalizedProvider}/`;
+  const models = params.modelRegistry.getAll?.() ?? [];
+  return models.some(
+    (model) =>
+      normalizeProviderId(model.provider) === normalizedProvider &&
+      model.id.toLowerCase().startsWith(prefix),
+  );
+}
+
+function resolveSameProviderModelIds(params: {
+  provider: string;
+  modelId: string;
+  preserveQualifiedModelId?: boolean;
+}) {
   const alternateModelId = stripSameProviderPrefix(params);
   const preserveQualifiedModelId =
-    normalizeProviderId(params.provider) === "openrouter" && alternateModelId !== params.modelId;
+    params.preserveQualifiedModelId === true && alternateModelId !== params.modelId;
   return {
     alternateModelId,
     fallbackLookupModelId: alternateModelId,
@@ -279,10 +300,15 @@ export function resolveModelWithRegistry(params: {
     return explicitModel.model;
   }
 
+  const preserveQualifiedModelId = providerHasQualifiedNativeModelIds({
+    provider: params.provider,
+    modelRegistry: params.modelRegistry,
+  });
   const { alternateModelId, fallbackLookupModelId, runtimeModelId, shouldTryAlternateExplicit } =
     resolveSameProviderModelIds({
       provider: params.provider,
       modelId: params.modelId,
+      preserveQualifiedModelId,
     });
   if (shouldTryAlternateExplicit) {
     const alternateExplicitModel = resolveExplicitModelWithRegistry({
@@ -410,10 +436,15 @@ export async function resolveModelAsync(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  const preserveQualifiedModelId = providerHasQualifiedNativeModelIds({
+    provider,
+    modelRegistry,
+  });
   const { alternateModelId, runtimeModelId, shouldTryAlternateExplicit } =
     resolveSameProviderModelIds({
       provider,
       modelId,
+      preserveQualifiedModelId,
     });
   const explicitModel = resolveExplicitModelWithRegistry({
     provider,
