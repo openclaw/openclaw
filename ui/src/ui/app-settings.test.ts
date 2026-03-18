@@ -312,6 +312,18 @@ describe("applySettingsFromUrl", () => {
     expect(window.location.search).toBe("");
   });
 
+  it("prefers fragment tokens over legacy query tokens when both are present", () => {
+    setTestWindowUrl("https://control.example/ui/overview?token=query-token#token=hash-token");
+    const host = createHost("overview");
+    host.settings.gatewayUrl = "wss://control.example/openclaw";
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.token).toBe("hash-token");
+    expect(window.location.search).toBe("");
+    expect(window.location.hash).toBe("");
+  });
+
   it("resets stale persisted session selection to main when a token is supplied without a session", () => {
     setTestWindowUrl("https://control.example/chat#token=test-token");
     const host = createHost("chat");
