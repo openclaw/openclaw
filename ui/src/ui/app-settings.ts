@@ -97,6 +97,9 @@ export function applySettingsFromUrl(host: SettingsHost) {
   const gatewayUrlRaw = params.get("gatewayUrl") ?? hashParams.get("gatewayUrl");
   const nextGatewayUrl = gatewayUrlRaw?.trim() ?? "";
   const gatewayUrlChanged = Boolean(nextGatewayUrl && nextGatewayUrl !== host.settings.gatewayUrl);
+  // Prefer fragment tokens over query tokens. Fragments avoid server-side request
+  // logs and referrer leakage; query-param tokens remain a one-time legacy fallback
+  // for compatibility with older deep links.
   const tokenRaw = hashParams.get("token") ?? params.get("token");
   const passwordRaw = params.get("password") ?? hashParams.get("password");
   const sessionRaw = params.get("session") ?? hashParams.get("session");
