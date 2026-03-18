@@ -57,6 +57,7 @@ function formatArgs(toolName: string, args: unknown): string {
 function processResult(
   result?: ToolResult,
   canRender?: boolean,
+  globalSeenPaths?: Set<string>,
 ): { images: CachedImage[]; text: string; textStripped: string } {
   const empty = { images: [], text: "", textStripped: "" };
   if (!result?.content) {
@@ -81,10 +82,11 @@ function processResult(
         }
         if (mediaUrls) {
           for (const mediaPath of mediaUrls) {
-            if (seenPaths.has(mediaPath)) {
+            if (seenPaths.has(mediaPath) || globalSeenPaths?.has(mediaPath)) {
               continue;
             }
             seenPaths.add(mediaPath);
+            globalSeenPaths?.add(mediaPath);
             const loaded = readMediaImageAsBase64(mediaPath);
             if (loaded) {
               const filename = mediaPath.split(/[/\\]/).pop();
@@ -144,11 +146,13 @@ export class ToolExecutionComponent extends Container {
   private cachedText = "";
   private cachedTextStripped = "";
   private imagesAttached = false;
+  private globalSeenPaths?: Set<string>;
 
-  constructor(toolName: string, args: unknown) {
+  constructor(toolName: string, args: unknown, globalSeenPaths?: Set<string>) {
     super();
     this.toolName = toolName;
     this.args = args;
+    this.globalSeenPaths = globalSeenPaths;
     this.box = new Box(1, 1, (line) => theme.toolPendingBg(line));
     this.header = new Text("", 0, 0);
     this.argsLine = new Text("", 0, 0);
@@ -182,7 +186,7 @@ export class ToolExecutionComponent extends Container {
     // images together, with sequential dedup: when a MEDIA text block is
     // rendered from file, the next image block (base64 duplicate) is skipped.
     this.detachImages();
-    const processed = processResult(result, canRenderInlineImages());
+    const processed = processResult(result, canRenderInlineImages(), this.globalSeenPaths);
     this.cachedImages = processed.images;
     this.cachedText = processed.text;
     this.cachedTextStripped = processed.textStripped;
