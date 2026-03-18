@@ -3430,7 +3430,7 @@ export const copiedRuntimeMarker = {
       tryNative: false,
     });
     await expect(withoutAlias.import(copiedChannelRuntime)).rejects.toThrow(
-      /openclaw\/plugin-sdk\/channel-runtime/,
+      /plugin-sdk\/channel-runtime/,
     );
 
     const withAlias = createJiti(jitiBaseUrl, {
