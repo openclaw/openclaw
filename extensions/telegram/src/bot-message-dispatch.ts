@@ -24,10 +24,10 @@ import type {
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -52,18 +52,6 @@ import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
-const DEFAULT_BOT_MESSAGE_DISPATCH_RUNTIME = {
-  dispatchReplyWithBufferedBlockDispatcher,
-};
-let botMessageDispatchRuntimeForTest:
-  | Partial<typeof DEFAULT_BOT_MESSAGE_DISPATCH_RUNTIME>
-  | undefined;
-
-export function setBotMessageDispatchRuntimeForTest(
-  runtime?: Partial<typeof DEFAULT_BOT_MESSAGE_DISPATCH_RUNTIME>,
-): void {
-  botMessageDispatchRuntimeForTest = runtime;
-}
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -122,6 +110,7 @@ type DispatchTelegramMessageParams = {
   streamMode: TelegramStreamMode;
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
+  telegramDeps?: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token">;
 };
 
@@ -159,12 +148,9 @@ export const dispatchTelegramMessage = async ({
   streamMode,
   textLimit,
   telegramCfg,
+  telegramDeps = defaultTelegramBotDeps,
   opts,
 }: DispatchTelegramMessageParams) => {
-  const botMessageDispatchRuntime = {
-    ...DEFAULT_BOT_MESSAGE_DISPATCH_RUNTIME,
-    ...botMessageDispatchRuntimeForTest,
-  };
   const {
     ctxPayload,
     msg,
@@ -551,7 +537,7 @@ export const dispatchTelegramMessage = async ({
 
   let dispatchError: unknown;
   try {
-    ({ queuedFinal } = await botMessageDispatchRuntime.dispatchReplyWithBufferedBlockDispatcher({
+    ({ queuedFinal } = await telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg,
       dispatcherOptions: {
