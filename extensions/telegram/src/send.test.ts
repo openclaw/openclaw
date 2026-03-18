@@ -474,6 +474,49 @@ describe("sendMessageTelegram", () => {
     }
   });
 
+  it("falls back to plain text when Telegram rejects HTML as empty text (Mode E)", async () => {
+    const cases = [
+      {
+        name: "newer 'text must be non-empty' wording",
+        error: new Error("400: Bad Request: text must be non-empty"),
+      },
+      {
+        name: "older 'message text is empty' wording",
+        error: new Error("400: Bad Request: message text is empty"),
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const sendMessage = vi
+        .fn()
+        .mockRejectedValueOnce(testCase.error)
+        .mockResolvedValueOnce({
+          message_id: 99,
+          chat: { id: "123" },
+        });
+      const api = { sendMessage } as unknown as {
+        sendMessage: typeof sendMessage;
+      };
+
+      const res = await sendMessageTelegram("123", ">", {
+        token: "tok",
+        api,
+      });
+
+      expect(sendMessage, testCase.name).toHaveBeenCalledTimes(2);
+      // First call: HTML with parse_mode
+      expect(sendMessage.mock.calls[0]?.[2], testCase.name).toEqual(
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+      // Second call: plain text fallback (no parse_mode)
+      expect(sendMessage.mock.calls[1]?.[2], testCase.name).toBeUndefined();
+      expect(sendMessage.mock.calls[1]?.[1], testCase.name).toBe(">");
+      expect(res.messageId, testCase.name).toBe("99");
+
+      sendMessage.mockClear();
+    }
+  });
+
   it("fails when Telegram text send returns no message_id", async () => {
     const sendMessage = vi.fn().mockResolvedValue({
       chat: { id: "123" },

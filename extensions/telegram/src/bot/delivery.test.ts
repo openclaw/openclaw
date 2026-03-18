@@ -1,6 +1,8 @@
 import type { Bot } from "grammy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
+import { deliverReplies } from "./delivery.js";
+import { sendTelegramText } from "./delivery.send.js";
 
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
@@ -600,23 +602,138 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("throws when formatted and plain fallback text are both empty", async () => {
+  it("silently skips when formatted and plain fallback text are both empty", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn();
     const bot = { api: { sendMessage } } as unknown as Bot;
 
-    await expect(
-      deliverReplies({
-        replies: [{ text: "   " }],
-        chatId: "123",
-        token: "tok",
-        runtime,
-        bot,
-        replyToMode: "off",
-        textLimit: 4000,
-      }),
-    ).rejects.toThrow("empty formatted text and empty plain fallback");
+    const result = await deliverReplies({
+      replies: [{ text: "   " }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
     expect(sendMessage).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(false);
+  });
+
+  it("attaches buttons to second chunk when first chunk is empty", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 50,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    // Three chunks: chunk 0 is whitespace-only (skipped), chunks 1+2 are real.
+    // Small textLimit forces paragraph-boundary splitting so "   " is its own chunk.
+    await deliverReplies({
+      replies: [
+        {
+          text: "   \n\nchunk one txt\n\nchunk two txt",
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Click me", callback_data: "click" }]],
+            },
+          },
+        },
+      ],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 20,
+    });
+
+    // Chunk 0 (whitespace) is skipped — only 2 sendMessage calls for real content.
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    // First sendMessage call (chunk 1, the first non-empty chunk) should carry reply_markup.
+    expect(sendMessage.mock.calls[0][2]).toEqual(
+      expect.objectContaining({
+        reply_markup: {
+          inline_keyboard: [[{ text: "Click me", callback_data: "click" }]],
+        },
+      }),
+    );
+    // Second sendMessage call (chunk 2) should NOT have reply_markup.
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_markup");
+  });
+
+  it("falls back to plain text when Telegram rejects with 'text must be non-empty' (Mode C)", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn(
+      async (_chatId: string, _text: string, opts?: Record<string, unknown>) => {
+        // HTML send attempt — Telegram rejects with newer error wording
+        if (opts && "parse_mode" in opts) {
+          throw new Error("400: Bad Request: text must be non-empty");
+        }
+        // Plain text fallback succeeds
+        return {
+          message_id: 6,
+          chat: { id: "123" },
+        };
+      },
+    );
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ text: "some text" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+      thread: { id: 42, scope: "forum" },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    // Second call should be the plain-text fallback without parse_mode
+    expect(sendMessage.mock.calls[1]?.[1]).toBe("some text");
+    expect(sendMessage.mock.calls[1]?.[2]).not.toHaveProperty("parse_mode");
+  });
+
+  it("returns undefined (no throw) when 'text must be non-empty' and no fallback (Mode D)", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn(async () => {
+      throw new Error("400: Bad Request: text must be non-empty");
+    });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    // Call sendTelegramText directly with plainText="" so hasFallbackText is false
+    // while text renders to non-empty HTML
+    const result = await sendTelegramText(bot, "123", "some text", runtime as RuntimeEnv, {
+      plainText: "",
+    });
+
+    // Should return undefined (no throw) — consistent with Mode A pre-send skip
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(result).toBeUndefined();
+  });
+
+  it("does not call markDelivered when sendTelegramText returns undefined (safety net)", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn();
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    // All-whitespace text: sendTelegramText returns undefined (safety net)
+    const result = await deliverReplies({
+      replies: [{ text: "   " }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(false);
   });
 
   it("uses reply_to_message_id when quote text is provided", async () => {
@@ -914,6 +1031,35 @@ describe("deliverReplies", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(pinChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("first chunk empty with replyToMode=first — reply threading applies to first sent chunk, not chunk index 0", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 55,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    // Two chunks: chunk 0 is whitespace-only (will be skipped), chunk 1 has real content.
+    // Use a small textLimit to force chunking at the double newline boundary.
+    const result = await deliverReplies({
+      replies: [{ text: "   \n\nreal content here", replyToId: "999" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "first",
+      textLimit: 20,
+    });
+
+    // Only the real-content chunk should be sent (chunk 0 is empty → skipped)
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    // The reply threading should be applied to the chunk that was actually sent
+    expect(sendMessage.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ reply_to_message_id: 999 }),
+    );
+    expect(result.delivered).toBe(true);
   });
 
   it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {

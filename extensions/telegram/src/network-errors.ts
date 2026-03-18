@@ -7,6 +7,8 @@ import {
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
 
+export const EMPTY_TEXT_ERR_RE = /message text is empty|text must be non-empty/i;
+
 const RECOVERABLE_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -150,6 +152,20 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
 }
 
 /**
+ * Checks whether any error in the cause chain of `err` has a pre-connect error code.
+ * Used to determine whether a grammY "failed after N attempts" envelope is safe to retry.
+ */
+function hasPreConnectCauseInChain(err: unknown): boolean {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    const code = normalizeCode(getErrorCode(candidate));
+    if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Returns true if the error is safe to retry for a non-idempotent Telegram send operation
  * (e.g. sendMessage). Only matches errors that are guaranteed to have occurred *before*
  * the request reached Telegram's servers, preventing duplicate message delivery.
@@ -165,6 +181,24 @@ export function isSafeToRetrySendError(err: unknown): boolean {
     const code = normalizeCode(getErrorCode(candidate));
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
       return true;
+    }
+    const message = formatErrorMessage(candidate).trim();
+    // Telegram 429 rate-limit: the server explicitly rejected the request before
+    // delivering it; retry_after signals it is safe to retry after the delay.
+    if (/^429\b/.test(message)) {
+      return true;
+    }
+    // grammY envelope error: "Network request for '…' failed after N attempts"
+    // This envelope wraps an underlying cause — we must inspect it to determine
+    // safety. Only treat as safe-to-retry if the root cause is a verifiable
+    // pre-connect failure. ECONNRESET, post-connect timeouts, and unknown causes
+    // could mean Telegram already received the message, so we must NOT retry.
+    if (GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message.toLowerCase())) {
+      if (hasPreConnectCauseInChain(candidate)) {
+        return true;
+      }
+      // Underlying cause is not a pre-connect failure — not safe to retry.
+      continue;
     }
   }
   return false;

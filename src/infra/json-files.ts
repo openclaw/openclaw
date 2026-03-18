@@ -37,6 +37,16 @@ export async function writeTextAtomic(
     mkdirOptions.mode = options.ensureDirMode;
   }
   await fs.mkdir(path.dirname(filePath), mkdirOptions);
+  // On macOS and some Linux configurations, fs.mkdir({ recursive: true }) may
+  // ignore the mode option.  Explicitly chmod the directory afterward to ensure
+  // it carries the requested permissions regardless of platform behavior.
+  if (typeof options?.ensureDirMode === "number") {
+    try {
+      await fs.chmod(path.dirname(filePath), options.ensureDirMode);
+    } catch {
+      // best-effort; ignore on platforms without chmod
+    }
+  }
   const parentDir = path.dirname(filePath);
   const tmp = `${filePath}.${randomUUID()}.tmp`;
   try {

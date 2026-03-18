@@ -19,7 +19,9 @@ import { resolveDiscordPreviewStreamMode } from "openclaw/plugin-sdk/config-runt
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { writePendingInbound } from "openclaw/plugin-sdk/infra-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { isGatewayDraining } from "openclaw/plugin-sdk/process-runtime";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -33,6 +35,8 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { warn as logWarn } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
@@ -54,7 +58,11 @@ import {
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
-import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
+import {
+  resolveDiscordAutoThreadContext,
+  resolveDiscordAutoThreadReplyPlan,
+  resolveDiscordThreadStarter,
+} from "./threading.js";
 import { sendTyping } from "./typing.js";
 
 function sleep(ms: number): Promise<void> {
@@ -126,6 +134,72 @@ export async function processDiscordMessage(
     abortSignal,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
+    return;
+  }
+
+  // Resolve the session key using the same chain as normal message routing so
+  // that drain-captured entries replay into the correct session after restart.
+  // threadKeys and autoThreadContext are computed synchronously here; since
+  // autoThreadContext requires an async Discord API call (thread creation) that
+  // we cannot make during drain, it evaluates to null and its SessionKey slot
+  // falls through to threadKeys.sessionKey ?? baseSessionKey.
+  const drainParentSessionKey = threadParentId
+    ? buildAgentSessionKey({
+        agentId: route.agentId,
+        channel: route.channel,
+        peer: { kind: "channel", id: threadParentId },
+      })
+    : undefined;
+  const drainThreadKeys = resolveThreadSessionKeys({
+    baseSessionKey,
+    threadId: threadChannel ? messageChannelId : undefined,
+    parentSessionKey: drainParentSessionKey,
+    useSuffix: false,
+  });
+  const drainAutoThreadContext = resolveDiscordAutoThreadContext({
+    agentId: route.agentId,
+    channel: route.channel,
+    messageChannelId,
+    // No createdThreadId at drain time — thread creation is skipped during drain.
+    createdThreadId: undefined,
+  });
+
+  // Drain guard: persist authorized messages for replay after restart.
+  // Auth was already verified in the preflight step (message-handler.preflight.ts) —
+  // unauthorized messages return null from preflight and never reach this function.
+  // Only messages that passed DM policy, guild allowlist, channel config, and
+  // member access checks are persisted here.
+  if (isGatewayDraining()) {
+    if (!messageText) {
+      logVerbose("discord: skip drain capture for message " + message.id + " (no routable text)");
+      return;
+    }
+    const stateDir = resolveStateDir(process.env);
+    const drainAccepted = await writePendingInbound(stateDir, {
+      channel: "discord",
+      id: String(message.id ?? Date.now()),
+      accountId,
+      payload: {
+        channelId: messageChannelId,
+        messageId: message.id,
+        text: messageText,
+        senderId: sender.id,
+        senderName: sender.name ?? author.username,
+        isGuild: isGuildMessage,
+        isDirect: isDirectMessage,
+      },
+      capturedAt: Date.now(),
+      sessionKey:
+        boundSessionKey ??
+        drainAutoThreadContext?.SessionKey ??
+        drainThreadKeys.sessionKey ??
+        baseSessionKey,
+    });
+    if (!drainAccepted) {
+      logWarn(
+        `discord: drain capture rejected for message ${message.id} (pending-inbound store at capacity)`,
+      );
+    }
     return;
   }
 

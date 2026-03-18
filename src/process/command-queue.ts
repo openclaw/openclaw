@@ -162,6 +162,13 @@ function drainLane(lane: string) {
 }
 
 /**
+ * Returns whether the gateway is currently draining for restart.
+ */
+export function isGatewayDraining(): boolean {
+  return queueState.gatewayDraining;
+}
+
+/**
  * Mark gateway as draining for restart so new enqueues fail fast with
  * `GatewayDrainingError` instead of being silently killed on shutdown.
  */
