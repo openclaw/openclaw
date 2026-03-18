@@ -36,7 +36,28 @@ describe("buildOpenAICodexProviderPlugin", () => {
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       contextWindow: 128_000,
-      maxTokens: 64_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("uses explicit gpt-5.4-mini limits on the no-template fallback path", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const mini = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4-mini",
+      modelRegistry: {
+        find: () => null,
+      } as never,
+    });
+
+    expect(mini).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4-mini",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 128_000,
+      maxTokens: 128_000,
     });
   });
 
