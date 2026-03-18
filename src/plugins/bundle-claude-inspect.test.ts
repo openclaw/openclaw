@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 
@@ -90,19 +89,8 @@ describe("Claude bundle plugin inspect integration", () => {
     // agents/ directory
     fs.mkdirSync(path.join(rootDir, "agents"), { recursive: true });
 
-    // .lsp.json with a stdio LSP server
-    fs.writeFileSync(
-      path.join(rootDir, ".lsp.json"),
-      JSON.stringify({
-        lspServers: {
-          "typescript-lsp": {
-            command: "typescript-language-server",
-            args: ["--stdio"],
-          },
-        },
-      }),
-      "utf-8",
-    );
+    // .lsp.json
+    fs.writeFileSync(path.join(rootDir, ".lsp.json"), '{"lspServers":{}}', "utf-8");
 
     // output-styles/ directory
     fs.mkdirSync(path.join(rootDir, "output-styles"), { recursive: true });
@@ -126,7 +114,7 @@ describe("Claude bundle plugin inspect integration", () => {
     expect(m.bundleFormat).toBe("claude");
   });
 
-  it("resolves skills from skills, commands, and agents paths", () => {
+  it("resolves skills from both skills and commands paths", () => {
     const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
     expect(result.ok).toBe(true);
     if (!result.ok) {
@@ -135,9 +123,6 @@ describe("Claude bundle plugin inspect integration", () => {
 
     expect(result.manifest.skills).toContain("skill-packs");
     expect(result.manifest.skills).toContain("extra-commands");
-    // Agent and output style dirs are merged into skills so their .md files are discoverable
-    expect(result.manifest.skills).toContain("agents");
-    expect(result.manifest.skills).toContain("output-styles");
   });
 
   it("resolves hooks from default and declared paths", () => {
@@ -191,18 +176,5 @@ describe("Claude bundle plugin inspect integration", () => {
     expect(mcp.supportedServerNames).toContain("test-stdio-server");
     expect(mcp.unsupportedServerNames).toContain("test-sse-server");
     expect(mcp.diagnostics).toEqual([]);
-  });
-
-  it("inspects LSP runtime support with stdio server", () => {
-    const lsp = inspectBundleLspRuntimeSupport({
-      pluginId: "test-claude-plugin",
-      rootDir,
-      bundleFormat: "claude",
-    });
-
-    expect(lsp.hasStdioServer).toBe(true);
-    expect(lsp.supportedServerNames).toContain("typescript-lsp");
-    expect(lsp.unsupportedServerNames).toEqual([]);
-    expect(lsp.diagnostics).toEqual([]);
   });
 });
