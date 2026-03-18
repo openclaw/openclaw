@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ResolvedAgentRoute } from "../../../src/routing/resolve-route.js";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createDeferred,
   createNativeCommandTestParams,
@@ -189,6 +190,16 @@ function registerAndResolveCommandHandlerBase(params: {
   } = params;
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
+  const telegramDeps: TelegramBotDeps = {
+    loadConfig: vi.fn(() => cfg),
+    resolveStorePath: sessionMocks.resolveStorePath as TelegramBotDeps["resolveStorePath"],
+    readChannelAllowFromStore: vi.fn(async () => []),
+    enqueueSystemEvent: vi.fn(),
+    dispatchReplyWithBufferedBlockDispatcher:
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    listSkillCommandsForAgents: vi.fn(() => []),
+    wasSentByBot: vi.fn(() => false),
+  };
   registerTelegramNativeCommands({
     ...createNativeCommandTestParams({
       bot: {
@@ -206,6 +217,7 @@ function registerAndResolveCommandHandlerBase(params: {
       useAccessGroups,
       telegramCfg,
       resolveTelegramGroupConfig,
+      telegramDeps,
     }),
   });
 
