@@ -21,6 +21,10 @@ export type MemorySyncProgressUpdate = {
   label?: string;
 };
 
+export type MemoryCloseOptions = {
+  fast?: boolean;
+};
+
 export type MemoryProviderStatus = {
   backend: "builtin" | "qmd";
   provider: string;
@@ -77,5 +81,5 @@ export interface MemorySearchManager {
   }): Promise<void>;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
   probeVectorAvailability(): Promise<boolean>;
-  close?(): Promise<void>;
+  close?(opts?: MemoryCloseOptions): Promise<void>;
 }

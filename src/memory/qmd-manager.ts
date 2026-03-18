@@ -17,6 +17,7 @@ import {
 } from "./session-files.js";
 import { requireNodeSqlite } from "./sqlite.js";
 import type {
+  MemoryCloseOptions,
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
   MemorySearchManager,
@@ -164,6 +165,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   >();
   private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
   private readonly sessionExporter: SessionExporterConfig | null;
+  private readonly shutdownController = new AbortController();
   private updateTimer: NodeJS.Timeout | null = null;
   private pendingUpdate: Promise<void> | null = null;
   private queuedForcedUpdate: Promise<void> | null = null;
@@ -957,7 +959,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     return true;
   }
 
-  async close(): Promise<void> {
+  async close(opts?: MemoryCloseOptions): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -967,8 +969,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.updateTimer = null;
     }
     this.queuedForcedRuns = 0;
-    await this.pendingUpdate?.catch(() => undefined);
-    await this.queuedForcedUpdate?.catch(() => undefined);
+    if (opts?.fast === true) {
+      this.shutdownController.abort(new Error("qmd shutdown"));
+      void this.pendingUpdate?.catch(() => undefined);
+      void this.queuedForcedUpdate?.catch(() => undefined);
+    } else {
+      await this.pendingUpdate?.catch(() => undefined);
+      await this.queuedForcedUpdate?.catch(() => undefined);
+    }
     if (this.db) {
       this.db.close();
       this.db = null;
@@ -1031,10 +1039,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     const isBootRun = reason === "boot" || reason.startsWith("boot:");
     const maxAttempts = isBootRun ? 3 : 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (this.closed) {
+        return;
+      }
       try {
         await this.runQmdUpdateOnce(reason);
         return;
       } catch (err) {
+        if (this.closed) {
+          return;
+        }
         if (attempt >= maxAttempts || !this.isRetryableUpdateError(err)) {
           throw err;
         }
@@ -1202,6 +1216,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       maxOutputChars: this.maxQmdOutputChars,
       // Large `qmd update` runs can easily exceed the output cap; keep only stderr.
       discardStdout: opts?.discardOutput,
+      abortSignal: this.shutdownController.signal,
     });
   }
 
@@ -1258,6 +1273,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       cwd: this.workspaceDir,
       timeoutMs: opts?.timeoutMs,
       maxOutputChars: this.maxQmdOutputChars,
+      abortSignal: this.shutdownController.signal,
     });
   }
 

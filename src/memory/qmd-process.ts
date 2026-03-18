@@ -3,6 +3,7 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
+import { killProcessTree } from "../process/kill-tree.js";
 
 export type CliSpawnInvocation = {
   command: string;
@@ -36,8 +37,13 @@ export async function runCliCommand(params: {
   timeoutMs?: number;
   maxOutputChars: number;
   discardStdout?: boolean;
+  abortSignal?: AbortSignal;
 }): Promise<{ stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
+    if (params.abortSignal?.aborted) {
+      reject(new Error(`${params.commandSummary} aborted`));
+      return;
+    }
     const child = spawn(params.spawnInvocation.command, params.spawnInvocation.argv, {
       env: params.env,
       cwd: params.cwd,
@@ -49,12 +55,57 @@ export async function runCliCommand(params: {
     let stdoutTruncated = false;
     let stderrTruncated = false;
     const discardStdout = params.discardStdout === true;
+    let settled = false;
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      params.abortSignal?.removeEventListener("abort", onAbort);
+      child.removeAllListeners("error");
+      child.removeAllListeners("close");
+    };
+    const rejectOnce = (err: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+    const resolveOnce = (value: { stdout: string; stderr: string }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const terminateChild = () => {
+      const pid = child.pid;
+      if (typeof pid === "number" && Number.isFinite(pid) && pid > 0) {
+        killProcessTree(pid, { graceMs: 0 });
+      } else {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Ignore kill failures after the child already exited.
+        }
+      }
+      child.stdin?.destroy();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    };
+    const onAbort = () => {
+      terminateChild();
+      rejectOnce(new Error(`${params.commandSummary} aborted`));
+    };
     const timer = params.timeoutMs
       ? setTimeout(() => {
-          child.kill("SIGKILL");
-          reject(new Error(`${params.commandSummary} timed out after ${params.timeoutMs}ms`));
+          terminateChild();
+          rejectOnce(new Error(`${params.commandSummary} timed out after ${params.timeoutMs}ms`));
         }, params.timeoutMs)
       : null;
+    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (data) => {
       if (discardStdout) {
         return;
@@ -69,17 +120,14 @@ export async function runCliCommand(params: {
       stderrTruncated = stderrTruncated || next.truncated;
     });
     child.on("error", (err) => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      reject(err);
+      rejectOnce(err instanceof Error ? err : new Error(String(err)));
     });
     child.on("close", (code) => {
-      if (timer) {
-        clearTimeout(timer);
+      if (settled) {
+        return;
       }
       if (!discardStdout && (stdoutTruncated || stderrTruncated)) {
-        reject(
+        rejectOnce(
           new Error(
             `${params.commandSummary} produced too much output (limit ${params.maxOutputChars} chars)`,
           ),
@@ -87,9 +135,11 @@ export async function runCliCommand(params: {
         return;
       }
       if (code === 0) {
-        resolve({ stdout, stderr });
+        resolveOnce({ stdout, stderr });
       } else {
-        reject(new Error(`${params.commandSummary} failed (code ${code}): ${stderr || stdout}`));
+        rejectOnce(
+          new Error(`${params.commandSummary} failed (code ${code}): ${stderr || stdout}`),
+        );
       }
     });
   });

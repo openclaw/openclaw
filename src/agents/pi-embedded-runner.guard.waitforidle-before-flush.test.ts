@@ -138,4 +138,42 @@ describe("flushPendingToolResultsAfterIdle", () => {
     });
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("clears pending immediately when cleanup already knows the run was aborted", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const waitForIdle = vi.fn(() => new Promise<void>(() => {}));
+
+    appendMessage(assistantToolCall("call_abort_1"));
+
+    await flushPendingToolResultsAfterIdle({
+      agent: { waitForIdle },
+      sessionManager: sm,
+      clearPendingOnTimeout: true,
+      skipWaitForIdle: true,
+    });
+
+    expect(waitForIdle).not.toHaveBeenCalled();
+    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant"]);
+  });
+
+  it("flushes immediately without waiting when skipWaitForIdle is requested", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const waitForIdle = vi.fn(() => new Promise<void>(() => {}));
+
+    appendMessage(assistantToolCall("call_abort_2"));
+
+    await flushPendingToolResultsAfterIdle({
+      agent: { waitForIdle },
+      sessionManager: sm,
+      skipWaitForIdle: true,
+    });
+
+    expect(waitForIdle).not.toHaveBeenCalled();
+    const messages = getMessages(sm);
+    expect(messages).toHaveLength(2);
+    expect(messages[1].role).toBe("toolResult");
+    expect((messages[1] as { isError?: boolean }).isError).toBe(true);
+  });
 });

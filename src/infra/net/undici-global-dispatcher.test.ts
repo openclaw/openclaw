@@ -12,10 +12,12 @@ const {
 } = vi.hoisted(() => {
   class Agent {
     constructor(public readonly options?: Record<string, unknown>) {}
+    close = vi.fn(async () => {});
   }
 
   class EnvHttpProxyAgent {
     constructor(public readonly options?: Record<string, unknown>) {}
+    close = vi.fn(async () => {});
   }
 
   class ProxyAgent {
@@ -63,6 +65,7 @@ vi.mock("./proxy-env.js", () => ({
 
 import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
 import {
+  closeGlobalUndiciDispatcher,
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
   ensureGlobalUndiciEnvProxyDispatcher,
   ensureGlobalUndiciStreamTimeouts,
@@ -204,5 +207,36 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+});
+
+describe("closeGlobalUndiciDispatcher", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetGlobalUndiciStreamTimeoutsForTests();
+  });
+
+  it("closes the current dispatcher when it supports close()", async () => {
+    const dispatcher = new Agent();
+    setCurrentDispatcher(dispatcher);
+
+    await closeGlobalUndiciDispatcher();
+
+    expect(dispatcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores dispatchers without a close method", async () => {
+    setCurrentDispatcher({ constructor: { name: "CustomDispatcher" } });
+
+    await expect(closeGlobalUndiciDispatcher()).resolves.toBeUndefined();
+  });
+
+  it("swallows dispatcher close failures", async () => {
+    const dispatcher = new EnvHttpProxyAgent();
+    dispatcher.close.mockRejectedValueOnce(new Error("boom"));
+    setCurrentDispatcher(dispatcher);
+
+    await expect(closeGlobalUndiciDispatcher()).resolves.toBeUndefined();
+    expect(dispatcher.close).toHaveBeenCalledTimes(1);
   });
 });

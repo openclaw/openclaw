@@ -18,13 +18,69 @@ import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { tryRouteCli } from "./route.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
+function closeLingeringCliTlsSockets(): void {
+  const handles = process._getActiveHandles();
+  for (const handle of handles) {
+    if (!handle || typeof handle !== "object") {
+      continue;
+    }
+    const encrypted = "encrypted" in handle ? handle.encrypted : false;
+    if (encrypted !== true) {
+      continue;
+    }
+    const fd = "fd" in handle ? handle.fd : undefined;
+    if (fd === 0 || fd === 1 || fd === 2) {
+      continue;
+    }
+    const unref = "unref" in handle ? handle.unref : undefined;
+    if (typeof unref === "function") {
+      try {
+        unref.call(handle);
+      } catch {
+        // Best-effort only.
+      }
+    }
+    const destroy = "destroy" in handle ? handle.destroy : undefined;
+    if (typeof destroy === "function") {
+      try {
+        destroy.call(handle);
+      } catch {
+        // Best-effort only.
+      }
+    }
+  }
+}
+
 async function closeCliMemoryManagers(): Promise<void> {
   try {
     const { closeAllMemorySearchManagers } = await import("../memory/search-manager.js");
-    await closeAllMemorySearchManagers();
+    await closeAllMemorySearchManagers({ fast: true });
   } catch {
     // Best-effort teardown for short-lived CLI processes.
   }
+}
+
+async function closeCliNetworkDispatchers(): Promise<void> {
+  try {
+    if (process.env.OPENCLAW_DEBUG_ACTIVE_HANDLES === "1") {
+      console.error("[openclaw][net] closeCliNetworkDispatchers:start");
+    }
+    const { closeGlobalUndiciDispatcher } =
+      await import("../infra/net/undici-global-dispatcher.js");
+    await closeGlobalUndiciDispatcher();
+    if (process.env.OPENCLAW_DEBUG_ACTIVE_HANDLES === "1") {
+      console.error("[openclaw][net] closeCliNetworkDispatchers:end");
+    }
+  } catch {
+    // Best-effort teardown for short-lived CLI processes.
+  }
+}
+
+function logCliShutdownMarker(label: string): void {
+  if (process.env.OPENCLAW_DEBUG_ACTIVE_HANDLES !== "1") {
+    return;
+  }
+  console.error(`[openclaw][shutdown] ${label} ts=${Date.now()}`);
 }
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
@@ -161,7 +217,13 @@ export async function runCli(argv: string[] = process.argv) {
 
     await program.parseAsync(parseArgv);
   } finally {
+    logCliShutdownMarker("before-closeCliMemoryManagers");
     await closeCliMemoryManagers();
+    logCliShutdownMarker("after-closeCliMemoryManagers");
+    await closeCliNetworkDispatchers();
+    logCliShutdownMarker("after-closeCliNetworkDispatchers");
+    closeLingeringCliTlsSockets();
+    logCliShutdownMarker("after-closeLingeringCliTlsSockets");
   }
 }
 

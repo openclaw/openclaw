@@ -154,6 +154,11 @@
 
 **Full maintainer PR workflow (optional):** If you want the repo's end-to-end maintainer workflow (triage order, quality bar, rebase rules, commit/changelog conventions, co-contributor policy, and the `review-pr` > `prepare-pr` > `merge-pr` pipeline), see `.agents/skills/PR_WORKFLOW.md`. Maintainers may use other workflows; when a maintainer specifies a workflow, follow that. If no workflow is specified, default to PR_WORKFLOW.
 
+- Branch ownership policy:
+  - `consumer` branch is for consumer-specific work: benchmark docs/results, isolated runtime flow, consumer loop validation, and branch-local execution scaffolding.
+  - `main` is for reusable OpenClaw fixes: browser/runtime bugs, local agent-turn reliability fixes, shared guardrails, and generally useful developer workflow improvements.
+  - If a fix starts on `consumer` but is clearly general-purpose, land it to `main` first, then sync or merge `main` back into `consumer`.
+  - Do not dump consumer experiment state into `main`; keep `main` clean and generally useful.
 - `/landpr` lives in the global Codex prompts (`~/.codex/prompts/landpr.md`); when landing or merging any PR, always follow that `/landpr` process.
 - Before opening or updating any PR, read `CONTRIBUTING.md` from the target repo and explicitly align the PR title/body/checklists with it (including AI-assistance transparency requirements when present).
 - PR validation baseline (unless user explicitly scopes narrower): run `pnpm build && pnpm check && pnpm test`, then report exactly what was/was not verified.
@@ -294,6 +299,7 @@
 - CLI progress: use `src/cli/progress.ts` (`osc-progress` + `@clack/prompts` spinner); don’t hand-roll spinners/bars.
 - Status output: keep tables + ANSI-safe wrapping (`src/terminal/table.ts`); `status --all` = read-only/pasteable, `status --deep` = probes.
 - Gateway currently runs only as the menubar app; there is no separate LaunchAgent/helper label installed. Restart via the OpenClaw Mac app or `scripts/restart-mac.sh`; to verify/kill use `launchctl print gui/$UID | grep openclaw` rather than assuming a fixed label. **When debugging on macOS, start/stop the gateway via the app, not ad-hoc tmux sessions; kill any temporary tunnels before handoff.**
+- Gateway safety rule: before any command that restarts, stops, uninstalls, force-reinstalls, or otherwise disrupts a shared gateway/runtime, get explicit user confirmation unless the user already asked for that exact operation. This matters because multiple agents or worktrees may be using the same gateway.
 - macOS logs: use `./scripts/clawlog.sh` to query unified logs for the OpenClaw subsystem; it supports follow/tail/category filters and expects passwordless sudo for `/usr/bin/log`.
 - If shared guardrails are available locally, review them; otherwise follow this repo's guidance.
 - SwiftUI state management (iOS/macOS): prefer the `Observation` framework (`@Observable`, `@Bindable`) over `ObservableObject`/`@StateObject`; don’t introduce new `ObservableObject` unless required for compatibility, and migrate existing usages when touching related code.
@@ -311,6 +317,7 @@
 - **Multi-agent safety:** do **not** switch branches / check out a different branch unless explicitly requested.
 - **Multi-agent safety:** running multiple agents is OK as long as each agent has its own session.
 - **Multi-agent safety:** when you see unrecognized files, keep going; focus on your changes and commit only those.
+- **Multi-agent safety:** do **not** stop, uninstall, restart, or `--force`-replace a gateway/runtime that might be shared across worktrees unless the user explicitly approved that exact disruption.
 - Lint/format churn:
   - If staged+unstaged diffs are formatting-only, auto-resolve without asking.
   - If commit/push already requested, auto-stage and include formatting-only follow-ups in the same commit (or a tiny follow-up commit if needed), no extra confirmation.

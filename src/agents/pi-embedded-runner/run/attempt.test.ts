@@ -6,6 +6,7 @@ import {
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
+  resolveRemainingAttemptTimeoutMs,
   resolveAttemptFsWorkspaceOnly,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
@@ -189,6 +190,27 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
     ).toBe(false);
   });
 });
+
+describe("resolveRemainingAttemptTimeoutMs", () => {
+  it("returns zero when setup already consumed the timeout budget", () => {
+    expect(
+      resolveRemainingAttemptTimeoutMs({
+        attemptDeadlineMs: 2_000,
+        nowMs: 2_500,
+      }),
+    ).toBe(0);
+  });
+
+  it("returns only the remaining budget when setup consumed part of the timeout", () => {
+    expect(
+      resolveRemainingAttemptTimeoutMs({
+        attemptDeadlineMs: 2_000,
+        nowMs: 1_925,
+      }),
+    ).toBe(75);
+  });
+});
+
 describe("wrapStreamFnTrimToolCallNames", () => {
   function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
     result: () => Promise<unknown>;

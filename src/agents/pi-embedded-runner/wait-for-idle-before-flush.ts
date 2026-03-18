@@ -45,7 +45,21 @@ export async function flushPendingToolResultsAfterIdle(opts: {
   sessionManager: ToolResultFlushManager | null | undefined;
   timeoutMs?: number;
   clearPendingOnTimeout?: boolean;
+  skipWaitForIdle?: boolean;
 }): Promise<void> {
+  // Once a run is already aborted, waiting for the agent to become idle buys us
+  // nothing. The provider/tool work may keep running in the background, but the
+  // caller needs the session lock released immediately so the next attempt does
+  // not queue behind a "timed out" turn for another cleanup window.
+  if (opts.skipWaitForIdle) {
+    if (opts.clearPendingOnTimeout && opts.sessionManager?.clearPendingToolResults) {
+      opts.sessionManager.clearPendingToolResults();
+      return;
+    }
+    opts.sessionManager?.flushPendingToolResults?.();
+    return;
+  }
+
   const timedOut = await waitForAgentIdleBestEffort(
     opts.agent,
     opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS,

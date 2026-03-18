@@ -165,6 +165,10 @@ function createCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
+function isAbortSignaled(signal: AbortSignal | undefined): boolean {
+  return Boolean(signal?.aborted);
+}
+
 function normalizeObservedTokenCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
@@ -1054,6 +1058,7 @@ export async function compactEmbeddedPiSessionDirect(
           agent: session?.agent,
           sessionManager,
           clearPendingOnTimeout: true,
+          skipWaitForIdle: isAbortSignaled(params.abortSignal),
         });
         session.dispose();
       }

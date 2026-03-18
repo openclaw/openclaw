@@ -7,6 +7,7 @@ const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
 const closeAllMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
+const closeGlobalUndiciDispatcherMock = vi.hoisted(() => vi.fn(async () => {}));
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const buildProgramMock = vi.hoisted(() => vi.fn());
 
@@ -34,6 +35,10 @@ vi.mock("../memory/search-manager.js", () => ({
   closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
 }));
 
+vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
+  closeGlobalUndiciDispatcher: closeGlobalUndiciDispatcherMock,
+}));
+
 vi.mock("./program/root-help.js", () => ({
   outputRootHelp: outputRootHelpMock,
 }));
@@ -47,6 +52,7 @@ const { runCli } = await import("./run-main.js");
 describe("runCli exit behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   it("does not force process.exit after successful routed command", async () => {
@@ -59,6 +65,8 @@ describe("runCli exit behavior", () => {
 
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
+    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledWith({ fast: true });
+    expect(closeGlobalUndiciDispatcherMock).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
@@ -74,7 +82,24 @@ describe("runCli exit behavior", () => {
     expect(outputRootHelpMock).toHaveBeenCalledTimes(1);
     expect(buildProgramMock).not.toHaveBeenCalled();
     expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
+    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledWith({ fast: true });
+    expect(closeGlobalUndiciDispatcherMock).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("destroys lingering TLS sockets during CLI teardown", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    const destroy = vi.fn();
+    const unref = vi.fn();
+    vi.spyOn(process, "_getActiveHandles").mockReturnValue([
+      { encrypted: true, destroy, unref },
+      { encrypted: true, fd: 1, destroy: vi.fn(), unref: vi.fn() },
+    ] as unknown as ReturnType<typeof process._getActiveHandles>);
+
+    await runCli(["node", "openclaw", "status"]);
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(unref).toHaveBeenCalledTimes(1);
   });
 });

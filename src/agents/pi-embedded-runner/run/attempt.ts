@@ -1377,12 +1377,23 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+export function resolveRemainingAttemptTimeoutMs(params: {
+  attemptDeadlineMs: number;
+  nowMs?: number;
+}): number {
+  return Math.max(0, params.attemptDeadlineMs - (params.nowMs ?? Date.now()));
+}
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
+  const attemptStartedAt = Date.now();
+  const attemptDeadlineMs = attemptStartedAt + params.timeoutMs;
   const runAbortController = new AbortController();
+  let cleanupShouldSkipIdleWait = false;
+  const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
   // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
   // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.
   ensureGlobalUndiciEnvProxyDispatcher();
@@ -1408,13 +1419,24 @@ export async function runEmbeddedAttempt(
   await fs.mkdir(effectiveWorkspace, { recursive: true });
 
   let restoreSkillEnv: (() => void) | undefined;
+  const getRemainingAttemptTimeoutMs = (): number =>
+    resolveRemainingAttemptTimeoutMs({ attemptDeadlineMs });
   process.chdir(effectiveWorkspace);
   try {
+    const logPreLockStage = (stage: string) => {
+      if (isProbeSession) {
+        return;
+      }
+      log.debug(
+        `embedded run pre-lock: runId=${params.runId} sessionId=${params.sessionId} stage=${stage} elapsedMs=${Date.now() - attemptStartedAt}`,
+      );
+    };
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
     });
+    logPreLockStage("skills-runtime-resolved");
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
@@ -1431,6 +1453,7 @@ export async function runEmbeddedAttempt(
       config: params.config,
       workspaceDir: effectiveWorkspace,
     });
+    logPreLockStage("skills-prompt-resolved");
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
@@ -1443,6 +1466,7 @@ export async function runEmbeddedAttempt(
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
       });
+    logPreLockStage("bootstrap-context-resolved");
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -1540,6 +1564,7 @@ export async function runEmbeddedAttempt(
             abortSessionForYield?.();
           },
         });
+    logPreLockStage("coding-tools-created");
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
       tools: toolsEnabled ? toolsRaw : [],
@@ -1553,6 +1578,7 @@ export async function runEmbeddedAttempt(
     logToolSchemasForGoogle({ tools, provider: params.provider });
 
     const machineName = await getMachineDisplayName();
+    logPreLockStage("machine-name-resolved");
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
       ? (resolveChannelCapabilities({
@@ -1647,6 +1673,7 @@ export async function runEmbeddedAttempt(
       cwd: process.cwd(),
       moduleUrl: import.meta.url,
     });
+    logPreLockStage("docs-path-resolved");
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
 
@@ -1711,6 +1738,7 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
+    logPreLockStage("system-prompt-built");
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -2136,10 +2164,12 @@ export async function runEmbeddedAttempt(
           }
         }
       } catch (err) {
+        cleanupShouldSkipIdleWait = true;
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
           sessionManager,
           clearPendingOnTimeout: true,
+          skipWaitForIdle: true,
         });
         activeSession.dispose();
         throw err;
@@ -2178,6 +2208,7 @@ export async function runEmbeddedAttempt(
       };
       const abortRun = (isTimeout = false, reason?: unknown) => {
         aborted = true;
+        cleanupShouldSkipIdleWait = true;
         if (isTimeout) {
           timedOut = true;
         }
@@ -2266,7 +2297,6 @@ export async function runEmbeddedAttempt(
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
-      const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
       const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
       let abortTimer: NodeJS.Timeout | undefined;
       let compactionGraceUsed = false;
@@ -2323,7 +2353,17 @@ export async function runEmbeddedAttempt(
           Math.max(1, delayMs),
         );
       };
-      scheduleAbortTimer(params.timeoutMs, "initial");
+      const remainingTimeoutMs = getRemainingAttemptTimeoutMs();
+      if (remainingTimeoutMs <= 0) {
+        abortRun(true, makeTimeoutAbortReason());
+      } else {
+        scheduleAbortTimer(remainingTimeoutMs, "initial");
+      }
+      if (!isProbeSession) {
+        log.debug(
+          `embedded run timeout armed: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs} remainingMs=${remainingTimeoutMs} setupMs=${Date.now() - attemptStartedAt}`,
+        );
+      }
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
@@ -2356,9 +2396,15 @@ export async function runEmbeddedAttempt(
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
+      // Capture the prompt timing anchor before the early-abort guard so cleanup
+      // and hook reporting can still compute a duration when setup already spent
+      // the full timeout budget and we never reach the actual prompt call.
+      const promptStartedAt = Date.now();
       const prePromptMessageCount = activeSession.messages.length;
       try {
-        const promptStartedAt = Date.now();
+        if (runAbortController.signal.aborted) {
+          throw makeAbortError(runAbortController.signal);
+        }
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
@@ -2864,6 +2910,7 @@ export async function runEmbeddedAttempt(
         agent: session?.agent,
         sessionManager,
         clearPendingOnTimeout: true,
+        skipWaitForIdle: cleanupShouldSkipIdleWait,
       });
       session?.dispose();
       releaseWsSession(params.sessionId);

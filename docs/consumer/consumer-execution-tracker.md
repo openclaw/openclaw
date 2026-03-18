@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-16
+Last updated: 2026-03-18
 Owner: consumer execution team
 Status: Active
 
@@ -35,7 +35,12 @@ Use these documents in this order when there is any ambiguity:
 - Phase B status now:
   - `profile=user` control lane passes (`start/status/tabs`) after remote debugging enablement.
   - `profile=openclaw` control lane passes (`start/status/tabs`) on isolated runtime.
-  - Remaining blocker is local agent-turn reliability for full task-matrix execution.
+  - Local `agent --local` prompt execution now exits cleanly in the isolated runtime after teardown fixes.
+  - Remaining blocker is provider/auth health for full task-matrix execution:
+    - `openai-codex:default` returns `API rate limit reached`.
+    - `openai-codex:notblockedamazon` returns `API rate limit reached`.
+    - lower-priority Codex OAuth profiles previously surfaced `refresh_token_reused`.
+    - Anthropic fallback previously surfaced `overloaded`.
   - LaunchAgent route was tested and reverted: it binds `19001` but runs against `~/.openclaw` state instead of `/tmp/openclaw-consumer`, so isolated auth/state checks fail.
 
 ## Execution phases and gates
@@ -66,9 +71,9 @@ Phase A validation notes (2026-03-16):
 
 - [ ] Finalize benchmark matrix in `docs/consumer/browser-spike-results.md`
 - [ ] Run approach: `user` existing-session path
-  - Control lane verified; remaining blocker is task execution via local agent turn.
+  - Control lane verified; task execution now blocked by model auth health, not browser attach.
 - [ ] Run approach: `openclaw` managed profile path
-  - Control lane verified; remaining blocker is task execution via local agent turn.
+  - Control lane verified; task execution now blocked by model auth health, not browser attach.
 - [ ] Run approach: Claude-in-Chrome investigation/adaptation
 - [ ] Mark Browserbase rows `credential-blocked` until credentials are available
 - [ ] Re-run Browserbase rows once credentials are provided
@@ -129,12 +134,12 @@ OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm opencla
 
 ## Benchmark tracker template
 
-| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                        |
-| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | ------------------------------------------------------------ |
-| user (existing-session) | pending       | pending     | pending            | pending          | pending           | pending            | control lane passes; blocked on local agent-turn reliability |
-| openclaw (managed)      | pending       | pending     | pending            | pending          | pending           | pending            | control lane passes; blocked on local agent-turn reliability |
-| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation                                     |
-| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                                              |
+| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                                                        |
+| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | -------------------------------------------------------------------------------------------- |
+| user (existing-session) | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | control lane passes; local agent run works; current blocker is model rate limits/auth health |
+| openclaw (managed)      | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | control lane passes; local agent run works; current blocker is model rate limits/auth health |
+| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation                                                                     |
+| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                                                                              |
 
 ## Scope guardrails (week 1)
 
@@ -163,3 +168,28 @@ Out of scope:
 - Evidence links:
 - Next 3 actions:
 ```
+
+## Daily log
+
+### 2026-03-18
+
+- Done:
+  - Confirmed `profile=user` and `profile=openclaw` control lanes remain healthy.
+  - Confirmed isolated `agent --local` turns now complete and exit cleanly after CLI teardown fixes.
+  - Pinned `openai-codex` auth order per agent to test individual profiles directly.
+- Blocked:
+  - `openai-codex:default` returns `⚠️ API rate limit reached. Please try again later.`
+  - `openai-codex:notblockedamazon` returns `⚠️ API rate limit reached. Please try again later.`
+  - Historical isolated logs show lower-priority Codex profiles hitting `refresh_token_reused`.
+  - Historical isolated logs show Anthropic fallback surfacing `overloaded`.
+- Evidence links:
+  - `/tmp/openclaw-profile-default.out`
+  - `/tmp/openclaw-profile-default.err`
+  - `/tmp/openclaw-profile-nba.out`
+  - `/tmp/openclaw-profile-nba.err`
+  - `/tmp/openclaw-codex.err`
+  - `/tmp/openclaw-agent-local.err`
+- Next 3 actions:
+  - Keep only the least-bad Codex profiles in isolated auth order so future runs skip known-bad refresh tokens.
+  - Update `docs/consumer/browser-spike-results.md` so benchmark state reflects provider-auth blockage rather than browser failure.
+  - If credentials remain unhealthy, request reauth or a non-Codex API-key-backed model for isolated runtime smoke.
