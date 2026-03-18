@@ -6,8 +6,46 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "./commands.js";
+import { CommandsSchema } from "./zod-schema.session.js";
+
+describe("CommandsSchema defaults", () => {
+  it("defaults nativeSkills to false", () => {
+    const parsed = CommandsSchema.parse({});
+    expect(parsed.nativeSkills).toBe(false);
+  });
+
+  it("defaults nativeSkills to false in the factory default", () => {
+    const parsed = CommandsSchema.parse(undefined);
+    expect(parsed.nativeSkills).toBe(false);
+  });
+
+  it("preserves explicit nativeSkills auto", () => {
+    const parsed = CommandsSchema.parse({ nativeSkills: "auto" });
+    expect(parsed.nativeSkills).toBe("auto");
+  });
+
+  it("preserves explicit nativeSkills true", () => {
+    const parsed = CommandsSchema.parse({ nativeSkills: true });
+    expect(parsed.nativeSkills).toBe(true);
+  });
+});
 
 describe("resolveNativeSkillsEnabled", () => {
+  it("returns false when schema default (false) is used as globalSetting", () => {
+    expect(
+      resolveNativeSkillsEnabled({
+        providerId: "discord",
+        globalSetting: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveNativeSkillsEnabled({
+        providerId: "telegram",
+        globalSetting: false,
+      }),
+    ).toBe(false);
+  });
+
   it("uses provider defaults for auto", () => {
     expect(
       resolveNativeSkillsEnabled({
