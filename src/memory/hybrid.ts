@@ -64,7 +64,7 @@ export async function mergeHybridResults(params: {
   mmr?: Partial<MMRConfig>;
   /** Temporal decay configuration for recency-aware scoring */
   temporalDecay?: Partial<TemporalDecayConfig>;
-  /** Test seam for deterministic time-dependent behavior */
+  /** Test hook for deterministic time-dependent behavior */
   nowMs?: number;
 }): Promise<
   Array<{
