@@ -10,7 +10,7 @@ export {
 } from "./plugin-sdk/whatsapp.js";
 export { extractMediaPlaceholder, extractText, monitorWebInbox } from "./plugin-sdk/whatsapp.js";
 export { loginWeb } from "./plugin-sdk/whatsapp.js";
-export { loadWebMedia, optimizeImageToJpeg } from "./plugin-sdk/whatsapp.js";
+export { loadWebMedia, optimizeImageToJpeg } from "./media/web-media.js";
 export { sendMessageWhatsApp } from "./plugin-sdk/whatsapp.js";
 export {
   createWaSocket,
