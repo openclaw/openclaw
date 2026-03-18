@@ -5,6 +5,7 @@ import { compactEmbeddedPiSessionDirect } from "../agents/pi-embedded-runner/com
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
 // ---------------------------------------------------------------------------
+import { delegateCompactionToRuntime } from "./delegate.js";
 import { LegacyContextEngine, registerLegacyContextEngine } from "./legacy.js";
 import {
   registerContextEngine,
@@ -254,6 +255,40 @@ describe("Engine contract tests", () => {
         currentTokenCount: 277403,
       }),
     );
+  });
+
+  it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
+    const result = await delegateCompactionToRuntime({
+      sessionId: "s2",
+      sessionFile: "/tmp/session.json",
+      tokenBudget: 4096,
+      runtimeContext: {
+        workspaceDir: "/tmp/workspace",
+        currentTokenCount: 12345,
+      },
+    });
+
+    expect(mockedCompactEmbeddedPiSessionDirect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "s2",
+        sessionFile: "/tmp/session.json",
+        tokenBudget: 4096,
+        currentTokenCount: 12345,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      compacted: false,
+      reason: "mock compaction",
+      result: {
+        summary: "",
+        firstKeptEntryId: "",
+        tokensBefore: 0,
+        tokensAfter: 0,
+        details: undefined,
+      },
+    });
   });
 });
 

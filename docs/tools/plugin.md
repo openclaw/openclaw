@@ -1810,6 +1810,36 @@ export default function (api) {
 }
 ```
 
+If your engine does **not** own the compaction algorithm, keep `compact()`
+implemented and delegate it explicitly:
+
+```ts
+import { delegateCompactionToRuntime } from "openclaw/plugin-sdk/core";
+
+export default function (api) {
+  api.registerContextEngine("my-memory-engine", () => ({
+    info: {
+      id: "my-memory-engine",
+      name: "My Memory Engine",
+      ownsCompaction: false,
+    },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact(params) {
+      return await delegateCompactionToRuntime(params);
+    },
+  }));
+}
+```
+
+`ownsCompaction: false` does not automatically fall back to legacy compaction.
+If your engine is active, its `compact()` method still handles `/compact` and
+overflow recovery.
+
 Then enable it in config:
 
 ```json5
