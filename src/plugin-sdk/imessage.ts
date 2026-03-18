@@ -1,4 +1,5 @@
 export type { IMessageAccountConfig } from "../config/types.js";
+export type { OpenClawConfig } from "../config/config.js";
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -37,7 +38,7 @@ export {
 export {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
-} from "../../extensions/imessage/src/group-policy.js";
+} from "../../extensions/imessage/api.js";
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";

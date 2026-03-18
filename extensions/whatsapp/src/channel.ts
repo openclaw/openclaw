@@ -5,6 +5,10 @@ import {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
 } from "./directory-config.js";
+import {
+  resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
+} from "./group-policy.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
 import {
   createActionGate,
@@ -12,6 +16,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   formatWhatsAppConfigAllowFromEntries,
   readStringParam,
+  resolveWhatsAppGroupIntroHint,
   resolveWhatsAppOutboundTarget,
   resolveWhatsAppHeartbeatRecipients,
   resolveWhatsAppMentionStripRegexes,
@@ -48,6 +53,11 @@ function parseWhatsAppExplicitTarget(raw: string) {
 
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   ...createWhatsAppPluginBase({
+    groups: {
+      resolveRequireMention: resolveWhatsAppGroupRequireMention,
+      resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
+      resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
+    },
     setupWizard: whatsappSetupWizardProxy,
     setup: whatsappSetupAdapter,
     isConfigured: async (account) =>
