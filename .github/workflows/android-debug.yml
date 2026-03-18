@@ -11,6 +11,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: apps/android
@@ -40,3 +42,15 @@ jobs:
         with:
           name: openclaw-android-debug-apk
           path: apps/android/app/build/outputs/apk/debug/*.apk
+
+      - name: Update Rolling Prerelease
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd ../..
+          # Create or update the release
+          gh release upload android-debug-latest apps/android/app/build/outputs/apk/debug/*.apk --clobber || \
+          gh release create android-debug-latest apps/android/app/build/outputs/apk/debug/*.apk \
+            --title "Android Debug APK (Latest)" \
+            --prerelease
