@@ -214,10 +214,13 @@ describe("exec host env validation", () => {
   });
 
   it("allows explicit host override when tools.exec.host is not configured", async () => {
-    const tool = createExecTool({ security: "full", ask: "off" });
+    // Use ask: "always" to force the approval gate and confirm approval-pending is returned
+    // (rather than an error). With ask: "off", requiresExecApproval returns false and the
+    // command would be executed directly instead of entering the approval flow.
+    const tool = createExecTool({ security: "full", ask: "always" });
 
     // When tools.exec.host is NOT configured, explicit host="gateway" should succeed
-    // (It will return approval-pending, not throw an error)
+    // (enters the approval flow and returns approval-pending, not throw an error)
     const result = await tool.execute("call1", {
       command: "echo ok",
       host: "gateway",
