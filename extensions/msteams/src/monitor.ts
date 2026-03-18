@@ -22,6 +22,15 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
+// Singleton guard: tracks the active server instance (or its in-flight startup
+// promise) to prevent EADDRINUSE crash loops when the gateway accidentally
+// starts the provider twice (race condition on double-start).
+let activeInstancePromise: Promise<MonitorMSTeamsResult> | null = null;
+
+export function resetMSTeamsProviderInstance(): void {
+  activeInstancePromise = null;
+}
+
 export type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
   runtime?: RuntimeEnv;
@@ -62,9 +71,27 @@ export function applyMSTeamsWebhookTimeouts(
   httpServer.headersTimeout = headersTimeoutMs;
 }
 
-export async function monitorMSTeamsProvider(
-  opts: MonitorMSTeamsOpts,
-): Promise<MonitorMSTeamsResult> {
+export function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<MonitorMSTeamsResult> {
+  // Singleton guard: if a startup is already in flight or an instance is
+  // already running, return the same promise to prevent a second listen()
+  // which would throw EADDRINUSE and enter an infinite crash-restart loop.
+  if (activeInstancePromise) {
+    const core = getMSTeamsRuntime();
+    const log = core.logging.getChildLogger({ name: "msteams" });
+    log.warn?.(
+      "msteams provider already started; returning existing instance — incoming abortSignal ignored",
+    );
+    return activeInstancePromise;
+  }
+  activeInstancePromise = _startMSTeamsProvider(opts);
+  // Clear the singleton on failure so a future attempt can retry.
+  activeInstancePromise.catch(() => {
+    activeInstancePromise = null;
+  });
+  return activeInstancePromise;
+}
+
+async function _startMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<MonitorMSTeamsResult> {
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams" });
   let cfg = opts.cfg;
@@ -329,6 +356,9 @@ export async function monitorMSTeamsProvider(
         if (err) {
           log.debug?.("msteams server close error", { error: String(err) });
         }
+        // Clear singleton after the port is released so no race window exists
+        // where a new start() could fire before the old server is fully closed.
+        activeInstancePromise = null;
         resolve();
       });
     });

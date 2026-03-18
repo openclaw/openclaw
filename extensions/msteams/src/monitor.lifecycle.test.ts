@@ -132,7 +132,7 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { monitorMSTeamsProvider } from "./monitor.js";
+import { monitorMSTeamsProvider, resetMSTeamsProviderInstance } from "./monitor.js";
 
 function createConfig(port: number): OpenClawConfig {
   return {
@@ -172,6 +172,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
   afterEach(() => {
     vi.clearAllMocks();
     expressControl.mode.value = "listening";
+    resetMSTeamsProviderInstance();
   });
 
   it("stays active until aborted", async () => {
@@ -210,5 +211,39 @@ describe("monitorMSTeamsProvider lifecycle", () => {
         pollStore: createStores().pollStore,
       }),
     ).rejects.toThrow(/EADDRINUSE/);
+  });
+
+  it("returns existing instance on duplicate start without crashing", async () => {
+    const abort = new AbortController();
+    const stores = createStores();
+    const cfg = createConfig(3978);
+    const runtime = createRuntime();
+
+    // Start the provider; it will block until abort.
+    const task1 = monitorMSTeamsProvider({
+      cfg,
+      runtime,
+      abortSignal: abort.signal,
+      conversationStore: stores.conversationStore,
+      pollStore: stores.pollStore,
+    });
+
+    // Second call while first is in-flight must return the same promise —
+    // not attempt a second expressApp.listen() which would throw EADDRINUSE.
+    const task2 = monitorMSTeamsProvider({
+      cfg,
+      runtime,
+      abortSignal: abort.signal,
+      conversationStore: stores.conversationStore,
+      pollStore: stores.pollStore,
+    });
+
+    // Both calls must share the same promise (same reference).
+    expect(task2).toBe(task1);
+
+    // Abort to unblock both tasks and verify they resolve cleanly.
+    abort.abort();
+    const [result1, result2] = await Promise.all([task1, task2]);
+    expect(result1.shutdown).toBe(result2.shutdown);
   });
 });
