@@ -1,4 +1,3 @@
-import { getOAuthApiKey } from "@mariozechner/pi-ai/oauth";
 import type {
   ProviderAuthContext,
   ProviderResolveDynamicModelContext,
@@ -142,6 +141,7 @@ function resolveCodexForwardCompatModel(
 
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
+    const { getOAuthApiKey } = await import("./openai-codex-provider.runtime.js");
     const refreshed = await getOAuthApiKey("openai-codex", {
       "openai-codex": cred,
     });
