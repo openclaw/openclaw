@@ -39,6 +39,32 @@ import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 const log = createSubsystemLogger("model-fallback");
 
+/**
+ * Structured error thrown when all model fallback candidates have been
+ * exhausted. Carries per-attempt details so callers can build informative
+ * user-facing messages (e.g. "rate-limited, retry in 30 s").
+ */
+export class FallbackSummaryError extends Error {
+  readonly attempts: FallbackAttempt[];
+  readonly soonestCooldownExpiry: number | null;
+
+  constructor(
+    message: string,
+    attempts: FallbackAttempt[],
+    soonestCooldownExpiry: number | null,
+    cause?: Error,
+  ) {
+    super(message, { cause });
+    this.name = "FallbackSummaryError";
+    this.attempts = attempts;
+    this.soonestCooldownExpiry = soonestCooldownExpiry;
+  }
+}
+
+export function isFallbackSummaryError(err: unknown): err is FallbackSummaryError {
+  return err instanceof FallbackSummaryError;
+}
+
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
 };
@@ -194,17 +220,18 @@ function throwFallbackFailureSummary(params: {
   lastError: unknown;
   label: string;
   formatAttempt: (attempt: FallbackAttempt) => string;
+  soonestCooldownExpiry?: number | null;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
     throw params.lastError;
   }
   const summary =
     params.attempts.length > 0 ? params.attempts.map(params.formatAttempt).join(" | ") : "unknown";
-  throw new Error(
+  throw new FallbackSummaryError(
     `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`,
-    {
-      cause: params.lastError instanceof Error ? params.lastError : undefined,
-    },
+    params.attempts,
+    params.soonestCooldownExpiry ?? null,
+    params.lastError instanceof Error ? params.lastError : undefined,
   );
 }
 
@@ -553,7 +580,7 @@ export async function runWithModelFallback<T>(params: {
         store: authStore,
         provider: candidate.provider,
       });
-      const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
+      const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id, undefined, candidate.model));
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
         // All profiles for this provider are in cooldown.
@@ -762,6 +789,19 @@ export async function runWithModelFallback<T>(params: {
       `${attempt.provider}/${attempt.model}: ${attempt.error}${
         attempt.reason ? ` (${attempt.reason})` : ""
       }`,
+    soonestCooldownExpiry: (() => {
+      if (!authStore) return null;
+      const allProfileIds = new Set<string>();
+      for (const c of candidates) {
+        const ids = resolveAuthProfileOrder({
+          cfg: params.cfg,
+          store: authStore,
+          provider: c.provider,
+        });
+        for (const id of ids) allProfileIds.add(id);
+      }
+      return getSoonestCooldownExpiry(authStore, [...allProfileIds]);
+    })(),
   });
 }
 

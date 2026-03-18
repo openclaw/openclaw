@@ -636,8 +636,8 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         errorCount: 3,
         lastFailureAt: now - 60_000,
       }),
-      // errorCount resets → calculateAuthProfileCooldownMs(1) = 60_000
-      expectedUntil: (now: number) => now + 60_000,
+      // errorCount resets → calculateAuthProfileCooldownMs(1) = 30_000 (stepped: 30s → 1m → 5m)
+      expectedUntil: (now: number) => now + 30_000,
       readUntil: (stats: WindowStats | undefined) => stats?.cooldownUntil,
     },
     {

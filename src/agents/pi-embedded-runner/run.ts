@@ -774,6 +774,7 @@ export async function runEmbeddedPiAgent(
         reason?: AuthProfileFailureReason | null;
         config?: RunEmbeddedPiAgentParams["config"];
         agentDir?: RunEmbeddedPiAgentParams["agentDir"];
+        modelId?: string;
       }) => {
         const { profileId, reason } = failure;
         if (!profileId || !reason || reason === "timeout") {
@@ -786,6 +787,7 @@ export async function runEmbeddedPiAgent(
           cfg: params.config,
           agentDir,
           runId: params.runId,
+          modelId: failure.modelId,
         });
       };
       const resolveAuthProfileFailureReason = (
@@ -1336,6 +1338,7 @@ export async function runEmbeddedPiAgent(
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
               reason: promptProfileFailureReason,
+              modelId,
             });
             const promptFailoverFailure =
               promptFailoverReason !== null || isFailoverErrorMessage(errorText);
@@ -1477,6 +1480,7 @@ export async function runEmbeddedPiAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason,
+                modelId,
               });
               if (timedOut && !isProbeSession) {
                 log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
