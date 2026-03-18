@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/voice-call";
+export * from "../../src/plugin-sdk/voice-call.js";
