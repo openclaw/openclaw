@@ -12,6 +12,7 @@ import {
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
@@ -366,7 +367,8 @@ export function readSessionTitleFieldsFromTranscript(
 
 function extractTextFromContent(content: TranscriptMessage["content"]): string | null {
   if (typeof content === "string") {
-    const normalized = stripInlineDirectiveTagsForDisplay(content).text.trim();
+    const stripped = stripInboundMetadata(content);
+    const normalized = stripInlineDirectiveTagsForDisplay(stripped).text.trim();
     return normalized || null;
   }
   if (!Array.isArray(content)) {
@@ -377,7 +379,8 @@ function extractTextFromContent(content: TranscriptMessage["content"]): string |
       continue;
     }
     if (part.type === "text" || part.type === "output_text" || part.type === "input_text") {
-      const normalized = stripInlineDirectiveTagsForDisplay(part.text).text.trim();
+      const stripped = stripInboundMetadata(part.text);
+      const normalized = stripInlineDirectiveTagsForDisplay(stripped).text.trim();
       if (normalized) {
         return normalized;
       }
