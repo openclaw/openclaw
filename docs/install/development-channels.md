@@ -75,3 +75,6 @@ Beta and dev builds may **not** include a macOS app release. That’s OK:
 
 - The git tag and npm dist-tag can still be published.
 - Call out “no macOS build for this beta” in release notes or changelog.
+
+## GitHub CLI Troubleshooting
+If you encounter permission issues when running automated CLI commands (e.g., `gh pr create`), ensure you have set up your `GH_TOKEN` as described in the developer setup documentation. A Classic PAT with `repo` and `read:org` scopes is required.
