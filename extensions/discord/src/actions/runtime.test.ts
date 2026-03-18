@@ -1,11 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DiscordActionConfig, OpenClawConfig } from "../../config/config.js";
-import { handleDiscordGuildAction } from "./discord-actions-guild.js";
-import { handleDiscordMessagingAction } from "./discord-actions-messaging.js";
-import { handleDiscordModerationAction } from "./discord-actions-moderation.js";
-import { handleDiscordAction } from "./discord-actions.js";
+import type { OpenClawConfig } from "../../../../src/config/config.js";
+import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
+import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
+import { handleDiscordAction } from "./runtime.js";
+import {
+  discordMessagingActionRuntime,
+  handleDiscordMessagingAction,
+} from "./runtime.messaging.js";
+import {
+  discordModerationActionRuntime,
+  handleDiscordModerationAction,
+} from "./runtime.moderation.js";
 
-const discordSendMocks = vi.hoisted(() => ({
+const originalDiscordMessagingActionRuntime = { ...discordMessagingActionRuntime };
+const originalDiscordGuildActionRuntime = { ...discordGuildActionRuntime };
+const originalDiscordModerationActionRuntime = { ...discordModerationActionRuntime };
+
+const discordSendMocks = {
   banMemberDiscord: vi.fn(async () => ({})),
   createChannelDiscord: vi.fn(async () => ({
     id: "new-channel",
@@ -42,7 +53,7 @@ const discordSendMocks = vi.hoisted(() => ({
   setChannelPermissionDiscord: vi.fn(async () => ({ ok: true })),
   timeoutMemberDiscord: vi.fn(async () => ({})),
   unpinMessageDiscord: vi.fn(async () => ({})),
-}));
+};
 
 const {
   createChannelDiscord,
@@ -67,21 +78,28 @@ const {
   timeoutMemberDiscord,
 } = discordSendMocks;
 
-vi.mock("../../../extensions/discord/src/send.js", () => ({
-  ...discordSendMocks,
-}));
-
 const enableAllActions = () => true;
 
 const disabledActions = (key: keyof DiscordActionConfig) => key !== "reactions";
 const channelInfoEnabled = (key: keyof DiscordActionConfig) => key === "channelInfo";
 const moderationEnabled = (key: keyof DiscordActionConfig) => key === "moderation";
 
-describe("handleDiscordMessagingAction", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  Object.assign(
+    discordMessagingActionRuntime,
+    originalDiscordMessagingActionRuntime,
+    discordSendMocks,
+  );
+  Object.assign(discordGuildActionRuntime, originalDiscordGuildActionRuntime, discordSendMocks);
+  Object.assign(
+    discordModerationActionRuntime,
+    originalDiscordModerationActionRuntime,
+    discordSendMocks,
+  );
+});
 
+describe("handleDiscordMessagingAction", () => {
   it.each([
     {
       name: "without account",

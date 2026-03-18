@@ -1,8 +1,12 @@
 import type { Activity, UpdatePresenceData } from "@buape/carbon/gateway";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { DiscordActionConfig } from "../../config/config.js";
-import { getGateway } from "../../plugin-sdk/discord.js";
-import { type ActionGate, jsonResult, readStringParam } from "./common.js";
+import {
+  type ActionGate,
+  jsonResult,
+  readStringParam,
+} from "../../../../src/agents/tools/common.js";
+import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
+import { getGateway } from "../monitor/gateway-registry.js";
 
 const ACTIVITY_TYPE_MAP: Record<string, number> = {
   playing: 0,

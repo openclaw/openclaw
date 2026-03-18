@@ -1,25 +1,30 @@
 import { PermissionFlagsBits } from "discord-api-types/v10";
-import { describe, expect, it, vi } from "vitest";
-import type { DiscordActionConfig } from "../../config/config.js";
-import { handleDiscordModerationAction } from "./discord-actions-moderation.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
+import {
+  discordModerationActionRuntime,
+  handleDiscordModerationAction,
+} from "./runtime.moderation.js";
 
-const discordSendMocks = vi.hoisted(() => ({
-  banMemberDiscord: vi.fn(async () => ({ ok: true })),
-  kickMemberDiscord: vi.fn(async () => ({ ok: true })),
-  timeoutMemberDiscord: vi.fn(async () => ({ id: "user-1" })),
-  hasAnyGuildPermissionDiscord: vi.fn(async () => false),
-}));
-
-const { banMemberDiscord, kickMemberDiscord, timeoutMemberDiscord, hasAnyGuildPermissionDiscord } =
-  discordSendMocks;
-
-vi.mock("../../../extensions/discord/src/send.js", () => ({
-  ...discordSendMocks,
-}));
+const originalDiscordModerationActionRuntime = { ...discordModerationActionRuntime };
+const banMemberDiscord = vi.fn(async () => ({ ok: true }));
+const kickMemberDiscord = vi.fn(async () => ({ ok: true }));
+const timeoutMemberDiscord = vi.fn(async () => ({ id: "user-1" }));
+const hasAnyGuildPermissionDiscord = vi.fn(async () => false);
 
 const enableAllActions = (_key: keyof DiscordActionConfig, _defaultValue = true) => true;
 
 describe("discord moderation sender authorization", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.assign(discordModerationActionRuntime, originalDiscordModerationActionRuntime, {
+      banMemberDiscord,
+      kickMemberDiscord,
+      timeoutMemberDiscord,
+      hasAnyGuildPermissionDiscord,
+    });
+  });
+
   it("rejects ban when sender lacks BAN_MEMBERS", async () => {
     hasAnyGuildPermissionDiscord.mockResolvedValueOnce(false);
 
