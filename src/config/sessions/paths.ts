@@ -7,6 +7,18 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveStateDir } from "../paths.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
+function isWindowsAbsoluteOnPosix(candidate: string): boolean {
+  if (path.sep === "\\") {
+    return false;
+  }
+  return /^[A-Za-z]:[/\\]/.test(candidate);
+}
+
+function extractBasename(candidate: string): string {
+  const parts = candidate.split(/[/\\]/);
+  return parts[parts.length - 1] ?? candidate;
+}
+
 function resolveAgentSessionsDir(
   agentId?: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -182,6 +194,14 @@ function resolvePathWithinSessionsDir(
   if (!trimmed) {
     throw new Error("Session file path must not be empty");
   }
+
+  if (isWindowsAbsoluteOnPosix(trimmed)) {
+    const basename = extractBasename(trimmed);
+    if (basename && basename !== "." && basename !== "..") {
+      return path.resolve(path.resolve(sessionsDir), basename);
+    }
+  }
+
   const resolvedBase = path.resolve(sessionsDir);
   const realBase = safeRealpathSync(resolvedBase) ?? resolvedBase;
   // Normalize absolute paths that are within the sessions directory.

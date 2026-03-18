@@ -662,6 +662,22 @@ describe("sessions", () => {
     );
   });
 
+  it.runIf(process.platform !== "win32")(
+    "maps Windows absolute sessionFile paths to the local sessions dir",
+    () => {
+      const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        {
+          sessionFile: String.raw`C:\Users\alice\.openclaw\agents\main\sessions\sess-2.jsonl`,
+        },
+        { sessionsDir },
+      );
+
+      expect(sessionFile).toBe(path.resolve(sessionsDir, "sess-2.jsonl"));
+    },
+  );
+
   it("resolves cross-agent paths when OPENCLAW_STATE_DIR differs from stored paths", () => {
     withStateDir(path.resolve("/different/state"), () => {
       const originalBase = path.resolve("/original/state");

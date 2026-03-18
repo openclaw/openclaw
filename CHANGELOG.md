@@ -181,6 +181,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Sessions/Windows: resolve persisted Windows-style absolute transcript paths by filename on POSIX so imported session stores no longer create literal drive-letter paths under the local sessions directory. (#50116) Thanks @RIPRODUCTIONS.
 - fix(discord): gate user allowlist name resolution [AI]. (#79002) Thanks @pgondhi987.
 - fix(msteams): gate startup user allowlist resolution [AI]. (#79003) Thanks @pgondhi987.
 - Harden macOS shell wrapper allowlist parsing [AI]. (#78518) Thanks @pgondhi987.
