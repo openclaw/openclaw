@@ -293,7 +293,7 @@ If you plan to build/run companion apps, follow the platform runbooks below.
 - WebChat + debug tools.
 - Remote gateway control over SSH.
 
-Note: signed builds required for macOS permissions to stick across rebuilds (see `docs/mac/permissions.md`).
+Note: signed builds required for macOS permissions to stick across rebuilds (see [macOS Permissions](https://docs.openclaw.ai/platforms/mac/permissions)).
 
 ### iOS node (optional)
 
@@ -364,7 +364,7 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 
 ### [Discord](https://docs.openclaw.ai/channels/discord)
 
-- Set `DISCORD_BOT_TOKEN` or `channels.discord.token` (env wins).
+- Set `DISCORD_BOT_TOKEN` or `channels.discord.token`.
 - Optional: set `commands.native`, `commands.text`, or `commands.useAccessGroups`, plus `channels.discord.allowFrom`, `channels.discord.guilds`, or `channels.discord.mediaMaxMb` as needed.
 
 ```json5

@@ -1,41 +1,9 @@
-import amazonBedrockPlugin from "../../../extensions/amazon-bedrock/index.js";
-import anthropicPlugin from "../../../extensions/anthropic/index.js";
-import bravePlugin from "../../../extensions/brave/index.js";
-import byteplusPlugin from "../../../extensions/byteplus/index.js";
-import cloudflareAiGatewayPlugin from "../../../extensions/cloudflare-ai-gateway/index.js";
-import copilotProxyPlugin from "../../../extensions/copilot-proxy/index.js";
-import elevenLabsPlugin from "../../../extensions/elevenlabs/index.js";
-import firecrawlPlugin from "../../../extensions/firecrawl/index.js";
-import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
-import googlePlugin from "../../../extensions/google/index.js";
-import huggingFacePlugin from "../../../extensions/huggingface/index.js";
-import kilocodePlugin from "../../../extensions/kilocode/index.js";
-import kimiCodingPlugin from "../../../extensions/kimi-coding/index.js";
-import microsoftPlugin from "../../../extensions/microsoft/index.js";
-import minimaxPlugin from "../../../extensions/minimax/index.js";
-import mistralPlugin from "../../../extensions/mistral/index.js";
-import modelStudioPlugin from "../../../extensions/modelstudio/index.js";
-import moonshotPlugin from "../../../extensions/moonshot/index.js";
-import nvidiaPlugin from "../../../extensions/nvidia/index.js";
-import ollamaPlugin from "../../../extensions/ollama/index.js";
-import openAIPlugin from "../../../extensions/openai/index.js";
-import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
-import opencodePlugin from "../../../extensions/opencode/index.js";
-import openRouterPlugin from "../../../extensions/openrouter/index.js";
-import perplexityPlugin from "../../../extensions/perplexity/index.js";
-import qianfanPlugin from "../../../extensions/qianfan/index.js";
-import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
-import sglangPlugin from "../../../extensions/sglang/index.js";
-import syntheticPlugin from "../../../extensions/synthetic/index.js";
-import togetherPlugin from "../../../extensions/together/index.js";
-import venicePlugin from "../../../extensions/venice/index.js";
-import vercelAiGatewayPlugin from "../../../extensions/vercel-ai-gateway/index.js";
-import vllmPlugin from "../../../extensions/vllm/index.js";
-import volcenginePlugin from "../../../extensions/volcengine/index.js";
-import xaiPlugin from "../../../extensions/xai/index.js";
-import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
-import zaiPlugin from "../../../extensions/zai/index.js";
-import { createCapturedPluginRegistration } from "../captured-registration.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { withBundledPluginEnablementCompat } from "../bundled-compat.js";
+import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
+import { loadOpenClawPlugins } from "../loader.js";
+import { createPluginLoaderLogger } from "../logger.js";
+import { resolvePluginProviders } from "../providers.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -43,11 +11,6 @@ import type {
   SpeechProviderPlugin,
   WebSearchProviderPlugin,
 } from "../types.js";
-
-type RegistrablePlugin = {
-  id: string;
-  register: (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
-};
 
 type CapabilityContractEntry<T> = {
   pluginId: string;
@@ -75,87 +38,62 @@ type PluginRegistrationContractEntry = {
   toolNames: string[];
 };
 
-const bundledProviderPlugins: RegistrablePlugin[] = [
-  amazonBedrockPlugin,
-  anthropicPlugin,
-  byteplusPlugin,
-  cloudflareAiGatewayPlugin,
-  copilotProxyPlugin,
-  githubCopilotPlugin,
-  googlePlugin,
-  huggingFacePlugin,
-  kilocodePlugin,
-  kimiCodingPlugin,
-  minimaxPlugin,
-  mistralPlugin,
-  modelStudioPlugin,
-  moonshotPlugin,
-  nvidiaPlugin,
-  ollamaPlugin,
-  opencodeGoPlugin,
-  opencodePlugin,
-  openAIPlugin,
-  openRouterPlugin,
-  qianfanPlugin,
-  qwenPortalPlugin,
-  sglangPlugin,
-  syntheticPlugin,
-  togetherPlugin,
-  venicePlugin,
-  vercelAiGatewayPlugin,
-  vllmPlugin,
-  volcenginePlugin,
-  xaiPlugin,
-  xiaomiPlugin,
-  zaiPlugin,
-];
+const log = createSubsystemLogger("plugins");
 
-const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unknown }> = [
-  { ...bravePlugin, credentialValue: "BSA-test" },
-  { ...firecrawlPlugin, credentialValue: "fc-test" },
-  { ...googlePlugin, credentialValue: "AIza-test" },
-  { ...moonshotPlugin, credentialValue: "sk-test" },
-  { ...perplexityPlugin, credentialValue: "pplx-test" },
-  { ...xaiPlugin, credentialValue: "xai-test" },
-];
+const BUNDLED_WEB_SEARCH_CREDENTIAL_VALUES: Readonly<Record<string, unknown>> = {
+  brave: "BSA-test",
+  firecrawl: "fc-test",
+  google: "AIza-test",
+  moonshot: "sk-test",
+  perplexity: "pplx-test",
+  xai: "xai-test",
+};
 
-const bundledSpeechPlugins: RegistrablePlugin[] = [elevenLabsPlugin, microsoftPlugin, openAIPlugin];
+const BUNDLED_SPEECH_PLUGIN_IDS = ["elevenlabs", "microsoft", "openai"] as const;
+const BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS = [
+  "anthropic",
+  "google",
+  "minimax",
+  "mistral",
+  "moonshot",
+  "openai",
+  "zai",
+] as const;
+const BUNDLED_IMAGE_GENERATION_PLUGIN_IDS = ["google", "openai"] as const;
 
-const bundledMediaUnderstandingPlugins: RegistrablePlugin[] = [
-  anthropicPlugin,
-  googlePlugin,
-  minimaxPlugin,
-  mistralPlugin,
-  moonshotPlugin,
-  openAIPlugin,
-  zaiPlugin,
-];
+export const providerContractRegistry: ProviderContractEntry[] = [];
 
-const bundledImageGenerationPlugins: RegistrablePlugin[] = [googlePlugin, openAIPlugin];
+export let providerContractLoadError: Error | undefined;
 
-function captureRegistrations(plugin: RegistrablePlugin) {
-  const captured = createCapturedPluginRegistration();
-  plugin.register(captured.api);
-  return captured;
+function loadBundledProviderRegistry(): ProviderContractEntry[] {
+  try {
+    providerContractLoadError = undefined;
+    return resolvePluginProviders({
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
+      cache: false,
+      activate: false,
+    })
+      .filter((provider): provider is ProviderPlugin & { pluginId: string } =>
+        Boolean(provider.pluginId),
+      )
+      .map((provider) => ({
+        pluginId: provider.pluginId,
+        provider,
+      }));
+  } catch (error) {
+    providerContractLoadError = error instanceof Error ? error : new Error(String(error));
+    return [];
+  }
 }
 
-function buildCapabilityContractRegistry<T>(params: {
-  plugins: RegistrablePlugin[];
-  select: (captured: ReturnType<typeof createCapturedPluginRegistration>) => T[];
-}): CapabilityContractEntry<T>[] {
-  return params.plugins.flatMap((plugin) => {
-    const captured = captureRegistrations(plugin);
-    return params.select(captured).map((provider) => ({
-      pluginId: plugin.id,
-      provider,
-    }));
-  });
-}
+const loadedBundledProviderRegistry: ProviderContractEntry[] = loadBundledProviderRegistry();
 
-export const providerContractRegistry: ProviderContractEntry[] = buildCapabilityContractRegistry({
-  plugins: bundledProviderPlugins,
-  select: (captured) => captured.providers,
-});
+providerContractRegistry.splice(
+  0,
+  providerContractRegistry.length,
+  ...loadedBundledProviderRegistry,
+);
 
 export const uniqueProviderContractProviders: ProviderPlugin[] = [
   ...new Map(providerContractRegistry.map((entry) => [entry.provider.id, entry.provider])).values(),
@@ -169,9 +107,63 @@ export const providerContractCompatPluginIds = providerContractPluginIds.map((pl
   pluginId === "kimi-coding" ? "kimi" : pluginId,
 );
 
+const bundledCapabilityContractPluginIds = [
+  ...new Set([
+    ...providerContractCompatPluginIds,
+    ...resolveBundledWebSearchPluginIds({}),
+    ...BUNDLED_SPEECH_PLUGIN_IDS,
+    ...BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
+    ...BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
+  ]),
+].toSorted((left, right) => left.localeCompare(right));
+
+export let capabilityContractLoadError: Error | undefined;
+
+function loadBundledCapabilityRegistry() {
+  try {
+    capabilityContractLoadError = undefined;
+    return loadOpenClawPlugins({
+      config: withBundledPluginEnablementCompat({
+        config: {
+          plugins: {
+            enabled: true,
+            allow: bundledCapabilityContractPluginIds,
+            slots: {
+              memory: "none",
+            },
+          },
+        },
+        pluginIds: bundledCapabilityContractPluginIds,
+      }),
+      cache: false,
+      activate: false,
+      logger: createPluginLoaderLogger(log),
+    });
+  } catch (error) {
+    capabilityContractLoadError = error instanceof Error ? error : new Error(String(error));
+    return loadOpenClawPlugins({
+      config: {
+        plugins: {
+          enabled: false,
+        },
+      },
+      cache: false,
+      activate: false,
+      logger: createPluginLoaderLogger(log),
+    });
+  }
+}
+
+const loadedBundledCapabilityRegistry = loadBundledCapabilityRegistry();
+
 export function requireProviderContractProvider(providerId: string): ProviderPlugin {
   const provider = uniqueProviderContractProviders.find((entry) => entry.id === providerId);
   if (!provider) {
+    if (providerContractLoadError) {
+      throw new Error(
+        `provider contract entry missing for ${providerId}; bundled provider registry failed to load: ${providerContractLoadError.message}`,
+      );
+    }
     throw new Error(`provider contract entry missing for ${providerId}`);
   }
   return provider;
@@ -204,57 +196,50 @@ export function resolveProviderContractProvidersForPluginIds(
 }
 
 export const webSearchProviderContractRegistry: WebSearchProviderContractEntry[] =
-  bundledWebSearchPlugins.flatMap((plugin) => {
-    const captured = captureRegistrations(plugin);
-    return captured.webSearchProviders.map((provider) => ({
-      pluginId: plugin.id,
-      provider,
-      credentialValue: plugin.credentialValue,
+  loadedBundledCapabilityRegistry.webSearchProviders
+    .filter((entry) => entry.pluginId in BUNDLED_WEB_SEARCH_CREDENTIAL_VALUES)
+    .map((entry) => ({
+      pluginId: entry.pluginId,
+      provider: entry.provider,
+      credentialValue: BUNDLED_WEB_SEARCH_CREDENTIAL_VALUES[entry.pluginId],
     }));
-  });
 
 export const speechProviderContractRegistry: SpeechProviderContractEntry[] =
-  buildCapabilityContractRegistry({
-    plugins: bundledSpeechPlugins,
-    select: (captured) => captured.speechProviders,
-  });
+  loadedBundledCapabilityRegistry.speechProviders.map((entry) => ({
+    pluginId: entry.pluginId,
+    provider: entry.provider,
+  }));
 
 export const mediaUnderstandingProviderContractRegistry: MediaUnderstandingProviderContractEntry[] =
-  buildCapabilityContractRegistry({
-    plugins: bundledMediaUnderstandingPlugins,
-    select: (captured) => captured.mediaUnderstandingProviders,
-  });
+  loadedBundledCapabilityRegistry.mediaUnderstandingProviders.map((entry) => ({
+    pluginId: entry.pluginId,
+    provider: entry.provider,
+  }));
 
 export const imageGenerationProviderContractRegistry: ImageGenerationProviderContractEntry[] =
-  buildCapabilityContractRegistry({
-    plugins: bundledImageGenerationPlugins,
-    select: (captured) => captured.imageGenerationProviders,
-  });
-
-const bundledPluginRegistrationList = [
-  ...new Map(
-    [
-      ...bundledProviderPlugins,
-      ...bundledSpeechPlugins,
-      ...bundledMediaUnderstandingPlugins,
-      ...bundledImageGenerationPlugins,
-      ...bundledWebSearchPlugins,
-    ].map((plugin) => [plugin.id, plugin]),
-  ).values(),
-];
+  loadedBundledCapabilityRegistry.imageGenerationProviders.map((entry) => ({
+    pluginId: entry.pluginId,
+    provider: entry.provider,
+  }));
 
 export const pluginRegistrationContractRegistry: PluginRegistrationContractEntry[] =
-  bundledPluginRegistrationList.map((plugin) => {
-    const captured = captureRegistrations(plugin);
-    return {
+  loadedBundledCapabilityRegistry.plugins
+    .filter(
+      (plugin) =>
+        plugin.origin === "bundled" &&
+        (plugin.providerIds.length > 0 ||
+          plugin.speechProviderIds.length > 0 ||
+          plugin.mediaUnderstandingProviderIds.length > 0 ||
+          plugin.imageGenerationProviderIds.length > 0 ||
+          plugin.webSearchProviderIds.length > 0 ||
+          plugin.toolNames.length > 0),
+    )
+    .map((plugin) => ({
       pluginId: plugin.id,
-      providerIds: captured.providers.map((provider) => provider.id),
-      speechProviderIds: captured.speechProviders.map((provider) => provider.id),
-      mediaUnderstandingProviderIds: captured.mediaUnderstandingProviders.map(
-        (provider) => provider.id,
-      ),
-      imageGenerationProviderIds: captured.imageGenerationProviders.map((provider) => provider.id),
-      webSearchProviderIds: captured.webSearchProviders.map((provider) => provider.id),
-      toolNames: captured.tools.map((tool) => tool.name),
-    };
-  });
+      providerIds: plugin.providerIds,
+      speechProviderIds: plugin.speechProviderIds,
+      mediaUnderstandingProviderIds: plugin.mediaUnderstandingProviderIds,
+      imageGenerationProviderIds: plugin.imageGenerationProviderIds,
+      webSearchProviderIds: plugin.webSearchProviderIds,
+      toolNames: plugin.toolNames,
+    }));
