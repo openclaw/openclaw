@@ -716,7 +716,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
         params.onAgentEvent?.({
           stream: "compaction",
-          data: { phase: "end", willRetry: false },
+          data: { phase: "end", willRetry: false, completed: true },
         });
         return { payloads: [{ text: "final" }], meta: {} };
       });
@@ -2048,7 +2048,7 @@ describe("runReplyAgent memory flush", () => {
         if (params.prompt?.includes("Pre-compaction memory flush.")) {
           params.onAgentEvent?.({
             stream: "compaction",
-            data: { phase: "end", willRetry: false },
+            data: { phase: "end", willRetry: false, completed: true },
           });
           return { payloads: [], meta: {} };
         }
