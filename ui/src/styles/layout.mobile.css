@@ -31,9 +31,10 @@
     transform: translateX(-100%);
     opacity: 0;
     pointer-events: none;
+    /* #8: smoother drawer transition (250ms) */
     transition:
-      transform var(--shell-focus-duration) var(--shell-focus-ease),
-      opacity var(--shell-focus-duration) var(--shell-focus-ease);
+      transform 250ms var(--shell-focus-ease),
+      opacity 250ms var(--shell-focus-ease);
   }
 
   .shell--nav-collapsed:not(.shell--nav-drawer-open) .shell-nav {
@@ -58,9 +59,12 @@
     z-index: 65;
     border: 0;
     background: color-mix(in srgb, black 52%, transparent);
+    /* #19: backdrop-filter glass effect */
+    backdrop-filter: blur(4px) saturate(1.2);
+    -webkit-backdrop-filter: blur(4px) saturate(1.2);
     opacity: 0;
     pointer-events: none;
-    transition: opacity var(--shell-focus-duration) var(--shell-focus-ease);
+    transition: opacity 250ms var(--shell-focus-ease);
   }
 
   .shell--nav-drawer-open .shell-nav-backdrop {
@@ -68,7 +72,7 @@
     pointer-events: auto;
   }
 
-  /* Show the hamburger toggle at the same breakpoint where the drawer takes over. */
+  /* #7: hamburger toggle with hover/active state */
   .topbar-nav-toggle {
     display: inline-flex;
     align-items: center;
@@ -81,6 +85,21 @@
     background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
     color: var(--muted);
     box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
+    transition:
+      background var(--duration-fast) ease,
+      border-color var(--duration-fast) ease,
+      color var(--duration-fast) ease;
+  }
+
+  .topbar-nav-toggle:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+
+  .topbar-nav-toggle:active {
+    background: var(--bg-muted);
+    transform: scale(0.95);
   }
 
   .sidebar,
@@ -252,13 +271,14 @@
     width: 100%;
   }
 
+  /* #7: hamburger toggle with hover/active state on mobile too */
   .topbar-nav-toggle {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    width: 38px;
-    height: 38px;
+    width: 44px;
+    height: 44px;
     padding: 0;
     border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
     border-radius: 999px;
@@ -306,9 +326,13 @@
     display: none;
   }
 
+  /* #9: safe-area-inset for nav drawer on notched phones */
   .shell-nav,
   .shell--nav-collapsed .shell-nav {
     width: min(92vw, 320px);
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
   }
 
   .shell--nav-collapsed:not(.shell--nav-drawer-open) .shell-nav {
@@ -401,6 +425,7 @@
     min-width: 44px;
     height: 44px;
   }
+
   .content {
     padding: 4px 4px 16px;
     gap: 12px;
@@ -461,9 +486,9 @@
     font-size: 12px;
   }
 
-  /* Pills */
+  /* #23: pills need more padding for touchability on mobile */
   .pill {
-    padding: 4px 10px;
+    padding: 6px 12px;
     font-size: 12px;
   }
 
@@ -488,13 +513,15 @@
     width: 100%;
   }
 
+  /* #3: more breathing room in chat thread */
   .chat-thread {
     margin-top: 0;
-    padding: 0 8px 12px;
+    padding: 0 12px 12px;
   }
 
+  /* #2: wider chat bubbles for more reading space */
   .chat-msg {
-    max-width: 90%;
+    max-width: 95%;
   }
 
   .chat-bubble {
@@ -502,8 +529,14 @@
     border-radius: var(--radius-md);
   }
 
+  /* #1: better touch targets for compose buttons (min 44x44) */
   .chat-compose {
     gap: 8px;
+  }
+
+  .chat-compose .chat-compose__actions .btn {
+    min-height: 44px;
+    min-width: 44px;
   }
 
   .chat-compose__field textarea {
@@ -513,6 +546,7 @@
     font-size: 14px;
   }
 
+  /* #4: agent chat input reduced margin */
   .agent-chat__input {
     margin: 0 8px 10px;
   }
@@ -521,16 +555,41 @@
     padding: 4px 8px;
   }
 
+  /* #1/#22: chat input buttons min 44x44 touch targets */
   .agent-chat__input-btn,
   .agent-chat__toolbar .btn-ghost {
-    width: 28px;
-    height: 28px;
+    width: 44px;
+    height: 44px;
   }
 
   .agent-chat__input-btn svg,
   .agent-chat__toolbar .btn-ghost svg {
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
+  }
+
+  /* #1: send button touch target */
+  .chat-send-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  /* #5: slash menu full-width with larger touch targets */
+  .slash-menu {
+    left: 0;
+    right: 0;
+    border-radius: var(--radius-md);
+  }
+
+  .slash-menu-item {
+    padding: 10px 12px;
+    min-height: 44px;
+  }
+
+  /* #6: slightly larger attachment thumbnails on mobile */
+  .chat-attachment-thumb {
+    width: 70px;
+    height: 70px;
   }
 
   /* Log stream */
@@ -561,10 +620,23 @@
     font-size: 12px;
   }
 
-  /* Lists */
+  /* #14: table rows with more padding on mobile */
+  .table-row {
+    padding: 12px 14px;
+    gap: 8px;
+  }
+
+  /* #15: list items with meta stack better on mobile */
   .list-item {
-    padding: 10px;
+    padding: 12px;
     border-radius: var(--radius-md);
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .list-meta {
+    text-align: left;
+    min-width: 0;
   }
 
   .list-title {
@@ -573,6 +645,17 @@
 
   .list-sub {
     font-size: 11px;
+  }
+
+  /* #16: cron job cards footer wrapping */
+  .cron-job-footer {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .cron-job-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   /* Code blocks */
@@ -586,6 +669,13 @@
     width: 26px;
     height: 26px;
     font-size: 13px;
+  }
+}
+
+/* #10: hide topbar search on small mobile since it's not very usable */
+@media (max-width: 400px) {
+  .topbar-search {
+    display: none;
   }
 }
 
@@ -621,8 +711,9 @@
     padding: 8px;
   }
 
+  /* #26: further reduce stat-value font to prevent overflow */
   .stat-value {
-    font-size: 16px;
+    font-size: 14px;
   }
 
   .chat-bubble {
@@ -649,5 +740,16 @@
     width: 24px;
     height: 24px;
     font-size: 12px;
+  }
+}
+
+/* #25: very small screens - overview cards single column */
+@media (max-width: 360px) {
+  .ov-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .ov-card__value {
+    font-size: 16px;
   }
 }

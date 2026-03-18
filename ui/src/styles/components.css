@@ -506,19 +506,26 @@
   border-radius: var(--radius-full);
   background: var(--danger);
   box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
-  animation: pulse-subtle 2s ease-in-out infinite;
+  animation: statusDot-pulse 2s ease-in-out infinite;
+}
+
+@keyframes statusDot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 18%, transparent); }
 }
 
 .statusDot.ok {
   background: var(--ok);
   box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
-  animation: none;
+  animation: statusDot-pulse 2s ease-in-out infinite;
+  color: var(--ok);
 }
 
 .statusDot.warn {
   background: var(--warn);
   box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
-  animation: none;
+  animation: statusDot-pulse 2s ease-in-out infinite;
+  color: var(--warn);
 }
 
 /* ===========================================

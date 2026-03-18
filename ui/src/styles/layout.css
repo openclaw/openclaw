@@ -335,6 +335,19 @@
   background: color-mix(in srgb, var(--panel) 98%, white 2%);
 }
 
+/* #27: light theme mobile nav drawer background */
+@media (max-width: 1100px) {
+  :root[data-theme-mode="light"] .shell-nav,
+  :root[data-theme-mode="light"] .shell--nav-collapsed .shell-nav {
+    background: var(--bg-elevated);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.12);
+  }
+
+  :root[data-theme-mode="light"] .shell-nav-backdrop {
+    background: rgba(0, 0, 0, 0.18);
+  }
+}
+
 .sidebar-shell {
   display: flex;
   flex-direction: column;
@@ -391,6 +404,11 @@
   flex-shrink: 0;
   border-radius: 10px;
   box-shadow: 0 8px 18px color-mix(in srgb, black 12%, transparent);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.sidebar-brand__logo:hover {
+  transform: scale(1.08);
 }
 
 .sidebar-brand__copy {
@@ -426,6 +444,7 @@
   overflow-x: hidden;
   padding: 0;
   scrollbar-width: none;
+  overscroll-behavior: contain;
 }
 
 .sidebar-nav::-webkit-scrollbar {
@@ -858,6 +877,7 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 
 .content > * + * {

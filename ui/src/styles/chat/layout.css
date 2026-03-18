@@ -61,6 +61,8 @@
   /* Allow shrinking for flex scroll behavior */
   border-radius: 12px;
   background: transparent;
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
 }
 
 .chat-thread-inner > :first-child {

@@ -411,6 +411,8 @@
 .config-section-hero__icon {
   width: 28px;
   height: 28px;
+  min-width: 28px;
+  min-height: 28px;
   color: var(--accent);
   display: flex;
   align-items: center;
@@ -812,12 +814,14 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* #28: light theme config cards with subtle shadows */
 :root[data-theme-mode="light"] .config-section-card {
   background: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
 :root[data-theme-mode="light"] .config-section-card:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 .config-section-card__header {
@@ -1787,16 +1791,23 @@
     text-align: left;
   }
 
+  /* #11: config section cards more breathing room on mobile */
   .config-section-card__header {
-    padding: 14px 16px;
+    padding: 16px 18px;
   }
 
   .config-section-card__content {
-    padding: 14px 16px;
+    padding: 16px 18px;
+  }
+
+  /* #12: config mode toggle larger touch targets */
+  .config-mode-toggle__btn {
+    min-height: 42px;
+    padding: 8px 12px;
   }
 
   .cfg-toggle-row {
-    padding: 12px 14px;
+    padding: 14px 16px;
   }
 
   .cfg-map__item {
@@ -1814,9 +1825,12 @@
 }
 
 @media (max-width: 480px) {
+  /* #13: don't shrink icon below 28px */
   .config-section-card__icon {
     width: 30px;
     height: 30px;
+    min-width: 28px;
+    min-height: 28px;
   }
 
   .config-section-card__title {
