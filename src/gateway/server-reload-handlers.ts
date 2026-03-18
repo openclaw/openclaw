@@ -1,4 +1,5 @@
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
+import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
@@ -145,6 +146,17 @@ export function createGatewayReloadHandlers(params: {
         for (const channel of plan.restartChannels) {
           await restartChannel(channel);
         }
+      }
+    }
+
+    if (plan.regenerateModelsJson) {
+      try {
+        const result = await ensureOpenClawModelsJson(nextConfig);
+        if (result.wrote) {
+          params.logReload.info("models.json regenerated from updated config");
+        }
+      } catch (err) {
+        params.logReload.warn(`models.json regeneration failed: ${String(err)}`);
       }
     }
 
