@@ -19,7 +19,6 @@ import {
   normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
-  type ChannelMessageActionAdapter,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/signal";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
@@ -30,24 +29,11 @@ import {
   resolveSignalRecipient,
   resolveSignalSender,
 } from "./identity.js";
+import { signalMessageActions } from "./message-actions.js";
 import type { SignalProbe } from "./probe.js";
 import { getSignalRuntime } from "./runtime.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import { createSignalPluginBase, signalConfigAccessors, signalSetupWizard } from "./shared.js";
-
-const signalMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: (ctx) =>
-    getSignalRuntime().channel.signal.messageActions?.describeMessageTool?.(ctx) ?? null,
-  supportsAction: (ctx) =>
-    getSignalRuntime().channel.signal.messageActions?.supportsAction?.(ctx) ?? false,
-  handleAction: async (ctx) => {
-    const ma = getSignalRuntime().channel.signal.messageActions;
-    if (!ma?.handleAction) {
-      throw new Error("Signal message actions not available");
-    }
-    return ma.handleAction(ctx);
-  },
-};
 
 type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
 
