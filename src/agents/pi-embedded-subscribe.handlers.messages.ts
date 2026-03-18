@@ -3,6 +3,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
@@ -191,7 +192,7 @@ export function resolveSilentReplyFallbackText(params: {
 }): string {
   const text = coerceText(params.text);
   const trimmed = text.trim();
-  if (trimmed !== SILENT_REPLY_TOKEN) {
+  if (!isSilentReplyText(trimmed, SILENT_REPLY_TOKEN) && !isAnnounceSkip(trimmed)) {
     return text;
   }
   const fallback = coerceText(params.messagingToolSentTexts.at(-1)).trim();

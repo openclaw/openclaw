@@ -146,6 +146,15 @@ describe("resolveSilentReplyFallbackText", () => {
     ).toBe("NO_REPLY");
   });
 
+  it("replaces ANNOUNCE_SKIP with latest messaging tool text when available", () => {
+    expect(
+      resolveSilentReplyFallbackText({
+        text: "ANNOUNCE_SKIP",
+        messagingToolSentTexts: ["first", "final delivered text"],
+      }),
+    ).toBe("final delivered text");
+  });
+
   it("tolerates malformed text payloads without throwing", () => {
     expect(
       resolveSilentReplyFallbackText({

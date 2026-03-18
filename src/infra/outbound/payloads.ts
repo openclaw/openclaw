@@ -12,6 +12,7 @@ import {
   hasReplyPayloadContent,
   type InteractiveReply,
 } from "../../interactive/payload.js";
+import { isAnnounceSkip } from "../../agents/tools/sessions-send-helpers.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -104,7 +105,7 @@ function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadP
   if (isSuppressedRelayStatusText(parsedText) && mergedMedia.length === 0) {
     return null;
   }
-  if (parsed.isSilent && mergedMedia.length === 0) {
+  if ((parsed.isSilent || isAnnounceSkip(parsedText)) && mergedMedia.length === 0) {
     return null;
   }
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
