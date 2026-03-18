@@ -599,7 +599,7 @@ describe("tool-loop-detection", () => {
         expect(loopResult.level).toBe("warning");
         expect(loopResult.detector).toBe("browser_search_storm");
         expect(loopResult.count).toBe(BROWSER_SEARCH_WARNING_THRESHOLD);
-        expect(loopResult.message).toContain("Browser search pages have been opened");
+        expect(loopResult.message).toContain("prior browser search-page opens");
       }
     });
 
