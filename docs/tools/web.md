@@ -43,12 +43,12 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 
 The table above is alphabetical. If no `provider` is explicitly set, runtime auto-detection checks providers in this order:
 
-1. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
-2. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
-3. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
-4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
-5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
-6. **Firecrawl** — `FIRECRAWL_API_KEY` env var or `tools.web.search.firecrawl.apiKey` config
+1. **Brave** — `BRAVE_API_KEY` env var or `plugins.entries.brave.config.webSearch.apiKey`
+2. **Gemini** — `GEMINI_API_KEY` env var or `plugins.entries.google.config.webSearch.apiKey`
+3. **Grok** — `XAI_API_KEY` env var or `plugins.entries.xai.config.webSearch.apiKey`
+4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `plugins.entries.moonshot.config.webSearch.apiKey`
+5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
+6. **Firecrawl** — `FIRECRAWL_API_KEY` env var or `plugins.entries.firecrawl.config.webSearch.apiKey`
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -80,7 +80,10 @@ pricing.
 2. Generate an API key in the dashboard
 3. Run `openclaw configure --section web` to store the key in config, or set `PERPLEXITY_API_KEY` in your environment.
 
-For legacy Sonar/OpenRouter compatibility, set `OPENROUTER_API_KEY` instead, or configure `tools.web.search.perplexity.apiKey` with an `sk-or-...` key. Setting `tools.web.search.perplexity.baseUrl` or `model` also opts Perplexity back into the chat-completions compatibility path.
+For legacy Sonar/OpenRouter compatibility, set `OPENROUTER_API_KEY` instead, or configure `plugins.entries.perplexity.config.webSearch.apiKey` with an `sk-or-...` key. Setting `plugins.entries.perplexity.config.webSearch.baseUrl` or `model` also opts Perplexity back into the chat-completions compatibility path.
+
+Provider-specific web search config now lives under `plugins.entries.<plugin>.config.webSearch.*`.
+Legacy `tools.web.search.*` provider paths still load through a compatibility shim for one release, but they should not be used in new configs.
 
 See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quickstart) for more details.
 
@@ -88,12 +91,12 @@ See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quicks
 
 **Via config:** run `openclaw configure --section web`. It stores the key under the provider-specific config path:
 
-- Brave: `tools.web.search.apiKey`
-- Firecrawl: `tools.web.search.firecrawl.apiKey`
-- Gemini: `tools.web.search.gemini.apiKey`
-- Grok: `tools.web.search.grok.apiKey`
-- Kimi: `tools.web.search.kimi.apiKey`
-- Perplexity: `tools.web.search.perplexity.apiKey`
+- Brave: `plugins.entries.brave.config.webSearch.apiKey`
+- Firecrawl: `plugins.entries.firecrawl.config.webSearch.apiKey`
+- Gemini: `plugins.entries.google.config.webSearch.apiKey`
+- Grok: `plugins.entries.xai.config.webSearch.apiKey`
+- Kimi: `plugins.entries.moonshot.config.webSearch.apiKey`
+- Perplexity: `plugins.entries.perplexity.config.webSearch.apiKey`
 
 All of these fields also support SecretRef objects.
 
@@ -114,12 +117,22 @@ For a gateway install, put these in `~/.openclaw/.env` (or your service environm
 
 ```json5
 {
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: {
+            apiKey: "YOUR_BRAVE_API_KEY", // optional if BRAVE_API_KEY is set // pragma: allowlist secret
+          },
+        },
+      },
+    },
+  },
   tools: {
     web: {
       search: {
         enabled: true,
         provider: "brave",
-        apiKey: "YOUR_BRAVE_API_KEY", // optional if BRAVE_API_KEY is set // pragma: allowlist secret
       },
     },
   },
@@ -142,9 +155,18 @@ For a gateway install, put these in `~/.openclaw/.env` (or your service environm
       search: {
         enabled: true,
         provider: "firecrawl",
-        firecrawl: {
-          apiKey: "fc-...", // optional if FIRECRAWL_API_KEY is set
-          baseUrl: "https://api.firecrawl.dev",
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      firecrawl: {
+        enabled: true,
+        config: {
+          webSearch: {
+            apiKey: "fc-...", // optional if FIRECRAWL_API_KEY is set
+            baseUrl: "https://api.firecrawl.dev",
+          },
         },
       },
     },
@@ -158,15 +180,23 @@ When you choose Firecrawl in onboarding or `openclaw configure --section web`, O
 
 ```json5
 {
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: {
+            apiKey: "YOUR_BRAVE_API_KEY", // optional if BRAVE_API_KEY is set // pragma: allowlist secret
+            mode: "llm-context",
+          },
+        },
+      },
+    },
+  },
   tools: {
     web: {
       search: {
         enabled: true,
         provider: "brave",
-        apiKey: "YOUR_BRAVE_API_KEY", // optional if BRAVE_API_KEY is set // pragma: allowlist secret
-        brave: {
-          mode: "llm-context",
-        },
       },
     },
   },
@@ -181,14 +211,22 @@ In this mode, `country` and `language` / `search_lang` still work, but `ui_lang`
 
 ```json5
 {
+  plugins: {
+    entries: {
+      perplexity: {
+        config: {
+          webSearch: {
+            apiKey: "pplx-...", // optional if PERPLEXITY_API_KEY is set
+          },
+        },
+      },
+    },
+  },
   tools: {
     web: {
       search: {
         enabled: true,
         provider: "perplexity",
-        perplexity: {
-          apiKey: "pplx-...", // optional if PERPLEXITY_API_KEY is set
-        },
       },
     },
   },
@@ -199,16 +237,24 @@ In this mode, `country` and `language` / `search_lang` still work, but `ui_lang`
 
 ```json5
 {
+  plugins: {
+    entries: {
+      perplexity: {
+        config: {
+          webSearch: {
+            apiKey: "<openrouter-api-key>", // optional if OPENROUTER_API_KEY is set
+            baseUrl: "https://openrouter.ai/api/v1",
+            model: "perplexity/sonar-pro",
+          },
+        },
+      },
+    },
+  },
   tools: {
     web: {
       search: {
         enabled: true,
         provider: "perplexity",
-        perplexity: {
-          apiKey: "<openrouter-api-key>", // optional if OPENROUTER_API_KEY is set
-          baseUrl: "https://openrouter.ai/api/v1",
-          model: "perplexity/sonar-pro",
-        },
       },
     },
   },
@@ -224,22 +270,30 @@ which returns AI-synthesized answers backed by live Google Search results with c
 
 1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
 2. Create an API key
-3. Set `GEMINI_API_KEY` in the Gateway environment, or configure `tools.web.search.gemini.apiKey`
+3. Set `GEMINI_API_KEY` in the Gateway environment, or configure `plugins.entries.google.config.webSearch.apiKey`
 
 ### Setting up Gemini search
 
 ```json5
 {
+  plugins: {
+    entries: {
+      google: {
+        config: {
+          webSearch: {
+            // API key (optional if GEMINI_API_KEY is set)
+            apiKey: "AIza...",
+            // Model (defaults to "gemini-2.5-flash")
+            model: "gemini-2.5-flash",
+          },
+        },
+      },
+    },
+  },
   tools: {
     web: {
       search: {
         provider: "gemini",
-        gemini: {
-          // API key (optional if GEMINI_API_KEY is set)
-          apiKey: "AIza...",
-          // Model (defaults to "gemini-2.5-flash")
-          model: "gemini-2.5-flash",
-        },
       },
     },
   },
@@ -266,12 +320,12 @@ Search the web using your configured provider.
 
 - `tools.web.search.enabled` must not be `false` (default: enabled)
 - API key for your chosen provider:
-  - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
-  - **Firecrawl**: `FIRECRAWL_API_KEY` or `tools.web.search.firecrawl.apiKey`
-  - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
-  - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
-  - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
-  - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **Brave**: `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
+  - **Firecrawl**: `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
+  - **Gemini**: `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
+  - **Grok**: `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
+  - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `plugins.entries.moonshot.config.webSearch.apiKey`
+  - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
 - All provider key fields above support SecretRef objects.
 
 ### Config
@@ -297,7 +351,7 @@ Search the web using your configured provider.
 Parameters depend on the selected provider.
 
 Perplexity's OpenRouter / Sonar compatibility path supports only `query` and `freshness`.
-If you set `tools.web.search.perplexity.baseUrl` / `model`, use `OPENROUTER_API_KEY`, or configure an `sk-or-...` key, Search API-only filters return explicit errors.
+If you set `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, use `OPENROUTER_API_KEY`, or configure an `sk-or-...` key under `plugins.entries.perplexity.config.webSearch.apiKey`, Search API-only filters return explicit errors.
 
 | Parameter             | Description                                           |
 | --------------------- | ----------------------------------------------------- |
