@@ -136,10 +136,17 @@ export function getShellConfig(): { shell: string; args: string[] } {
   const shellName = envShell ? path.basename(envShell) : "";
 
   // Nushell: use directly — structured data output is the point.
-  // Unlike Fish (which falls back to bash because it rejects bashisms),
-  // nushell should run as-is; the agent knows it's nushell via detectRuntimeShell().
+  // Check both $SHELL and env vars (NU_VERSION/NUSHELL_VERSION) because nu is
+  // commonly launched from a bash/zsh login shell, leaving $SHELL as /bin/bash
+  // while detectRuntimeShell() reports "nu" to the agent via the env vars.
   if (shellName === "nu") {
     return { shell: envShell!, args: ["-c"] };
+  }
+  if (shellName !== "nu" && (process.env.NU_VERSION || process.env.NUSHELL_VERSION)) {
+    const nu = resolveShellFromPath("nu");
+    if (nu) {
+      return { shell: nu, args: ["-c"] };
+    }
   }
 
   // Fish rejects common bashisms used by tools, so prefer bash when detected.

@@ -26,7 +26,7 @@ describe("getShellConfig", () => {
   const tempDirs: string[] = [];
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["SHELL", "PATH", "CLAWDBOT_SHELL"]);
+    envSnapshot = captureEnv(["SHELL", "PATH", "CLAWDBOT_SHELL", "NU_VERSION", "NUSHELL_VERSION"]);
     if (!isWin) {
       process.env.SHELL = "/usr/bin/fish";
     }
@@ -79,6 +79,16 @@ describe("getShellConfig", () => {
     process.env.SHELL = "/usr/bin/nu";
     const { shell, args } = getShellConfig();
     expect(shell).toBe("/usr/bin/nu");
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("detects nushell via NU_VERSION when SHELL is bash", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "nu" }]);
+    process.env.SHELL = "/usr/bin/bash";
+    process.env.NU_VERSION = "0.111.0";
+    process.env.PATH = binDir;
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "nu"));
     expect(args).toEqual(["-c"]);
   });
 
