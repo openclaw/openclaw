@@ -13,7 +13,6 @@ import {
   resolveSearchTimeoutSeconds,
   resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
-  type OpenClawConfig,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
@@ -63,18 +62,14 @@ type KimiSearchResponse = {
   }>;
 };
 
-function resolveKimiConfig(config?: OpenClawConfig, searchConfig?: SearchConfigRecord): KimiConfig {
-  const pluginConfig = resolveProviderWebSearchPluginConfig(config, "moonshot");
-  if (pluginConfig) {
-    return pluginConfig as KimiConfig;
-  }
-  const kimi = (searchConfig as Record<string, unknown> | undefined)?.kimi;
+function resolveKimiConfig(searchConfig?: SearchConfigRecord): KimiConfig {
+  const kimi = searchConfig?.kimi;
   return kimi && typeof kimi === "object" && !Array.isArray(kimi) ? (kimi as KimiConfig) : {};
 }
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
   return (
-    readConfiguredSecretString(kimi?.apiKey, "plugins.entries.moonshot.config.webSearch.apiKey") ??
+    readConfiguredSecretString(kimi?.apiKey, "tools.web.search.kimi.apiKey") ??
     readProviderEnvValue(["KIMI_API_KEY", "MOONSHOT_API_KEY"])
   );
 }
@@ -243,7 +238,6 @@ function createKimiSchema() {
 }
 
 function createKimiToolDefinition(
-  config?: OpenClawConfig,
   searchConfig?: SearchConfigRecord,
 ): WebSearchProviderToolDefinition {
   return {
@@ -270,13 +264,13 @@ function createKimiToolDefinition(
         }
       }
 
-      const kimiConfig = resolveKimiConfig(config, searchConfig);
+      const kimiConfig = resolveKimiConfig(searchConfig);
       const apiKey = resolveKimiApiKey(kimiConfig);
       if (!apiKey) {
         return {
           error: "missing_kimi_api_key",
           message:
-            "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure plugins.entries.moonshot.config.webSearch.apiKey.",
+            "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure tools.web.search.kimi.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
@@ -359,8 +353,19 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "moonshot", "apiKey", value);
     },
-    createTool: (ctx) =>
-      createKimiToolDefinition(ctx.config, ctx.searchConfig as SearchConfigRecord | undefined),
+    createTool: (ctx) => {
+      const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "moonshot");
+      const searchConfig = {
+        ...(ctx.searchConfig as SearchConfigRecord | undefined),
+        kimi: {
+          ...((ctx.searchConfig as SearchConfigRecord | undefined)?.kimi as
+            | Record<string, unknown>
+            | undefined),
+          ...(pluginConfig as Record<string, unknown> | undefined),
+        },
+      } as SearchConfigRecord;
+      return createKimiToolDefinition(searchConfig);
+    },
   };
 }
 
