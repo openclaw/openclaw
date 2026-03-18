@@ -288,6 +288,10 @@ export async function createBundleLspToolRuntime(params: {
   for (const diagnostic of loaded.diagnostics) {
     logWarn(`bundle-lsp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
+  // Skip spawning when no LSP servers are configured.
+  if (Object.keys(loaded.lspServers).length === 0) {
+    return { tools: [], sessions: [], dispose: async () => {} };
+  }
 
   const reservedNames = new Set(
     Array.from(params.reservedToolNames ?? [], (name) => name.trim().toLowerCase()).filter(Boolean),
