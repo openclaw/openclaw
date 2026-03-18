@@ -33,9 +33,23 @@ DISABLE_GRAPHICS_FLAGS="${OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS:-1}"
 DISABLE_EXTENSIONS="${OPENCLAW_BROWSER_DISABLE_EXTENSIONS:-1}"
 RENDERER_PROCESS_LIMIT="${OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT:-2}"
 
-mkdir -p "${HOME}" "${HOME}/.chrome" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}"
+mkdir -p "${HOME}" "${HOME}/.chrome" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}" "${HOME}/.vnc"
 
-Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp &
+# Build Xtigervnc args. It replaces both Xvfb and x11vnc in a single process
+# and supports Extended Clipboard (UTF-8) since TigerVNC v1.10.0.
+TIGERVNC_ARGS=( :1 -geometry 1280x800 -depth 24 -rfbport "${VNC_PORT}"
+  -AlwaysShared -AcceptSetDesktopSize -SendCutText -AcceptCutText )
+
+if [[ -n "${NOVNC_PASSWORD}" ]]; then
+  NOVNC_PASSWD_FILE="${HOME}/.vnc/passwd"
+  tigervncpasswd -f <<< "${NOVNC_PASSWORD}" > "${NOVNC_PASSWD_FILE}"
+  chmod 600 "${NOVNC_PASSWD_FILE}"
+  TIGERVNC_ARGS+=( -SecurityTypes VncAuth -PasswordFile "${NOVNC_PASSWD_FILE}" )
+else
+  TIGERVNC_ARGS+=( -SecurityTypes None )
+fi
+
+Xtigervnc "${TIGERVNC_ARGS[@]}" &
 
 if [[ "${HEADLESS}" == "1" ]]; then
   CHROME_ARGS=(
@@ -110,17 +124,6 @@ fi
 socat "${SOCAT_LISTEN_ADDR}" "TCP:127.0.0.1:${CHROME_CDP_PORT}" &
 
 if [[ "${ENABLE_NOVNC}" == "1" && "${HEADLESS}" != "1" ]]; then
-  # VNC auth passwords are max 8 chars; use a random default when not provided.
-  if [[ -z "${NOVNC_PASSWORD}" ]]; then
-    NOVNC_PASSWORD="$(< /proc/sys/kernel/random/uuid)"
-    NOVNC_PASSWORD="${NOVNC_PASSWORD//-/}"
-    NOVNC_PASSWORD="${NOVNC_PASSWORD:0:8}"
-  fi
-  NOVNC_PASSWD_FILE="${HOME}/.vnc/passwd"
-  mkdir -p "${HOME}/.vnc"
-  x11vnc -storepasswd "${NOVNC_PASSWORD}" "${NOVNC_PASSWD_FILE}" >/dev/null
-  chmod 600 "${NOVNC_PASSWD_FILE}"
-  x11vnc -display :1 -rfbport "${VNC_PORT}" -shared -forever -rfbauth "${NOVNC_PASSWD_FILE}" -localhost &
   websockify --web /usr/share/novnc/ "${NOVNC_PORT}" "localhost:${VNC_PORT}" &
 fi
 

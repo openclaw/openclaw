@@ -20,9 +20,8 @@ RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/
     novnc \
     python3 \
     socat \
-    websockify \
-    x11vnc \
-    xvfb
+    tigervnc-standalone-server \
+    websockify
 
 COPY --chmod=755 scripts/sandbox-browser-entrypoint.sh /usr/local/bin/openclaw-sandbox-browser
 
