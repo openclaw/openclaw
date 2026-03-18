@@ -1247,7 +1247,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             .split("\n")
             .map((l) => l.trim())
             .filter(Boolean);
-          const missing = expectedTools.filter((t) => !actualTools.some((a) => a.includes(t)));
+          const missing = expectedTools.filter((t) => !actualTools.includes(t));
           if (missing.length > 0) {
             log.warn(
               `mcporter bridge tool mismatch for server "${mcporter.serverName}": ` +
