@@ -3,7 +3,7 @@ import type { TranslationMap } from "../lib/types.ts";
 export const de: TranslationMap = {
   common: {
     version: "Version",
-    health: "Status",
+    health: "Gateway-Zustand",
     ok: "OK",
     online: "Online",
     offline: "Offline",
