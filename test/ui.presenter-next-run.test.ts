@@ -12,7 +12,6 @@ describe("formatNextRun", () => {
     const out = formatNextRun(ts);
     // Validate format structure: weekday + comma + datetime with digits + relative time in parentheses
     expect(out).toMatch(/^.+, .*\p{N}.*\(.+\)$/u);
-    expect(out).toContain("(");
-    expect(out).toContain(")");
+  });
   });
 });
