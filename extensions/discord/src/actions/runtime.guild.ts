@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { getPresence } from "../monitor/presence-cache.js";
 import {
   type ActionGate,
   jsonResult,
@@ -7,8 +8,7 @@ import {
   readStringArrayParam,
   readStringParam,
   type DiscordActionConfig,
-} from "openclaw/plugin-sdk/discord-core";
-import { getPresence } from "../monitor/presence-cache.js";
+} from "../runtime-api.js";
 import {
   addRoleDiscord,
   createChannelDiscord,

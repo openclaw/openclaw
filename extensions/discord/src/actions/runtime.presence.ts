@@ -1,12 +1,12 @@
 import type { Activity, UpdatePresenceData } from "@buape/carbon/gateway";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { getGateway } from "../monitor/gateway-registry.js";
 import {
   type ActionGate,
   jsonResult,
   readStringParam,
   type DiscordActionConfig,
-} from "openclaw/plugin-sdk/discord-core";
-import { getGateway } from "../monitor/gateway-registry.js";
+} from "../runtime-api.js";
 
 const ACTIVITY_TYPE_MAP: Record<string, number> = {
   playing: 0,
