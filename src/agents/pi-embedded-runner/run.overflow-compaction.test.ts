@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -16,6 +16,7 @@ import {
   mockedContextEngine,
   mockedCompactDirect,
   mockedRunEmbeddedAttempt,
+  resetRunOverflowCompactionHarnessMocks,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams,
@@ -24,10 +25,12 @@ import {
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
 describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
+  beforeAll(async () => {
+    ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());
+  });
+
   beforeEach(() => {
-    return loadRunOverflowCompactionHarness().then((loaded) => {
-      runEmbeddedPiAgent = loaded.runEmbeddedPiAgent;
-    });
+    resetRunOverflowCompactionHarnessMocks();
   });
 
   beforeEach(() => {
