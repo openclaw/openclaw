@@ -1,10 +1,9 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
 import type { TelegramNetworkConfig } from "../runtime-api.js";
+import { resolveTelegramApiBase } from "./api-base.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
-
-const TELEGRAM_API_BASE = "https://api.telegram.org";
 
 export type TelegramProbe = BaseProbeResult & {
   status?: number | null;
@@ -100,7 +99,7 @@ export async function probeTelegram(
   const deadlineMs = started + timeoutBudgetMs;
   const options = resolveProbeOptions(proxyOrOptions);
   const fetcher = resolveProbeFetcher(token, options);
-  const base = `${TELEGRAM_API_BASE}/bot${token}`;
+  const base = `${resolveTelegramApiBase()}/bot${token}`;
   const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
   const resolveRemainingBudgetMs = () => Math.max(0, deadlineMs - Date.now());
 

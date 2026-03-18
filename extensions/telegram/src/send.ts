@@ -21,6 +21,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { redactSensitiveText } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramApiBase } from "./api-base.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -236,11 +237,14 @@ function resolveTelegramClientOptions(
   const fetchImpl = resolveTelegramFetch(proxyFetch, {
     network: account.config.network,
   });
+  const apiRoot = resolveTelegramApiBase();
+  const useCustomApiRoot = apiRoot !== "https://api.telegram.org";
   const clientOptions =
-    fetchImpl || timeoutSeconds
+    fetchImpl || timeoutSeconds || useCustomApiRoot
       ? {
           ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
+          ...(useCustomApiRoot ? { apiRoot } : {}),
         }
       : undefined;
   if (cacheKey) {

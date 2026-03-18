@@ -4,6 +4,7 @@ import { retryAsync } from "openclaw/plugin-sdk/infra-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramApiBase, resolveTelegramApiHostname } from "../api-base.js";
 import { shouldRetryTelegramTransportFallback, type TelegramTransport } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
@@ -11,9 +12,9 @@ import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
 const TELEGRAM_MEDIA_SSRF_POLICY = {
-  // Telegram file downloads should trust api.telegram.org even when DNS/proxy
-  // resolution maps to private/internal ranges in restricted networks.
-  allowedHostnames: ["api.telegram.org"],
+  // Telegram file downloads should trust the configured API hostname even when
+  // DNS/proxy resolution maps to private/internal ranges in restricted networks.
+  allowedHostnames: [resolveTelegramApiHostname()],
   allowRfc2544BenchmarkRange: true,
 };
 
@@ -125,7 +126,7 @@ async function downloadAndSaveTelegramFile(params: {
   maxBytes: number;
   telegramFileName?: string;
 }) {
-  const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
+  const url = `${resolveTelegramApiBase()}/file/bot${params.token}/${params.filePath}`;
   const fetched = await fetchRemoteMedia({
     url,
     fetchImpl: params.transport.sourceFetch,
