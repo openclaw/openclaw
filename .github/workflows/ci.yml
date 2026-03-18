@@ -304,6 +304,100 @@ jobs:
       - name: Enforce safe external URL opening policy
         run: pnpm lint:ui:no-raw-window-open
 
+  plugin-extension-boundary:
+    name: "plugin-extension-boundary"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    env:
+      PLUGIN_EXTENSION_BOUNDARY_ENFORCE_AFTER: "2026-03-24T05:00:00Z"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run plugin extension boundary guard with grace period
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tmp_output="$(mktemp)"
+          if pnpm run lint:plugins:no-extension-imports >"$tmp_output" 2>&1; then
+            cat "$tmp_output"
+            rm -f "$tmp_output"
+            exit 0
+          fi
+
+          status=$?
+          cat "$tmp_output"
+          rm -f "$tmp_output"
+
+          now_epoch="$(date -u +%s)"
+          enforce_epoch="$(date -u -d "$PLUGIN_EXTENSION_BOUNDARY_ENFORCE_AFTER" +%s)"
+          fix_instructions="If you are an LLM agent fixing this: run 'pnpm run lint:plugins:no-extension-imports', remove src/plugins/** -> extensions/** imports where possible, and if the remaining inventory is intentional for now update test/fixtures/plugin-extension-import-boundary-inventory.json in the same PR."
+
+          if [ "$now_epoch" -lt "$enforce_epoch" ]; then
+            echo "::warning::Plugin extension import boundary violations are temporarily allowed until ${PLUGIN_EXTENSION_BOUNDARY_ENFORCE_AFTER}. This grace period ends in one week from the rollout date. After that timestamp this job will fail unless the inventory is reduced or the baseline is intentionally updated. ${fix_instructions}"
+            exit 0
+          fi
+
+          echo "::error::Plugin extension import boundary grace period ended at ${PLUGIN_EXTENSION_BOUNDARY_ENFORCE_AFTER}. ${fix_instructions}"
+          exit "$status"
+
+  web-search-provider-boundary:
+    name: "web-search-provider-boundary"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    env:
+      WEB_SEARCH_PROVIDER_BOUNDARY_ENFORCE_AFTER: "2026-03-24T05:00:00Z"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run web search provider boundary guard with grace period
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tmp_output="$(mktemp)"
+          if pnpm run lint:web-search-provider-boundaries >"$tmp_output" 2>&1; then
+            cat "$tmp_output"
+            rm -f "$tmp_output"
+            exit 0
+          fi
+
+          status=$?
+          cat "$tmp_output"
+          rm -f "$tmp_output"
+
+          now_epoch="$(date -u +%s)"
+          enforce_epoch="$(date -u -d "$WEB_SEARCH_PROVIDER_BOUNDARY_ENFORCE_AFTER" +%s)"
+          fix_instructions="If you are an LLM agent fixing this: run 'pnpm run lint:web-search-provider-boundaries', move provider-specific web-search logic out of core, and if the remaining inventory is intentional for now update test/fixtures/web-search-provider-boundary-inventory.json in the same PR."
+
+          if [ "$now_epoch" -lt "$enforce_epoch" ]; then
+            echo "::warning::Web search provider boundary violations are temporarily allowed until ${WEB_SEARCH_PROVIDER_BOUNDARY_ENFORCE_AFTER}. This grace period ends in one week from the rollout date. After that timestamp this job will fail unless the inventory is reduced or the baseline is intentionally updated. ${fix_instructions}"
+            exit 0
+          fi
+
+          echo "::error::Web search provider boundary grace period ended at ${WEB_SEARCH_PROVIDER_BOUNDARY_ENFORCE_AFTER}. ${fix_instructions}"
+          exit "$status"
+
   build-smoke:
     name: "build-smoke"
     needs: [docs-scope, changed-scope]
