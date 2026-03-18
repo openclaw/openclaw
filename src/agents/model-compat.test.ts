@@ -65,7 +65,7 @@ beforeEach(() => {
   providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(undefined);
 });
 
-describe("normalizeModelCompat - Anthropic baseUrl", () => {
+describe("normalizeModelCompat — Anthropic baseUrl", () => {
   const anthropicBase = (): Model<Api> =>
     ({
       id: "claude-opus-4-6",

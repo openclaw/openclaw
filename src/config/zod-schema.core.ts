@@ -199,12 +199,12 @@ export const ModelCompatSchema = z
         z.literal("qwen-chat-template"),
       ])
       .optional(),
-    toolSchemaProfile: z.literal("xai").optional(),
-    nativeWebSearchTool: z.boolean().optional(),
-    toolCallArgumentsEncoding: z.literal("html-entities").optional(),
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
+    toolSchemaProfile: z.literal("xai").optional(),
+    nativeWebSearchTool: z.boolean().optional(),
+    toolCallArgumentsEncoding: z.literal("html-entities").optional(),
     requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
