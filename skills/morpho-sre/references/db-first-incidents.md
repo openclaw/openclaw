@@ -37,22 +37,22 @@ Combined reference for DB-first data incident investigation and the DB query gua
 ## Preferred Collector
 
 ```bash
-/home/node/.openclaw/skills/morpho-sre/db-evidence.sh \
+/home/node/.openclaw/skills/morpho-sre/scripts/db-evidence.sh \
   --namespace morpho-prd \
   --target indexer \
   --mode summary
 
-/home/node/.openclaw/skills/morpho-sre/db-evidence.sh \
+/home/node/.openclaw/skills/morpho-sre/scripts/db-evidence.sh \
   --namespace morpho-prd \
   --target indexer \
   --mode schema
 
-/home/node/.openclaw/skills/morpho-sre/db-evidence.sh \
+/home/node/.openclaw/skills/morpho-sre/scripts/db-evidence.sh \
   --namespace morpho-prd \
   --target indexer \
   --mode data
 
-/home/node/.openclaw/skills/morpho-sre/db-evidence.sh \
+/home/node/.openclaw/skills/morpho-sre/scripts/db-evidence.sh \
   --namespace morpho-prd \
   --target indexer \
   --mode replica
@@ -83,8 +83,10 @@ Use `db-evidence.sh`; use ad hoc SQL only when the wrapper cannot express the ne
 ### Mandatory Response Evidence Line
 
 ```
-db=<host:port/dbname> schema_check=<ok|failed> query_check=<ok|failed> rows=<n>
+db=<host:port/dbname> schema_check=<ok|failed> query_check=<ok|failed|error_msg> rows=<n|N/A>
 ```
+
+When partial checks fail, include the evidence line with mixed ok/failed status and the error detail for the failing check.
 
 ### If Live Query Cannot Run
 

@@ -37,10 +37,10 @@ Step-by-step incident investigation workflow for Morpho SRE. Every incident foll
 
 Every incident reply must include:
 
-- **Evidence:** commands + concrete output snippets
+- **Evidence:** summarized facts from live checks (not raw command output)
 - **Root-cause hypotheses:** ranked with confidence
-- **Next commands:** what to check if the top hypothesis needs confirmation
-- **PR URL** when created (or blocked reason + manual fallback)
+- **Validation:** what to verify if the top hypothesis needs confirmation
+- **Fix PR:** link to existing fix or PR URL when created (or suggested PR candidate)
 
 ## Key Constraints
 

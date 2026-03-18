@@ -9,7 +9,7 @@
 
 set -eu
 
-DATADIR="${CLAUDE_PLUGIN_DATA:-/tmp/openclaw-sre-data}"
+DATADIR="${CLAUDE_PLUGIN_DATA:-${XDG_RUNTIME_DIR:-/tmp}/openclaw-sre-data}"
 LOGFILE="$DATADIR/skill-usage.jsonl"
 mkdir -p "$DATADIR"
 
@@ -37,18 +37,25 @@ case "${1:---help}" in
     DURATION="${3:-}"
 
     # Determine if this is a script or reference
-    if echo "$NAME" | grep -q '\.sh$'; then
+    if echo "$NAME" | grep -qE '\.(sh|py|rb|js|ts)$'; then
       KEY="script"
     else
       KEY="reference"
     fi
 
-    ENTRY="{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"${KEY}\":\"${NAME}\",\"context\":\"${CONTEXT}\""
+    # Build JSON safely using jq to escape special characters
     if [ -n "$DURATION" ]; then
-      ENTRY="${ENTRY},\"duration_sec\":${DURATION}"
+      ENTRY=$(jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg key "$KEY" --arg name "$NAME" --arg ctx "$CONTEXT" \
+        --argjson dur "$DURATION" \
+        '{ts: $ts, ($key): $name, context: $ctx, duration_sec: $dur}')
+    else
+      ENTRY=$(jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg key "$KEY" --arg name "$NAME" --arg ctx "$CONTEXT" \
+        '{ts: $ts, ($key): $name, context: $ctx}')
     fi
-    ENTRY="${ENTRY}}"
 
     echo "$ENTRY" >> "$LOGFILE"
+    chmod 600 "$LOGFILE" 2>/dev/null || true
     ;;
 esac

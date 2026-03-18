@@ -27,20 +27,20 @@ Use this first in heartbeat mode. It is the comprehensive 12-step triage pipelin
 
 ### Pipeline Steps (0-11)
 
-| Step | Name                             | Required?    | Description                       |
-| ---- | -------------------------------- | ------------ | --------------------------------- | ---- | ----------------------------------------- |
-| `00` | Linear memory lookup             | Optional     | `linear-memory-lookup.sh`         |
-| `01` | Pod/deploy runtime signals       | **Required** | Pod and deployment health         |
-| `02` | Events + alert signals           | **Required** | Kubernetes events and alert state |
-| `03` | Prometheus trends                | Optional     | Metric trend analysis             |
-| `04` | ArgoCD sync drift                | Optional     | GitOps sync status                |
-| `05` | Log signal enrichment            | Optional     | Pod log error extraction          |
-| `06` | Cert/secret health               | Optional     | Certificate and secret expiry     |
-| `07` | AWS resource signals             | Optional     | AWS-level resource health         |
-| `08` | Image->repo mapping              | Optional     | Correlate images to source repos  |
-| `09` | Deployed revision/PR correlation | Optional     | Map deployed commits to PRs       |
-| `10` | Repo CI signal                   | Optional     | Latest workflow runs per repo     |
-| `11` | RCA synthesis                    | --           | `RCA_MODE=single                  | dual | heuristic`, fallback to ranked heuristics |
+| Step | Name                             | Required?    | Description                                                       |
+| ---- | -------------------------------- | ------------ | ----------------------------------------------------------------- |
+| `00` | Linear memory lookup             | Optional     | `linear-memory-lookup.sh`                                         |
+| `01` | Pod/deploy runtime signals       | **Required** | Pod and deployment health                                         |
+| `02` | Events + alert signals           | **Required** | Kubernetes events and alert state                                 |
+| `03` | Prometheus trends                | Optional     | Metric trend analysis                                             |
+| `04` | ArgoCD sync drift                | Optional     | GitOps sync status                                                |
+| `05` | Log signal enrichment            | Optional     | Pod log error extraction                                          |
+| `06` | Cert/secret health               | Optional     | Certificate and secret expiry                                     |
+| `07` | AWS resource signals             | Optional     | AWS-level resource health                                         |
+| `08` | Image->repo mapping              | Optional     | Correlate images to source repos                                  |
+| `09` | Deployed revision/PR correlation | Optional     | Map deployed commits to PRs                                       |
+| `10` | Repo CI signal                   | Optional     | Latest workflow runs per repo                                     |
+| `11` | RCA synthesis                    | --           | `RCA_MODE=single\|dual\|heuristic`, fallback to ranked heuristics |
 
 ### Output Sections
 

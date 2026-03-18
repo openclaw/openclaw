@@ -152,7 +152,7 @@ If `command -v` fails or PATH looks wrong, stop and reply in blocked mode.
 ## Output Contract
 
 - Summary (4-line header)
-- Evidence (commands + concrete output snippets)
+- Evidence (summarized facts from live checks — no raw command output)
 - Root-cause hypotheses (ranked + confidence, only after live check)
-- Next commands
-- PR URL when created (or blocked reason + manual fallback)
+- Validation checks (what to verify, phrased as outcomes not commands)
+- Fix PR link or suggested PR candidate (never omit on high-confidence RCA)
