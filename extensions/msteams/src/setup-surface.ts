@@ -1,4 +1,3 @@
-import type { MSTeamsTeamConfig } from "openclaw/plugin-sdk/msteams";
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
@@ -13,6 +12,7 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
+import type { MSTeamsTeamConfig } from "../runtime-api.js";
 import {
   parseMSTeamsTeamEntry,
   resolveMSTeamsChannelAllowlist,
