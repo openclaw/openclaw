@@ -195,7 +195,8 @@ export function inferUniqueProviderFromConfiguredModels(params: {
     if (!parsed) {
       continue;
     }
-    if (parsed.model === model || parsed.model.toLowerCase() === normalized) {
+    const fullRef = `${parsed.provider}/${parsed.model}`.toLowerCase();
+    if (parsed.model === model || parsed.model.toLowerCase() === normalized || fullRef === normalized) {
       providers.add(parsed.provider);
       if (providers.size > 1) {
         return undefined;
