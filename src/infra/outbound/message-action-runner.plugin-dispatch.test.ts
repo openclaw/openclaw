@@ -35,7 +35,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct", "channel"] },
       config: createAlwaysConfiguredPluginConfig(),
       actions: {
-        listActions: () => ["pin", "list-pins", "member-info"],
+        describeMessageTool: () => ({ actions: ["pin", "list-pins", "member-info"] }),
         supportsAction: ({ action }) =>
           action === "pin" || action === "list-pins" || action === "member-info",
         handleAction,
@@ -240,7 +240,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct"] },
       config: createAlwaysConfiguredPluginConfig(),
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         supportsAction: ({ action }) => action === "send",
         handleAction,
       },
@@ -332,7 +332,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
       },
       actions: {
-        listActions: () => ["poll"],
+        describeMessageTool: () => ({ actions: ["poll"] }),
         supportsAction: ({ action }) => action === "poll",
         handleAction,
       },
@@ -408,6 +408,100 @@ describe("runMessageAction plugin dispatch", () => {
     });
   });
 
+  describe("plugin-owned poll semantics", () => {
+    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+      jsonResult({
+        ok: true,
+        forwarded: {
+          to: params.to ?? null,
+          pollQuestion: params.pollQuestion ?? null,
+          pollOption: params.pollOption ?? null,
+          pollDurationSeconds: params.pollDurationSeconds ?? null,
+          pollPublic: params.pollPublic ?? null,
+        },
+      }),
+    );
+
+    const discordPollPlugin: ChannelPlugin = {
+      id: "discord",
+      meta: {
+        id: "discord",
+        label: "Discord",
+        selectionLabel: "Discord",
+        docsPath: "/channels/discord",
+        blurb: "Discord plugin-owned poll test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: createAlwaysConfiguredPluginConfig(),
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["poll"] }),
+        supportsAction: ({ action }) => action === "poll",
+        handleAction,
+      },
+    };
+
+    beforeEach(() => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin: discordPollPlugin,
+          },
+        ]),
+      );
+      handleAction.mockClear();
+    });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+    });
+
+    it("lets non-telegram plugins own extra poll fields", async () => {
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            discord: {
+              token: "tok",
+            },
+          },
+        } as OpenClawConfig,
+        action: "poll",
+        params: {
+          channel: "discord",
+          target: "channel:123",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza", "Sushi"],
+          pollDurationSeconds: 120,
+          pollPublic: true,
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("poll");
+      expect(result.handledBy).toBe("plugin");
+      expect(handleAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "poll",
+          channel: "discord",
+          params: expect.objectContaining({
+            to: "channel:123",
+            pollQuestion: "Lunch?",
+            pollOption: ["Pizza", "Sushi"],
+            pollDurationSeconds: 120,
+            pollPublic: true,
+          }),
+        }),
+      );
+    });
+  });
+
   describe("components parsing", () => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({
@@ -428,7 +522,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct"] },
       config: createAlwaysConfiguredPluginConfig({}),
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         supportsAction: ({ action }) => action === "send",
         handleAction,
       },
@@ -510,7 +604,7 @@ describe("runMessageAction plugin dispatch", () => {
         resolveAccount: () => ({}),
       },
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         handleAction,
       },
     };
