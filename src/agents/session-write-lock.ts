@@ -447,6 +447,7 @@ export async function acquireSessionWriteLock(params: {
   staleMs?: number;
   maxHoldMs?: number;
   allowReentrant?: boolean;
+  ensureDir?: boolean;
 }): Promise<{
   release: () => Promise<void>;
 }> {
@@ -456,7 +457,9 @@ export async function acquireSessionWriteLock(params: {
   const maxHoldMs = resolvePositiveMs(params.maxHoldMs, DEFAULT_MAX_HOLD_MS);
   const sessionFile = path.resolve(params.sessionFile);
   const sessionDir = path.dirname(sessionFile);
-  await fs.mkdir(sessionDir, { recursive: true });
+  if (params.ensureDir ?? true) {
+    await fs.mkdir(sessionDir, { recursive: true });
+  }
   let normalizedDir = sessionDir;
   try {
     normalizedDir = await fs.realpath(sessionDir);
