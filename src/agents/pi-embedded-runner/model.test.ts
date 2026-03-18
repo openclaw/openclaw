@@ -435,6 +435,43 @@ describe("resolveModel", () => {
     });
   });
 
+  it("normalizes same-provider qualified refs before provider fallback matching", () => {
+    const cfg = {
+      models: {
+        providers: {
+          polza: {
+            baseUrl: "https://proxy.example/v1",
+            api: "openai-completions",
+            headers: { "X-Provider": "provider" },
+            models: [
+              {
+                ...makeModel("gpt-4o-mini"),
+                reasoning: true,
+                contextWindow: 123456,
+                maxTokens: 4096,
+                headers: { "X-Model": "special" },
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("polza", "polza/gpt-4o-mini", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "polza",
+      id: "gpt-4o-mini",
+      reasoning: true,
+      contextWindow: 123456,
+      maxTokens: 4096,
+    });
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Provider": "provider",
+      "X-Model": "special",
+    });
+  });
   it("uses OpenRouter API capabilities for unknown models when cache is populated", () => {
     mockGetOpenRouterModelCapabilities.mockReturnValue({
       name: "Healer Alpha",

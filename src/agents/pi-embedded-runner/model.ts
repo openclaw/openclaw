@@ -232,6 +232,16 @@ function resolveExplicitModelWithRegistry(params: {
   return undefined;
 }
 
+function stripSameProviderPrefix(params: { provider: string; modelId: string }): string {
+  const providerId = normalizeProviderId(params.provider);
+  const modelId = params.modelId.trim();
+  if (!providerId || !modelId) {
+    return modelId;
+  }
+  const prefix = `${providerId}/`;
+  return modelId.toLowerCase().startsWith(prefix) ? modelId.slice(prefix.length) : modelId;
+}
+
 export function resolveModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -245,6 +255,23 @@ export function resolveModelWithRegistry(params: {
   }
   if (explicitModel?.kind === "resolved") {
     return explicitModel.model;
+  }
+
+  const alternateModelId = stripSameProviderPrefix({
+    provider: params.provider,
+    modelId: params.modelId,
+  });
+  if (alternateModelId !== params.modelId) {
+    const alternateExplicitModel = resolveExplicitModelWithRegistry({
+      ...params,
+      modelId: alternateModelId,
+    });
+    if (alternateExplicitModel?.kind === "suppressed") {
+      return undefined;
+    }
+    if (alternateExplicitModel?.kind === "resolved") {
+      return alternateExplicitModel.model;
+    }
   }
 
   const { provider, modelId, cfg, modelRegistry, agentDir } = params;
@@ -270,21 +297,22 @@ export function resolveModelWithRegistry(params: {
     });
   }
 
-  const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
+  const fallbackModelId = alternateModelId !== modelId ? alternateModelId : modelId;
+  const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === fallbackModelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
   const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
-  if (providerConfig || modelId.startsWith("mock-")) {
+  if (providerConfig || fallbackModelId.startsWith("mock-")) {
     return normalizeResolvedModel({
       provider,
       cfg,
       agentDir,
       model: {
-        id: modelId,
-        name: modelId,
+        id: fallbackModelId,
+        name: fallbackModelId,
         api: providerConfig?.api ?? "openai-responses",
         provider,
         baseUrl: providerConfig?.baseUrl,
