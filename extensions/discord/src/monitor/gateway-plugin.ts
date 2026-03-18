@@ -9,6 +9,7 @@ import WebSocket from "ws";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
+const DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS = 30_000;
 const DISCORD_GATEWAY_INFO_TIMEOUT_MS = 10_000;
 
 type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
@@ -255,10 +256,10 @@ function createGatewayPlugin(params: {
     }
 
     override createWebSocket(url: string) {
-      if (!params.wsAgent) {
-        return super.createWebSocket(url);
-      }
-      return new WebSocket(url, { agent: params.wsAgent });
+      return new WebSocket(url, {
+        handshakeTimeout: DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS,
+        ...(params.wsAgent ? { agent: params.wsAgent } : {}),
+      });
     }
   }
 
