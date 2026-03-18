@@ -19,6 +19,10 @@ import {
 } from "./accounts.js";
 import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
 import {
+  listDiscordDirectoryGroupsFromConfig,
+  listDiscordDirectoryPeersFromConfig,
+} from "./directory-config.js";
+import {
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./exec-approvals.js";
@@ -41,8 +45,6 @@ import {
   type ChannelPlugin,
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
