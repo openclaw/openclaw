@@ -1,4 +1,4 @@
-import { requireBundledChannelPlugin } from "../channels/plugins/bundled.js";
+import { bundledChannelPlugins } from "../channels/plugins/bundled.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
@@ -20,15 +20,11 @@ type PatchedSetupAdapterFields = {
 };
 
 export function setDefaultChannelPluginRegistryForTests(): void {
-  const channels = [
-    { pluginId: "discord", plugin: requireBundledChannelPlugin("discord"), source: "test" },
-    { pluginId: "feishu", plugin: requireBundledChannelPlugin("feishu"), source: "test" },
-    { pluginId: "slack", plugin: requireBundledChannelPlugin("slack"), source: "test" },
-    { pluginId: "telegram", plugin: requireBundledChannelPlugin("telegram"), source: "test" },
-    { pluginId: "whatsapp", plugin: requireBundledChannelPlugin("whatsapp"), source: "test" },
-    { pluginId: "signal", plugin: requireBundledChannelPlugin("signal"), source: "test" },
-    { pluginId: "imessage", plugin: requireBundledChannelPlugin("imessage"), source: "test" },
-  ] as unknown as Parameters<typeof createTestRegistry>[0];
+  const channels = bundledChannelPlugins.map((plugin) => ({
+    pluginId: plugin.id,
+    plugin,
+    source: "test" as const,
+  })) as unknown as Parameters<typeof createTestRegistry>[0];
   setActivePluginRegistry(createTestRegistry(channels));
 }
 
