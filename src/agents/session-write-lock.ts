@@ -313,13 +313,16 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
   }
 }
 
+// TODO(argus): This assumes sessions.json is co-located with the session transcript file.
+// The session store path is configurable (see config/sessions/paths.ts resolveStorePath),
+// so this heuristic breaks when a custom store path is configured. Fixing this requires
+// threading the resolved store path or config through the lock acquisition call chain.
 function resolveSessionStorePathForLock(sessionFile: string): string {
   return path.join(path.dirname(sessionFile), "sessions.json");
 }
 
 function resolveStoredSessionFilePath(params: {
   sessionDir: string;
-  sessionFile: string;
   entry: SessionEntry;
 }): string | null {
   const stored = params.entry.sessionFile?.trim();
@@ -352,7 +355,6 @@ async function readArgusSessionContext(params: { sessionFile: string; nowMs: num
       }
       const resolved = resolveStoredSessionFilePath({
         sessionDir,
-        sessionFile: targetFile,
         entry,
       });
       if (!resolved || resolved !== targetFile) {

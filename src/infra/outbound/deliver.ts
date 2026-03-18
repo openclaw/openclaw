@@ -498,6 +498,11 @@ export async function deliverOutboundPayloads(
       excludeId: queueId,
     }).catch(() => false);
     if (shouldDeferForLaneWatch) {
+      // TODO(argus): Deferred silent deliveries remain as .json files in the queue
+      // directory and are only recovered on gateway restart (via recoverPendingDeliveries).
+      // A background timer or queue-drain listener would allow these to be retried
+      // without a full restart, but adding retry scheduling here risks re-ordering
+      // deliveries or duplicate sends. Accept the limitation for now.
       return [];
     }
   }
