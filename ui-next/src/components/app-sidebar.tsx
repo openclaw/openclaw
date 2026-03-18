@@ -91,12 +91,6 @@ const navData = {
       subtitle: "Active sessions",
     },
     {
-      title: "Projects",
-      url: "/projects",
-      icon: FolderKanban,
-      subtitle: "Registered project workspaces",
-    },
-    {
       title: "Cron Jobs",
       url: "/cron",
       icon: Timer,
@@ -212,6 +206,12 @@ const navData = {
     },
   ],
   orchestration: [
+    {
+      title: "Projects",
+      url: "/projects",
+      icon: FolderKanban,
+      subtitle: "Registered project workspaces",
+    },
     {
       title: "Workspaces",
       url: "/workspaces",
