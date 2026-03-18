@@ -347,7 +347,10 @@ export async function resolveApiKeyForProvider(params: {
     return {
       apiKey: envResolved.apiKey,
       source: envResolved.source,
-      mode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+      mode:
+        envResolved.source.includes("OAUTH_TOKEN") || envResolved.source === "gcloud adc"
+          ? "oauth"
+          : "api-key",
     };
   }
 
@@ -426,7 +429,7 @@ export function resolveEnvApiKey(
     if (!envKey) {
       return null;
     }
-    return { apiKey: envKey, source: "gcloud adc" };
+    return { apiKey: envKey === "<authenticated>" ? "" : envKey, source: "gcloud adc" };
   }
   return null;
 }

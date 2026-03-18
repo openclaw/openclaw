@@ -33,3 +33,43 @@ export function ensureCustomApiRegistered(api: Api, streamFn: StreamFn): boolean
   );
   return true;
 }
+
+// google-vertex ADC fix (#49194): pi-ai returns "<authenticated>" sentinel
+// from getEnvApiKey which gets passed as a literal API key → 401.
+type ProviderStreamOptions = Record<string, unknown>;
+
+function stripAdcSentinel(options: unknown): unknown {
+  if (
+    options &&
+    typeof options === "object" &&
+    "apiKey" in options &&
+    (options as ProviderStreamOptions).apiKey === "<authenticated>"
+  ) {
+    const { apiKey: _, ...rest } = options as ProviderStreamOptions;
+    return rest;
+  }
+  return options;
+}
+
+let vertexAdcFixApplied = false;
+
+export function installGoogleVertexAdcFix(): void {
+  if (vertexAdcFixApplied) {
+    return;
+  }
+  const original = getApiProvider("google-vertex" as Api);
+  if (!original) {
+    return;
+  }
+  vertexAdcFixApplied = true;
+  registerApiProvider(
+    {
+      api: "google-vertex" as Api,
+      stream: (model, context, options) =>
+        original.stream(model, context, stripAdcSentinel(options) as typeof options),
+      streamSimple: (model, context, options) =>
+        original.streamSimple(model, context, stripAdcSentinel(options) as typeof options),
+    },
+    "openclaw-vertex-adc-fix",
+  );
+}

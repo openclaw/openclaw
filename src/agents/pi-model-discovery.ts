@@ -6,6 +6,7 @@ import type {
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { installGoogleVertexAdcFix } from "./custom-api-registry.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
@@ -148,5 +149,6 @@ export function discoverAuthStorage(agentDir: string): PiAuthStorage {
 }
 
 export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
+  installGoogleVertexAdcFix();
   return new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
 }
