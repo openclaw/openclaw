@@ -32,6 +32,7 @@ export type EnabledBundleMcpConfigResult = {
 };
 export type BundleMcpRuntimeSupport = {
   hasSupportedStdioServer: boolean;
+  supportedServerNames: string[];
   unsupportedServerNames: string[];
   diagnostics: string[];
 };
@@ -279,17 +280,20 @@ export function inspectBundleMcpRuntimeSupport(params: {
   bundleFormat: PluginBundleFormat;
 }): BundleMcpRuntimeSupport {
   const loaded = loadBundleMcpConfig(params);
+  const supportedServerNames: string[] = [];
   const unsupportedServerNames: string[] = [];
   let hasSupportedStdioServer = false;
   for (const [serverName, server] of Object.entries(loaded.config.mcpServers)) {
     if (typeof server.command === "string" && server.command.trim().length > 0) {
       hasSupportedStdioServer = true;
+      supportedServerNames.push(serverName);
       continue;
     }
     unsupportedServerNames.push(serverName);
   }
   return {
     hasSupportedStdioServer,
+    supportedServerNames,
     unsupportedServerNames,
     diagnostics: loaded.diagnostics,
   };
