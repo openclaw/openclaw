@@ -51,10 +51,10 @@ function resolveAppUserNames(account: { config: { botUser?: string | null } }) {
 }
 
 export const googlechatMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
+  describeMessageTool: ({ cfg }) => {
     const accounts = listEnabledAccounts(cfg);
     if (accounts.length === 0) {
-      return [];
+      return null;
     }
     const actions = new Set<ChannelMessageActionName>([]);
     actions.add("send");
@@ -62,7 +62,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
       actions.add("react");
       actions.add("reactions");
     }
-    return Array.from(actions);
+    return { actions: Array.from(actions) };
   },
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");

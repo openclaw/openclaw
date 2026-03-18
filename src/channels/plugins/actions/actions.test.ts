@@ -1089,7 +1089,7 @@ describe("signalMessageActions", () => {
 
     for (const testCase of cases) {
       expect(
-        signalMessageActions.listActions?.({ cfg: testCase.cfg }) ?? [],
+        signalMessageActions.describeMessageTool?.({ cfg: testCase.cfg })?.actions ?? [],
         testCase.name,
       ).toEqual(testCase.expected);
     }

@@ -74,14 +74,14 @@ async function mutateSignalReaction(params: {
 }
 
 export const signalMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
+  describeMessageTool: ({ cfg }) => {
     const accounts = listEnabledSignalAccounts(cfg);
     if (accounts.length === 0) {
-      return [];
+      return null;
     }
     const configuredAccounts = accounts.filter((account) => account.configured);
     if (configuredAccounts.length === 0) {
-      return [];
+      return null;
     }
 
     const actions = new Set<ChannelMessageActionName>(["send"]);
@@ -93,7 +93,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       actions.add("react");
     }
 
-    return Array.from(actions);
+    return { actions: Array.from(actions) };
   },
   supportsAction: ({ action }) => action !== "send",
 
