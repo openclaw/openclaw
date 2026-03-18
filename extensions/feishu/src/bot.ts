@@ -131,9 +131,10 @@ export function parseFeishuMessageEvent(
   event: FeishuMessageEvent,
   botOpenId?: string,
   _botName?: string,
+  respondToAtAll?: boolean,
 ): FeishuMessageContext {
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
-  const mentionedBot = checkBotMentioned(event, botOpenId);
+  const mentionedBot = checkBotMentioned(event, botOpenId, respondToAtAll);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
   // Strip the bot's own mention so slash commands like @Bot /help retain
   // the leading /. This applies in both p2p *and* group contexts — the
@@ -259,7 +260,20 @@ export async function handleFeishuMessage(params: {
     return;
   }
 
-  let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
+  // Resolve respondToAtAll before parsing so @_all gating applies during
+  // checkBotMentioned. We pass it as a parameter rather than resolving it
+  // inside checkBotMentioned because that function is a pure predicate with
+  // no access to config — keeping config resolution in the caller (here)
+  // preserves separation of concerns and testability.
+  // Uses event.message.chat_id directly (same value as ctx.chatId) because
+  // ctx isn't built yet at this point.
+  const earlyGroupConfig = resolveFeishuGroupConfig({
+    cfg: feishuCfg,
+    groupId: event.message.chat_id,
+  });
+  const respondToAtAll = earlyGroupConfig?.respondToAtAll ?? feishuCfg?.respondToAtAll ?? false;
+
+  let ctx = parseFeishuMessageEvent(event, botOpenId, botName, respondToAtAll);
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
@@ -334,9 +348,7 @@ export async function handleFeishuMessage(params: {
     0,
     feishuCfg?.historyLimit ?? cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
-  const groupConfig = isGroup
-    ? resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId })
-    : undefined;
+  const groupConfig = isGroup ? earlyGroupConfig : undefined;
   const groupSession = isGroup
     ? resolveFeishuGroupSession({
         chatId: ctx.chatId,

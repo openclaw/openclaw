@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { checkBotMentioned } from "./bot-content.js";
 import { parseFeishuMessageEvent } from "./bot.js";
 
 // Helper to build a minimal FeishuMessageEvent for testing
@@ -189,5 +190,72 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     });
     const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
     expect(ctx.content).toBe("[Forwarded message: sc_abc123]");
+  });
+});
+
+describe("checkBotMentioned – @_all / respondToAtAll gating", () => {
+  const BOT_OPEN_ID = "ou_bot_123";
+
+  function makeMinimalEvent(content: string) {
+    return {
+      message: {
+        content,
+        message_type: "text",
+        mentions: [] as Array<{ key: string; name: string; id: { open_id?: string } }>,
+        chat_id: "oc_chat1",
+        message_id: "msg_1",
+      },
+      sender: {
+        sender_id: { open_id: "ou_sender", user_id: "u1" },
+      },
+    };
+  }
+
+  it("@_all returns false when respondToAtAll is undefined (default)", () => {
+    const event = makeMinimalEvent(JSON.stringify({ text: "@_all hello" }));
+    expect(checkBotMentioned(event, BOT_OPEN_ID)).toBe(false);
+  });
+
+  it("@_all returns false when respondToAtAll is false", () => {
+    const event = makeMinimalEvent(JSON.stringify({ text: "@_all hello" }));
+    expect(checkBotMentioned(event, BOT_OPEN_ID, false)).toBe(false);
+  });
+
+  it("@_all returns true when respondToAtAll is true", () => {
+    const event = makeMinimalEvent(JSON.stringify({ text: "@_all hello" }));
+    expect(checkBotMentioned(event, BOT_OPEN_ID, true)).toBe(true);
+  });
+
+  it("direct bot mention still works regardless of respondToAtAll", () => {
+    const event = makeMinimalEvent(JSON.stringify({ text: "hello" }));
+    event.message.mentions = [{ key: "@_user_1", name: "Bot", id: { open_id: BOT_OPEN_ID } }];
+    // Works without respondToAtAll
+    expect(checkBotMentioned(event, BOT_OPEN_ID)).toBe(true);
+    // Works with respondToAtAll=false
+    expect(checkBotMentioned(event, BOT_OPEN_ID, false)).toBe(true);
+    // Works with respondToAtAll=true
+    expect(checkBotMentioned(event, BOT_OPEN_ID, true)).toBe(true);
+  });
+});
+
+describe("parseFeishuMessageEvent – @_all respondToAtAll integration", () => {
+  const BOT_OPEN_ID = "ou_bot_123";
+
+  it("@_all message returns mentionedBot=false by default (no respondToAtAll)", () => {
+    const event = makeEvent("group", [], "@_all hello everyone");
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("@_all message returns mentionedBot=true when respondToAtAll=true is passed", () => {
+    const event = makeEvent("group", [], "@_all hello everyone");
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID, undefined, true);
+    expect(ctx.mentionedBot).toBe(true);
+  });
+
+  it("@_all message returns mentionedBot=false when respondToAtAll=false is passed", () => {
+    const event = makeEvent("group", [], "@_all hello everyone");
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID, undefined, false);
+    expect(ctx.mentionedBot).toBe(false);
   });
 });

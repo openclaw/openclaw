@@ -244,12 +244,18 @@ export function parseMergeForwardContent(params: {
   return lines.join("\n");
 }
 
-export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolean {
+export function checkBotMentioned(
+  event: FeishuMessageLike,
+  botOpenId?: string,
+  respondToAtAll?: boolean,
+): boolean {
   if (!botOpenId) {
     return false;
   }
+  // @_all (@所有人) only triggers this bot when respondToAtAll is explicitly true.
+  // Default false prevents every bot in the group from responding simultaneously.
   if ((event.message.content ?? "").includes("@_all")) {
-    return true;
+    return respondToAtAll === true;
   }
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
