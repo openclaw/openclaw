@@ -20,6 +20,30 @@ describe("amazon-bedrock provider plugin", () => {
     ).toBeUndefined();
   });
 
+  it("enables prompt caching for Application Inference Profile ARNs with Claude model name", () => {
+    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
+    const arn =
+      "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
+    const result = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: arn,
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              models: [{ id: arn, name: "Claude Sonnet 4.6 via Inference Profile" }],
+            },
+          },
+        },
+      },
+      streamFn: baseFn,
+    } as never);
+
+    // Should return the original streamFn (no no-cache wrapper)
+    expect(result).toBe(baseFn);
+  });
+
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
     const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
     const wrapped = provider.wrapStreamFn?.({

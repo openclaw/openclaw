@@ -121,7 +121,8 @@ describe("isAnthropicBedrockModel", () => {
 
     it("should handle special characters in model IDs and names", () => {
       expect(isAnthropicBedrockModel("anthropic.claude-3_opus@v1:0")).toBe(true);
-      expect(isAnthropicBedrockModel("model-with-special-chars!@#", "Claude Model!")).toBe(true);
+      // IDs with special characters don't match short profile ID pattern
+      expect(isAnthropicBedrockModel("model-with-special-chars!@#", "Claude Model!")).toBe(false);
     });
   });
 

@@ -17,8 +17,20 @@ export default definePluginEntry({
       label: "Amazon Bedrock",
       docsPath: "/providers/models",
       auth: [],
-      wrapStreamFn: ({ modelId, streamFn }) =>
-        isAnthropicBedrockModel(modelId) ? streamFn : createBedrockNoCacheWrapper(streamFn),
+      wrapStreamFn: ({ modelId, config, provider, streamFn }) => {
+        // Look up model name from provider config for inference profile detection
+        let modelName: string | undefined;
+        const providerConfig = config?.models?.providers?.[provider];
+        if (providerConfig?.models) {
+          const modelDef = (providerConfig.models as Array<{ id?: string; name?: string }>).find(
+            (m) => m.id === modelId,
+          );
+          modelName = modelDef?.name;
+        }
+        return isAnthropicBedrockModel(modelId, modelName)
+          ? streamFn
+          : createBedrockNoCacheWrapper(streamFn);
+      },
       resolveDefaultThinkingLevel: ({ modelId }) =>
         CLAUDE_46_MODEL_RE.test(modelId.trim()) ? "adaptive" : undefined,
     });
