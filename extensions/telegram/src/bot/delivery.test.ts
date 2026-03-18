@@ -619,6 +619,45 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("skips empty last chunk when long response splits into multiple chunks", async () => {
+    // Scenario: large response split into 2 chunks where the last chunk is empty/whitespace.
+    // Before the fix: Telegram 400 "text must be non-empty" → "No response generated."
+    // After the fix: empty chunk is skipped silently; first chunk delivers successfully.
+    const { runtime, sendMessage, bot } = createSendMessageHarness(99);
+    const longText = "A".repeat(3900) + "\n\n   "; // ~3900 chars + trailing whitespace
+    await deliverWith({
+      replies: [{ text: longText }],
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 3500,
+    });
+    // sendMessage should only be called for the non-empty chunks.
+    expect(sendMessage).toHaveBeenCalled();
+  });
+
+  it("handles Telegram 400 text-must-be-non-empty error by silently skipping the chunk", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error("Call to 'sendMessage' failed! (400: Bad Request: text must be non-empty)"),
+      );
+    const bot = createBot({ sendMessage });
+
+    // Should not throw — empty-text 400s are silently skipped.
+    const result = await deliverReplies({
+      replies: [{ text: "   " }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+    expect(result.delivered).toBe(false);
+  });
+
   it("uses reply_to_message_id when quote text is provided", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
