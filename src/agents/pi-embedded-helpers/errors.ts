@@ -852,7 +852,7 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
 
-function isJsonApiInternalServerError(raw: string): boolean {
+function isJsonApiTransientError(raw: string): boolean {
   if (!raw) {
     return false;
   }
@@ -861,7 +861,14 @@ function isJsonApiInternalServerError(raw: string): boolean {
   // {"type":"error","error":{"type":"api_error","message":"..."}}
   // Some providers (e.g. MiniMax) use non-standard messages like "unknown error, 520 (1000)"
   // instead of "internal server error", so we match on the error type alone. (#49440)
-  return value.includes('"type":"api_error"');
+  if (!value.includes('"type":"api_error"')) {
+    return false;
+  }
+  // Guard: a body whose error type is "api_error" but whose message carries a billing or
+  // auth signal must not be shadowed here — let those classifiers win downstream.
+  return (
+    !isBillingErrorMessage(raw) && !isAuthErrorMessage(raw) && !isAuthPermanentErrorMessage(raw)
+  );
 }
 
 export function parseImageDimensionError(raw: string): {
@@ -1014,7 +1021,7 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     // Treat remaining transient 5xx provider failures as retryable transport issues.
     return "timeout";
   }
-  if (isJsonApiInternalServerError(raw)) {
+  if (isJsonApiTransientError(raw)) {
     return "timeout";
   }
   if (isCloudCodeAssistFormatError(raw)) {

@@ -67,6 +67,20 @@ describe("MiniMax HTTP 520 failover (#49440)", () => {
         '{"type":"error","error":{"type":"auth_error","message":"invalid api key provided"}}';
       expect(classifyFailoverReason(raw)).toBe("auth");
     });
+
+    it("does not misclassify api_error body with billing message as timeout", () => {
+      // A provider that wraps billing errors under "api_error" type must still resolve to
+      // "billing", not "timeout". Previously isJsonApiTransientError would shadow this. (#49440)
+      const raw = '{"type":"error","error":{"type":"api_error","message":"insufficient credits"}}';
+      expect(classifyFailoverReason(raw)).toBe("billing");
+    });
+
+    it("does not misclassify api_error body with auth message as timeout", () => {
+      // Same guard: auth errors wrapped in api_error type must resolve to "auth". (#49440)
+      const raw =
+        '{"type":"error","error":{"type":"api_error","message":"invalid api key provided"}}';
+      expect(classifyFailoverReason(raw)).toBe("auth");
+    });
   });
 
   describe("classifyFailoverReason — prefixed with HTTP 520", () => {
