@@ -55,8 +55,9 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
 }
 
 export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
-  // Per-client seq counter. Only incremented when an event is actually sent to
-  // that client, so scope filtering and slow-consumer drops never cause gaps.
+  // Per-client seq counter. Incremented when an event is sent *or* intentionally
+  // dropped via dropIfSlow, so the client sees a seq gap and can trigger onGap.
+  // Only scope filtering (client never subscribed) skips without advancing seq.
   const clientSeqs = new WeakMap<GatewayWsClient, number>();
 
   const broadcastInternal = (
@@ -87,6 +88,13 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       }
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
       if (slow && opts?.dropIfSlow) {
+        // Advance seq without sending so the client detects a gap via onGap.
+        // This is intentional: dropIfSlow events (e.g. exec.approval.requested)
+        // are stateful, and the UI relies on gap detection to surface stale state.
+        if (!isTargeted) {
+          const prev = clientSeqs.get(c) ?? 0;
+          clientSeqs.set(c, prev + 1);
+        }
         continue;
       }
       if (slow) {
