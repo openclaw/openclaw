@@ -68,4 +68,6 @@ export type BrowserConfig = {
    * Example: ["--window-size=1920,1080", "--disable-infobars"]
    */
   extraArgs?: string[];
+  /** Enable GPU acceleration in headless mode. Requires GPU devices (/dev/dri/*). Default: false */
+  gpuEnabled?: boolean;
 };

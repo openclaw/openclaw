@@ -31,6 +31,7 @@ export type ResolvedBrowserConfig = {
   color: string;
   executablePath?: string;
   headless: boolean;
+  gpuEnabled: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
   defaultProfile: string;
@@ -248,6 +249,7 @@ export function resolveBrowserConfig(
   }
 
   const headless = cfg?.headless === true;
+  const gpuEnabled = cfg?.gpuEnabled === true;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
   const executablePath = cfg?.executablePath?.trim() || undefined;
@@ -294,6 +296,7 @@ export function resolveBrowserConfig(
     color: defaultColor,
     executablePath,
     headless,
+    gpuEnabled,
     noSandbox,
     attachOnly,
     defaultProfile,
