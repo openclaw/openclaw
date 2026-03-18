@@ -1049,6 +1049,11 @@ export async function runEmbeddedAttempt(
         params.thinkLevel,
         sessionAgentId,
         activeSkillNames.length > 0 ? activeSkillNames : undefined,
+        {
+          threadRunId: params.runId,
+          sessionKey: params.sessionKey,
+          threadId: params.sessionId,
+        },
       );
 
       // Forward sender identity as HTTP headers so downstream LLM proxies can
