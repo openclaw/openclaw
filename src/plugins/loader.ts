@@ -202,9 +202,15 @@ const resolvePluginSdkAlias = (): string | null =>
 function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
   return {
     interopDefault: true,
-    // Prefer Node's native sync ESM loader for built dist/*.js modules so
-    // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
-    tryNative: true,
+    // Do NOT set tryNative: true here. Node 22+ has native TypeScript support
+    // (type stripping), so jiti's tryNative path loads .ts files via the native
+    // ESM dynamic import(), which succeeds for the file itself but then fails to
+    // resolve its .js-extension sub-imports (ESM convention) because the native
+    // ESM resolver does not remap .js→.ts. jiti's async tryNative path has no
+    // .catch() fallback, so the error propagates instead of falling back to
+    // jiti's own CJS transform. Singleton coherence for pre-loaded dist/*.js
+    // modules is preserved by jiti's moduleCache (shares nativeRequire.cache).
+    tryNative: false,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
     ...(Object.keys(aliasMap).length > 0
       ? {
