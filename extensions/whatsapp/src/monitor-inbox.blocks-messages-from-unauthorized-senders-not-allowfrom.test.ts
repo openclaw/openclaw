@@ -21,7 +21,7 @@ const TIMESTAMP_OFF_MESSAGES_CFG = {
 } as const;
 
 async function flushInboundQueue() {
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 25));
 }
 
 const createNotifyUpsert = (message: Record<string, unknown>) => ({
