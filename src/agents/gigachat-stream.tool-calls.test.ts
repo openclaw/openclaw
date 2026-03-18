@@ -34,6 +34,7 @@ describe("createGigachatStreamFn tool calling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clientConfigs.length = 0;
+    vi.unstubAllEnvs();
   });
 
   it("round-trips sanitized tool names for streamed function calls", async () => {
@@ -175,6 +176,75 @@ describe("createGigachatStreamFn tool calling", () => {
     const event = await stream.result();
 
     expect(event.content).toEqual([{ type: "text", text: "final tail" }]);
+  });
+
+  it("prefers the resolved GigaChat baseUrl over the env override", async () => {
+    vi.stubEnv("GIGACHAT_BASE_URL", "https://env-host.example/api/v1");
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://resolved-host.example/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      { messages: [], tools: [] } as never,
+      { apiKey: "token" } as never,
+    );
+
+    const event = await stream.result();
+
+    expect(event.content).toEqual([{ type: "text", text: "done" }]);
+    expect(clientConfigs).toHaveLength(1);
+    expect(clientConfigs[0]?.baseUrl).toBe("https://resolved-host.example/api/v1");
+  });
+
+  it("forwards resolved model headers and caller headers on the custom transport", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      {
+        api: "gigachat",
+        provider: "gigachat",
+        id: "GigaChat-2-Max",
+        headers: {
+          "X-Model-Header": "model-value",
+        },
+      } as never,
+      { messages: [], tools: [] } as never,
+      {
+        apiKey: "token",
+        headers: {
+          "X-Caller-Header": "caller-value",
+        },
+      } as never,
+    );
+
+    const event = await stream.result();
+
+    expect(event.content).toEqual([{ type: "text", text: "done" }]);
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer test-token",
+          Accept: "text/event-stream",
+          "X-Model-Header": "model-value",
+          "X-Caller-Header": "caller-value",
+        }),
+      }),
+    );
   });
 
   it("sanitizes historical assistant/tool result names in the outbound request", async () => {

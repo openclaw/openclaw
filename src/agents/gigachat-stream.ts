@@ -43,6 +43,15 @@ function stripLeakedFunctionCallPrelude(text: string): string {
   return text.replace(/^\s*assistant\s+function\s+call(?:\s*([A-Za-z0-9_.:/-]+))?\s*\{\s*/i, "");
 }
 
+function resolveGigachatModelHeaders(model: {
+  headers?: unknown;
+}): Record<string, string> | undefined {
+  if (!model.headers || typeof model.headers !== "object" || Array.isArray(model.headers)) {
+    return undefined;
+  }
+  return model.headers as Record<string, string>;
+}
+
 // ── Function name sanitization ──────────────────────────────────────────────
 // GigaChat requires function names to be alphanumeric + underscore only.
 
@@ -434,9 +443,10 @@ async function withRetry<T>(
 // ── Stream function ─────────────────────────────────────────────────────────
 
 export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
+  const configuredBaseUrl = opts.baseUrl.trim();
   const envBaseUrl = process.env.GIGACHAT_BASE_URL?.trim();
   const effectiveBaseUrl =
-    envBaseUrl || opts.baseUrl || "https://gigachat.devices.sberbank.ru/api/v1";
+    configuredBaseUrl || envBaseUrl || "https://gigachat.devices.sberbank.ru/api/v1";
 
   const envVerifySsl = process.env.GIGACHAT_VERIFY_SSL_CERTS?.trim().toLowerCase();
   const insecureTls = opts.insecureTls ?? (envVerifySsl === "false" || envVerifySsl === "0");
@@ -650,17 +660,21 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
         const requestId = randomUUID();
         log.debug(`GigaChat request ${requestId}: starting`);
 
+        const headers: Record<string, string> = {
+          ...resolveGigachatModelHeaders(model),
+          ...options?.headers,
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "text/event-stream",
+          "Cache-Control": "no-store",
+          "X-Request-ID": requestId,
+        };
+
         const response = await axiosClient.request({
           method: "POST",
           url: "/chat/completions",
           data: { ...chatRequest, stream: true },
           responseType: "stream",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            Accept: "text/event-stream",
-            "Cache-Control": "no-store",
-            "X-Request-ID": requestId,
-          },
+          headers,
           signal: options?.signal,
         });
 
