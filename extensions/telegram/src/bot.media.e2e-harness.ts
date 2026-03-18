@@ -68,9 +68,35 @@ export const telegramBotRuntimeForTest = {
   },
   sequentialize: () => vi.fn(),
   apiThrottler: () => throttlerSpy(),
+};
+
+const mediaHarnessReplySpy = vi.hoisted(() =>
+  vi.fn(async (_ctx, opts) => {
+    await opts?.onReplyStart?.();
+    return undefined;
+  }),
+);
+const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
+  vi.fn(async (params) => {
+    await params.dispatcherOptions?.typingCallbacks?.start?.();
+    const reply = await mediaHarnessReplySpy(params.ctx, params.replyOptions);
+    const payloads = reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
+    for (const payload of payloads) {
+      await params.dispatcherOptions?.deliver?.(payload, { kind: "final" });
+    }
+    return { queuedFinal: false, counts: {} };
+  }),
+);
+export const telegramBotDepsForTest = {
   loadConfig: () => ({
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
   }),
+  resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/telegram-media-sessions.json"),
+  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
+  enqueueSystemEvent: vi.fn(),
+  dispatchReplyWithBufferedBlockDispatcher: mediaHarnessDispatchReplyWithBufferedBlockDispatcher,
+  listSkillCommandsForAgents: vi.fn(() => []),
+  wasSentByBot: vi.fn(() => false),
 };
 
 beforeEach(() => {
@@ -131,10 +157,11 @@ vi.doMock("openclaw/plugin-sdk/conversation-runtime", () => ({
   })),
 }));
 
-vi.doMock("openclaw/plugin-sdk/reply-runtime", () => {
-  const replySpy = vi.fn(async (_ctx, opts) => {
-    await opts?.onReplyStart?.();
-    return undefined;
-  });
-  return { getReplyFromConfig: replySpy, __replySpy: replySpy };
+vi.doMock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    getReplyFromConfig: mediaHarnessReplySpy,
+    __replySpy: mediaHarnessReplySpy,
+  };
 });
