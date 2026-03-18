@@ -1,3 +1,7 @@
+import {
+  setFeishuThreadBindingIdleTimeoutBySessionKey,
+  setFeishuThreadBindingMaxAgeBySessionKey,
+} from "../../../extensions/feishu/src/thread-bindings.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
@@ -568,14 +572,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
           });
     }
     if (onFeishu) {
-      const feishuBindings = await import("../../../extensions/feishu/src/thread-bindings.js");
       return action === SESSION_ACTION_IDLE
-        ? feishuBindings.setFeishuThreadBindingIdleTimeoutBySessionKey({
+        ? setFeishuThreadBindingIdleTimeoutBySessionKey({
             targetSessionKey: feishuBinding!.targetSessionKey,
             accountId,
             idleTimeoutMs: durationMs,
           })
-        : feishuBindings.setFeishuThreadBindingMaxAgeBySessionKey({
+        : setFeishuThreadBindingMaxAgeBySessionKey({
             targetSessionKey: feishuBinding!.targetSessionKey,
             accountId,
             maxAgeMs: durationMs,

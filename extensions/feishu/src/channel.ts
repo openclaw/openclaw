@@ -45,6 +45,10 @@ import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupAdapter } from "./setup-core.js";
 import { feishuSetupWizard } from "./setup-surface.js";
 import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
+import {
+  createFeishuThreadBindingManager,
+  getFeishuThreadBindingManager,
+} from "./thread-bindings.js";
 import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 
 const meta: ChannelMeta = {
@@ -966,7 +970,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       const { monitorFeishuProvider } = await import("./monitor.js");
-      const { createFeishuThreadBindingManager } = await import("./thread-bindings.js");
       const { resolveThreadBindingSpawnPolicy } = await import("openclaw/plugin-sdk/feishu");
       const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
       const port = account.config?.webhookPort ?? null;
@@ -1001,7 +1004,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       }
     },
     stopAccount: async (ctx) => {
-      const { getFeishuThreadBindingManager } = await import("./thread-bindings.js");
       const manager = getFeishuThreadBindingManager(ctx.accountId);
       if (manager) {
         manager.stop();
