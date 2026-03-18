@@ -287,7 +287,7 @@ describe("coerceFormValues", () => {
     expect(coerceFormValues(undefined, topLevelSchema)).toBeUndefined();
   });
 
-  it("handles anyOf schemas with number variant", () => {
+  it("preserves string values when anyOf also allows strings", () => {
     const schema: JsonSchema = {
       type: "object",
       properties: {
@@ -298,8 +298,24 @@ describe("coerceFormValues", () => {
     };
     const form = { timeout: "30" };
     const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
-    expect(typeof coerced.timeout).toBe("number");
-    expect(coerced.timeout).toBe(30);
+    expect(coerced.timeout).toBe("30");
+  });
+
+  it("preserves large Discord-style ids for string-or-number unions", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        ids: {
+          type: "array",
+          items: {
+            anyOf: [{ type: "string" }, { type: "number" }],
+          },
+        },
+      },
+    };
+    const form = { ids: ["1234567890123456789"] };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    expect(coerced.ids).toEqual(["1234567890123456789"]);
   });
 
   it("handles integer schema type", () => {
@@ -477,12 +493,12 @@ describe("coerceFormValues", () => {
     expect(values).toEqual([1, 3]);
   });
 
-  it("coerces boolean in anyOf union", () => {
+  it("coerces boolean in anyOf union when string is not allowed", () => {
     const schema: JsonSchema = {
       type: "object",
       properties: {
         flag: {
-          anyOf: [{ type: "boolean" }, { type: "string" }],
+          anyOf: [{ type: "boolean" }, { type: "null" }],
         },
       },
     };

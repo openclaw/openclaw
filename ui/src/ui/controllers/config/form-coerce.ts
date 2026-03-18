@@ -57,6 +57,8 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     const variants = (schema.anyOf ?? schema.oneOf ?? []).filter(
       (v) => !(v.type === "null" || (Array.isArray(v.type) && v.type.includes("null"))),
     );
+    const variantTypes = variants.map((variant) => schemaType(variant));
+    const hasStringVariant = variantTypes.includes("string");
 
     if (variants.length === 1) {
       return coerceFormValues(value, variants[0]);
@@ -64,6 +66,9 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
 
     // Try number/boolean coercion for string values
     if (typeof value === "string") {
+      if (hasStringVariant) {
+        return value;
+      }
       for (const variant of variants) {
         const variantType = schemaType(variant);
         if (variantType === "number" || variantType === "integer") {
