@@ -1105,7 +1105,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           capability !== "mcpServers" &&
           capability !== "settings" &&
           !(
-            capability === "commands" &&
+            (capability === "commands" ||
+              capability === "agents" ||
+              capability === "outputStyles" ||
+              capability === "lspServers") &&
             (record.bundleFormat === "claude" || record.bundleFormat === "cursor")
           ) &&
           !(
