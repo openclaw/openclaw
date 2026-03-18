@@ -18,11 +18,25 @@ export type TelegramBotDeps = {
 };
 
 export const defaultTelegramBotDeps: TelegramBotDeps = {
-  loadConfig,
-  resolveStorePath,
-  readChannelAllowFromStore,
-  enqueueSystemEvent,
-  dispatchReplyWithBufferedBlockDispatcher,
-  listSkillCommandsForAgents,
-  wasSentByBot,
+  get loadConfig() {
+    return loadConfig;
+  },
+  get resolveStorePath() {
+    return resolveStorePath;
+  },
+  get readChannelAllowFromStore() {
+    return readChannelAllowFromStore;
+  },
+  get enqueueSystemEvent() {
+    return enqueueSystemEvent;
+  },
+  get dispatchReplyWithBufferedBlockDispatcher() {
+    return dispatchReplyWithBufferedBlockDispatcher;
+  },
+  get listSkillCommandsForAgents() {
+    return listSkillCommandsForAgents;
+  },
+  get wasSentByBot() {
+    return wasSentByBot;
+  },
 };
