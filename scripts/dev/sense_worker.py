@@ -31,7 +31,13 @@ def resolve_token(token: str | None, token_env: str | None) -> str | None:
     return None
 
 
-def request_json(method: str, url: str, payload: dict | None, timeout: float, token: str | None = None) -> int:
+def request_json_result(
+    method: str,
+    url: str,
+    payload: dict | None,
+    timeout: float,
+    token: str | None = None,
+) -> dict:
     headers = {"Accept": "application/json"}
     if token:
         headers["X-Sense-Worker-Token"] = token
@@ -43,49 +49,33 @@ def request_json(method: str, url: str, payload: dict | None, timeout: float, to
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8", errors="replace")
-            print(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "status": resp.status,
-                        "url": url,
-                        "body": try_parse_json(body),
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            )
-            return 0
+            return {
+                "ok": True,
+                "status": resp.status,
+                "url": url,
+                "body": try_parse_json(body),
+            }
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "status": exc.code,
-                    "url": url,
-                    "body": try_parse_json(body),
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            file=sys.stderr,
-        )
-        return 1
+        return {
+            "ok": False,
+            "status": exc.code,
+            "url": url,
+            "body": try_parse_json(body),
+        }
     except urllib.error.URLError as exc:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "url": url,
-                    "error": str(exc.reason),
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            file=sys.stderr,
-        )
-        return 2
+        return {
+            "ok": False,
+            "url": url,
+            "error": str(exc.reason),
+        }
+
+
+def request_json(method: str, url: str, payload: dict | None, timeout: float, token: str | None = None) -> int:
+    result = request_json_result(method, url, payload, timeout, token=token)
+    stream = sys.stdout if result.get("ok") else sys.stderr
+    print(json.dumps(result, ensure_ascii=False, indent=2), file=stream)
+    return 0 if result.get("ok") else 1
 
 
 def main() -> int:

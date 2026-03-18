@@ -528,6 +528,7 @@
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
     "release:check": "pnpm config:docs:check && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
+    "sense:analyze": "python3 scripts/dev/sense_summarize_workflow.py --task analyze_text",
     "sense:draft": "python3 scripts/dev/sense_summarize_workflow.py --task generate_draft",
     "sense:freeform": "node --import tsx scripts/dev/sense_freeform_embedded.ts",
     "sense:summarize": "python3 scripts/dev/sense_summarize_workflow.py",

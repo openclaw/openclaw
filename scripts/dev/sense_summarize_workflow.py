@@ -6,7 +6,7 @@ import re
 import sys
 from pathlib import Path
 
-from sense_worker import DEFAULT_BASE_URL, DEFAULT_TIMEOUT, request_json
+from sense_worker import DEFAULT_BASE_URL, DEFAULT_TIMEOUT, request_json_result
 
 
 def _read_input(args: argparse.Namespace) -> str:
@@ -53,6 +53,25 @@ def build_local_fallback_draft(text: str) -> str:
     )
 
 
+def build_local_fallback_analysis(text: str) -> dict:
+    cleaned = _normalize_whitespace(text)
+    if not cleaned:
+        return {
+            "summary": "解析対象が空です。",
+            "key_points": [],
+            "suggested_next_action": "入力内容を確認して再実行してください。",
+        }
+    parts = re.split(r"(?<=[。！？.!?])\s+", cleaned)
+    points = [part.strip()[:100] for part in parts if part.strip()][:3]
+    if not points:
+        points = [cleaned[:100]]
+    return {
+        "summary": cleaned[:140],
+        "key_points": points,
+        "suggested_next_action": "主要論点を確認し、次の担当へ引き継いでください。",
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Minimal ops workflow: offload summarize to Sense worker with local fallback."
@@ -88,15 +107,23 @@ def main() -> int:
         f"[sense-workflow] agent={args.agent} action=execute task={args.task} target={url}",
         file=sys.stderr,
     )
-    rc = request_json("POST", url, payload, args.timeout, token=token)
-    if rc == 0:
+    result = request_json_result("POST", url, payload, args.timeout, token=token)
+    stream = sys.stdout if result.get("ok") else sys.stderr
+    print(json.dumps(result, ensure_ascii=False, indent=2), file=stream)
+    if result.get("ok"):
         return 0
+    status = result.get("status")
+    if status == 401:
+        return 1
     if args.no_fallback:
-        return rc
+        return 1
 
     if args.task == "generate_draft":
         fallback_key = "draft"
         fallback_value = build_local_fallback_draft(text)
+    elif args.task == "analyze_text":
+        fallback_key = "analysis"
+        fallback_value = build_local_fallback_analysis(text)
     else:
         fallback_key = "summary"
         fallback_value = build_local_fallback_summary(text)

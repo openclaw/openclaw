@@ -10,6 +10,7 @@ Provide a minimal OpenClaw-side workflow for offloading selected text tasks from
 - Primary tasks:
   - `summarize`
   - `generate_draft`
+  - `analyze_text`
 - Transport: `POST http://192.168.11.11:8787/execute`
 - Auth: optional shared header `X-Sense-Worker-Token`
 - Safe default: local fallback summary when Sense is unavailable or times out
@@ -26,6 +27,13 @@ Generate a short draft:
 ```bash
 cd /home/deepnoa/openclaw
 pnpm sense:draft -- --input "Prepare a short follow-up note for a corporate inquiry."
+```
+
+Run lightweight analysis:
+
+```bash
+cd /home/deepnoa/openclaw
+pnpm sense:analyze -- --input "Identify the main themes, risks, and next action from this note."
 ```
 
 You can also pass a file:
@@ -60,6 +68,23 @@ Fallback run prints JSON like:
 
 For `task=generate_draft`, fallback returns `draft` instead of `summary`.
 
+For `task=analyze_text`, fallback returns:
+
+```json
+{
+  "ok": true,
+  "path": "local_fallback",
+  "agent": "ops",
+  "task": "analyze_text",
+  "analysis": {
+    "summary": "...",
+    "key_points": ["...", "..."],
+    "suggested_next_action": "..."
+  },
+  "error": "sense_worker_unavailable"
+}
+```
+
 ## Logging
 
 The workflow writes a short request log to stderr:
@@ -75,17 +100,17 @@ The Sense adapter itself logs request / response / timeout details when invoked 
 - Success:
   - `pnpm sense:summarize -- --input "..."`
   - `pnpm sense:draft -- --input "..."`
+  - `pnpm sense:analyze -- --input "..."`
 - Fallback:
   - `pnpm sense:summarize -- --base-url http://192.168.11.11:9999 --input "..."`
   - `pnpm sense:draft -- --base-url http://192.168.11.11:9999 --input "..."`
+  - `pnpm sense:analyze -- --base-url http://192.168.11.11:9999 --input "..."`
 
 ## Troubleshooting
 
 - `401 Unauthorized`
   - `SENSE_WORKER_TOKEN` on T550 does not match the worker-side token.
-- token header is sent but request still succeeds with a wrong token
-  - current Sense worker is not yet enforcing token verification.
-  - OpenClaw-side auth transport is ready, but worker-side `401` enforcement must be enabled on Sense.
+  - helper workflows do not fallback on `401`; unauthorized should stay visible to the operator.
 - `fetch failed`
   - worker is unavailable, wrong base URL, or LAN route is down.
 - timeout
@@ -94,3 +119,12 @@ The Sense adapter itself logs request / response / timeout details when invoked 
 ## Next integration step
 
 When plugin tools are consistently exposed inside the target agent runtime, replace this explicit helper workflow with a native agent-side call to `sense-worker(action=execute, task=summarize)` while keeping the same fallback contract.
+
+## Dispatcher note
+
+- The current live worker already accepts arbitrary `task` names and returns a generic success envelope.
+- The long-term worker-side direction is:
+  - auth check
+  - dispatcher
+  - per-task handlers (`summarize`, `generate_draft`, `analyze_text`, future heavy tasks)
+  - worker-internal adapters for Ollama / NemoClaw / GPU paths
