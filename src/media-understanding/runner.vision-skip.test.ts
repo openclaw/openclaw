@@ -1,12 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  buildProviderRegistry,
-  createMediaAttachmentCache,
-  normalizeMediaAttachments,
-  runCapability,
-} from "./runner.js";
 
 const catalog = [
   {
@@ -17,17 +11,34 @@ const catalog = [
   },
 ];
 
+const loadModelCatalog = vi.hoisted(() => vi.fn(async () => catalog));
+
 vi.mock("../agents/model-catalog.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/model-catalog.js")>(
     "../agents/model-catalog.js",
   );
   return {
     ...actual,
-    loadModelCatalog: vi.fn(async () => catalog),
+    loadModelCatalog,
   };
 });
 
+let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
+let createMediaAttachmentCache: typeof import("./runner.js").createMediaAttachmentCache;
+let normalizeMediaAttachments: typeof import("./runner.js").normalizeMediaAttachments;
+let runCapability: typeof import("./runner.js").runCapability;
+
 describe("runCapability image skip", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      buildProviderRegistry,
+      createMediaAttachmentCache,
+      normalizeMediaAttachments,
+      runCapability,
+    } = await import("./runner.js"));
+  });
+
   it("skips image understanding when the active model supports vision", async () => {
     const ctx: MsgContext = { MediaPath: "/tmp/image.png", MediaType: "image/png" };
     const media = normalizeMediaAttachments(ctx);

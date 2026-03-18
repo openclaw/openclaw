@@ -1,6 +1,5 @@
 // Public web-search registration helpers for provider plugins.
 
-import type { OpenClawConfig } from "../config/config.js";
 import type {
   WebSearchCredentialResolutionSource,
   WebSearchProviderPlugin,
@@ -9,21 +8,11 @@ import type {
 export { readNumberParam, readStringArrayParam, readStringParam } from "../agents/tools/common.js";
 export { resolveCitationRedirectUrl } from "../agents/tools/web-search-citation-redirect.js";
 export {
-  getScopedCredentialValue,
-  getTopLevelCredentialValue,
-  resolveProviderWebSearchPluginConfig,
-  setScopedCredentialValue,
-  setProviderWebSearchPluginConfigValue,
-  setTopLevelCredentialValue,
-} from "../agents/tools/web-search-provider-config.js";
-export type { SearchConfigRecord } from "../agents/tools/web-search-provider-common.js";
-export { resolveWebSearchProviderCredential } from "../agents/tools/web-search-provider-credentials.js";
-export { withTrustedWebToolsEndpoint } from "../agents/tools/web-guarded-fetch.js";
-export {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
-  MAX_SEARCH_COUNT,
+  FRESHNESS_TO_RECENCY,
   isoToPerplexityDate,
+  MAX_SEARCH_COUNT,
   normalizeFreshness,
   normalizeToIsoDate,
   readCachedSearchPayload,
@@ -38,6 +27,17 @@ export {
   writeCachedSearchPayload,
 } from "../agents/tools/web-search-provider-common.js";
 export {
+  getScopedCredentialValue,
+  getTopLevelCredentialValue,
+  resolveProviderWebSearchPluginConfig,
+  setScopedCredentialValue,
+  setProviderWebSearchPluginConfigValue,
+  setTopLevelCredentialValue,
+} from "../agents/tools/web-search-provider-config.js";
+export type { SearchConfigRecord } from "../agents/tools/web-search-provider-common.js";
+export { resolveWebSearchProviderCredential } from "../agents/tools/web-search-provider-credentials.js";
+export { withTrustedWebToolsEndpoint } from "../agents/tools/web-guarded-fetch.js";
+export {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
   normalizeCacheKey,
@@ -51,7 +51,6 @@ export { enablePluginInConfig } from "../plugins/enable.js";
 export { formatCliCommand } from "../cli/command-format.js";
 export { wrapWebContent } from "../security/external-content.js";
 export type {
-  OpenClawConfig,
   WebSearchCredentialResolutionSource,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
