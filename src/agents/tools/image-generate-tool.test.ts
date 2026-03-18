@@ -14,8 +14,23 @@ function stubImageGenerationProviders() {
       id: "google",
       defaultModel: "gemini-3.1-flash-image-preview",
       models: ["gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview"],
-      supportedResolutions: ["1K", "2K", "4K"],
-      supportsImageEditing: true,
+      capabilities: {
+        generate: {
+          maxCount: 4,
+          supportsAspectRatio: true,
+          supportsResolution: true,
+        },
+        edit: {
+          enabled: true,
+          maxInputImages: 5,
+          supportsAspectRatio: true,
+          supportsResolution: true,
+        },
+        geometry: {
+          resolutions: ["1K", "2K", "4K"],
+          aspectRatios: ["1:1", "16:9"],
+        },
+      },
       generateImage: vi.fn(async () => {
         throw new Error("not used");
       }),
@@ -24,8 +39,19 @@ function stubImageGenerationProviders() {
       id: "openai",
       defaultModel: "gpt-image-1",
       models: ["gpt-image-1"],
-      supportedSizes: ["1024x1024", "1024x1536", "1536x1024"],
-      supportsImageEditing: false,
+      capabilities: {
+        generate: {
+          maxCount: 4,
+          supportsSize: true,
+        },
+        edit: {
+          enabled: false,
+          maxInputImages: 0,
+        },
+        geometry: {
+          sizes: ["1024x1024", "1024x1536", "1536x1024"],
+        },
+      },
       generateImage: vi.fn(async () => {
         throw new Error("not used");
       }),
@@ -398,7 +424,8 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain("google (default gemini-3.1-flash-image-preview)");
     expect(text).toContain("gemini-3.1-flash-image-preview");
     expect(text).toContain("gemini-3-pro-image-preview");
-    expect(text).toContain("editing");
+    expect(text).toContain("editing up to 5 refs");
+    expect(text).toContain("aspect ratios 1:1, 16:9");
     expect(result).toMatchObject({
       details: {
         providers: expect.arrayContaining([
@@ -409,9 +436,139 @@ describe("createImageGenerateTool", () => {
               "gemini-3.1-flash-image-preview",
               "gemini-3-pro-image-preview",
             ]),
+            capabilities: expect.objectContaining({
+              edit: expect.objectContaining({
+                enabled: true,
+                maxInputImages: 5,
+              }),
+            }),
           }),
         ]),
       },
     });
+  });
+
+  it("rejects provider-specific edit limits before runtime", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "fal",
+        defaultModel: "fal-ai/flux/dev",
+        models: ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsSize: true,
+            supportsAspectRatio: true,
+            supportsResolution: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 1,
+            supportsSize: true,
+            supportsAspectRatio: false,
+            supportsResolution: true,
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("input-image"),
+      contentType: "image/png",
+    });
+
+    const tool = createImageGenerateTool({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "fal/fal-ai/flux/dev",
+            },
+          },
+        },
+      },
+      workspaceDir: process.cwd(),
+    });
+
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image_generate tool");
+    }
+
+    await expect(
+      tool.execute("call-fal-edit", {
+        prompt: "combine",
+        images: ["./fixtures/a.png", "./fixtures/b.png"],
+      }),
+    ).rejects.toThrow("fal edit supports at most 1 reference image");
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported provider-specific edit aspect ratio overrides before runtime", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "fal",
+        defaultModel: "fal-ai/flux/dev",
+        models: ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsSize: true,
+            supportsAspectRatio: true,
+            supportsResolution: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 1,
+            supportsSize: true,
+            supportsAspectRatio: false,
+            supportsResolution: true,
+          },
+          geometry: {
+            aspectRatios: ["1:1", "16:9"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("input-image"),
+      contentType: "image/png",
+    });
+
+    const tool = createImageGenerateTool({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "fal/fal-ai/flux/dev",
+            },
+          },
+        },
+      },
+      workspaceDir: process.cwd(),
+    });
+
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image_generate tool");
+    }
+
+    await expect(
+      tool.execute("call-fal-aspect", {
+        prompt: "edit",
+        image: "./fixtures/a.png",
+        aspectRatio: "16:9",
+      }),
+    ).rejects.toThrow("fal edit does not support aspectRatio overrides");
+    expect(generateImage).not.toHaveBeenCalled();
   });
 });

@@ -6,6 +6,14 @@ const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
 const DEFAULT_FAL_EDIT_SUBPATH = "image-to-image";
 const DEFAULT_OUTPUT_FORMAT = "png";
+const FAL_SUPPORTED_SIZES = [
+  "1024x1024",
+  "1024x1536",
+  "1536x1024",
+  "1024x1792",
+  "1792x1024",
+] as const;
+const FAL_SUPPORTED_ASPECT_RATIOS = ["1:1", "4:3", "3:4", "16:9", "9:16"] as const;
 
 type FalGeneratedImage = {
   url?: string;
@@ -172,9 +180,27 @@ export function buildFalImageGenerationProvider(): ImageGenerationProviderPlugin
     label: "fal",
     defaultModel: DEFAULT_FAL_IMAGE_MODEL,
     models: [DEFAULT_FAL_IMAGE_MODEL, `${DEFAULT_FAL_IMAGE_MODEL}/${DEFAULT_FAL_EDIT_SUBPATH}`],
-    supportedSizes: ["1024x1024", "1024x1536", "1536x1024", "1024x1792", "1792x1024"],
-    supportedResolutions: ["1K", "2K", "4K"],
-    supportsImageEditing: true,
+    capabilities: {
+      generate: {
+        maxCount: 4,
+        supportsSize: true,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+      },
+      edit: {
+        enabled: true,
+        maxCount: 4,
+        maxInputImages: 1,
+        supportsSize: true,
+        supportsAspectRatio: false,
+        supportsResolution: true,
+      },
+      geometry: {
+        sizes: [...FAL_SUPPORTED_SIZES],
+        aspectRatios: [...FAL_SUPPORTED_ASPECT_RATIOS],
+        resolutions: ["1K", "2K", "4K"],
+      },
+    },
     async generateImage(req) {
       const auth = await resolveApiKeyForProvider({
         provider: "fal",
