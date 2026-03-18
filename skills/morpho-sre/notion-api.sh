@@ -188,9 +188,11 @@ main() {
             esac
           done
           local -a args=()
+          local property_id=""
           while IFS= read -r property; do
             [[ -n "$property" ]] || continue
-            args+=( 'filter_properties[]' "$property" )
+            property_id="$(validate_property_id "$property")"
+            args+=( 'filter_properties[]' "$property_id" )
           done < <(parse_csv_values "$filter_properties")
           if (( ${#args[@]} > 0 )); then
             notion_request \
@@ -230,9 +232,11 @@ main() {
             esac
           done
           local -a args=()
+          local property_id=""
           while IFS= read -r property; do
             [[ -n "$property" ]] || continue
-            args+=( 'filter_properties[]' "$property" )
+            property_id="$(validate_property_id "$property")"
+            args+=( 'filter_properties[]' "$property_id" )
           done < <(parse_csv_values "$filter_properties")
           if (( ${#args[@]} > 0 )); then
             notion_request GET "/pages/${page_id}" '' "${args[@]}"
@@ -244,9 +248,12 @@ main() {
           [[ -n "${3:-}" && -n "${4:-}" ]] || {
             die "usage: notion-api.sh page property <page-id-or-url> <property-id> [--page-size N] [--start-cursor CURSOR]"
           }
-          local property_page_id property_id page_size="" start_cursor=""
+          local property_page_id property_id encoded_property_id page_size="" start_cursor=""
           property_page_id="$(normalize_notion_id "$3")"
-          property_id="$4"
+          property_id="$(validate_property_id "$4")"
+          encoded_property_id="$(urlencode_preserving_pct_encoded "$property_id")" || {
+            die 'failed to URL-encode page property id'
+          }
           shift 4
           while [[ $# -gt 0 ]]; do
             case "$1" in
@@ -267,7 +274,7 @@ main() {
           done
           notion_request \
             GET \
-            "/pages/${property_page_id}/properties/$(urlencode_preserving_pct_encoded "$property_id")" \
+            "/pages/${property_page_id}/properties/${encoded_property_id}" \
             '' \
             start_cursor "$start_cursor" \
             page_size "$page_size"

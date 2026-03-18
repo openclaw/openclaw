@@ -75,7 +75,20 @@ for arg in "$@"; do
       exit 0
       ;;
     */v1/secret/data/openclaw-sre/all-secrets)
-      printf '{"data":{"data":{"NOTION_SECRET":"vault-token-abcdef"}}}\n'
+      case "${VAULT_RETURN_ERROR:-}" in
+        missing_key)
+          printf '{"data":{"data":{}}}\n'
+          ;;
+        malformed)
+          printf 'not-json\n'
+          ;;
+        network)
+          exit 28
+          ;;
+        *)
+          printf '{"data":{"data":{"NOTION_SECRET":"vault-token-abcdef"}}}\n'
+          ;;
+      esac
       exit 0
       ;;
   esac
@@ -144,10 +157,13 @@ test "$(normalize_notion_id '309d6993-9e6d-815e-b960-d3fc854d83d5')" = '309d6993
 test "$(normalize_notion_id 'https://www.notion.so/Eng-Post-Mortem-309d69939e6d815eb960d3fc854d83d5')" = '309d6993-9e6d-815e-b960-d3fc854d83d5'
 test "$(normalize_notion_id 'https://www.notion.so/Team/Database-name-309d69939e6d815eb960d3fc854d83d5?v=22222222222222222222222222222222')" = '309d6993-9e6d-815e-b960-d3fc854d83d5'
 test "$(normalize_notion_id 'https://www.notion.so/Page-309d69939e6d815eb960d3fc854d83d5#33333333333333333333333333333333')" = '309d6993-9e6d-815e-b960-d3fc854d83d5'
+test "$(validate_property_id 'title')" = 'title'
+test "$(validate_property_id 'f%5C%5C%3Ap')" = 'f%5C%5C%3Ap'
 test "$(urlencode_preserving_pct_encoded 'f%5C%5C%3Ap')" = 'f%5C%5C%3Ap'
 test "$(urlencode_preserving_pct_encoded 'status value')" = 'status%20value'
 test "$(redact_secret '12345678')" = '***'
-test "$(redact_secret '123456789')" = '1234...6789'
+test "$(redact_secret '123456789')" = '***'
+test "$(redact_secret '1234567890123')" = '123...123'
 
 test "$(validate_page_size 1)" = '1'
 test "$(validate_page_size 100)" = '100'
@@ -185,6 +201,55 @@ if (normalize_notion_id 'https://www.notion.so/no-id-here' >/dev/null 2>"${TMP}/
   exit 1
 fi
 rg -F 'failed to extract Notion id from URL' "${TMP}/missing-id.err" >/dev/null
+if (normalize_notion_id 'https://www.notion.so' >/dev/null 2>"${TMP}/invalid-url.err"); then
+  echo 'expected malformed notion URL to fail' >&2
+  exit 1
+fi
+rg -F 'invalid Notion URL format' "${TMP}/invalid-url.err" >/dev/null
+if (validate_property_id 'bad id' >/dev/null 2>"${TMP}/invalid-property.err"); then
+  echo 'expected invalid property id to fail' >&2
+  exit 1
+fi
+rg -F 'invalid Notion property id: bad id' "${TMP}/invalid-property.err" >/dev/null
+
+if (
+  unset NOTION_SECRET NOTION_TOKEN
+  export VAULT_ADDR='https://vault.test'
+  export VAULT_TOKEN='cached-vault-token'
+  export VAULT_RETURN_ERROR='missing_key'
+  export NOTION_CURL_BIN="$VAULT_CURL"
+  load_secret_from_vault_token >/dev/null 2>"${TMP}/vault-missing-key.err"
+); then
+  echo 'expected vault missing-key response to fail' >&2
+  exit 1
+fi
+rg -F 'NOTION_SECRET not found in vault path secret/data/openclaw-sre/all-secrets' "${TMP}/vault-missing-key.err" >/dev/null
+
+if (
+  unset NOTION_SECRET NOTION_TOKEN
+  export VAULT_ADDR='https://vault.test'
+  export VAULT_TOKEN='cached-vault-token'
+  export VAULT_RETURN_ERROR='malformed'
+  export NOTION_CURL_BIN="$VAULT_CURL"
+  load_secret_from_vault_token >/dev/null 2>"${TMP}/vault-malformed.err"
+); then
+  echo 'expected vault malformed JSON response to fail' >&2
+  exit 1
+fi
+rg -F 'vault returned invalid JSON at secret/data/openclaw-sre/all-secrets' "${TMP}/vault-malformed.err" >/dev/null
+
+if (
+  unset NOTION_SECRET NOTION_TOKEN
+  export VAULT_ADDR='https://vault.test'
+  export VAULT_TOKEN='cached-vault-token'
+  export VAULT_RETURN_ERROR='network'
+  export NOTION_CURL_BIN="$VAULT_CURL"
+  load_secret_from_vault_token >/dev/null 2>"${TMP}/vault-network.err"
+); then
+  echo 'expected vault network failure to fail' >&2
+  exit 1
+fi
+rg -F 'vault secret fetch failed at secret/data/openclaw-sre/all-secrets' "${TMP}/vault-network.err" >/dev/null
 
 export NOTION_SECRET='secret-token-abcdef'
 export NOTION_SKIP_VAULT=1

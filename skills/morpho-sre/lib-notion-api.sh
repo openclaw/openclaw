@@ -29,10 +29,10 @@ redact_secret() {
   local value="${1:-}"
   if [[ -z "$value" ]]; then
     printf '(not set)'
-  elif [[ ${#value} -le 8 ]]; then
+  elif [[ ${#value} -le 12 ]]; then
     printf '***'
   else
-    printf '%s...%s' "${value:0:4}" "${value: -4}"
+    printf '%s...%s' "${value:0:3}" "${value: -3}"
   fi
 }
 
@@ -69,6 +69,7 @@ normalize_notion_id() {
 
   local extracted=""
   if [[ "$raw" =~ ^https?:// ]]; then
+    [[ "$raw" =~ ^https?://[^/]+/.+ ]] || die "invalid Notion URL format: $raw"
     local path_only="$raw"
     path_only="${path_only%%#*}"
     path_only="${path_only%%\?*}"
@@ -94,6 +95,17 @@ validate_page_size() {
   [[ -n "$raw" ]] || die "invalid --page-size: expected integer 1-100"
   [[ "$raw" =~ ^[0-9]+$ ]] || die "invalid --page-size: expected integer 1-100"
   (( raw >= 1 && raw <= 100 )) || die "invalid --page-size: expected integer 1-100"
+  printf '%s\n' "$raw"
+}
+
+validate_property_id() {
+  local raw
+  raw="$(trim "${1:-}")"
+  [[ -n "$raw" ]] || die 'missing Notion property id'
+  [[ ${#raw} -le 256 ]] || die "invalid Notion property id: input too long (${#raw} chars)"
+  [[ "$raw" =~ ^([A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+$ ]] || {
+    die "invalid Notion property id: ${raw}"
+  }
   printf '%s\n' "$raw"
 }
 
@@ -261,8 +273,8 @@ notion_request() {
     url="$(append_query_param "$url" "$key" "$value")"
   done
 
-  local tmp_body=''
-  tmp_body="$(mktemp /tmp/notion-api-body.XXXXXX)" || die 'failed to create temp file'
+  local tmp_body='' tmp_root="${TMPDIR:-/tmp}"
+  tmp_body="$(mktemp "${tmp_root%/}/notion-api-body.XXXXXX")" || die 'failed to create temp file'
   trap '[[ -n "${tmp_body:-}" ]] && rm -f "$tmp_body"' RETURN
   local -a curl_args=(
     -sS
