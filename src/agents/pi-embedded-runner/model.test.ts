@@ -518,6 +518,44 @@ describe("resolveModel", () => {
     });
   });
 
+  it("preserves qualified OpenRouter model overrides when provider api is implicit", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            models: [
+              {
+                ...makeModel("openrouter/healer-alpha"),
+                reasoning: true,
+                contextWindow: 262144,
+                maxTokens: 65536,
+                headers: { "X-Model": "special" },
+              },
+            ],
+            headers: { "X-Provider": "provider" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openrouter", "openrouter/healer-alpha", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/healer-alpha",
+      api: "openai-responses",
+      reasoning: true,
+      contextWindow: 262144,
+      maxTokens: 65536,
+    });
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Provider": "provider",
+      "X-Model": "special",
+    });
+  });
+
   it("normalizes same-provider qualified ids before dynamic model hooks", async () => {
     const resolvePluginSpy = vi
       .spyOn(providerRuntime, "resolveProviderRuntimePlugin")
@@ -533,6 +571,7 @@ describe("resolveModel", () => {
             polza: {
               baseUrl: "https://proxy.example/v1",
               api: "openai-completions",
+              models: [],
             },
           },
         },
