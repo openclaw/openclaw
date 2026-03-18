@@ -100,7 +100,6 @@ export async function executeNodeHostCommand(
       params: {
         command: argv,
         rawCommand: params.command,
-        cwd: params.workdir,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
       },
@@ -113,7 +112,7 @@ export async function executeNodeHostCommand(
   }
   const runArgv = prepared.plan.argv;
   const runRawCommand = prepared.plan.commandText;
-  const runCwd = prepared.plan.cwd ?? params.workdir;
+  const runCwd = typeof prepared.plan.cwd === "string" ? prepared.plan.cwd : undefined;
   const runAgentId = prepared.plan.agentId ?? params.agentId;
   const runSessionKey = prepared.plan.sessionKey ?? params.sessionKey;
 
@@ -194,7 +193,7 @@ export async function executeNodeHostCommand(
       params: {
         command: runArgv,
         rawCommand: runRawCommand,
-        cwd: runCwd,
+        ...(runCwd ? { cwd: runCwd } : {}),
         env: nodeEnv,
         timeoutMs: typeof params.timeoutSec === "number" ? params.timeoutSec * 1000 : undefined,
         agentId: runAgentId,

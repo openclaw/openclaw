@@ -283,6 +283,79 @@ describe("exec approvals", () => {
     await expect.poll(() => agentParams, { timeout: 2_000, interval: 20 }).toBeTruthy();
   });
 
+  it("does not forward the local cwd to node prepare or run payloads", async () => {
+    let prepareParams: Record<string, unknown> | undefined;
+    let runParams: Record<string, unknown> | undefined;
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as {
+          command?: string;
+          params?: Record<string, unknown>;
+        };
+        if (invoke.command === "system.run.prepare") {
+          prepareParams = invoke.params;
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          runParams = invoke.params;
+          return { payload: { success: true, stdout: "ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-node-cwd", { command: "echo hello" });
+    expect(result.details.status).toBe("completed");
+    expect(prepareParams).toBeTruthy();
+    expect(runParams).toBeTruthy();
+    expect(prepareParams).not.toHaveProperty("cwd");
+    expect(runParams).not.toHaveProperty("cwd");
+  });
+
+  it("reuses a node-provided cwd from the prepare plan for execution", async () => {
+    let runParams: Record<string, unknown> | undefined;
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as {
+          command?: string;
+          params?: Record<string, unknown>;
+        };
+        if (invoke.command === "system.run.prepare") {
+          expect(invoke.params).not.toHaveProperty("cwd");
+          return buildSystemRunPreparePayload({
+            ...invoke.params,
+            cwd: "C:\\\\node-workspace",
+          });
+        }
+        if (invoke.command === "system.run") {
+          runParams = invoke.params;
+          return { payload: { success: true, stdout: "ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-node-remote-cwd", { command: "echo hello" });
+    expect(result.details.status).toBe("completed");
+    expect(runParams).toMatchObject({ cwd: "C:\\\\node-workspace" });
+  });
+
   it("skips approval when node allowlist is satisfied", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-bin-"));
     const binDir = path.join(tempDir, "bin");
