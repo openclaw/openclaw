@@ -190,4 +190,25 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
     expect(ctx.content).toBe("[Forwarded message: sc_abc123]");
   });
+
+  // @_all (@所有人) behaviour — opt-in is controlled by respondToAtAll config
+  // and resolved later in handleFeishuMessage; parseFeishuMessageEvent itself
+  // no longer unconditionally sets mentionedBot=true for @_all.
+  it("returns mentionedBot=false for @_all message (respondToAtAll opt-in not yet applied)", () => {
+    const event = makeEvent("group", [], "@_all hello everyone");
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=false for @_all even when bot is also in mentions list (opt-in path takes precedence)", () => {
+    // Explicit bot mention still wins via the mentions array path
+    const event = makeEvent(
+      "group",
+      [{ key: "@_user_1", name: "Bot", id: { open_id: BOT_OPEN_ID } }],
+      "@_all hello",
+    );
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    // Bot IS in the mentions array, so it should still be true via that path
+    expect(ctx.mentionedBot).toBe(true);
+  });
 });

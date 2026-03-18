@@ -428,6 +428,17 @@ export async function handleFeishuMessage(params: {
       groupPolicy,
     }));
 
+    // @_all (@所有人) opt-in: if the message targets all group members and the
+    // account or group is explicitly configured with respondToAtAll:true, treat
+    // it as mentioning this bot.  Default is false so bots that do not opt in
+    // stay silent when a user broadcasts to the whole group.
+    if (!ctx.mentionedBot && (event.message.content ?? "").includes("@_all")) {
+      const respondToAtAll = groupConfig?.respondToAtAll ?? feishuCfg?.respondToAtAll ?? false;
+      if (respondToAtAll) {
+        ctx = { ...ctx, mentionedBot: true };
+      }
+    }
+
     if (requireMention && !ctx.mentionedBot) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
       // Record to pending history for non-broadcast groups only. For broadcast groups,

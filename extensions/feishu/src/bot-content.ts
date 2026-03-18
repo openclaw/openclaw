@@ -231,9 +231,11 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
   if (!botOpenId) {
     return false;
   }
-  if ((event.message.content ?? "").includes("@_all")) {
-    return true;
-  }
+  // @_all (@所有人) is intentionally NOT treated as mentioning every bot here.
+  // Whether to respond to @所有人 is an opt-in decision controlled by the
+  // respondToAtAll config flag; the check is applied in handleFeishuMessage
+  // after the group config is resolved so that per-group and per-account
+  // settings are both honoured.
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
     return mentions.some((mention) => mention.id.open_id === botOpenId);
