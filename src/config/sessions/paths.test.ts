@@ -122,6 +122,40 @@ describe("ensurePrivateSessionsDir", () => {
     }
   });
 
+  it("rejects when a freshly created state root changes before child mkdirs", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-root-swap-"));
+    const stateDir = path.join(tempDir, "state");
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    const outsideStateDir = path.join(tempDir, "outside-state");
+    const realMkdir = fsPromises.mkdir.bind(fsPromises);
+
+    vi.spyOn(fsPromises, "mkdir").mockImplementation(async (filePath, options) => {
+      const resolved = path.resolve(String(filePath));
+      const result = await realMkdir(filePath, options);
+      if (resolved === stateDir) {
+        fs.mkdirSync(outsideStateDir, { recursive: true });
+        fs.rmSync(stateDir, { recursive: true, force: true });
+        fs.symlinkSync(outsideStateDir, stateDir, "dir");
+      }
+      return result;
+    });
+
+    try {
+      const { ensurePrivateSessionsDir } = await import("./paths.js");
+
+      await expect(ensurePrivateSessionsDir(sessionsDir)).rejects.toThrow(
+        /must not traverse a symlink|changed during permission update/i,
+      );
+      expect(fs.existsSync(path.join(outsideStateDir, "agents"))).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects when the directory identity changes before chmod", async () => {
     if (process.platform === "win32") {
       return;
@@ -267,13 +301,56 @@ describe("isManagedSessionsDir", () => {
       const stateDir = path.join(tempDir, "StateRoot");
       fs.mkdirSync(stateDir, { recursive: true });
 
-      const realExistsSync = fs.existsSync.bind(fs);
-      vi.spyOn(fs, "existsSync").mockImplementation((candidatePath) => {
+      const realLstatSync = fs.lstatSync.bind(fs);
+      vi.spyOn(fs, "lstatSync").mockImplementation((candidatePath) => {
         const resolved = path.resolve(String(candidatePath));
         if (resolved === path.join(tempDir, "stateroot")) {
-          return false;
+          throw Object.assign(new Error("missing"), { code: "ENOENT" });
         }
-        return realExistsSync(candidatePath);
+        return realLstatSync(candidatePath);
+      });
+
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      } as NodeJS.ProcessEnv;
+      const caseVariantSessionsDir = path.join(stateDir, "AGENTS", "Main", "sessions");
+
+      const { isManagedSessionStorePath, isManagedSessionTranscriptPath, isManagedSessionsDir } =
+        await import("./paths.js");
+
+      expect(isManagedSessionsDir(caseVariantSessionsDir, env)).toBe(false);
+      expect(
+        isManagedSessionStorePath(path.join(caseVariantSessionsDir, "sessions.json"), env),
+      ).toBe(false);
+      expect(
+        isManagedSessionTranscriptPath(path.join(caseVariantSessionsDir, "sess-1.jsonl"), env),
+      ).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat separately cased sibling roots as case-insensitive aliases", async () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-managed-case-sibling-"));
+    const siblingStateDir = path.join(tempDir, "sibling-state");
+    try {
+      const stateDir = path.join(tempDir, "StateRoot");
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.mkdirSync(siblingStateDir, { recursive: true });
+
+      const siblingStat = fs.lstatSync(siblingStateDir);
+      const realLstatSync = fs.lstatSync.bind(fs);
+      vi.spyOn(fs, "lstatSync").mockImplementation((candidatePath) => {
+        const resolved = path.resolve(String(candidatePath));
+        if (resolved === path.join(tempDir, "stateroot")) {
+          return siblingStat;
+        }
+        return realLstatSync(candidatePath);
       });
 
       const env = {

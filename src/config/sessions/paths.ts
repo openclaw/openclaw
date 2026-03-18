@@ -18,6 +18,12 @@ type PathIdentitySnapshot = {
   stat: fs.Stats;
 };
 
+type PinnedStateRootIdentity = {
+  path: string;
+  stat: fs.Stats;
+  strictDirectoryIdentity: boolean;
+};
+
 function resolveAgentSessionsDir(
   agentId?: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -55,22 +61,31 @@ async function ensureManagedSessionsParentChain(sessionsDir: string): Promise<vo
   }
 
   const stateDir = path.dirname(agentsDir);
+  let pinnedStateRootIdentity: PinnedStateRootIdentity | undefined;
   try {
     const stat = await fsPromises.stat(stateDir);
     if (!stat.isDirectory()) {
       throw new Error(`Session transcripts dir must be a directory: ${stateDir}`);
     }
+    pinnedStateRootIdentity = await capturePinnedStateRootIdentity(stateDir);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") {
       throw err;
     }
     await fsPromises.mkdir(stateDir, { recursive: true });
+    pinnedStateRootIdentity = {
+      path: stateDir,
+      stat: await verifyDirectoryIdentity(stateDir),
+      strictDirectoryIdentity: true,
+    };
   }
 
   for (const dirPath of [agentsDir, agentDir]) {
+    await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
     try {
       await verifyDirectoryIdentity(dirPath);
+      await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
       continue;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -87,7 +102,9 @@ async function ensureManagedSessionsParentChain(sessionsDir: string): Promise<vo
         throw err;
       }
     }
+    await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
     await verifyDirectoryIdentity(dirPath);
+    await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
   }
 }
 
@@ -115,6 +132,44 @@ async function verifyDirectoryIdentity(dirPath: string): Promise<fs.Stats> {
     return stat;
   } finally {
     await handle.close().catch(() => undefined);
+  }
+}
+
+async function capturePinnedStateRootIdentity(
+  stateDir: string,
+): Promise<PinnedStateRootIdentity | undefined> {
+  const stat = await fsPromises.lstat(stateDir);
+  if (stat.isSymbolicLink()) {
+    // The configured state root may intentionally be a symlink alias.
+    return {
+      path: stateDir,
+      stat,
+      strictDirectoryIdentity: false,
+    };
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`Session transcripts dir must be a directory: ${stateDir}`);
+  }
+  return {
+    path: stateDir,
+    stat: await verifyDirectoryIdentity(stateDir),
+    strictDirectoryIdentity: true,
+  };
+}
+
+async function assertPinnedStateRootIdentity(
+  pinned: PinnedStateRootIdentity | undefined,
+): Promise<void> {
+  if (!pinned) {
+    return;
+  }
+
+  const current = pinned.strictDirectoryIdentity
+    ? await verifyDirectoryIdentity(pinned.path)
+    : await fsPromises.lstat(pinned.path);
+
+  if (!sameFileIdentity(pinned.stat, current)) {
+    throw new Error(`Session transcripts dir changed during permission update: ${pinned.path}`);
   }
 }
 
@@ -502,6 +557,20 @@ function resolveCaseVariantProbePath(filePath: string): string | undefined {
   return undefined;
 }
 
+function safeLstatSync(filePath: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+function pathsReferenceSameEntry(leftPath: string, rightPath: string): boolean {
+  const left = safeLstatSync(leftPath);
+  const right = safeLstatSync(rightPath);
+  return !!left && !!right && sameFileIdentity(left, right);
+}
+
 function shouldCompareManagedPathsCaseInsensitively(filePath: string): boolean {
   if (process.platform === "win32") {
     return true;
@@ -517,7 +586,7 @@ function shouldCompareManagedPathsCaseInsensitively(filePath: string): boolean {
     return false;
   }
 
-  return fs.existsSync(caseVariantProbePath);
+  return pathsReferenceSameEntry(probePath, caseVariantProbePath);
 }
 
 function normalizeManagedPathForComparison(
