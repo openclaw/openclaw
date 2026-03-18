@@ -74,6 +74,39 @@ describe("createHostWorkspaceEditTool post-write recovery", () => {
     ).rejects.toThrow("Simulated post-write failure");
   });
 
+  it("returns success when oldText is a substring of newText (e.g. appending/wrapping) (#49363)", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "wrap.md");
+    const oldText = "foo";
+    const newText = "foobar";
+    // Simulate a successful write where oldText was replaced with newText.
+    await fs.writeFile(filePath, `before ${newText} after`, "utf-8");
+
+    const tool = createHostWorkspaceEditTool(tmpDir);
+    const result = await tool.execute("call-1", { path: filePath, oldText, newText }, undefined);
+
+    expect(result).toBeDefined();
+    const content = Array.isArray((result as { content?: unknown }).content)
+      ? (result as { content: Array<{ type?: string; text?: string }> }).content
+      : [];
+    const textBlock = content.find((b) => b?.type === "text" && typeof b.text === "string");
+    expect(textBlock?.text).toContain("Successfully replaced text");
+  });
+
+  it("rethrows when oldText is substring of newText but oldText also appears outside newText", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "partial.md");
+    const oldText = "foo";
+    const newText = "foobar";
+    // oldText appears both inside newText AND separately — edit did not fully succeed.
+    await fs.writeFile(filePath, `${newText} and also foo here`, "utf-8");
+
+    const tool = createHostWorkspaceEditTool(tmpDir);
+    await expect(
+      tool.execute("call-1", { path: filePath, oldText, newText }, undefined),
+    ).rejects.toThrow("Simulated post-write failure");
+  });
+
   it("rethrows when file still contains oldText (pre-write failure; avoid false success)", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
     const filePath = path.join(tmpDir, "pre-write-fail.md");

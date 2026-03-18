@@ -59,8 +59,15 @@ export function wrapHostEditToolWithPostWriteRecovery(
           // is no longer present. This avoids false success when upstream threw before writing
           // (e.g. oldText not found) but the file already contained newText (review feedback).
           const hasNew = content.includes(newText);
+          // When newText contains oldText (e.g. appending/wrapping), a successful edit will
+          // still have oldText in the file (inside the newText). Strip newText occurrences
+          // before checking so we don't get a false positive "stillHasOld" (#49363).
+          const contentForOldCheck =
+            oldText !== undefined && oldText.length > 0 && newText.includes(oldText)
+              ? content.replaceAll(newText, "")
+              : content;
           const stillHasOld =
-            oldText !== undefined && oldText.length > 0 && content.includes(oldText);
+            oldText !== undefined && oldText.length > 0 && contentForOldCheck.includes(oldText);
           if (hasNew && !stillHasOld) {
             return {
               content: [
