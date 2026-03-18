@@ -1,17 +1,28 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { DiscordActionConfig } from "../../config/config.js";
+import {
+  type ActionGate,
+  jsonResult,
+  readStringParam,
+  type DiscordActionConfig,
+} from "openclaw/plugin-sdk/discord-core";
 import {
   banMemberDiscord,
   hasAnyGuildPermissionDiscord,
   kickMemberDiscord,
   timeoutMemberDiscord,
-} from "../../plugin-sdk/discord.js";
-import { type ActionGate, jsonResult, readStringParam } from "./common.js";
+} from "../send.js";
 import {
   isDiscordModerationAction,
   readDiscordModerationCommand,
   requiredGuildPermissionForModerationAction,
-} from "./discord-actions-moderation-shared.js";
+} from "./runtime.moderation-shared.js";
+
+export const discordModerationActionRuntime = {
+  banMemberDiscord,
+  hasAnyGuildPermissionDiscord,
+  kickMemberDiscord,
+  timeoutMemberDiscord,
+};
 
 async function verifySenderModerationPermission(params: {
   guildId: string;
@@ -23,7 +34,7 @@ async function verifySenderModerationPermission(params: {
   if (!params.senderUserId) {
     return;
   }
-  const hasPermission = await hasAnyGuildPermissionDiscord(
+  const hasPermission = await discordModerationActionRuntime.hasAnyGuildPermissionDiscord(
     params.guildId,
     params.senderUserId,
     [params.requiredPermission],
@@ -57,7 +68,7 @@ export async function handleDiscordModerationAction(
   switch (command.action) {
     case "timeout": {
       const member = accountId
-        ? await timeoutMemberDiscord(
+        ? await discordModerationActionRuntime.timeoutMemberDiscord(
             {
               guildId: command.guildId,
               userId: command.userId,
@@ -67,7 +78,7 @@ export async function handleDiscordModerationAction(
             },
             { accountId },
           )
-        : await timeoutMemberDiscord({
+        : await discordModerationActionRuntime.timeoutMemberDiscord({
             guildId: command.guildId,
             userId: command.userId,
             durationMinutes: command.durationMinutes,
@@ -78,7 +89,7 @@ export async function handleDiscordModerationAction(
     }
     case "kick": {
       if (accountId) {
-        await kickMemberDiscord(
+        await discordModerationActionRuntime.kickMemberDiscord(
           {
             guildId: command.guildId,
             userId: command.userId,
@@ -87,7 +98,7 @@ export async function handleDiscordModerationAction(
           { accountId },
         );
       } else {
-        await kickMemberDiscord({
+        await discordModerationActionRuntime.kickMemberDiscord({
           guildId: command.guildId,
           userId: command.userId,
           reason: command.reason,
@@ -97,7 +108,7 @@ export async function handleDiscordModerationAction(
     }
     case "ban": {
       if (accountId) {
-        await banMemberDiscord(
+        await discordModerationActionRuntime.banMemberDiscord(
           {
             guildId: command.guildId,
             userId: command.userId,
@@ -107,7 +118,7 @@ export async function handleDiscordModerationAction(
           { accountId },
         );
       } else {
-        await banMemberDiscord({
+        await discordModerationActionRuntime.banMemberDiscord({
           guildId: command.guildId,
           userId: command.userId,
           reason: command.reason,

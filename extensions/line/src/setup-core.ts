@@ -1,11 +1,11 @@
 import {
-  listLineAccountIds,
+  DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   resolveLineAccount,
+  type ChannelSetupAdapter,
   type LineConfig,
-} from "openclaw/plugin-sdk/line";
-import type { ChannelSetupAdapter, OpenClawConfig } from "openclaw/plugin-sdk/setup";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/line-core";
 
 const channel = "line" as const;
 
@@ -158,4 +158,4 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
   },
 };
 
-export { listLineAccountIds };
+export { listLineAccountIds } from "openclaw/plugin-sdk/line-core";

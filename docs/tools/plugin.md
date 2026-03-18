@@ -188,6 +188,64 @@ The important design boundary:
 That split lets OpenClaw validate config, explain missing/disabled plugins, and
 build UI/schema hints before the full runtime is active.
 
+### Channel plugins and the shared message tool
+
+Channel plugins do not need to register a separate send/edit/react tool for
+normal chat actions. OpenClaw keeps one shared `message` tool in core, and
+channel plugins own the channel-specific discovery and execution behind it.
+
+The current boundary is:
+
+- core owns the shared `message` tool host, prompt wiring, session/thread
+  bookkeeping, and execution dispatch
+- channel plugins own scoped action discovery, capability discovery, and any
+  channel-specific schema fragments
+- channel plugins execute the final action through their action adapter
+
+For channel plugins, the preferred SDK surface is
+`ChannelMessageActionAdapter.describeMessageTool(...)`. That unified discovery
+call lets a plugin return its visible actions, capabilities, and schema
+contributions together so those pieces do not drift apart.
+
+Core passes runtime scope into that discovery step. Important fields include:
+
+- `accountId`
+- `currentChannelId`
+- `currentThreadTs`
+- `currentMessageId`
+- `sessionKey`
+- `sessionId`
+- `agentId`
+- trusted inbound `requesterSenderId`
+
+That matters for context-sensitive plugins. A channel can hide or expose
+message actions based on the active account, current room/thread/message, or
+trusted requester identity without hardcoding channel-specific branches in the
+core `message` tool.
+
+This is why embedded-runner routing changes are still plugin work: the runner is
+responsible for forwarding the current chat/session identity into the plugin
+discovery boundary so the shared `message` tool exposes the right channel-owned
+surface for the current turn.
+
+For channel-owned execution helpers, bundled plugins should keep the execution
+runtime inside their own extension modules. Core no longer owns the Discord,
+Slack, Telegram, or WhatsApp message-action runtimes under `src/agents/tools`.
+We do not publish separate `plugin-sdk/*-action-runtime` subpaths, and bundled
+plugins should import their own local runtime code directly from their
+extension-owned modules.
+
+For polls specifically, there are two execution paths:
+
+- `outbound.sendPoll` is the shared baseline for channels that fit the common
+  poll model
+- `actions.handleAction("poll")` is the preferred path for channel-specific
+  poll semantics or extra poll parameters
+
+Core now defers shared poll parsing until after plugin poll dispatch declines
+the action, so plugin-owned poll handlers can accept channel-specific poll
+fields without being blocked by the generic poll parser first.
+
 ## Capability ownership model
 
 OpenClaw treats a native plugin as the ownership boundary for a **company** or a
@@ -611,7 +669,7 @@ Provider plugins now have two layers:
 - runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`, `resolveDefaultThinkingLevel`, `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
 
 OpenClaw still owns the generic agent loop, failover, transcript handling, and
-tool policy. These hooks are the seam for provider-specific behavior without
+tool policy. These hooks are the extension surface for provider-specific behavior without
 needing a whole custom inference transport.
 
 Use manifest `providerAuthEnvVars` when the provider has env-based credentials
@@ -1099,10 +1157,10 @@ authoring plugins:
   a one-time deprecation warning outside test environments.
 - Bundled extension internals remain private. External plugins should use only
   `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
-  public seams under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
+  public entry points under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
   `setup-entry.js`, and narrowly scoped files such as `login-qr-api.js`. Never
   import `extensions/<id>/src/*` from core or from another extension.
-- Repo seam split:
+- Repo entry point split:
   `extensions/<id>/api.js` is the helper/types barrel,
   `extensions/<id>/runtime-api.js` is the runtime-only barrel,
   `extensions/<id>/index.js` is the bundled plugin entry,
@@ -1590,7 +1648,7 @@ Example:
 
 ```bash
 openclaw plugins list
-openclaw plugins info <id>
+openclaw plugins inspect <id>
 openclaw plugins install <path>                 # copy a local file/dir into ~/.openclaw/extensions/<id>
 openclaw plugins install ./extensions/voice-call # relative path ok
 openclaw plugins install ./plugin.tgz           # install from a local tarball
@@ -1660,7 +1718,7 @@ Recommended sequence:
    lifecycle, channel-facing semantics, and runtime helper shape.
 2. add typed plugin registration/runtime surfaces
    Extend `OpenClawPluginApi` and/or `api.runtime` with the smallest useful
-   typed seam.
+   typed capability surface.
 3. wire core + channel/feature consumers
    Channels and feature plugins should consume the new capability through core,
    not by importing a vendor implementation directly.
@@ -1850,8 +1908,8 @@ Plugins can register **model providers** so users can run OAuth or API-key
 setup inside OpenClaw, surface provider setup in onboarding/model-pickers, and
 contribute implicit provider discovery.
 
-Provider plugins are the modular extension seam for model-provider setup. They
-are not just "OAuth helpers" anymore.
+Provider plugins are the modular extension surface for model-provider setup.
+They are not just "OAuth helpers" anymore.
 
 ### Provider plugin lifecycle
 

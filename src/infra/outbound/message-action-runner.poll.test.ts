@@ -34,15 +34,24 @@ async function runPollAction(params: {
     params: params.actionParams as never,
     toolContext: params.toolContext as never,
   });
-  return mocks.executePollAction.mock.calls[0]?.[0] as
+  const call = mocks.executePollAction.mock.calls[0]?.[0] as
     | {
-        durationSeconds?: number;
-        maxSelections?: number;
-        threadId?: string;
-        isAnonymous?: boolean;
+        resolveCorePoll?: () => {
+          durationSeconds?: number;
+          maxSelections?: number;
+          threadId?: string;
+          isAnonymous?: boolean;
+        };
         ctx?: { params?: Record<string, unknown> };
       }
     | undefined;
+  if (!call) {
+    return undefined;
+  }
+  return {
+    ...call.resolveCorePoll?.(),
+    ctx: call.ctx,
+  };
 }
 describe("runMessageAction poll handling", () => {
   beforeEach(async () => {
@@ -55,11 +64,11 @@ describe("runMessageAction poll handling", () => {
       telegramConfig,
     } = await import("./message-action-runner.test-helpers.js"));
     installMessageActionRunnerTestRegistry();
-    mocks.executePollAction.mockResolvedValue({
+    mocks.executePollAction.mockImplementation(async (input) => ({
       handledBy: "core",
-      payload: { ok: true },
+      payload: { ok: true, corePoll: input.resolveCorePoll() },
       pollResult: { ok: true },
-    });
+    }));
   });
 
   afterEach(() => {
@@ -105,7 +114,7 @@ describe("runMessageAction poll handling", () => {
     },
   ])("$name", async ({ getCfg, actionParams, message }) => {
     await expect(runPollAction({ cfg: getCfg(), actionParams })).rejects.toThrow(message);
-    expect(mocks.executePollAction).not.toHaveBeenCalled();
+    expect(mocks.executePollAction).toHaveBeenCalledTimes(1);
   });
 
   it("passes Telegram durationSeconds, visibility, and auto threadId to executePollAction", async () => {
