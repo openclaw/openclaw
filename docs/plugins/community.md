@@ -45,7 +45,7 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **ContentClaw** — Generate AI-powered content pages at scale from any topic, analyze competitor sitemaps, and serve via REST API for any CMS. Registers 5 tools: generate, competitor analysis, list pages, get page, and serve dashboard. Supports OpenAI, Gemini, Anthropic, xAI, Qwen, and Ollama.
+- **ContentClaw** — Generate AI-powered content pages at scale from any topic, analyze competitor sitemaps, and serve via REST API for any CMS.
   npm: `contentclaw-openclaw-plugin`
   repo: `https://github.com/metehan777/contentclaw`
   install: `openclaw plugins install contentclaw-openclaw-plugin`
