@@ -2,15 +2,16 @@ import type { TranslationMap } from "../lib/types.ts";
 
 export const en: TranslationMap = {
   common: {
-    version: "Version",
     health: "Health",
     ok: "OK",
+    online: "Online",
     offline: "Offline",
     connect: "Connect",
     refresh: "Refresh",
     enabled: "Enabled",
     disabled: "Disabled",
     na: "n/a",
+    version: "Version",
     docs: "Docs",
     theme: "Theme",
     resources: "Resources",
@@ -147,10 +148,6 @@ export const en: TranslationMap = {
       refreshAll: "Refresh All",
       terminal: "Terminal",
     },
-    streamMode: {
-      active: "Stream mode — values redacted",
-      disable: "Disable",
-    },
     palette: {
       placeholder: "Type a command…",
       noResults: "No results",
@@ -158,17 +155,18 @@ export const en: TranslationMap = {
   },
   login: {
     subtitle: "Gateway Dashboard",
-    passwordPlaceholder: "optional", // pragma: allowlist secret
+    passwordPlaceholder: "optional",
   },
   chat: {
     disconnected: "Disconnected from gateway.",
     refreshTitle: "Refresh chat data",
     thinkingToggle: "Toggle assistant thinking/working output",
+    toolCallsToggle: "Toggle tool calls and tool results",
     focusToggle: "Toggle focus mode (hide sidebar + page header)",
     hideCronSessions: "Hide cron sessions",
     showCronSessions: "Show cron sessions",
     showCronSessionsHidden: "Show cron sessions ({count} hidden)",
-    onboardingDisabled: "Disabled during onboarding",
+    onboardingDisabled: "Disabled during setup",
   },
   languages: {
     en: "English",

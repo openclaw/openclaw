@@ -1,18 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
 
+function createFallbackDmPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    guid: "msg-1",
+    isGroup: false,
+    isFromMe: false,
+    handle: null,
+    chatGuid: "iMessage;-;+15551234567",
+    ...overrides,
+  };
+}
+
 describe("normalizeWebhookMessage", () => {
   it("falls back to DM chatGuid handle when sender handle is missing", () => {
     const result = normalizeWebhookMessage({
       type: "new-message",
-      data: {
-        guid: "msg-1",
+      data: createFallbackDmPayload({
         text: "hello",
-        isGroup: false,
-        isFromMe: false,
-        handle: null,
-        chatGuid: "iMessage;-;+15551234567",
-      },
+      }),
     });
 
     expect(result).not.toBeNull();
@@ -78,15 +84,11 @@ describe("normalizeWebhookReaction", () => {
   it("falls back to DM chatGuid handle when reaction sender handle is missing", () => {
     const result = normalizeWebhookReaction({
       type: "updated-message",
-      data: {
+      data: createFallbackDmPayload({
         guid: "msg-2",
         associatedMessageGuid: "p:0/msg-1",
         associatedMessageType: 2000,
-        isGroup: false,
-        isFromMe: false,
-        handle: null,
-        chatGuid: "iMessage;-;+15551234567",
-      },
+      }),
     });
 
     expect(result).not.toBeNull();

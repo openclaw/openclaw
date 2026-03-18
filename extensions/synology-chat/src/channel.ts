@@ -5,15 +5,15 @@
  */
 
 import {
-  DEFAULT_ACCOUNT_ID,
-  setAccountEnabledInConfigSection,
-  registerPluginHttpRoute,
-  buildChannelConfigSchema,
-} from "openclaw/plugin-sdk/synology-chat";
+  createHybridChannelConfigAdapter,
+  createScopedDmSecurityResolver,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import { z } from "zod";
+import { DEFAULT_ACCOUNT_ID, registerPluginHttpRoute, buildChannelConfigSchema } from "../api.js";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendMessage, sendFileUrl } from "./client.js";
 import { getSynologyRuntime } from "./runtime.js";
+import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surface.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import { createWebhookHandler } from "./webhook-handler.js";
 
@@ -21,6 +21,37 @@ const CHANNEL_ID = "synology-chat";
 const SynologyChatConfigSchema = buildChannelConfigSchema(z.object({}).passthrough());
 
 const activeRouteUnregisters = new Map<string, () => void>();
+
+const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynologyChatAccount>({
+  channelKey: CHANNEL_ID,
+  resolvePolicy: (account) => account.dmPolicy,
+  resolveAllowFrom: (account) => account.allowedUserIds,
+  policyPathSuffix: "dmPolicy",
+  defaultPolicy: "allowlist",
+  approveHint: "openclaw pairing approve synology-chat <code>",
+  normalizeEntry: (raw) => raw.toLowerCase().trim(),
+});
+
+const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynologyChatAccount>({
+  sectionKey: CHANNEL_ID,
+  listAccountIds: (cfg: any) => listAccountIds(cfg),
+  resolveAccount: (cfg: any, accountId?: string | null) => resolveAccount(cfg, accountId),
+  defaultAccountId: () => DEFAULT_ACCOUNT_ID,
+  clearBaseFields: [
+    "token",
+    "incomingUrl",
+    "nasHost",
+    "webhookPath",
+    "dmPolicy",
+    "allowedUserIds",
+    "rateLimitPerMinute",
+    "botName",
+    "allowInsecureSsl",
+  ],
+  resolveAllowFrom: (account) => account.allowedUserIds,
+  formatAllowFrom: (allowFrom) =>
+    allowFrom.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean),
+});
 
 function waitUntilAbort(signal?: AbortSignal, onAbort?: () => void): Promise<void> {
   return new Promise((resolve) => {
@@ -68,32 +99,11 @@ export function createSynologyChatPlugin() {
     reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
 
     configSchema: SynologyChatConfigSchema,
+    setup: synologyChatSetupAdapter,
+    setupWizard: synologyChatSetupWizard,
 
     config: {
-      listAccountIds: (cfg: any) => listAccountIds(cfg),
-
-      resolveAccount: (cfg: any, accountId?: string | null) => resolveAccount(cfg, accountId),
-
-      defaultAccountId: (_cfg: any) => DEFAULT_ACCOUNT_ID,
-
-      setAccountEnabled: ({ cfg, accountId, enabled }: any) => {
-        const channelConfig = cfg?.channels?.[CHANNEL_ID] ?? {};
-        if (accountId === DEFAULT_ACCOUNT_ID) {
-          return {
-            ...cfg,
-            channels: {
-              ...cfg.channels,
-              [CHANNEL_ID]: { ...channelConfig, enabled },
-            },
-          };
-        }
-        return setAccountEnabledInConfigSection({
-          cfg,
-          sectionKey: `channels.${CHANNEL_ID}`,
-          accountId,
-          enabled,
-        });
-      },
+      ...synologyChatConfigAdapter,
     },
 
     pairing: {
@@ -112,30 +122,7 @@ export function createSynologyChatPlugin() {
     },
 
     security: {
-      resolveDmPolicy: ({
-        cfg,
-        accountId,
-        account,
-      }: {
-        cfg: any;
-        accountId?: string | null;
-        account: ResolvedSynologyChatAccount;
-      }) => {
-        const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-        const channelCfg = (cfg as any).channels?.["synology-chat"];
-        const useAccountPath = Boolean(channelCfg?.accounts?.[resolvedAccountId]);
-        const basePath = useAccountPath
-          ? `channels.synology-chat.accounts.${resolvedAccountId}.`
-          : "channels.synology-chat.";
-        return {
-          policy: account.dmPolicy ?? "allowlist",
-          allowFrom: account.allowedUserIds ?? [],
-          policyPath: `${basePath}dmPolicy`,
-          allowFromPath: basePath,
-          approveHint: "openclaw pairing approve synology-chat <code>",
-          normalizeEntry: (raw: string) => raw.toLowerCase().trim(),
-        };
-      },
+      resolveDmPolicy: resolveSynologyChatDmPolicy,
       collectWarnings: ({ account }: { account: ResolvedSynologyChatAccount }) => {
         const warnings: string[] = [];
         if (!account.token) {
@@ -377,3 +364,5 @@ export function createSynologyChatPlugin() {
     },
   };
 }
+
+export const synologyChatPlugin = createSynologyChatPlugin();

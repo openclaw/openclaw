@@ -1,17 +1,24 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveConversationBindingRecord,
+  touchConversationBindingRecord,
+} from "../../bindings/records.js";
+import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
+  parseSessionThreadInfo,
   resolveSessionStoreEntry,
   resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { shouldSuppressLocalDiscordExecApprovalPrompt } from "../../discord/exec-approvals.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
   deriveInboundMessageHookContext,
+  toPluginInboundClaimContext,
+  toPluginInboundClaimEvent,
   toInternalMessageReceivedContext,
   toPluginMessageContext,
   toPluginMessageReceivedEvent,
@@ -22,7 +29,16 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import {
+  buildPluginBindingDeclinedText,
+  buildPluginBindingErrorText,
+  buildPluginBindingUnavailableText,
+  hasShownPluginBindingFallbackNotice,
+  isPluginOwnedSessionBindingRecord,
+  markPluginBindingFallbackNoticeShown,
+  toPluginConversationBinding,
+} from "../../plugins/conversation-binding.js";
+import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -172,6 +188,12 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+  // Restore route thread context only from the active turn or the thread-scoped session key.
+  // Do not read thread ids from the normalised session store here: `origin.threadId` can be
+  // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
+  // stale route after thread delivery was intentionally cleared.
+  const routeThreadId =
+    ctx.MessageThreadId ?? parseSessionThreadInfo(acpDispatchSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
@@ -183,30 +205,12 @@ export async function dispatchReplyFromConfig(params: {
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
   const { isGroup, groupId } = hookContext;
-
-  // Trigger plugin hooks (fire-and-forget)
-  if (hookRunner?.hasHooks("message_received")) {
-    fireAndForgetHook(
-      hookRunner.runMessageReceived(
-        toPluginMessageReceivedEvent(hookContext),
-        toPluginMessageContext(hookContext),
-      ),
-      "dispatch-from-config: message_received plugin hook failed",
-    );
-  }
-
-  // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
-  if (sessionKey) {
-    fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent("message", "received", sessionKey, {
-          ...toInternalMessageReceivedContext(hookContext),
-          timestamp,
-        }),
-      ),
-      "dispatch-from-config: message_received internal hook failed",
-    );
-  }
+  const inboundClaimContext = toPluginInboundClaimContext(hookContext);
+  const inboundClaimEvent = toPluginInboundClaimEvent(hookContext, {
+    commandAuthorized:
+      typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
+    wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+  });
 
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
@@ -260,7 +264,7 @@ export async function dispatchReplyFromConfig(params: {
       to: originatingTo,
       sessionKey: ctx.SessionKey,
       accountId: ctx.AccountId,
-      threadId: ctx.MessageThreadId,
+      threadId: routeThreadId,
       cfg,
       abortSignal,
       mirror,
@@ -271,6 +275,144 @@ export async function dispatchReplyFromConfig(params: {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
     }
   };
+
+  const sendBindingNotice = async (
+    payload: ReplyPayload,
+    mode: "additive" | "terminal",
+  ): Promise<boolean> => {
+    if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+      const result = await routeReply({
+        payload,
+        channel: originatingChannel,
+        to: originatingTo,
+        sessionKey: ctx.SessionKey,
+        accountId: ctx.AccountId,
+        threadId: routeThreadId,
+        cfg,
+        isGroup,
+        groupId,
+      });
+      if (!result.ok) {
+        logVerbose(
+          `dispatch-from-config: route-reply (plugin binding notice) failed: ${result.error ?? "unknown error"}`,
+        );
+      }
+      return result.ok;
+    }
+    return mode === "additive"
+      ? dispatcher.sendToolResult(payload)
+      : dispatcher.sendFinalReply(payload);
+  };
+
+  const pluginOwnedBindingRecord =
+    inboundClaimContext.conversationId && inboundClaimContext.channelId
+      ? resolveConversationBindingRecord({
+          channel: inboundClaimContext.channelId,
+          accountId: inboundClaimContext.accountId ?? "default",
+          conversationId: inboundClaimContext.conversationId,
+          parentConversationId: inboundClaimContext.parentConversationId,
+        })
+      : null;
+  const pluginOwnedBinding = isPluginOwnedSessionBindingRecord(pluginOwnedBindingRecord)
+    ? toPluginConversationBinding(pluginOwnedBindingRecord)
+    : null;
+
+  let pluginFallbackReason:
+    | "plugin-bound-fallback-missing-plugin"
+    | "plugin-bound-fallback-no-handler"
+    | undefined;
+
+  if (pluginOwnedBinding) {
+    touchConversationBindingRecord(pluginOwnedBinding.bindingId);
+    logVerbose(
+      `plugin-bound inbound routed to ${pluginOwnedBinding.pluginId} conversation=${pluginOwnedBinding.conversationId}`,
+    );
+    const targetedClaimOutcome = hookRunner?.runInboundClaimForPluginOutcome
+      ? await hookRunner.runInboundClaimForPluginOutcome(
+          pluginOwnedBinding.pluginId,
+          inboundClaimEvent,
+          inboundClaimContext,
+        )
+      : (() => {
+          const pluginLoaded =
+            getGlobalPluginRegistry()?.plugins.some(
+              (plugin) => plugin.id === pluginOwnedBinding.pluginId && plugin.status === "loaded",
+            ) ?? false;
+          return pluginLoaded
+            ? ({ status: "no_handler" } as const)
+            : ({ status: "missing_plugin" } as const);
+        })();
+
+    switch (targetedClaimOutcome.status) {
+      case "handled": {
+        markIdle("plugin_binding_dispatch");
+        recordProcessed("completed", { reason: "plugin-bound-handled" });
+        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+      }
+      case "missing_plugin":
+      case "no_handler": {
+        pluginFallbackReason =
+          targetedClaimOutcome.status === "missing_plugin"
+            ? "plugin-bound-fallback-missing-plugin"
+            : "plugin-bound-fallback-no-handler";
+        if (!hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId)) {
+          const didSendNotice = await sendBindingNotice(
+            { text: buildPluginBindingUnavailableText(pluginOwnedBinding) },
+            "additive",
+          );
+          if (didSendNotice) {
+            markPluginBindingFallbackNoticeShown(pluginOwnedBinding.bindingId);
+          }
+        }
+        break;
+      }
+      case "declined": {
+        await sendBindingNotice(
+          { text: buildPluginBindingDeclinedText(pluginOwnedBinding) },
+          "terminal",
+        );
+        markIdle("plugin_binding_declined");
+        recordProcessed("completed", { reason: "plugin-bound-declined" });
+        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+      }
+      case "error": {
+        logVerbose(
+          `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
+        );
+        await sendBindingNotice(
+          { text: buildPluginBindingErrorText(pluginOwnedBinding) },
+          "terminal",
+        );
+        markIdle("plugin_binding_error");
+        recordProcessed("completed", { reason: "plugin-bound-error" });
+        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+      }
+    }
+  }
+
+  // Trigger plugin hooks (fire-and-forget)
+  if (hookRunner?.hasHooks("message_received")) {
+    fireAndForgetHook(
+      hookRunner.runMessageReceived(
+        toPluginMessageReceivedEvent(hookContext),
+        toPluginMessageContext(hookContext),
+      ),
+      "dispatch-from-config: message_received plugin hook failed",
+    );
+  }
+
+  // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
+  if (sessionKey) {
+    fireAndForgetHook(
+      triggerInternalHook(
+        createInternalHookEvent("message", "received", sessionKey, {
+          ...toInternalMessageReceivedContext(hookContext),
+          timestamp,
+        }),
+      ),
+      "dispatch-from-config: message_received internal hook failed",
+    );
+  }
 
   markProcessing();
 
@@ -289,7 +431,7 @@ export async function dispatchReplyFromConfig(params: {
           to: originatingTo,
           sessionKey: ctx.SessionKey,
           accountId: ctx.AccountId,
-          threadId: ctx.MessageThreadId,
+          threadId: routeThreadId,
           cfg,
           isGroup,
           groupId,
@@ -367,8 +509,8 @@ export async function dispatchReplyFromConfig(params: {
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
-        normalizeMessageChannel(ctx.Surface ?? ctx.Provider) === "discord" &&
-        shouldSuppressLocalDiscordExecApprovalPrompt({
+        shouldSuppressLocalExecApprovalPrompt({
+          channel: normalizeMessageChannel(ctx.Surface ?? ctx.Provider),
           cfg,
           accountId: ctx.AccountId,
           payload,
@@ -519,7 +661,7 @@ export async function dispatchReplyFromConfig(params: {
           to: originatingTo,
           sessionKey: ctx.SessionKey,
           accountId: ctx.AccountId,
-          threadId: ctx.MessageThreadId,
+          threadId: routeThreadId,
           cfg,
           isGroup,
           groupId,
@@ -571,7 +713,7 @@ export async function dispatchReplyFromConfig(params: {
               to: originatingTo,
               sessionKey: ctx.SessionKey,
               accountId: ctx.AccountId,
-              threadId: ctx.MessageThreadId,
+              threadId: routeThreadId,
               cfg,
               isGroup,
               groupId,
@@ -599,7 +741,10 @@ export async function dispatchReplyFromConfig(params: {
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
-    recordProcessed("completed");
+    recordProcessed(
+      "completed",
+      pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
+    );
     markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {

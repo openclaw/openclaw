@@ -150,6 +150,49 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toBe("");
     expect(result!.mediaUrl).toBe("https://example.com/img.png");
   });
+
+  it("does not compile Slack directives unless interactive replies are enabled", () => {
+    const result = normalizeReplyPayload({
+      text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
+    expect(result!.interactive).toBeUndefined();
+  });
+
+  it("applies responsePrefix before compiling Slack directives into shared interactive blocks", () => {
+    const result = normalizeReplyPayload(
+      {
+        text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
+      },
+      { responsePrefix: "[bot]", enableSlackInteractiveReplies: true },
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("[bot] hello");
+    expect(result!.interactive).toEqual({
+      blocks: [
+        {
+          type: "text",
+          text: "[bot] hello",
+        },
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Retry",
+              value: "retry",
+            },
+            {
+              label: "Ignore",
+              value: "ignore",
+            },
+          ],
+        },
+      ],
+    });
+  });
 });
 
 describe("typing controller", () => {

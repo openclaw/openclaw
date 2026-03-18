@@ -46,7 +46,7 @@ The Ansible playbook installs and configures:
 1. **Tailscale** (mesh VPN for secure remote access)
 2. **UFW firewall** (SSH + Tailscale ports only)
 3. **Docker CE + Compose V2** (for agent sandboxes)
-4. **Node.js 22.x + pnpm** (runtime dependencies)
+4. **Node.js 24 + pnpm** (runtime dependencies; Node 22 LTS, currently `22.16+`, remains supported for compatibility)
 5. **OpenClaw** (host-based, not containerized)
 6. **Systemd service** (auto-start with security hardening)
 
@@ -154,7 +154,7 @@ If you're locked out:
 - SSH access (port 22) is always allowed
 - The gateway is **only** accessible via Tailscale by design
 
-### Service won't start
+### Service will not start
 
 ```bash
 # Check logs
