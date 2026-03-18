@@ -61,6 +61,14 @@ export function resolveSlackStreamingThreadHint(params: {
   });
 }
 
+export function resolveSlackDeliveryThreadTs(params: {
+  forcedThreadTs?: string;
+  plannedThreadTs?: string;
+  usedReplyThreadTs?: string;
+}): string | undefined {
+  return params.forcedThreadTs ?? params.plannedThreadTs ?? params.usedReplyThreadTs;
+}
+
 function shouldUseStreaming(params: {
   streamingEnabled: boolean;
   threadTs: string | undefined;
@@ -230,7 +238,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let usedReplyThreadTs: string | undefined;
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
-    const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
+    const replyThreadTs = resolveSlackDeliveryThreadTs({
+      forcedThreadTs,
+      plannedThreadTs: replyPlan.nextThreadTs(),
+      usedReplyThreadTs,
+    });
     await deliverReplies({
       replies: [payload],
       target: prepared.replyTarget,
@@ -380,7 +392,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     accountId: account.accountId,
     maxChars: Math.min(ctx.textLimit, 4000),
     resolveThreadTs: () => {
-      const ts = replyPlan.nextThreadTs();
+      const ts = resolveSlackDeliveryThreadTs({
+        plannedThreadTs: replyPlan.nextThreadTs(),
+        usedReplyThreadTs,
+      });
       if (ts) {
         usedReplyThreadTs ??= ts;
       }

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isSlackStreamingEnabled, resolveSlackStreamingThreadHint } from "./dispatch.js";
+import {
+  isSlackStreamingEnabled,
+  resolveSlackDeliveryThreadTs,
+  resolveSlackStreamingThreadHint,
+} from "./dispatch.js";
 
 describe("slack native streaming defaults", () => {
   it("is enabled for partial mode when native streaming is on", () => {
@@ -43,5 +47,33 @@ describe("slack native streaming thread hint", () => {
         messageTs: "1000.3",
       }),
     ).toBe("2000.1");
+  });
+});
+
+describe("slack block delivery thread reuse", () => {
+  it("reuses the established thread when first-mode planning is exhausted", () => {
+    expect(
+      resolveSlackDeliveryThreadTs({
+        plannedThreadTs: undefined,
+        usedReplyThreadTs: "3000.1",
+      }),
+    ).toBe("3000.1");
+  });
+
+  it("still prefers an explicit or newly planned thread over the reused thread", () => {
+    expect(
+      resolveSlackDeliveryThreadTs({
+        forcedThreadTs: "3000.2",
+        plannedThreadTs: "3000.3",
+        usedReplyThreadTs: "3000.1",
+      }),
+    ).toBe("3000.2");
+
+    expect(
+      resolveSlackDeliveryThreadTs({
+        plannedThreadTs: "3000.3",
+        usedReplyThreadTs: "3000.1",
+      }),
+    ).toBe("3000.3");
   });
 });
