@@ -6,15 +6,20 @@ import {
   toDirectoryEntries,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { inspectReadOnlyChannelAccount } from "../../../src/channels/read-only-account-inspect.js";
-import type { InspectedTelegramAccount } from "../../../src/channels/read-only-account-inspect.telegram.runtime.js";
+import { inspectTelegramAccount } from "../api.js";
+import type { InspectedTelegramAccount } from "../api.js";
 
-export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  const account = (await inspectReadOnlyChannelAccount({
-    channelId: "telegram",
+async function inspectTelegramDirectoryAccount(
+  params: DirectoryConfigParams,
+): Promise<InspectedTelegramAccount | null> {
+  return inspectTelegramAccount({
     cfg: params.cfg,
     accountId: params.accountId,
-  })) as InspectedTelegramAccount | null;
+  });
+}
+
+export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConfigParams) {
+  const account = await inspectTelegramDirectoryAccount(params);
   if (!account || !("config" in account)) {
     return [];
   }
@@ -36,11 +41,7 @@ export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConf
 }
 
 export async function listTelegramDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  const account = (await inspectReadOnlyChannelAccount({
-    channelId: "telegram",
-    cfg: params.cfg,
-    accountId: params.accountId,
-  })) as InspectedTelegramAccount | null;
+  const account = await inspectTelegramDirectoryAccount(params);
   if (!account || !("config" in account)) {
     return [];
   }

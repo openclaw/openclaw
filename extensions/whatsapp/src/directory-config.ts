@@ -3,8 +3,8 @@ import {
   listDirectoryUserEntriesFromAllowFrom,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../../src/whatsapp/normalize.js";
 import { resolveWhatsAppAccount } from "./accounts.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
 
 export async function listWhatsAppDirectoryPeersFromConfig(params: DirectoryConfigParams) {
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
