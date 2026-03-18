@@ -40,7 +40,7 @@ vi.mock("../config/paths.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/paths.js")>();
   return {
     ...actual,
-    resolveStateDir: (...args: unknown[]) => resolveStateDir(...args),
+    resolveStateDir: () => resolveStateDir(),
   };
 });
 
