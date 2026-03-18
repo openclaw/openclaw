@@ -312,13 +312,20 @@ Auto-responses use the agent system. Tune with:
 
 ```bash
 openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
+openclaw voicecall start --to "+15555550123"   # alias for call
 openclaw voicecall continue --call-id <id> --message "Any questions?"
 openclaw voicecall speak --call-id <id> --message "One moment"
 openclaw voicecall end --call-id <id>
 openclaw voicecall status --call-id <id>
 openclaw voicecall tail
+openclaw voicecall latency                     # summarize turn latency from logs
 openclaw voicecall expose --mode funnel
 ```
+
+`latency` reads `calls.jsonl` from the default voice-call storage path. Use
+`--file <path>` to point at a different log and `--last <n>` to limit analysis
+to the last N records (default 200). Output includes p50/p90/p99 for turn
+latency and listen-wait times.
 
 ## Agent tool
 
