@@ -33,7 +33,7 @@ plugin errors and block config validation.
 
 See the full plugin system guide: [Plugins](/tools/plugin).
 For the native capability model and current external-compatibility guidance:
-[Capability model](/tools/plugin#public-capability-model).
+[Capability model](/plugins/architecture#public-capability-model).
 
 ## Required fields
 
@@ -135,7 +135,7 @@ See [Configuration reference](/configuration) for the full `plugins.*` schema.
   `--auth-choice` resolution, preferred-provider mapping, and simple onboarding
   CLI flag registration before provider runtime loads. For runtime wizard
   metadata that requires provider code, see
-  [Provider runtime hooks](/tools/plugin#provider-runtime-hooks).
+  [Provider runtime hooks](/plugins/architecture#provider-runtime-hooks).
 - Exclusive plugin kinds are selected through `plugins.slots.*`.
   - `kind: "memory"` is selected by `plugins.slots.memory`.
   - `kind: "context-engine"` is selected by `plugins.slots.contextEngine`

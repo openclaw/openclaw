@@ -13,7 +13,7 @@ Manage agent hooks (event-driven automations for commands like `/new`, `/reset`,
 Related:
 
 - Hooks: [Hooks](/automation/hooks)
-- Plugin hooks: [Plugins](/tools/plugin#plugin-hooks)
+- Plugin hooks: [Plugin hooks](/plugins/architecture#provider-runtime-hooks)
 
 ## List All Hooks
 
