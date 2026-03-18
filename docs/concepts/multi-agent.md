@@ -192,8 +192,8 @@ If a binding sets multiple match fields (for example `peer` + `guildId`), all sp
 > matches only the channel's **default account** (the one named `"default"`,
 > or the value of `channels.<ch>.defaultAccount`).
 >
-> If you have **multiple accounts** configured for a channel (e.g. Feishu
-> `default` + `ai-bot`, WhatsApp `personal` + `biz`), you **must** set
+> If you have **multiple accounts** configured for a channel (e.g. WhatsApp
+> `personal` + `biz`, Telegram `default` + `alerts`), you **must** set
 > `accountId` explicitly in each binding:
 >
 > - `"accountId": "*"` — match **all** accounts (channel-wide).

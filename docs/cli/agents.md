@@ -67,7 +67,7 @@ If you omit `accountId` (`--bind <channel>`), OpenClaw resolves it from channel 
 > [!WARNING]
 > A binding **without `accountId`** matches the channel **default account
 > only** — it does **not** match all accounts. If you configure multiple
-> accounts for a channel (e.g. Feishu `default` + `ai-bot`), use
+> accounts for a channel (e.g. WhatsApp `personal` + `biz`), use
 > `--bind <channel>:*` or add `accountId: "*"` in JSON to match all of
 > them, or specify each account explicitly.
 
@@ -78,19 +78,19 @@ Examples:
 
 ```bash
 # match all accounts on the channel (recommended for multi-account setups)
-openclaw agents bind --agent work --bind feishu:*
+openclaw agents bind --agent work --bind telegram:*
 
 # match a specific account
-openclaw agents bind --agent work --bind feishu:ai-bot
+openclaw agents bind --agent work --bind telegram:ops
 
 # initial channel-only binding (matches default account only)
 openclaw agents bind --agent work --bind telegram
 
 # later upgrade to account-scoped binding
-openclaw agents bind --agent work --bind telegram:ops
+openclaw agents bind --agent work --bind telegram:alerts
 ```
 
-After an upgrade, routing for that binding is scoped to `telegram:ops`. If you also want default-account routing, add it explicitly (for example `--bind telegram:default`).
+After an upgrade, routing for that binding is scoped to `telegram:alerts`. If you also want default-account routing, add it explicitly (for example `--bind telegram:default`).
 
 Remove bindings:
 
