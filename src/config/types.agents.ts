@@ -41,6 +41,10 @@ export type AgentRouteBinding = {
   agentId: string;
   comment?: string;
   match: AgentBindingMatch;
+  tools?: {
+    allow?: string[];
+    deny?: string[];
+  };
 };
 
 export type AgentAcpBinding = {
