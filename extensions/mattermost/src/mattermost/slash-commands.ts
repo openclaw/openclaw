@@ -12,6 +12,8 @@
  * - On shutdown, cleans up registered commands via DELETE /api/v4/commands/{id}
  */
 
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { MattermostClient } from "./client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -44,9 +46,17 @@ export type MattermostRegisteredCommand = {
   trigger: string;
   teamId: string;
   token: string;
+  callbackUrl: string;
   /** True when this process created the command and should delete it on shutdown. */
   managed: boolean;
 };
+
+type PersistedMattermostSlashCommandState = {
+  version: 1;
+  commands: MattermostRegisteredCommand[];
+};
+
+const SLASH_COMMAND_STATE_VERSION = 1;
 
 /**
  * Payload sent by Mattermost when a slash command is invoked.
@@ -238,10 +248,114 @@ export async function updateMattermostCommand(
   );
 }
 
+function isMattermostRegisteredCommand(value: unknown): value is MattermostRegisteredCommand {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.id === "string" &&
+    typeof entry.trigger === "string" &&
+    typeof entry.teamId === "string" &&
+    typeof entry.token === "string" &&
+    typeof entry.callbackUrl === "string" &&
+    typeof entry.managed === "boolean"
+  );
+}
+
+function normalizePersistedCommands(value: unknown): MattermostRegisteredCommand[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const commands: MattermostRegisteredCommand[] = [];
+  for (const entry of value) {
+    if (!isMattermostRegisteredCommand(entry)) {
+      continue;
+    }
+    commands.push({
+      id: entry.id,
+      trigger: entry.trigger,
+      teamId: entry.teamId,
+      token: entry.token,
+      callbackUrl: entry.callbackUrl,
+      managed: entry.managed,
+    });
+  }
+  return commands;
+}
+
+function sanitizeAccountId(accountId: string): string {
+  const trimmed = accountId.trim();
+  if (!trimmed) {
+    return "default";
+  }
+  return trimmed.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+export function resolveSlashCommandCachePath(stateDir: string, accountId: string): string {
+  return path.join(
+    stateDir,
+    "mattermost",
+    "slash-commands",
+    `${sanitizeAccountId(accountId)}.json`,
+  );
+}
+
+export async function loadPersistedSlashCommands(
+  cachePath: string,
+  log?: (msg: string) => void,
+): Promise<MattermostRegisteredCommand[]> {
+  try {
+    const raw = await fs.readFile(cachePath, "utf8");
+    const parsed = JSON.parse(raw) as Partial<PersistedMattermostSlashCommandState> | null;
+    if (!parsed || parsed.version !== SLASH_COMMAND_STATE_VERSION) {
+      log?.(`mattermost: ignoring slash command cache at ${cachePath} due to unsupported version`);
+      return [];
+    }
+    return normalizePersistedCommands(parsed.commands);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return [];
+    }
+    log?.(`mattermost: failed to load slash command cache ${cachePath}: ${String(err)}`);
+    return [];
+  }
+}
+
+export async function savePersistedSlashCommands(
+  cachePath: string,
+  commands: MattermostRegisteredCommand[],
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    const payload: PersistedMattermostSlashCommandState = {
+      version: SLASH_COMMAND_STATE_VERSION,
+      commands: normalizePersistedCommands(commands),
+    };
+    await fs.writeFile(cachePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  } catch (err) {
+    log?.(`mattermost: failed to save slash command cache ${cachePath}: ${String(err)}`);
+  }
+}
+
+export async function removePersistedSlashCommands(
+  cachePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    await fs.rm(cachePath, { force: true });
+  } catch (err) {
+    log?.(`mattermost: failed to remove slash command cache ${cachePath}: ${String(err)}`);
+  }
+}
+
 /**
  * Register all OpenClaw slash commands for a given team.
  * Skips commands that are already registered with the same trigger + callback URL.
- * Returns the list of newly created command IDs.
+ * Falls back to a persisted cache when Mattermost refuses GET /commands but
+ * still allows POST /commands for bot tokens.
  */
 export async function registerSlashCommands(params: {
   client: MattermostClient;
@@ -249,9 +363,10 @@ export async function registerSlashCommands(params: {
   creatorUserId: string;
   callbackUrl: string;
   commands: MattermostCommandSpec[];
+  cachedCommands?: MattermostRegisteredCommand[];
   log?: (msg: string) => void;
 }): Promise<MattermostRegisteredCommand[]> {
-  const { client, teamId, creatorUserId, callbackUrl, commands, log } = params;
+  const { client, teamId, creatorUserId, callbackUrl, commands, cachedCommands, log } = params;
   const normalizedCreatorUserId = creatorUserId.trim();
   if (!normalizedCreatorUserId) {
     throw new Error("creatorUserId is required for slash command reconciliation");
@@ -279,8 +394,35 @@ export async function registerSlashCommands(params: {
 
   const registered: MattermostRegisteredCommand[] = [];
   const allowBlindCreate = listError != null;
+  const createdThisRun: MattermostRegisteredCommand[] = [];
+  const cachedByTrigger = new Map<string, MattermostRegisteredCommand[]>();
+  for (const cmd of cachedCommands ?? []) {
+    if (cmd.teamId !== teamId || cmd.callbackUrl !== callbackUrl) {
+      continue;
+    }
+    const list = cachedByTrigger.get(cmd.trigger) ?? [];
+    list.push(cmd);
+    cachedByTrigger.set(cmd.trigger, list);
+  }
 
   for (const spec of commands) {
+    if (allowBlindCreate) {
+      const cachedForTrigger = cachedByTrigger.get(spec.trigger) ?? [];
+      if (cachedForTrigger.length > 1) {
+        log?.(
+          `mattermost: multiple cached commands found for /${spec.trigger}; using the first and leaving extras untouched`,
+        );
+      }
+      const cachedCmd = cachedForTrigger[0];
+      if (cachedCmd) {
+        log?.(
+          `mattermost: reusing cached command /${spec.trigger} after listing failed (id=${cachedCmd.id})`,
+        );
+        registered.push(cachedCmd);
+        continue;
+      }
+    }
+
     const existingForTrigger = allowBlindCreate ? [] : (existingByTrigger.get(spec.trigger) ?? []);
     const ownedCommands = allowBlindCreate
       ? []
@@ -312,6 +454,7 @@ export async function registerSlashCommands(params: {
         trigger: spec.trigger,
         teamId,
         token: existingCmd.token,
+        callbackUrl,
         managed: false,
       });
       continue;
@@ -340,6 +483,7 @@ export async function registerSlashCommands(params: {
           trigger: spec.trigger,
           teamId,
           token: updated.token,
+          callbackUrl,
           managed: false,
         });
         continue;
@@ -379,6 +523,15 @@ export async function registerSlashCommands(params: {
         trigger: spec.trigger,
         teamId,
         token: created.token,
+        callbackUrl,
+        managed: true,
+      });
+      createdThisRun.push({
+        id: created.id,
+        trigger: spec.trigger,
+        teamId,
+        token: created.token,
+        callbackUrl,
         managed: true,
       });
     } catch (err) {
@@ -388,12 +541,9 @@ export async function registerSlashCommands(params: {
 
   if (allowBlindCreate && registered.length !== commands.length) {
     log?.(
-      "mattermost: command listing failed and blind-create was incomplete; deleting newly created commands and keeping slash callbacks inactive",
+      "mattermost: command listing failed and blind-create was incomplete; deleting commands created in this boot and keeping slash callbacks inactive",
     );
-    for (const cmd of registered) {
-      if (!cmd.managed) {
-        continue;
-      }
+    for (const cmd of createdThisRun) {
       try {
         await deleteMattermostCommand(client, cmd.id);
       } catch (err) {
@@ -415,10 +565,12 @@ export async function cleanupSlashCommands(params: {
   client: MattermostClient;
   commands: MattermostRegisteredCommand[];
   log?: (msg: string) => void;
-}): Promise<void> {
+}): Promise<MattermostRegisteredCommand[]> {
   const { client, commands, log } = params;
+  const remaining: MattermostRegisteredCommand[] = [];
   for (const cmd of commands) {
     if (!cmd.managed) {
+      remaining.push(cmd);
       continue;
     }
     try {
@@ -426,8 +578,10 @@ export async function cleanupSlashCommands(params: {
       log?.(`mattermost: deleted command /${cmd.trigger} (id=${cmd.id})`);
     } catch (err) {
       log?.(`mattermost: failed to delete command /${cmd.trigger}: ${String(err)}`);
+      remaining.push(cmd);
     }
   }
+  return remaining;
 }
 
 // ─── Callback parsing ────────────────────────────────────────────────────────

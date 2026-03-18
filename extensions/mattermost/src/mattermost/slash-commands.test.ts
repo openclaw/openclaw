@@ -1,12 +1,20 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
 import {
+  cleanupSlashCommands,
   DEFAULT_COMMAND_SPECS,
+  loadPersistedSlashCommands,
   parseSlashCommandPayload,
+  removePersistedSlashCommands,
   registerSlashCommands,
   resolveCallbackUrl,
+  resolveSlashCommandCachePath,
   resolveCommandText,
   resolveSlashCommandConfig,
+  savePersistedSlashCommands,
 } from "./slash-commands.js";
 
 describe("slash-commands", () => {
@@ -195,6 +203,57 @@ describe("slash-commands", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("reuses cached commands when listing existing commands is forbidden after restart", async () => {
+    const request = vi.fn(async (path: string, init?: { method?: string }) => {
+      if (path.startsWith("/commands?team_id=")) {
+        throw new Error(
+          "Mattermost API 403 Forbidden: You do not have the appropriate permissions.",
+        );
+      }
+      if (init?.method === "POST") {
+        throw new Error("should not recreate cached command");
+      }
+      throw new Error(`unexpected request path: ${path}`);
+    });
+
+    const client = { request } as unknown as MattermostClient;
+    const result = await registerSlashCommands({
+      client,
+      teamId: "team-1",
+      creatorUserId: "bot-user",
+      callbackUrl: "http://gateway/callback",
+      commands: [
+        {
+          trigger: "oc_status",
+          description: "status",
+          autoComplete: true,
+        },
+      ],
+      cachedCommands: [
+        {
+          id: "cmd-cached-1",
+          trigger: "oc_status",
+          teamId: "team-1",
+          token: "tok-cached-1",
+          callbackUrl: "http://gateway/callback",
+          managed: true,
+        },
+      ],
+    });
+
+    expect(result).toEqual([
+      {
+        id: "cmd-cached-1",
+        trigger: "oc_status",
+        teamId: "team-1",
+        token: "tok-cached-1",
+        callbackUrl: "http://gateway/callback",
+        managed: true,
+      },
+    ]);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("cleans up blind-created commands when listing fails and registration is incomplete", async () => {
     const request = vi.fn(async (path: string, init?: { method?: string }) => {
       if (path.startsWith("/commands?team_id=")) {
@@ -248,5 +307,174 @@ describe("slash-commands", () => {
     ).rejects.toThrow("Mattermost API 403 Forbidden");
 
     expect(request).toHaveBeenCalledWith("/commands/cmd-created-1", { method: "DELETE" });
+  });
+
+  it("only deletes commands created in the current blind-create attempt", async () => {
+    const request = vi.fn(async (path: string, init?: { method?: string; body?: string }) => {
+      if (path.startsWith("/commands?team_id=")) {
+        throw new Error(
+          "Mattermost API 403 Forbidden: You do not have the appropriate permissions.",
+        );
+      }
+      if (path === "/commands" && init?.method === "POST") {
+        const body = JSON.parse(init.body ?? "{}") as { trigger?: string };
+        if (body.trigger === "oc_help") {
+          return {
+            id: "cmd-created-2",
+            token: "tok-created-2",
+            team_id: "team-1",
+            creator_id: "bot-user",
+            trigger: "oc_help",
+            method: "P",
+            url: "http://gateway/callback",
+            auto_complete: true,
+          };
+        }
+        throw new Error("Mattermost API 400 Bad Request: trigger already exists");
+      }
+      if (path === "/commands/cmd-created-2" && init?.method === "DELETE") {
+        return undefined;
+      }
+      if (path === "/commands/cmd-cached-1" && init?.method === "DELETE") {
+        throw new Error("should not delete cached command");
+      }
+      throw new Error(`unexpected request path: ${path}`);
+    });
+
+    const client = { request } as unknown as MattermostClient;
+
+    await expect(
+      registerSlashCommands({
+        client,
+        teamId: "team-1",
+        creatorUserId: "bot-user",
+        callbackUrl: "http://gateway/callback",
+        commands: [
+          {
+            trigger: "oc_status",
+            description: "status",
+            autoComplete: true,
+          },
+          {
+            trigger: "oc_help",
+            description: "help",
+            autoComplete: true,
+          },
+          {
+            trigger: "oc_model",
+            description: "model",
+            autoComplete: true,
+          },
+        ],
+        cachedCommands: [
+          {
+            id: "cmd-cached-1",
+            trigger: "oc_status",
+            teamId: "team-1",
+            token: "tok-cached-1",
+            callbackUrl: "http://gateway/callback",
+            managed: true,
+          },
+        ],
+      }),
+    ).rejects.toThrow("Mattermost API 403 Forbidden");
+
+    expect(request).toHaveBeenCalledWith("/commands/cmd-created-2", { method: "DELETE" });
+    expect(request).not.toHaveBeenCalledWith("/commands/cmd-cached-1", { method: "DELETE" });
+  });
+
+  it("returns the remaining commands after cleanup", async () => {
+    const request = vi.fn(async (path: string, init?: { method?: string }) => {
+      if (path === "/commands/cmd-managed-1" && init?.method === "DELETE") {
+        return undefined;
+      }
+      if (path === "/commands/cmd-managed-2" && init?.method === "DELETE") {
+        throw new Error("Mattermost API 500 Internal Server Error");
+      }
+      throw new Error(`unexpected request path: ${path}`);
+    });
+
+    const remaining = await cleanupSlashCommands({
+      client: { request } as unknown as MattermostClient,
+      commands: [
+        {
+          id: "cmd-managed-1",
+          trigger: "oc_status",
+          teamId: "team-1",
+          token: "tok-1",
+          callbackUrl: "http://gateway/callback",
+          managed: true,
+        },
+        {
+          id: "cmd-managed-2",
+          trigger: "oc_help",
+          teamId: "team-1",
+          token: "tok-2",
+          callbackUrl: "http://gateway/callback",
+          managed: true,
+        },
+        {
+          id: "cmd-unmanaged-1",
+          trigger: "oc_model",
+          teamId: "team-1",
+          token: "tok-3",
+          callbackUrl: "http://gateway/callback",
+          managed: false,
+        },
+      ],
+    });
+
+    expect(remaining).toEqual([
+      {
+        id: "cmd-managed-2",
+        trigger: "oc_help",
+        teamId: "team-1",
+        token: "tok-2",
+        callbackUrl: "http://gateway/callback",
+        managed: true,
+      },
+      {
+        id: "cmd-unmanaged-1",
+        trigger: "oc_model",
+        teamId: "team-1",
+        token: "tok-3",
+        callbackUrl: "http://gateway/callback",
+        managed: false,
+      },
+    ]);
+  });
+
+  it("persists slash command cache to disk", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mm-slash-cache-"));
+    const cachePath = resolveSlashCommandCachePath(stateDir, "default");
+
+    try {
+      await savePersistedSlashCommands(cachePath, [
+        {
+          id: "cmd-cache-1",
+          trigger: "oc_status",
+          teamId: "team-1",
+          token: "tok-cache-1",
+          callbackUrl: "http://gateway/callback",
+          managed: true,
+        },
+      ]);
+
+      await expect(loadPersistedSlashCommands(cachePath)).resolves.toEqual([
+        {
+          id: "cmd-cache-1",
+          trigger: "oc_status",
+          teamId: "team-1",
+          token: "tok-cache-1",
+          callbackUrl: "http://gateway/callback",
+          managed: true,
+        },
+      ]);
+
+      await removePersistedSlashCommands(cachePath);
+      await expect(loadPersistedSlashCommands(cachePath)).resolves.toEqual([]);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });
