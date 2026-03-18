@@ -26,16 +26,16 @@ export type GatewayBroadcastOpts = {
 };
 
 export type GatewayBroadcastFn = (
-    event: string,
-    payload: unknown,
-    opts?: GatewayBroadcastOpts,
+  event: string,
+  payload: unknown,
+  opts?: GatewayBroadcastOpts,
 ) => void;
 
 export type GatewayBroadcastToConnIdsFn = (
-    event: string,
-    payload: unknown,
-    connIds: ReadonlySet<string>,
-    opts?: GatewayBroadcastOpts,
+  event: string,
+  payload: unknown,
+  connIds: ReadonlySet<string>,
+  opts?: GatewayBroadcastOpts,
 ) => void;
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
@@ -60,10 +60,10 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
   const clientSeqs = new WeakMap<GatewayWsClient, number>();
 
   const broadcastInternal = (
-      event: string,
-      payload: unknown,
-      opts?: GatewayBroadcastOpts,
-      targetConnIds?: ReadonlySet<string>,
+    event: string,
+    payload: unknown,
+    opts?: GatewayBroadcastOpts,
+    targetConnIds?: ReadonlySet<string>,
   ) => {
     if (params.clients.size === 0) {
       return;
@@ -101,7 +101,11 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       // Use a local variable + spread to avoid mutating a shared object,
       // which would silently break if the loop body ever became async.
       const clientSeq = !isTargeted
-        ? (() => { const prev = clientSeqs.get(c) ?? 0; clientSeqs.set(c, prev + 1); return prev + 1; })()
+        ? (() => {
+            const prev = clientSeqs.get(c) ?? 0;
+            clientSeqs.set(c, prev + 1);
+            return prev + 1;
+          })()
         : undefined;
       if (clientSeq !== undefined) {
         minSeq = Math.min(minSeq, clientSeq);
@@ -136,7 +140,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
   };
 
   const broadcast: GatewayBroadcastFn = (event, payload, opts) =>
-      broadcastInternal(event, payload, opts);
+    broadcastInternal(event, payload, opts);
 
   const broadcastToConnIds: GatewayBroadcastToConnIdsFn = (event, payload, connIds, opts) => {
     if (connIds.size === 0) {
