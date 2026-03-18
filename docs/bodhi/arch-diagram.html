@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenBodhi — Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #07090d;
+    --grid: rgba(255,255,255,0.025);
+    --green: #39d98a;
+    --green-dim: rgba(57,217,138,0.15);
+    --amber: #f5a623;
+    --amber-dim: rgba(245,166,35,0.12);
+    --blue: #5b8dee;
+    --blue-dim: rgba(91,141,238,0.12);
+    --red: #e05c5c;
+    --surface: rgba(255,255,255,0.04);
+    --surface-hi: rgba(255,255,255,0.07);
+    --border: rgba(255,255,255,0.08);
+    --border-hi: rgba(255,255,255,0.15);
+    --text: #e2e8f0;
+    --text-dim: #64748b;
+    --text-muted: #334155;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+    position: relative;
+  }
+
+  /* Grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+  }
+
+  /* Radial glow center */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 900px;
+    height: 900px;
+    background: radial-gradient(circle, rgba(57,217,138,0.04) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .page {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 8px;
+  }
+
+  .header h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: #fff;
+  }
+
+  .header .tag {
+    font-size: 11px;
+    color: var(--green);
+    border: 1px solid rgba(57,217,138,0.3);
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.05em;
+  }
+
+  .subtitle {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 48px;
+    letter-spacing: 0.02em;
+  }
+
+  /* ── SECURITY PERIMETER ── */
+  .perimeter {
+    border: 1px solid rgba(245,166,35,0.2);
+    border-radius: 16px;
+    padding: 20px;
+    position: relative;
+    background: rgba(245,166,35,0.02);
+    margin-bottom: 0;
+  }
+
+  .perimeter-label {
+    position: absolute;
+    top: -11px;
+    left: 20px;
+    background: var(--bg);
+    padding: 0 8px;
+    font-size: 10px;
+    color: var(--amber);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .perimeter-badges {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+
+  .sec-badge {
+    font-size: 10px;
+    color: var(--amber);
+    border: 1px solid rgba(245,166,35,0.25);
+    padding: 3px 10px;
+    border-radius: 4px;
+    background: rgba(245,166,35,0.05);
+    letter-spacing: 0.06em;
+  }
+
+  /* ── LAYERS ── */
+  .layers {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .connector {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 36px;
+    position: relative;
+  }
+
+  .connector-line {
+    width: 1px;
+    height: 100%;
+    background: linear-gradient(to bottom, var(--border-hi), var(--border));
+    position: relative;
+  }
+
+  .connector-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    box-shadow: 0 0 8px var(--green);
+    animation: flow-down 2s ease-in-out infinite;
+  }
+
+  @keyframes flow-down {
+    0% { top: -3px; opacity: 1; }
+    100% { top: calc(100% + 3px); opacity: 0; }
+  }
+
+  .connector-label {
+    position: absolute;
+    right: calc(50% + 12px);
+    font-size: 10px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    letter-spacing: 0.04em;
+  }
+
+  /* ── NODE ── */
+  .node {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    overflow: hidden;
+    transition: border-color 0.2s, background 0.2s;
+  }
+
+  .node:hover {
+    border-color: var(--border-hi);
+    background: var(--surface-hi);
+  }
+
+  .node-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .node-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .dot-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot-blue { background: var(--blue); box-shadow: 0 0 6px var(--blue); }
+  .dot-amber { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  .dot-white { background: #fff; }
+
+  .node-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #fff;
+  }
+
+  .node-subtitle {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  .node-body {
+    padding: 12px 16px;
+  }
+
+  /* ── INTERFACE NODE ── */
+  .interface-node {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .interface-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text);
+  }
+
+  .interface-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: var(--surface-hi);
+    border: 1px solid var(--border-hi);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+  }
+
+  /* ── AGENT GRID ── */
+  .agent-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+
+  .agent-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: var(--surface);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .agent-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+  }
+
+  .agent-bodhi::before { background: var(--green); }
+  .agent-bo::before { background: #c084fc; }
+  .agent-osint::before { background: var(--blue); }
+  .agent-moonman::before { background: var(--amber); }
+
+  .agent-name {
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: #fff;
+  }
+
+  .agent-role {
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.4;
+  }
+
+  /* ── CASCADE ── */
+  .cascade {
+    display: flex;
+    align-items: center;
+    gap: 0;
+  }
+
+  .cascade-item {
+    flex: 1;
+    padding: 10px 12px;
+    border-right: 1px solid var(--border);
+    position: relative;
+  }
+
+  .cascade-item:last-child { border-right: none; }
+
+  .cascade-num {
+    font-size: 9px;
+    color: var(--text-muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .cascade-model {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 2px;
+  }
+
+  .cascade-note {
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  .cascade-arrow {
+    width: 20px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  /* ── KNOWLEDGE SPLIT ── */
+  .knowledge-split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .k-node {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    overflow: hidden;
+  }
+
+  .k-header {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .k-body {
+    padding: 10px 12px;
+  }
+
+  .k-item {
+    font-size: 10px;
+    color: var(--text-dim);
+    padding: 3px 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .k-item::before {
+    content: '·';
+    color: var(--text-muted);
+  }
+
+  .k-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    color: var(--text-muted);
+    padding: 0 4px;
+  }
+
+  /* ── STORAGE ROW ── */
+  .storage-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+  }
+
+  .storage-item {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: var(--surface);
+  }
+
+  .storage-path {
+    font-size: 10px;
+    color: var(--green);
+    margin-bottom: 4px;
+    letter-spacing: 0.02em;
+  }
+
+  .storage-desc {
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  /* ── BUILT-IN PANEL ── */
+  .builtin-section {
+    margin-top: 48px;
+  }
+
+  .section-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 4px;
+  }
+
+  .section-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 20px;
+  }
+
+  .builtin-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .builtin-card {
+    border-radius: 10px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .builtin-card.zero {
+    border-color: rgba(57,217,138,0.2);
+    background: rgba(57,217,138,0.03);
+  }
+
+  .builtin-card.write {
+    border-color: rgba(91,141,238,0.2);
+    background: rgba(91,141,238,0.03);
+  }
+
+  .builtin-label {
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    font-weight: 700;
+  }
+
+  .builtin-card.zero .builtin-label { color: var(--green); }
+  .builtin-card.write .builtin-label { color: var(--blue); }
+
+  .builtin-item {
+    font-size: 11px;
+    color: var(--text);
+    padding: 4px 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .builtin-item:last-child { border-bottom: none; }
+
+  .builtin-check {
+    flex-shrink: 0;
+    font-size: 10px;
+    margin-top: 1px;
+  }
+
+  .zero .builtin-check { color: var(--green); }
+  .write .builtin-check { color: var(--blue); }
+
+  .builtin-item span { line-height: 1.4; }
+
+  .builtin-how {
+    margin-top: 4px;
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 0.02em;
+  }
+
+  /* ── DELTA TABLE ── */
+  .delta-section {
+    margin-top: 32px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .delta-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-family: 'Syne', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 0.05em;
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .delta-row {
+    display: grid;
+    grid-template-columns: 2fr 1.5fr 2fr;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+  }
+
+  .delta-row:last-child { border-bottom: none; }
+  .delta-row.head { background: var(--surface); font-size: 10px; }
+
+  .delta-cell {
+    padding: 10px 16px;
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .delta-cell:last-child { border-right: none; }
+
+  .delta-feature { color: var(--text); font-weight: 500; }
+  .delta-old { color: var(--red); font-size: 10px; }
+  .delta-new { color: var(--green); font-size: 10px; }
+  .delta-head-label { color: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; font-size: 9px; }
+
+  /* Pulse animations */
+  @keyframes pulse-green {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .live-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 6px var(--green);
+    animation: pulse-green 2s ease-in-out infinite;
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+
+  /* horizontal connector for cascade */
+  .h-connector {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    height: 24px;
+    margin: 2px 0;
+  }
+
+  .h-line { flex: 1; height: 1px; background: var(--border); }
+  .h-label { font-size: 9px; color: var(--text-muted); letter-spacing: 0.06em; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="header">
+    <h1>OpenBodhi</h1>
+    <span class="tag">bodhi1 · GTX 1070 · Tailscale</span>
+  </div>
+  <div class="subtitle">agentic OS architecture — minimal · offline-first · sovereign</div>
+
+  <!-- SECURITY PERIMETER WRAPPER -->
+  <div class="perimeter">
+    <span class="perimeter-label">SECURITY PERIMETER</span>
+
+    <div class="perimeter-badges">
+      <span class="sec-badge">LUKS full-disk</span>
+      <span class="sec-badge">UFW · SSH only external</span>
+      <span class="sec-badge">Tailscale admin tunnel</span>
+      <span class="sec-badge">fail2ban</span>
+      <span class="sec-badge">ChaCha20 / AES-GCM SSH</span>
+      <span class="sec-badge">exec two-step confirm</span>
+    </div>
+
+    <div class="layers">
+
+      <!-- INTERFACE -->
+      <div class="node">
+        <div class="node-header">
+          <div class="node-dot dot-white"></div>
+          <span class="node-title">Interface</span>
+          <span class="node-subtitle">primary channel</span>
+        </div>
+        <div class="node-body">
+          <div class="interface-node">
+            <div class="interface-item">
+              <div class="interface-icon">📱</div>
+              Telegram · any device
+            </div>
+            <div style="font-size:10px;color:var(--text-muted);padding:0 8px;">→ Tailscale tunnel →</div>
+            <div class="interface-item">
+              <div class="interface-icon">🔒</div>
+              ws://127.0.0.1:18789
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="connector">
+        <div class="connector-line">
+          <div class="connector-dot" style="animation-delay:0s"></div>
+        </div>
+        <span class="connector-label">grammY · WebSocket</span>
+      </div>
+
+      <!-- OPENCLAW OS -->
+      <div class="node">
+        <div class="node-header">
+          <div class="node-dot dot-green"></div>
+          <span class="node-title">OpenClaw OS Runtime</span>
+          <span class="node-subtitle">gateway + cron + skills</span>
+        </div>
+        <div class="node-body">
+          <div class="agent-grid">
+            <div class="agent-card agent-bodhi">
+              <div class="agent-name">Bodhi</div>
+              <div class="agent-role">system · shell · infra</div>
+            </div>
+            <div class="agent-card agent-bo">
+              <div class="agent-name">Bo</div>
+              <div class="agent-role">wellness · vault · nudge</div>
+            </div>
+            <div class="agent-card agent-osint">
+              <div class="agent-name">OSINT</div>
+              <div class="agent-role">business · outreach · intel</div>
+            </div>
+            <div class="agent-card agent-moonman">
+              <div class="agent-name">Moonman</div>
+              <div class="agent-role">trading · signals · risk</div>
+            </div>
+          </div>
+          <div class="h-connector" style="margin-top:10px;">
+            <div class="h-line"></div>
+            <div class="h-label">CronService · 44 scheduled jobs · skills/</div>
+            <div class="h-line"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="connector">
+        <div class="connector-line">
+          <div class="connector-dot" style="animation-delay:0.4s"></div>
+        </div>
+        <span class="connector-label">model resolution</span>
+      </div>
+
+      <!-- MODEL CASCADE -->
+      <div class="node">
+        <div class="node-header">
+          <div class="node-dot dot-blue"></div>
+          <span class="node-title">Model Cascade</span>
+          <span class="node-subtitle">config-only · zero custom code</span>
+        </div>
+        <div class="node-body">
+          <div class="cascade">
+            <div class="cascade-item">
+              <div class="cascade-num">primary</div>
+              <div class="cascade-model">Claude Sonnet</div>
+              <div class="cascade-note">Anthropic API · billed</div>
+            </div>
+            <div class="cascade-arrow">→</div>
+            <div class="cascade-item">
+              <div class="cascade-num">fallback 1</div>
+              <div class="cascade-model">Llama 3.3 70B</div>
+              <div class="cascade-note">OpenRouter :free</div>
+            </div>
+            <div class="cascade-arrow">→</div>
+            <div class="cascade-item">
+              <div class="cascade-num">fallback 2</div>
+              <div class="cascade-model">Gemma 3 12B</div>
+              <div class="cascade-note">OpenRouter :free</div>
+            </div>
+            <div class="cascade-arrow">→</div>
+            <div class="cascade-item">
+              <div class="cascade-num">offline · final</div>
+              <div class="cascade-model" style="color:var(--green)">gemma3:12b</div>
+              <div class="cascade-note">Ollama · GTX 1070</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="connector">
+        <div class="connector-line">
+          <div class="connector-dot" style="animation-delay:0.8s"></div>
+        </div>
+        <span class="connector-label">write + enrich</span>
+      </div>
+
+      <!-- KNOWLEDGE LAYER -->
+      <div class="node">
+        <div class="node-header">
+          <div class="node-dot dot-green"></div>
+          <span class="node-title">Knowledge Layer</span>
+          <span class="node-subtitle">vault → graph · 5min metabolism</span>
+        </div>
+        <div class="node-body">
+          <div class="knowledge-split">
+            <div class="k-node">
+              <div class="k-header">
+                <div class="node-dot dot-white" style="width:6px;height:6px;"></div>
+                bodhi_vault
+                <span style="font-size:9px;color:var(--text-dim);margin-left:auto;font-weight:400;">source of truth</span>
+              </div>
+              <div class="k-body">
+                <div class="k-item">nodes/*.json · SHA-256 manifest</div>
+                <div class="k-item">expand_content → Ollama</div>
+                <div class="k-item">match_concepts · 15 refs</div>
+                <div class="k-item">SiYuan + Obsidian sync</div>
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:center;">
+              <div style="text-align:center;width:100%;">
+                <div style="font-size:9px;color:var(--text-muted);letter-spacing:0.06em;">*/5 cron</div>
+                <div style="font-size:18px;color:var(--text-muted);">→</div>
+                <div style="font-size:9px;color:var(--green);">clawhub install lightrag</div>
+              </div>
+            </div>
+
+            <div class="k-node">
+              <div class="k-header">
+                <div class="node-dot dot-green" style="width:6px;height:6px;"></div>
+                LightRAG
+                <span style="font-size:9px;color:var(--text-dim);margin-left:auto;font-weight:400;">:8765</span>
+              </div>
+              <div class="k-body">
+                <div class="k-item">entity + relation graph</div>
+                <div class="k-item">nomic-embed-text · 768d</div>
+                <div class="k-item">SQLite + NetworkX</div>
+                <div class="k-item" style="color:var(--green);">graph explorer UI ↗</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="connector">
+        <div class="connector-line">
+          <div class="connector-dot" style="animation-delay:1.2s"></div>
+        </div>
+        <span class="connector-label">persistent storage</span>
+      </div>
+
+      <!-- STORAGE -->
+      <div class="node">
+        <div class="node-header">
+          <div class="node-dot dot-amber"></div>
+          <span class="node-title">Storage</span>
+          <span class="node-subtitle">~/.openclaw/ · LUKS encrypted</span>
+        </div>
+        <div class="node-body">
+          <div class="storage-row">
+            <div class="storage-item">
+              <div class="storage-path">vault/nodes/</div>
+              <div class="storage-desc">JSON node files · timestamped</div>
+            </div>
+            <div class="storage-item">
+              <div class="storage-path">lightrag/</div>
+              <div class="storage-desc">facts.db · graph entities</div>
+            </div>
+            <div class="storage-item">
+              <div class="storage-path">sessions/ · memory/</div>
+              <div class="storage-desc">transcripts · MEMORY.md</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /layers -->
+  </div><!-- /perimeter -->
+
+  <!-- WHAT'S ALREADY BUILT IN -->
+  <div class="builtin-section">
+    <div class="section-title">What's already built in — zero custom code</div>
+    <div class="section-sub">OpenClaw + ClawHub provide most of this stack. Custom code: ~25 lines Python + 1 SKILL.md.</div>
+
+    <div class="builtin-grid">
+      <div class="builtin-card zero">
+        <div class="builtin-label">OpenClaw built-in · config only</div>
+        <div class="builtin-item">
+          <span class="builtin-check">✓</span>
+          <span>
+            Model fallback chain
+            <div class="builtin-how">model: &#123; primary, fallbacks[] &#125; in openclaw.json</div>
+          </span>
+        </div>
+        <div class="builtin-item">
+          <span class="builtin-check">✓</span>
+          <span>
+            Ollama provider
+            <div class="builtin-how">ollama/gemma3:12b · docs/providers/ollama.md</div>
+          </span>
+        </div>
+        <div class="builtin-item">
+          <span class="builtin-check">✓</span>
+          <span>
+            OpenRouter provider
+            <div class="builtin-how">openrouter/model:free + OPENROUTER_API_KEY</div>
+          </span>
+        </div>
+        <div class="builtin-item">
+          <span class="builtin-check">✓</span>
+          <span>
+            Exec / shell tool
+            <div class="builtin-how">tools.exec + exec-approvals.json gating</div>
+          </span>
+        </div>
+        <div class="builtin-item">
+          <span class="builtin-check">✓</span>
+          <span>
+            /usage cost tracking
+            <div class="builtin-how">built-in CLI · /usage cost · session logs</div>
+          </span>
+        </div>
+        <div class="builtin-item">
+          <span class="builtin-check">✓</span>
+          <span>
+            Memory system
+            <div class="builtin-how">MEMORY.md + memory/*.md · vector search built-in</div>
+          </span>
+        </div>
+      </div>
+
+      <div class="builtin-card zero">
+        <div class="builtin-label">ClawHub install · clawhub install &lt;slug&gt;</div>
+        <div class="builtin-item">
+          <span class="builtin-check">✓</span>
+          <span>
+            LightRAG skill
+            <div class="builtin-how">clawhub install lightrag · replaces Flask server</div>
+          </span>
+        </div>
+        <div class="builtin-item">
+          <span class="builtin-check">✓</span>
+          <span>
+            Budget circuit breaker
+            <div class="builtin-how">clawhub install cost-governor · replaces budget-tracker.ts</div>
+          </span>
+        </div>
+        <div class="builtin-item">
+          <span class="builtin-check">✓</span>
+          <span>
+            Knowledge graph builder
+            <div class="builtin-how">clawhub install knowledge-graph</div>
+          </span>
+        </div>
+        <div class="builtin-item">
+          <span class="builtin-check">✓</span>
+          <span>
+            Memory hygiene
+            <div class="builtin-how">clawhub install memory-hygiene</div>
+          </span>
+        </div>
+        <div class="builtin-item">
+          <span class="builtin-check">✓</span>
+          <span>
+            openclaw-memory-architecture
+            <div class="builtin-how">dashboard :8765 + graph-ingest-daily.py</div>
+          </span>
+        </div>
+      </div>
+
+      <div class="builtin-card write">
+        <div class="builtin-label">custom code needed · minimal delta</div>
+        <div class="builtin-item">
+          <span class="builtin-check">~</span>
+          <span>
+            expand_content Ollama call
+            <div class="builtin-how">~25 lines Python · enrich.py stub already exists</div>
+          </span>
+        </div>
+        <div class="builtin-item">
+          <span class="builtin-check">~</span>
+          <span>
+            vault → LightRAG ingest adapter
+            <div class="builtin-how">adapt graph-ingest-daily.py · reads vault nodes dir</div>
+          </span>
+        </div>
+        <div class="builtin-item">
+          <span class="builtin-check">~</span>
+          <span>
+            bodhi-shell SKILL.md
+            <div class="builtin-how">instructions only · tools.exec already wired</div>
+          </span>
+        </div>
+        <div class="builtin-item">
+          <span class="builtin-check">~</span>
+          <span>
+            openclaw.json config
+            <div class="builtin-how">model cascade + tools.exec + OpenRouter key</div>
+          </span>
+        </div>
+        <div class="builtin-item" style="opacity:0.4;">
+          <span class="builtin-check" style="color:var(--red);">✗</span>
+          <span>
+            budget-tracker.ts
+            <div class="builtin-how">dropped → cost-governor from ClawHub</div>
+          </span>
+        </div>
+        <div class="builtin-item" style="opacity:0.4;">
+          <span class="builtin-check" style="color:var(--red);">✗</span>
+          <span>
+            custom Flask server
+            <div class="builtin-how">dropped → LightRAG built-in server</div>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- WHAT CHANGES -->
+    <div class="delta-section">
+      <div class="delta-header">
+        <span class="live-dot"></span>
+        Revised plan — original vs minimal
+      </div>
+      <div class="delta-row head">
+        <div class="delta-cell"><span class="delta-head-label">Feature</span></div>
+        <div class="delta-cell"><span class="delta-head-label">Original plan</span></div>
+        <div class="delta-cell"><span class="delta-head-label">Minimal (built-ins first)</span></div>
+      </div>
+      <div class="delta-row">
+        <div class="delta-cell"><span class="delta-feature">Budget control</span></div>
+        <div class="delta-cell"><span class="delta-old">Write budget-tracker.ts · modify src/run.ts</span></div>
+        <div class="delta-cell"><span class="delta-new">clawhub install cost-governor · zero code</span></div>
+      </div>
+      <div class="delta-row">
+        <div class="delta-cell"><span class="delta-feature">LightRAG server</span></div>
+        <div class="delta-cell"><span class="delta-old">Write bodhi_lightrag/ Flask server (~200 lines)</span></div>
+        <div class="delta-cell"><span class="delta-new">clawhub install lightrag + LightRAG built-in server</span></div>
+      </div>
+      <div class="delta-row">
+        <div class="delta-cell"><span class="delta-feature">Graph ingestion</span></div>
+        <div class="delta-cell"><span class="delta-old">Write ingest.py from scratch</span></div>
+        <div class="delta-cell"><span class="delta-new">Adapt graph-ingest-daily.py (20 lines)</span></div>
+      </div>
+      <div class="delta-row">
+        <div class="delta-cell"><span class="delta-feature">Shell access</span></div>
+        <div class="delta-cell"><span class="delta-old">Write SKILL.md + modify tools config</span></div>
+        <div class="delta-cell"><span class="delta-new">SKILL.md only · tools.exec already built in</span></div>
+      </div>
+      <div class="delta-row">
+        <div class="delta-cell"><span class="delta-feature">Offline enrichment</span></div>
+        <div class="delta-cell"><span class="delta-old">Same — implement expand_content stub</span></div>
+        <div class="delta-cell"><span class="delta-new">Same — ~25 lines, no change</span></div>
+      </div>
+      <div class="delta-row">
+        <div class="delta-cell"><span class="delta-feature">Model cascade</span></div>
+        <div class="delta-cell"><span class="delta-old">Same — openclaw.json config only</span></div>
+        <div class="delta-cell"><span class="delta-new">Same — config only · unchanged</span></div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+</body>
+</html>
