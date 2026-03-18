@@ -184,9 +184,18 @@ export async function modelsAuthCleanCommand(
     }
   }
   // 2) Provider keys in cfg.auth.order (keys are provider identifiers).
-  for (const providerKey of Object.keys(cfg.auth?.order ?? {})) {
+  //    Also track providers explicitly disabled via an empty order array so the
+  //    drift guard does not preserve their stale profiles.
+  const explicitlyDisabledProviders = new Set<string>();
+  for (const [providerKey, orderValue] of Object.entries(cfg.auth?.order ?? {})) {
     if (providerKey.trim()) {
       configuredProviders.add(normalizeProviderIdForAuth(providerKey.trim()));
+      // An explicitly empty array means the provider is intentionally disabled.
+      // Runtime (resolveAuthProfileOrder) skips empty-order providers entirely,
+      // so their store profiles are stale and should be pruned.
+      if (Array.isArray(orderValue) && orderValue.length === 0) {
+        explicitlyDisabledProviders.add(normalizeProviderIdForAuth(providerKey.trim()));
+      }
     }
   }
   // 3) Fall back to store-matched providers for profiles referenced by
@@ -220,17 +229,27 @@ export async function modelsAuthCleanCommand(
       return false;
     }
     // Store-fallback: this profile's provider has no explicitly-configured profile,
-    // so it is the sole credential source for that provider.  Preserve it.
+    // so it is the sole credential source for that provider.  Preserve it —
+    // unless the provider is explicitly disabled via an empty auth.order array,
+    // in which case its profiles are stale and should be pruned.
     const cred = store.profiles[id];
-    if (cred && !configuredProviders.has(normalizeProviderIdForAuth(cred.provider))) {
+    if (
+      cred &&
+      !configuredProviders.has(normalizeProviderIdForAuth(cred.provider)) &&
+      !explicitlyDisabledProviders.has(normalizeProviderIdForAuth(cred.provider))
+    ) {
       return false;
     }
     // Drift guard: the provider appears in config, but none of its configured
     // profile IDs actually exist in the store.  The store profile is the only
     // working credential — preserve it so the provider isn't left with nothing.
+    // Exception: providers explicitly disabled via an empty auth.order array
+    // should have their profiles pruned even if no configured IDs exist in
+    // the store — the empty order means the provider is intentionally off.
     if (
       cred &&
-      !configuredProvidersWithStorePresence.has(normalizeProviderIdForAuth(cred.provider))
+      !configuredProvidersWithStorePresence.has(normalizeProviderIdForAuth(cred.provider)) &&
+      !explicitlyDisabledProviders.has(normalizeProviderIdForAuth(cred.provider))
     ) {
       return false;
     }
