@@ -25,7 +25,7 @@ function loadRootAliasWithStubs(options?: {
 }) {
   let createJitiCalls = 0;
   let jitiLoadCalls = 0;
-  let lastJitiOptions: Record<string, unknown> | undefined;
+  const createJitiOptions: Record<string, unknown>[] = [];
   const loadedSpecifiers: string[] = [];
   const monolithicExports = options?.monolithicExports ?? {
     slowHelper: () => "loaded",
@@ -55,7 +55,7 @@ function loadRootAliasWithStubs(options?: {
       return {
         createJiti(_filename: string, jitiOptions?: Record<string, unknown>) {
           createJitiCalls += 1;
-          lastJitiOptions = jitiOptions;
+          createJitiOptions.push(jitiOptions ?? {});
           return (specifier: string) => {
             jitiLoadCalls += 1;
             loadedSpecifiers.push(specifier);
@@ -75,8 +75,8 @@ function loadRootAliasWithStubs(options?: {
     get jitiLoadCalls() {
       return jitiLoadCalls;
     },
-    get lastJitiOptions() {
-      return lastJitiOptions;
+    get createJitiOptions() {
+      return createJitiOptions;
     },
     loadedSpecifiers,
   };
@@ -121,10 +121,22 @@ describe("plugin-sdk root alias", () => {
     expect("slowHelper" in lazyRootSdk).toBe(true);
     expect(lazyModule.createJitiCalls).toBe(1);
     expect(lazyModule.jitiLoadCalls).toBe(1);
-    expect(lazyModule.lastJitiOptions?.tryNative).toBe(true);
+    expect(lazyModule.createJitiOptions.at(-1)?.tryNative).toBe(false);
     expect((lazyRootSdk.slowHelper as () => string)()).toBe("loaded");
     expect(Object.keys(lazyRootSdk)).toContain("slowHelper");
     expect(Object.getOwnPropertyDescriptor(lazyRootSdk, "slowHelper")).toBeDefined();
+  });
+
+  it("prefers native loading when compat resolves to dist", () => {
+    const lazyModule = loadRootAliasWithStubs({
+      distExists: true,
+      monolithicExports: {
+        slowHelper: () => "loaded",
+      },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    expect(lazyModule.createJitiOptions.at(-1)?.tryNative).toBe(true);
   });
 
   it("forwards delegateCompactionToRuntime through the compat-backed root alias", () => {
