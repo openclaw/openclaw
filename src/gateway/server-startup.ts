@@ -25,10 +25,9 @@ import {
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import {
+  claimPendingInboundEntries,
   clearActiveTurn,
-  clearPendingInboundEntries,
   readActiveTurn,
-  readPendingInbound,
   readStaleActiveTurns,
 } from "../infra/pending-inbound-store.js";
 import { enqueueSystemEvent, MAX_EVENTS } from "../infra/system-events.js";
@@ -150,12 +149,14 @@ export async function startGatewaySidecars(params: {
   // is required at this point.
   try {
     const stateDir = resolveStateDir(process.env);
-    const pending = await readPendingInbound(stateDir);
+    // Atomically claim (read + clear) pending entries in a single locked
+    // operation.  This prevents a race where a concurrent drain writer
+    // inserts a new entry between reading and clearing — the old separate
+    // readPendingInbound → clearPendingInboundEntries sequence could lose
+    // messages captured in that window.
+    const pending = await claimPendingInboundEntries(stateDir);
     if (pending.length > 0) {
       params.log.warn(`replaying ${pending.length} inbound message(s) captured during drain`);
-      // Consume-then-process: clear only inbound entries to prevent infinite retry on crash.
-      // Active turns remain intact in the shared file.
-      await clearPendingInboundEntries(stateDir);
 
       // Per-session cap: system-event queue holds at most MAX_EVENTS entries.
       // Sessions with exactly MAX_EVENTS queued entries should replay all of them;

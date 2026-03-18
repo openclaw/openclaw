@@ -169,6 +169,35 @@ export async function readPendingInbound(stateDir: string): Promise<PendingInbou
 }
 
 /**
+ * Atomically claim (read and clear) all pending inbound entries.
+ * Returns the entries that were present and clears them in a single
+ * file-lock-protected operation so that concurrent writers cannot
+ * insert entries between the read and the clear — preventing message loss.
+ */
+export async function claimPendingInboundEntries(
+  stateDir: string,
+): Promise<PendingInboundEntry[]> {
+  const filePath = resolveStorePath(stateDir);
+  let claimed: PendingInboundEntry[] = [];
+  await withInProcessQueue(filePath, () =>
+    withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
+      const existing = await readPendingInboundFile(filePath);
+      claimed = Object.values(existing.entries);
+      if (claimed.length === 0) {
+        return; // nothing to claim
+      }
+      existing.entries = {};
+      await writeJsonAtomic(filePath, existing, {
+        mode: 0o600,
+        trailingNewline: true,
+        ensureDirMode: 0o700,
+      });
+    }),
+  );
+  return claimed;
+}
+
+/**
  * Remove the pending inbound file entirely.
  * @deprecated Use `clearPendingInboundEntries` or `clearActiveTurns` to avoid
  * nuking data belonging to the other key.
