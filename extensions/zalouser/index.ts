@@ -1,8 +1,11 @@
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import type { AnyAgentTool } from "openclaw/plugin-sdk/zalouser";
+import type { AnyAgentTool } from "./runtime-api.js";
 import { zalouserPlugin } from "./src/channel.js";
 import { setZalouserRuntime } from "./src/runtime.js";
 import { ZalouserToolSchema, executeZalouserTool } from "./src/tool.js";
+
+export { zalouserPlugin } from "./src/channel.js";
+export { setZalouserRuntime } from "./src/runtime.js";
 
 export default defineChannelPluginEntry({
   id: "zalouser",
