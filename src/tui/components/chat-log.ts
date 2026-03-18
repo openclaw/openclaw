@@ -12,6 +12,9 @@ export class ChatLog extends Container {
   private streamingRuns = new Map<string, AssistantMessageComponent>();
   private btwMessage: BtwInlineMessage | null = null;
   private toolsExpanded = false;
+  // Shared across all tool components to dedup images rendered by different
+  // tool calls (e.g. skill exec + follow-up media delivery for the same file).
+  readonly renderedImages = new Set<string>();
 
   constructor(maxComponents = 180) {
     super();
@@ -55,6 +58,7 @@ export class ChatLog extends Container {
     this.toolById.clear();
     this.streamingRuns.clear();
     this.btwMessage = null;
+    this.renderedImages.clear();
   }
 
   addSystem(text: string) {
@@ -147,7 +151,7 @@ export class ChatLog extends Container {
       existing.setArgs(args);
       return existing;
     }
-    const component = new ToolExecutionComponent(toolName, args);
+    const component = new ToolExecutionComponent(toolName, args, this.renderedImages);
     component.setExpanded(this.toolsExpanded);
     this.toolById.set(toolCallId, component);
     this.append(component);
