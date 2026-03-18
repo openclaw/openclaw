@@ -289,6 +289,8 @@ export async function resolveApiKeyForProvider(params: {
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+  const normalized = normalizeProviderId(provider);
+  let explicitProfileError: Error | null = null;
 
   if (profileId) {
     const resolved = await resolveApiKeyForProfile({
@@ -298,15 +300,19 @@ export async function resolveApiKeyForProvider(params: {
       agentDir: params.agentDir,
     });
     if (!resolved) {
-      throw new Error(`No credentials found for profile "${profileId}".`);
+      explicitProfileError = new Error(`No credentials found for profile "${profileId}".`);
+      if (normalized !== "google-vertex") {
+        throw explicitProfileError;
+      }
+    } else {
+      const mode = store.profiles[profileId]?.type;
+      return {
+        apiKey: resolved.apiKey,
+        profileId,
+        source: `profile:${profileId}`,
+        mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
+      };
     }
-    const mode = store.profiles[profileId]?.type;
-    return {
-      apiKey: resolved.apiKey,
-      profileId,
-      source: `profile:${profileId}`,
-      mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
-    };
   }
 
   const authOverride = resolveProviderAuthOverride(cfg, provider);
@@ -314,31 +320,35 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
-  const order = resolveAuthProfileOrder({
-    cfg,
-    store,
-    provider,
-    preferredProfile,
-  });
-  for (const candidate of order) {
-    try {
-      const resolved = await resolveApiKeyForProfile({
-        cfg,
-        store,
-        profileId: candidate,
-        agentDir: params.agentDir,
-      });
-      if (resolved) {
-        const mode = store.profiles[candidate]?.type;
-        return {
-          apiKey: resolved.apiKey,
+  if (!profileId) {
+    const order = resolveAuthProfileOrder({
+      cfg,
+      store,
+      provider,
+      preferredProfile,
+    });
+    for (const candidate of order) {
+      try {
+        const resolved = await resolveApiKeyForProfile({
+          cfg,
+          store,
           profileId: candidate,
-          source: `profile:${candidate}`,
-          mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
-        };
+          agentDir: params.agentDir,
+        });
+        if (resolved) {
+          const mode = store.profiles[candidate]?.type;
+          return {
+            apiKey: resolved.apiKey,
+            profileId: candidate,
+            source: `profile:${candidate}`,
+            mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
+          };
+        }
+      } catch (err) {
+        log.debug?.(
+          `auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`,
+        );
       }
-    } catch (err) {
-      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
     }
   }
 
@@ -361,7 +371,6 @@ export async function resolveApiKeyForProvider(params: {
     return syntheticLocalAuth;
   }
 
-  const normalized = normalizeProviderId(provider);
   if (authOverride === undefined && normalized === "amazon-bedrock") {
     return resolveAwsSdkAuthInfo();
   }
@@ -380,6 +389,10 @@ export async function resolveApiKeyForProvider(params: {
   });
   if (pluginMissingAuthMessage) {
     throw new Error(pluginMissingAuthMessage);
+  }
+
+  if (explicitProfileError) {
+    throw explicitProfileError;
   }
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
