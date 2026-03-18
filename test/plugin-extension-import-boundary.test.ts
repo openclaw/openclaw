@@ -30,7 +30,7 @@ describe("plugin extension import boundary inventory", () => {
     expect(inventory).toContainEqual(
       expect.objectContaining({
         file: "src/plugins/runtime/runtime-signal.ts",
-        resolvedPath: "extensions/signal/src/index.js",
+        resolvedPath: "extensions/signal/runtime-api.js",
       }),
     );
   });

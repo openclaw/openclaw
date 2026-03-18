@@ -49,6 +49,7 @@ const allowedGenericFiles = new Set([
   "src/agents/tools/web-search-core.ts",
   "src/agents/tools/web-search.ts",
   "src/secrets/runtime-web-tools.ts",
+  "src/web-search/runtime.ts",
 ]);
 
 const ignoredFiles = new Set([
