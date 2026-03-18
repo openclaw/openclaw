@@ -381,7 +381,7 @@ export function handleMessageEnd(
   const hasToolCall =
     Array.isArray(assistantMessage.content) &&
     assistantMessage.content.some(
-      (block: Record<string, unknown>) => block?.type === "toolCall" || block?.type === "tool_use",
+      (block) => block.type === "toolCall" || (block as { type: string }).type === "tool_use",
     );
 
   if (
