@@ -100,6 +100,17 @@ describe("heartbeat transcript pruning", () => {
     });
   });
 
+  it("prunes transcript when heartbeat returns malformed mixed ack output", async () => {
+    await runTranscriptScenario({
+      sessionId: "test-session-malformed-prune",
+      reply: {
+        text: "Checking queue/state and nothing needs attention. HEARTBEAT_OK",
+        usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      },
+      expectPruned: true,
+    });
+  });
+
   it("does not prune transcript when heartbeat returns meaningful content", async () => {
     await runTranscriptScenario({
       sessionId: "test-session-no-prune",

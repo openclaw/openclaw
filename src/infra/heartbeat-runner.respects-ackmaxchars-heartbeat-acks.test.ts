@@ -154,7 +154,7 @@ describe("runHeartbeatOnce ack handling", () => {
     return cfg;
   }
 
-  it("respects ackMaxChars for heartbeat acks", async () => {
+  it("treats symbol-only heartbeat token variants as ack even when ackMaxChars is 0", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createWhatsAppHeartbeatConfig({
         tmpDir,
@@ -176,7 +176,7 @@ describe("runHeartbeatOnce ack handling", () => {
         deps: makeWhatsAppDeps({ sendWhatsApp }),
       });
 
-      expect(sendWhatsApp).toHaveBeenCalled();
+      expect(sendWhatsApp).not.toHaveBeenCalled();
     });
   });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
+  resolveHeartbeatReplyDisposition,
   stripHeartbeatToken,
 } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
@@ -235,5 +236,74 @@ Check the server logs
 ### Subsection
 `;
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+});
+
+describe("resolveHeartbeatReplyDisposition", () => {
+  it("classifies pure heartbeat tokens as ack", () => {
+    expect(resolveHeartbeatReplyDisposition({ text: "HEARTBEAT_OK" })).toEqual({
+      disposition: "ack",
+      text: "",
+      hadToken: true,
+    });
+  });
+
+  it("classifies mixed heartbeat text as malformed", () => {
+    expect(
+      resolveHeartbeatReplyDisposition({
+        text: "Checking queue/state before deciding. HEARTBEAT_OK",
+      }),
+    ).toEqual({
+      disposition: "malformedAck",
+      text: "Checking queue/state before deciding.",
+      hadToken: true,
+    });
+  });
+
+  it("treats short trailing text as ack when ackMaxChars allows it", () => {
+    expect(
+      resolveHeartbeatReplyDisposition({
+        text: "HEARTBEAT_OK all good",
+        ackMaxChars: 16,
+      }),
+    ).toEqual({
+      disposition: "ack",
+      text: "",
+      hadToken: true,
+    });
+  });
+
+  it("classifies token plus reasoning as malformed", () => {
+    expect(
+      resolveHeartbeatReplyDisposition({
+        text: "HEARTBEAT_OK",
+        hasReasoning: true,
+      }),
+    ).toEqual({
+      disposition: "malformedAck",
+      text: "",
+      hadToken: true,
+    });
+  });
+
+  it("delivers exec-completion payloads even when they include the heartbeat token", () => {
+    expect(
+      resolveHeartbeatReplyDisposition({
+        text: "Backup finished successfully. HEARTBEAT_OK",
+        hasExecCompletion: true,
+      }),
+    ).toEqual({
+      disposition: "deliver",
+      text: "Backup finished successfully.",
+      hadToken: true,
+    });
+  });
+
+  it("keeps non-token text deliverable", () => {
+    expect(resolveHeartbeatReplyDisposition({ text: "Disk usage crossed 95%" })).toEqual({
+      disposition: "deliver",
+      text: "Disk usage crossed 95%",
+      hadToken: false,
+    });
   });
 });
