@@ -109,9 +109,9 @@ export function resolveImageModelConfigForTool(params: {
 
   let preferred: string | null = null;
 
-  // MiniMax users: always try the canonical vision model first when auth exists.
+  // MiniMax users: prefer provider-configured vision model; fall back to VL-01 if nothing in config.
   if (isMinimaxVlmProvider(primary.provider) && providerOk) {
-    preferred = `${primary.provider}/MiniMax-VL-01`;
+    preferred = providerVisionFromConfig ?? `${primary.provider}/MiniMax-VL-01`;
   } else if (providerOk && providerVisionFromConfig) {
     preferred = providerVisionFromConfig;
   } else if (primary.provider === "zai" && providerOk) {
