@@ -248,6 +248,7 @@ describe("bot-native-command-menu", () => {
     const rateLimitError = Object.assign(new Error("429: Too Many Requests: retry after 5"), {
       error_code: 429,
       description: "Too Many Requests: retry after 5",
+      parameters: { retry_after: 5 },
     });
     const setMyCommands = vi
       .fn()
@@ -283,6 +284,7 @@ describe("bot-native-command-menu", () => {
     const rateLimitError = Object.assign(new Error("429: Too Many Requests: retry after 2"), {
       error_code: 429,
       description: "Too Many Requests: retry after 2",
+      parameters: { retry_after: 2 },
     });
     const setMyCommands = vi.fn().mockRejectedValue(rateLimitError);
     const runtimeLog = vi.fn();
