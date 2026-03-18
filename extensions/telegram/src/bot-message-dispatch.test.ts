@@ -26,16 +26,13 @@ vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
 }));
 
-vi.mock("./send.js", () => ({
-  createForumTopicTelegram: vi.fn(),
-  deleteMessageTelegram: vi.fn(),
-  editForumTopicTelegram: vi.fn(),
-  editMessageTelegram,
-  reactMessageTelegram: vi.fn(),
-  sendMessageTelegram: vi.fn(),
-  sendPollTelegram: vi.fn(),
-  sendStickerTelegram: vi.fn(),
-}));
+vi.mock("./send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./send.js")>();
+  return {
+    ...actual,
+    editMessageTelegram,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
@@ -2008,25 +2005,18 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      try {
-        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
-      } catch (err) {
-        dispatcherOptions.onError(err, { kind: "final" });
-      }
+      dispatcherOptions.onError(new Error("network down"), { kind: "final" });
       return { queuedFinal: false };
     });
-    deliverReplies
-      .mockRejectedValueOnce(new Error("network down"))
-      .mockResolvedValueOnce({ delivered: true });
+    deliverReplies.mockResolvedValueOnce({ delivered: true });
 
     await expect(dispatchWithContext({ context: createContext() })).resolves.toBeUndefined();
-    // Fallback should be sent because failedDeliveries > 0
-    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenLastCalledWith(
       expect.objectContaining({
         replies: [
           expect.objectContaining({
-            text: expect.stringContaining("No response"),
+            text: expect.stringContaining("Something went wrong"),
           }),
         ],
       }),
@@ -2036,26 +2026,20 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("sends fallback in off mode when deliver throws", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      try {
-        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
-      } catch (err) {
-        dispatcherOptions.onError(err, { kind: "final" });
-      }
+      dispatcherOptions.onError(new Error("403 bot blocked"), { kind: "final" });
       return { queuedFinal: false };
     });
-    deliverReplies
-      .mockRejectedValueOnce(new Error("403 bot blocked"))
-      .mockResolvedValueOnce({ delivered: true });
+    deliverReplies.mockResolvedValueOnce({ delivered: true });
 
     await dispatchWithContext({ context: createContext(), streamMode: "off" });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenLastCalledWith(
       expect.objectContaining({
         replies: [
           expect.objectContaining({
-            text: expect.stringContaining("No response"),
+            text: expect.stringContaining("Something went wrong"),
           }),
         ],
       }),

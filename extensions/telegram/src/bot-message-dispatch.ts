@@ -35,6 +35,7 @@ import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
+import { retryTelegramFinalReplyDelivery } from "./final-reply-retry.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
   type ArchivedPreview,
@@ -480,6 +481,18 @@ export const dispatchTelegramMessage = async ({
     }
     return result.delivered;
   };
+  const sendPayloadWithFinalRetry = async (
+    payload: ReplyPayload,
+    kind: "tool" | "block" | "final",
+  ) => {
+    if (kind !== "final") {
+      return sendPayload(payload);
+    }
+    return retryTelegramFinalReplyDelivery({
+      deliver: () => sendPayload(payload),
+      log: logVerbose,
+    });
+  };
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
     archivedAnswerPreviews,
@@ -634,7 +647,7 @@ export const dispatchTelegramMessage = async ({
             if (reply.hasMedia) {
               const payloadWithoutSuppressedReasoning =
                 typeof payload.text === "string" ? { ...payload, text: "" } : payload;
-              await sendPayload(payloadWithoutSuppressedReasoning);
+              await sendPayloadWithFinalRetry(payloadWithoutSuppressedReasoning, info.kind);
             }
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
@@ -654,7 +667,7 @@ export const dispatchTelegramMessage = async ({
             }
             return;
           }
-          await sendPayload(payload);
+          await sendPayloadWithFinalRetry(payload, info.kind);
           if (info.kind === "final") {
             await flushBufferedFinalAnswer();
           }
