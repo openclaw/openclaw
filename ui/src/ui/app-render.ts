@@ -538,6 +538,9 @@ export function renderApp(state: AppViewState) {
                       : nothing
                   }
                 </a>
+                <div class="sidebar-mode-switch">
+                  ${renderTopbarThemeModeToggle(state)}
+                </div>
                 ${(() => {
                   const version = state.hello?.server?.version ?? "";
                   return version

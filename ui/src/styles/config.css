@@ -1715,6 +1715,13 @@
    =========================================== */
 
 @media (max-width: 768px) {
+  .config-layout {
+    height: calc(100vh - 100px);
+    height: calc(100dvh - 100px);
+    margin: 0 -8px -16px;
+    border-radius: var(--radius-md);
+  }
+
   .config-actions {
     flex-wrap: wrap;
     padding: 14px 16px;
