@@ -3754,6 +3754,78 @@
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
 }
 
+@media (max-width: 768px) {
+  .ov-bottom-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ov-access-grid {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
+
+  .ov-recent__row {
+    gap: 8px;
+  }
+
+  .ov-recent__model {
+    font-size: 11px;
+  }
+
+  .ov-attention-item {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .agent-row {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .agent-avatar--lg {
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+  }
+
+  .agent-header {
+    gap: 8px;
+  }
+
+  .agent-header-main {
+    gap: 8px;
+  }
+
+  .exec-approval-overlay {
+    padding: 12px;
+  }
+
+  .exec-approval-card {
+    padding: 16px;
+  }
+
+  .exec-approval-actions {
+    flex-direction: column;
+  }
+
+  .exec-approval-actions .btn {
+    width: 100%;
+  }
+
+  .exec-approval-command {
+    font-size: 12px;
+    padding: 8px 10px;
+  }
+
+  .table-head {
+    display: none;
+  }
+
+  .table-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}
+
 @media (max-width: 600px) {
   .ov-cards {
     grid-template-columns: repeat(2, 1fr);
