@@ -59,7 +59,7 @@ describe("ensurePluginRegistryLoaded", () => {
 
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        onlyPluginIds: ["telegram"],
+        onlyPluginIds: [],
       }),
     );
   });
@@ -85,7 +85,7 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(2);
     expect(mocks.loadOpenClawPlugins).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ onlyPluginIds: ["telegram"] }),
+      expect.objectContaining({ onlyPluginIds: [] }),
     );
     expect(mocks.loadOpenClawPlugins).toHaveBeenNthCalledWith(
       2,

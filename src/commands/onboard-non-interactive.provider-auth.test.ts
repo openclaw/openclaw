@@ -2,15 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import {
   MINIMAX_API_BASE_URL,
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
-} from "./onboard-auth.js";
+} from "../plugin-sdk/provider-models.js";
+import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createThrowingRuntime,
   readJsonFile,
@@ -22,6 +22,7 @@ type OnboardEnv = {
   configPath: string;
   runtime: NonInteractiveRuntime;
 };
+type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
 
@@ -61,7 +62,7 @@ type ProviderAuthConfigSnapshot = {
   };
 };
 
-function createZaiFetchMock(responses: Record<string, number>): typeof fetch {
+function createZaiFetchMock(responses: Record<string, number>): FetchLike {
   return vi.fn(async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : "";
     const parsedBody =
@@ -77,12 +78,12 @@ function createZaiFetchMock(responses: Record<string, number>): typeof fetch {
         headers: { "content-type": "application/json" },
       },
     );
-  }) as typeof fetch;
+  });
 }
 
 async function withZaiProbeFetch<T>(
   responses: Record<string, number>,
-  run: (fetchMock: typeof fetch) => Promise<T>,
+  run: (fetchMock: FetchLike) => Promise<T>,
 ): Promise<T> {
   const originalVitest = process.env.VITEST;
   delete process.env.VITEST;
