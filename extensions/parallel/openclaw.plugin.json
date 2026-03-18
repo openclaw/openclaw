@@ -1,0 +1,33 @@
+{
+  "id": "parallel",
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Parallel API Key",
+      "help": "Parallel API key (fallback: PARALLEL_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "par-..."
+    },
+    "webSearch.baseUrl": {
+      "label": "Parallel Base URL",
+      "help": "Base URL for API requests (defaults to https://api.parallel.ai)."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
