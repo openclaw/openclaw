@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import { resolvePluginWebSearchProviders } from "../web-search-providers.js";
 import {
+  capabilityContractLoadError,
   imageGenerationProviderContractRegistry,
   mediaUnderstandingProviderContractRegistry,
   pluginRegistrationContractRegistry,
@@ -85,6 +86,11 @@ function findRegistrationForPlugin(pluginId: string) {
 }
 
 describe("plugin contract registry", () => {
+  it("loads bundled non-provider capability registries without import-time failure", () => {
+    expect(capabilityContractLoadError).toBeUndefined();
+    expect(pluginRegistrationContractRegistry.length).toBeGreaterThan(0);
+  });
+
   it("does not duplicate bundled provider ids", () => {
     const ids = providerContractRegistry.map((entry) => entry.provider.id);
     expect(ids).toEqual([...new Set(ids)]);
