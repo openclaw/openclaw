@@ -329,6 +329,7 @@ export type ChannelMessageActionContext = {
 export type ChannelToolSend = {
   to: string;
   accountId?: string | null;
+  threadId?: string | null;
 };
 
 export type ChannelMessageActionAdapter = {
