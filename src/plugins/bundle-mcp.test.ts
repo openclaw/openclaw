@@ -56,7 +56,8 @@ describe("loadEnabledBundleMcpConfig", () => {
         throw new Error("expected bundled MCP args to include the server path");
       }
       expect(await fs.realpath(loadedServerPath)).toBe(resolvedServerPath);
-      expect(loadedServer.cwd).toBe(resolvedPluginRoot);
+      expect(typeof loadedServer.cwd).toBe("string");
+      expect(await fs.realpath(String(loadedServer.cwd))).toBe(resolvedPluginRoot);
     } finally {
       env.restore();
     }
@@ -145,7 +146,15 @@ describe("loadEnabledBundleMcpConfig", () => {
       delete process.env.OPENCLAW_STATE_DIR;
 
       const pluginRoot = path.join(homeDir, ".openclaw", "extensions", "inline-claude");
+      const serverCommandPath = path.join(pluginRoot, "bin", "server.sh");
+      const serverProbePath = path.join(pluginRoot, "servers", "probe.mjs");
+      const localProbePath = path.join(pluginRoot, "local-probe.mjs");
       await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+      await fs.mkdir(path.dirname(serverCommandPath), { recursive: true });
+      await fs.mkdir(path.dirname(serverProbePath), { recursive: true });
+      await fs.writeFile(serverCommandPath, "#!/bin/sh\n", "utf-8");
+      await fs.writeFile(serverProbePath, "export {};\n", "utf-8");
+      await fs.writeFile(localProbePath, "export {};\n", "utf-8");
       await fs.writeFile(
         path.join(pluginRoot, ".claude-plugin", "plugin.json"),
         `${JSON.stringify(
@@ -179,19 +188,31 @@ describe("loadEnabledBundleMcpConfig", () => {
         },
       });
       const resolvedPluginRoot = await fs.realpath(pluginRoot);
+      const inlineProbe = loaded.config.mcpServers.inlineProbe;
+      const inlineArgs = getServerArgs(inlineProbe);
+      const inlineCommand =
+        isRecord(inlineProbe) && typeof inlineProbe.command === "string"
+          ? inlineProbe.command
+          : undefined;
+      const inlineCwd =
+        isRecord(inlineProbe) && typeof inlineProbe.cwd === "string" ? inlineProbe.cwd : undefined;
+      const inlineEnvPluginRoot =
+        isRecord(inlineProbe) &&
+        isRecord(inlineProbe.env) &&
+        typeof inlineProbe.env.PLUGIN_ROOT === "string"
+          ? inlineProbe.env.PLUGIN_ROOT
+          : undefined;
 
       expect(loaded.diagnostics).toEqual([]);
-      expect(loaded.config.mcpServers.inlineProbe).toEqual({
-        command: path.join(resolvedPluginRoot, "bin", "server.sh"),
-        args: [
-          path.join(resolvedPluginRoot, "servers", "probe.mjs"),
-          path.join(resolvedPluginRoot, "local-probe.mjs"),
-        ],
-        cwd: resolvedPluginRoot,
-        env: {
-          PLUGIN_ROOT: resolvedPluginRoot,
-        },
-      });
+      expect(inlineCommand).toBeDefined();
+      expect(inlineArgs).toHaveLength(2);
+      expect(inlineCwd).toBeDefined();
+      expect(inlineEnvPluginRoot).toBeDefined();
+      expect(await fs.realpath(String(inlineCommand))).toBe(await fs.realpath(serverCommandPath));
+      expect(await fs.realpath(String(inlineArgs?.[0]))).toBe(await fs.realpath(serverProbePath));
+      expect(await fs.realpath(String(inlineArgs?.[1]))).toBe(await fs.realpath(localProbePath));
+      expect(await fs.realpath(String(inlineCwd))).toBe(resolvedPluginRoot);
+      expect(await fs.realpath(String(inlineEnvPluginRoot))).toBe(resolvedPluginRoot);
     } finally {
       env.restore();
     }

@@ -1,14 +1,44 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
+import { matrixPlugin } from "../../../extensions/matrix/index.js";
+import { msteamsPlugin } from "../../../extensions/msteams/index.js";
+import { nostrPlugin } from "../../../extensions/nostr/index.js";
+import { tlonPlugin } from "../../../extensions/tlon/index.js";
+import { zalouserPlugin } from "../../../extensions/zalouser/index.js";
+import { bundledChannelPlugins } from "../../channels/plugins/bundled.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
+
+function setSessionRoutePluginRegistryForTests(): void {
+  const channels = [
+    ...bundledChannelPlugins,
+    matrixPlugin,
+    msteamsPlugin,
+    nostrPlugin,
+    tlonPlugin,
+    zalouserPlugin,
+  ].map((plugin) => ({
+    pluginId: plugin.id,
+    plugin,
+    source: "test" as const,
+  })) as unknown as Parameters<typeof createTestRegistry>[0];
+  setActivePluginRegistry(createTestRegistry(channels));
+}
 
 describe("resolveOutboundSessionRoute", () => {
   beforeEach(() => {
-    setDefaultChannelPluginRegistryForTests();
+    setSessionRoutePluginRegistryForTests();
   });
 
   const baseConfig = {} as OpenClawConfig;
+
+  async function resolveRouteForTest(
+    params: Parameters<typeof resolveOutboundSessionRoute>[0],
+  ): ReturnType<typeof resolveOutboundSessionRoute> {
+    setSessionRoutePluginRegistryForTests();
+    return resolveOutboundSessionRoute(params);
+  }
 
   it("resolves provider-specific session routes", async () => {
     const perChannelPeerCfg = { session: { dmScope: "per-channel-peer" } } as OpenClawConfig;
@@ -268,7 +298,7 @@ describe("resolveOutboundSessionRoute", () => {
     ];
 
     for (const testCase of cases) {
-      const route = await resolveOutboundSessionRoute({
+      const route = await resolveRouteForTest({
         cfg: testCase.cfg,
         channel: testCase.channel,
         agentId: "main",
@@ -293,7 +323,7 @@ describe("resolveOutboundSessionRoute", () => {
   });
 
   it("uses resolved Discord user targets to route bare numeric ids as DMs", async () => {
-    const route = await resolveOutboundSessionRoute({
+    const route = await resolveRouteForTest({
       cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
       channel: "discord",
       agentId: "main",
@@ -315,7 +345,7 @@ describe("resolveOutboundSessionRoute", () => {
 
   it("uses resolved Mattermost user targets to route bare ids as DMs", async () => {
     const userId = "dthcxgoxhifn3pwh65cut3ud3w";
-    const route = await resolveOutboundSessionRoute({
+    const route = await resolveRouteForTest({
       cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
       channel: "mattermost",
       agentId: "main",
@@ -337,7 +367,7 @@ describe("resolveOutboundSessionRoute", () => {
 
   it("rejects bare numeric Discord targets when the caller has no kind hint", async () => {
     await expect(
-      resolveOutboundSessionRoute({
+      resolveRouteForTest({
         cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
         channel: "discord",
         agentId: "main",
