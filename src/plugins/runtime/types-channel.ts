@@ -144,7 +144,7 @@ export type PluginRuntimeChannel = {
     resolveUserAllowlist: typeof import("../../../extensions/slack/runtime-api.js").resolveSlackUserAllowlist;
     sendMessageSlack: typeof import("../../../extensions/slack/runtime-api.js").sendMessageSlack;
     monitorSlackProvider: typeof import("../../../extensions/slack/runtime-api.js").monitorSlackProvider;
-    handleSlackAction: typeof import("../../agents/tools/slack-actions.js").handleSlackAction;
+    handleSlackAction: typeof import("../../../extensions/slack/runtime-api.js").handleSlackAction;
   };
   telegram: {
     auditGroupMembership: typeof import("../../../extensions/telegram/runtime-api.js").auditTelegramGroupMembership;
