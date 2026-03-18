@@ -19,6 +19,7 @@ if (shouldWarnCompatImport) {
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
+export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 
 export { createAccountStatusSink } from "./channel-lifecycle.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
