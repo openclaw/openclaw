@@ -114,8 +114,10 @@ export async function runAppleContainerCli(
     });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
+    let timedOut = false;
     let timeoutId: NodeJS.Timeout | null = setTimeout(() => {
       timeoutId = null;
+      timedOut = true;
       child.kill("SIGKILL");
     }, options.config.timeoutMs);
     let aborted = false;
@@ -165,13 +167,22 @@ export async function runAppleContainerCli(
       if (signal) {
         signal.removeEventListener("abort", handleAbort);
       }
+      if (timedOut) {
+        reject(
+          new Error(
+            `${options.config.command} ${options.args.join(" ")} timed out after ${options.config.timeoutMs}ms`,
+          ),
+        );
+        return;
+      }
       if (aborted || signal?.aborted) {
         reject(createAbortError());
         return;
       }
       const stdout = Buffer.concat(stdoutChunks);
       const stderr = Buffer.concat(stderrChunks);
-      const exitCode = code ?? 0;
+      // Treat signal-killed processes (code === null) as failure
+      const exitCode = code ?? 1;
       if (exitCode !== 0 && !options.allowFailure) {
         reject(
           createAppleContainerCommandError(
@@ -236,6 +247,10 @@ export async function inspectAppleContainer(params: {
   if (!raw) {
     return null;
   }
-  const parsed = JSON.parse(raw) as AppleContainerInspectEntry[];
-  return parsed[0] ?? null;
+  try {
+    const parsed = JSON.parse(raw) as AppleContainerInspectEntry[];
+    return parsed[0] ?? null;
+  } catch {
+    return null;
+  }
 }

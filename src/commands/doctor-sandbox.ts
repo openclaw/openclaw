@@ -86,12 +86,14 @@ function parseAppleContainerSystemStatus(stdout: string): "running" | "stopped" 
   }
 }
 
-async function getAppleContainerSystemStatus(): Promise<"running" | "unavailable" | "stopped"> {
+async function getAppleContainerSystemStatus(
+  command = "container",
+): Promise<"running" | "unavailable" | "stopped"> {
   if (process.platform !== "darwin" || process.arch !== "arm64") {
     return "unavailable";
   }
   try {
-    const result = await runExec("container", ["system", "status", "--format", "json"], {
+    const result = await runExec(command, ["system", "status", "--format", "json"], {
       timeoutMs: 5_000,
     });
     return parseAppleContainerSystemStatus(result.stdout) ?? "unavailable";
@@ -229,7 +231,11 @@ export async function maybeRepairSandboxImages(
   const backend = resolveSandboxBackend(cfg);
   if (backend !== "docker") {
     if (backend === "apple-container") {
-      const status = await getAppleContainerSystemStatus();
+      const appleContainerCommand =
+        (
+          cfg.plugins?.entries?.["apple-container"]?.config as { command?: string } | undefined
+        )?.command?.trim() || "container";
+      const status = await getAppleContainerSystemStatus(appleContainerCommand);
       if (status === "unavailable") {
         note(
           [
