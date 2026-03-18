@@ -2,7 +2,7 @@
 summary: "Design for an opt-in Firecrawl extension that adds search/scrape value without hardwiring Firecrawl into core defaults"
 read_when:
   - Designing Firecrawl integration work
-  - Evaluating web_search/web_fetch plugin seams
+  - Evaluating web_search/web_fetch plugin extension surfaces
   - Deciding whether Firecrawl belongs in core or as an extension
 title: "Firecrawl Extension Design"
 ---
@@ -38,7 +38,7 @@ That combination argues for an extension, not more Firecrawl-specific logic in t
 
 - **Opt-in, vendor-scoped**: no auto-enable, no setup hijack, no default tool-profile widening.
 - **Extension owns Firecrawl-specific config**: prefer plugin config over growing `tools.web.*` again.
-- **Useful on day one**: works even if core `web_search` / `web_fetch` seams stay unchanged.
+- **Useful on day one**: works even if core `web_search` / `web_fetch` extension surfaces stay unchanged.
 - **Security-first**: endpoint fetches use the same guarded networking posture as other web tools.
 - **Self-hosted-friendly**: config + env fallback, explicit base URL, no hosted-only assumptions.
 
@@ -208,15 +208,15 @@ Recommended shape:
 - allow any registered plugin provider id at runtime,
 - validate provider-specific config via the provider plugin or a generic provider bag.
 
-### Phase 3: optional `web_fetch` provider seam
+### Phase 3: optional `web_fetch` provider capability
 
 Do this only if maintainers want vendor-specific fetch backends to participate in `web_fetch`.
 
 Needed core addition:
 
-- `registerWebFetchProvider` or equivalent fetch-backend seam
+- `registerWebFetchProvider` or equivalent fetch-backend extension surface
 
-Without that seam, the extension should keep `firecrawl_scrape` as an explicit tool rather than trying to patch built-in `web_fetch`.
+Without that capability, the extension should keep `firecrawl_scrape` as an explicit tool rather than trying to patch built-in `web_fetch`.
 
 ## Security requirements
 
@@ -249,7 +249,7 @@ This belongs as an extension, not a prompt-only skill.
 - Self-hosted Firecrawl works with config/env fallback.
 - Extension endpoint fetches use guarded networking.
 - No new Firecrawl-specific core onboarding/default behavior.
-- Core can later adopt plugin-native `web_search` / `web_fetch` seams without redesigning the extension.
+- Core can later adopt plugin-native `web_search` / `web_fetch` extension surfaces without redesigning the extension.
 
 ## Recommended implementation order
 
@@ -257,4 +257,4 @@ This belongs as an extension, not a prompt-only skill.
 2. Build `firecrawl_search`
 3. Add docs and examples
 4. If desired, generalize `web_search` provider loading so the extension can back `web_search`
-5. Only then consider a true `web_fetch` provider seam
+5. Only then consider a true `web_fetch` provider capability
