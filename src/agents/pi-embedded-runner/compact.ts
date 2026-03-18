@@ -53,6 +53,7 @@ import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { createConfiguredOllamaStreamFn } from "../ollama-stream.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
+import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
 import {
   ensureSessionHeader,
@@ -603,10 +604,21 @@ export async function compactEmbeddedPiSessionDirect(
           reservedToolNames: tools.map((tool) => tool.name),
         })
       : undefined;
-    const effectiveTools =
-      bundleMcpRuntime && bundleMcpRuntime.tools.length > 0
-        ? [...tools, ...bundleMcpRuntime.tools]
-        : tools;
+    const bundleLspRuntime = toolsEnabled
+      ? await createBundleLspToolRuntime({
+          workspaceDir: effectiveWorkspace,
+          cfg: params.config,
+          reservedToolNames: [
+            ...tools.map((tool) => tool.name),
+            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+          ],
+        })
+      : undefined;
+    const effectiveTools = [
+      ...tools,
+      ...(bundleMcpRuntime?.tools ?? []),
+      ...(bundleLspRuntime?.tools ?? []),
+    ];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     logToolSchemasForGoogle({ tools: effectiveTools, provider });
     const machineName = await getMachineDisplayName();
@@ -1092,6 +1104,7 @@ export async function compactEmbeddedPiSessionDirect(
         });
         session.dispose();
         await bundleMcpRuntime?.dispose();
+        await bundleLspRuntime?.dispose();
       }
     } finally {
       await sessionLock.release();
