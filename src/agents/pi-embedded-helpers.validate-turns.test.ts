@@ -630,6 +630,68 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     ]);
   });
 
+  it("should strip functionCall blocks mid-conversation when no matching toolResult exists", () => {
+    // Tests all three tool-call type variants (toolUse, toolCall, functionCall)
+    // in a multi-turn conversation with mixed matching/dangling tool calls.
+    // All tool-call types produce "toolResult" type results — there is no "functionResult".
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tools" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "tu-1", name: "search", input: {} },
+          { type: "toolCall", id: "tc-1", name: "fetch", input: {} },
+          { type: "functionCall", id: "fc-1", name: "compute", input: {} },
+          { type: "text", text: "Running three tools" },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          // Only toolUse tu-1 has a matching toolResult
+          {
+            type: "toolResult",
+            toolUseId: "tu-1",
+            content: [{ type: "text", text: "Search result" }],
+          },
+          { type: "text", text: "Only first tool returned" },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "Continue" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    // The two consecutive user messages should be merged
+    expect(result).toHaveLength(3);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    // toolUse tu-1 preserved (has matching toolResult), toolCall tc-1 and functionCall fc-1 stripped
+    expect(assistantContent).toEqual([
+      { type: "toolUse", id: "tu-1", name: "search", input: {} },
+      { type: "text", text: "Running three tools" },
+    ]);
+  });
+
+  it("should strip end-of-conversation functionCall blocks", () => {
+    // When functionCall blocks are the last assistant message with no following user message
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Compute something" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "functionCall", id: "fc-1", name: "compute", input: {} },
+          { type: "text", text: "Computing..." },
+        ],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(2);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([{ type: "text", text: "Computing..." }]);
+  });
+
   it("does not crash when assistant content is non-array", () => {
     const msgs = [
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
