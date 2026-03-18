@@ -112,6 +112,7 @@ vi.mock("./resolve-allowlist.js", () => ({
 
 vi.mock("./sdk.js", () => ({
   createMSTeamsAdapter: () => createMSTeamsAdapter(),
+  createTokenProvider: () => ({ getAccessToken: vi.fn(async () => "mock-token") }),
   loadMSTeamsSdkWithAuth: () => loadMSTeamsSdkWithAuth(),
 }));
 

@@ -64,6 +64,34 @@ export type MSTeamsConfig = {
   appId?: string;
   /** Azure Bot App Password / Client Secret. */
   appPassword?: SecretInput;
+  /**
+   * Authentication type for the bot.
+   * - "clientSecret" (default): Uses appPassword (client secret).
+   * - "certificate": Uses certPemFile + certKeyFile for certificate-based auth.
+   * - "federatedCredential": Uses FIC (First-party Integration Channel) client ID
+   *   with workload identity federation (no secret needed).
+   * - "defaultAzureCredential": Defers credential selection to @azure/identity's
+   *   DefaultAzureCredential, which tries env vars, workload identity, managed
+   *   identity, az cli, and other sources automatically.
+   */
+  authType?: "clientSecret" | "certificate" | "federatedCredential" | "defaultAzureCredential";
+  /** Path to the certificate PEM file (used when authType is "certificate"). */
+  certPemFile?: string;
+  /** Path to the certificate key file (used when authType is "certificate"). */
+  certKeyFile?: string;
+  /** Whether to send the X5C param for SNI authentication (used with certificate auth). */
+  sendX5C?: boolean;
+  /**
+   * The FIC (First-party Integration Channel) client ID for federated credential auth.
+   * This is the client ID of a user-assigned managed identity with a federated credential
+   * configured on the App Registration.
+   */
+  ficClientId?: string;
+  /**
+   * Path to the workload identity assertion file (e.g., K8s service account token).
+   * Used with federated credential auth when running in Kubernetes or similar environments.
+   */
+  widAssertionFile?: string;
   /** Azure AD Tenant ID (for single-tenant bots). */
   tenantId?: string;
   /** Webhook server configuration. */

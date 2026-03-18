@@ -41,6 +41,8 @@ describe("msteams errors", () => {
 
   it("provides actionable hints for common cases", () => {
     expect(formatMSTeamsSendErrorHint({ kind: "auth" })).toContain("msteams");
+    expect(formatMSTeamsSendErrorHint({ kind: "auth" })).toContain("MSTEAMS_APP_ID");
+    expect(formatMSTeamsSendErrorHint({ kind: "auth" })).toContain("MSTEAMS_TENANT_ID");
     expect(formatMSTeamsSendErrorHint({ kind: "throttled" })).toContain("throttled");
   });
 

@@ -4,7 +4,7 @@ import {
   type MSTeamsConfig,
 } from "../runtime-api.js";
 import { formatUnknownError } from "./errors.js";
-import { loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { createTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -59,13 +59,14 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
   if (!creds) {
     return {
       ok: false,
-      error: "missing credentials (appId, appPassword, tenantId)",
+      error:
+        "missing credentials (appId, tenantId — or env MSTEAMS_APP_ID/MSTEAMS_TENANT_ID — and one of: appPassword, certificate, or federated credential)",
     };
   }
 
   try {
     const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-    const tokenProvider = new sdk.MsalTokenProvider(authConfig);
+    const tokenProvider = createTokenProvider(creds, authConfig, sdk);
     await tokenProvider.getAccessToken("https://api.botframework.com");
     let graph:
       | {

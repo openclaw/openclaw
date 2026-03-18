@@ -19,7 +19,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { createMSTeamsAdapter, createTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 export type MonitorMSTeamsOpts = {
@@ -248,10 +248,10 @@ export async function monitorMSTeamsProvider(
   const express = await import("express");
 
   const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-  const { ActivityHandler, MsalTokenProvider, authorizeJWT } = sdk;
+  const { ActivityHandler, authorizeJWT } = sdk;
 
   // Auth configuration - create early so adapter is available for deliverReplies
-  const tokenProvider = new MsalTokenProvider(authConfig);
+  const tokenProvider = createTokenProvider(creds, authConfig, sdk);
   const adapter = createMSTeamsAdapter(authConfig, sdk);
 
   const handler = registerMSTeamsHandlers(new ActivityHandler() as MSTeamsActivityHandler, {
