@@ -14,7 +14,7 @@ export class ChatLog extends Container {
   private toolsExpanded = false;
   // Shared across all tool components to dedup images rendered by different
   // tool calls (e.g. skill exec + follow-up media delivery for the same file).
-  readonly renderedImagePaths = new Set<string>();
+  readonly renderedImages = new Set<string>();
 
   constructor(maxComponents = 180) {
     super();
@@ -58,7 +58,7 @@ export class ChatLog extends Container {
     this.toolById.clear();
     this.streamingRuns.clear();
     this.btwMessage = null;
-    this.renderedImagePaths.clear();
+    this.renderedImages.clear();
   }
 
   addSystem(text: string) {
@@ -151,7 +151,7 @@ export class ChatLog extends Container {
       existing.setArgs(args);
       return existing;
     }
-    const component = new ToolExecutionComponent(toolName, args, this.renderedImagePaths);
+    const component = new ToolExecutionComponent(toolName, args, this.renderedImages);
     component.setExpanded(this.toolsExpanded);
     this.toolById.set(toolCallId, component);
     this.append(component);

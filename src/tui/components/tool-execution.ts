@@ -54,10 +54,17 @@ function formatArgs(toolName: string, args: unknown): string {
  * This dedup approach comes from the old PR #36740 and avoids index-space
  * mismatches when MEDIA paths and image blocks are interleaved.
  */
+// Short fingerprint of base64 data for cross-tool dedup. Covers the image
+// header + enough pixel data to distinguish different images while staying
+// cheap to compute. Two tool calls with the same file produce identical data.
+function imageFingerprint(data: string): string {
+  return data.slice(0, 128);
+}
+
 function processResult(
   result?: ToolResult,
   canRender?: boolean,
-  globalSeenPaths?: Set<string>,
+  globalRendered?: Set<string>,
 ): { images: CachedImage[]; text: string; textStripped: string } {
   const empty = { images: [], text: "", textStripped: "" };
   if (!result?.content) {
@@ -82,13 +89,18 @@ function processResult(
         }
         if (mediaUrls) {
           for (const mediaPath of mediaUrls) {
-            if (seenPaths.has(mediaPath) || globalSeenPaths?.has(mediaPath)) {
+            if (seenPaths.has(mediaPath) || globalRendered?.has(mediaPath)) {
               continue;
             }
             seenPaths.add(mediaPath);
-            globalSeenPaths?.add(mediaPath);
+            globalRendered?.add(mediaPath);
             const loaded = readMediaImageAsBase64(mediaPath);
             if (loaded) {
+              const fp = imageFingerprint(loaded.data);
+              if (globalRendered?.has(fp)) {
+                continue;
+              }
+              globalRendered?.add(fp);
               const filename = mediaPath.split(/[/\\]/).pop();
               images.push({
                 component: createInlineImage(loaded.data, loaded.mimeType, { filename }),
@@ -108,9 +120,13 @@ function processResult(
         }
         // Orphan image block (no preceding MEDIA) - render from base64 if available
         if (entry.data && entry.mimeType && !entry.omitted) {
-          images.push({
-            component: createInlineImage(entry.data, entry.mimeType),
-          });
+          const fp = imageFingerprint(entry.data);
+          if (!globalRendered?.has(fp)) {
+            globalRendered?.add(fp);
+            images.push({
+              component: createInlineImage(entry.data, entry.mimeType),
+            });
+          }
         }
       } else {
         const mime = entry.mimeType ?? "image";
@@ -146,13 +162,13 @@ export class ToolExecutionComponent extends Container {
   private cachedText = "";
   private cachedTextStripped = "";
   private imagesAttached = false;
-  private globalSeenPaths?: Set<string>;
+  private globalRendered?: Set<string>;
 
-  constructor(toolName: string, args: unknown, globalSeenPaths?: Set<string>) {
+  constructor(toolName: string, args: unknown, globalRendered?: Set<string>) {
     super();
     this.toolName = toolName;
     this.args = args;
-    this.globalSeenPaths = globalSeenPaths;
+    this.globalRendered = globalRendered;
     this.box = new Box(1, 1, (line) => theme.toolPendingBg(line));
     this.header = new Text("", 0, 0);
     this.argsLine = new Text("", 0, 0);
@@ -186,7 +202,7 @@ export class ToolExecutionComponent extends Container {
     // images together, with sequential dedup: when a MEDIA text block is
     // rendered from file, the next image block (base64 duplicate) is skipped.
     this.detachImages();
-    const processed = processResult(result, canRenderInlineImages(), this.globalSeenPaths);
+    const processed = processResult(result, canRenderInlineImages(), this.globalRendered);
     this.cachedImages = processed.images;
     this.cachedText = processed.text;
     this.cachedTextStripped = processed.textStripped;
