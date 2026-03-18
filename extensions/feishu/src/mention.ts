@@ -98,7 +98,7 @@ export function formatMentionAllForText(): string {
  * Format @mention for card message (lark_md)
  */
 export function formatMentionForCard(target: MentionTarget): string {
-  return `<at id=${target.openId}></at>`;
+  return `<at id=${target.openId}>${target.name}</at>`;
 }
 
 /**
