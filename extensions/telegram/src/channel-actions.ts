@@ -7,7 +7,6 @@ import {
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-runtime";
 import {
-  createLegacyMessageToolDiscoveryMethods,
   createMessageToolButtonsSchema,
   createTelegramPollExtraToolSchemas,
   createUnionActionGate,
@@ -178,7 +177,6 @@ function readTelegramMessageIdParam(params: Record<string, unknown>): number {
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
-  ...createLegacyMessageToolDiscoveryMethods(describeTelegramMessageTool),
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
