@@ -957,7 +957,10 @@ export async function updateLastRoute(params: {
       lastAccountId: normalized.lastAccountId,
       lastThreadId: normalized.lastThreadId,
     };
-    const next = mergeSessionEntry(
+    // Use preserve-activity so that route updates from inbound messages do not
+    // bump updatedAt; idle/daily session resets rely on updatedAt reflecting the
+    // last actual agent turn, not the last routing metadata write.
+    const next = mergeSessionEntryPreserveActivity(
       existing,
       metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
     );
