@@ -320,7 +320,11 @@ export function renderUsage(props: UsageProps) {
         })()
       : props.costDaily;
 
-  const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
+  const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates, {
+    selectedDays: props.selectedDays,
+    selectedHours: props.selectedHours,
+    timeZone: props.timeZone,
+  });
   const isEmpty = !props.loading && !props.totals && props.sessions.length === 0;
   const hasMissingCost =
     (displayTotals?.missingCostEntries ?? 0) > 0 ||

@@ -99,6 +99,13 @@ function getZonedWeekday(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCDay() : date.getDay();
 }
 
+function getZonedDateKey(date: Date, zone: "local" | "utc"): string {
+  const year = zone === "utc" ? date.getUTCFullYear() : date.getFullYear();
+  const month = zone === "utc" ? date.getUTCMonth() + 1 : date.getMonth() + 1;
+  const day = zone === "utc" ? date.getUTCDate() : date.getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 function setToHourEnd(date: Date, zone: "local" | "utc"): Date {
   const next = new Date(date);
   if (zone === "utc") {
@@ -515,15 +522,72 @@ type UsageInsightStats = {
   peakErrorDay?: { date: string; errors: number; messages: number; rate: number };
 };
 
+type UsageInsightFilters = {
+  selectedDays: string[];
+  selectedHours: number[];
+  timeZone: "local" | "utc";
+};
+
+const getSessionFilteredDurationMs = (
+  session: UsageSessionEntry,
+  filters: UsageInsightFilters,
+): number => {
+  const usage = session.usage;
+  const fullDurationMs = Math.max(usage?.durationMs ?? 0, 0);
+  if (filters.selectedDays.length === 0 && filters.selectedHours.length === 0) {
+    return fullDurationMs;
+  }
+
+  const start = usage?.firstActivity ?? session.updatedAt;
+  const end = usage?.lastActivity ?? session.updatedAt;
+  if (start === undefined || end === undefined) {
+    return 0;
+  }
+
+  const startMs = Math.min(start, end);
+  const endMs = Math.max(start, end);
+  if (endMs <= startMs) {
+    const point = new Date(startMs);
+    const dayMatches =
+      filters.selectedDays.length === 0 ||
+      filters.selectedDays.includes(getZonedDateKey(point, filters.timeZone));
+    const hourMatches =
+      filters.selectedHours.length === 0 ||
+      filters.selectedHours.includes(getZonedHour(point, filters.timeZone));
+    return dayMatches && hourMatches ? fullDurationMs : 0;
+  }
+
+  let filteredDurationMs = 0;
+  let cursor = startMs;
+  while (cursor < endMs) {
+    const date = new Date(cursor);
+    const dayMatches =
+      filters.selectedDays.length === 0 ||
+      filters.selectedDays.includes(getZonedDateKey(date, filters.timeZone));
+    const hourMatches =
+      filters.selectedHours.length === 0 ||
+      filters.selectedHours.includes(getZonedHour(date, filters.timeZone));
+    const nextHourEnd = setToHourEnd(date, filters.timeZone).getTime() + 1;
+    const segmentEnd = Math.min(nextHourEnd, endMs);
+    if (dayMatches && hourMatches) {
+      filteredDurationMs += Math.max(segmentEnd - cursor, 0);
+    }
+    cursor = segmentEnd;
+  }
+
+  return filteredDurationMs;
+};
+
 const buildUsageInsightStats = (
   sessions: UsageSessionEntry[],
   totals: UsageTotals | null,
   aggregates: UsageAggregates,
+  filters: UsageInsightFilters,
 ): UsageInsightStats => {
   let durationSumMs = 0;
   let durationCount = 0;
   for (const session of sessions) {
-    const duration = session.usage?.durationMs ?? 0;
+    const duration = getSessionFilteredDurationMs(session, filters);
     if (duration > 0) {
       durationSumMs += duration;
       durationCount += 1;

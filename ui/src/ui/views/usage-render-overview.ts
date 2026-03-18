@@ -403,9 +403,11 @@ function renderUsageInsights(
       : "—";
   const cacheHint = "Cache hit rate = cache read / (input + cache read). Higher is better.";
   const errorHint = "Error rate = errors / total messages. Lower is better.";
-  const throughputHint = "Throughput shows tokens per minute over active time. Higher is better.";
+  const throughputHint =
+    "Throughput shows tokens per minute over active time inside the current date/hour filters.";
   const tokensHint = "Average tokens per message in this range.";
-  const durationHint = "Active time sums each session's first-to-last activity within the range.";
+  const durationHint =
+    "Active time sums the portions of each session span that fall inside the current date/hour filters.";
   const costHint = showCostHint
     ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
     : "Average cost per message when providers report costs.";
