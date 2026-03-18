@@ -30,6 +30,11 @@ import { cacheMessage, getChannelHistory, fetchThreadHistory } from "./history.j
 import { downloadMessageImages } from "./media.js";
 import { createProcessedMessageTracker } from "./processed-messages.js";
 import {
+  applyTlonSettingsOverrides,
+  buildTlonSettingsMigrations,
+  mergeUniqueStrings,
+} from "./settings-helpers.js";
+import {
   extractMessageText,
   extractCites,
   formatModelName,
@@ -177,48 +182,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   // Migrate file config to settings store (seed on first run)
   async function migrateConfigToSettings() {
-    const migrations: Array<{ key: string; fileValue: unknown; settingsValue: unknown }> = [
-      {
-        key: "dmAllowlist",
-        fileValue: account.dmAllowlist,
-        settingsValue: currentSettings.dmAllowlist,
-      },
-      {
-        key: "groupInviteAllowlist",
-        fileValue: account.groupInviteAllowlist,
-        settingsValue: currentSettings.groupInviteAllowlist,
-      },
-      {
-        key: "groupChannels",
-        fileValue: account.groupChannels,
-        settingsValue: currentSettings.groupChannels,
-      },
-      {
-        key: "defaultAuthorizedShips",
-        fileValue: account.defaultAuthorizedShips,
-        settingsValue: currentSettings.defaultAuthorizedShips,
-      },
-      {
-        key: "autoDiscoverChannels",
-        fileValue: account.autoDiscoverChannels,
-        settingsValue: currentSettings.autoDiscoverChannels,
-      },
-      {
-        key: "autoAcceptDmInvites",
-        fileValue: account.autoAcceptDmInvites,
-        settingsValue: currentSettings.autoAcceptDmInvites,
-      },
-      {
-        key: "autoAcceptGroupInvites",
-        fileValue: account.autoAcceptGroupInvites,
-        settingsValue: currentSettings.autoAcceptGroupInvites,
-      },
-      {
-        key: "showModelSig",
-        fileValue: account.showModelSignature,
-        settingsValue: currentSettings.showModelSig,
-      },
-    ];
+    const migrations = buildTlonSettingsMigrations(account, currentSettings);
 
     for (const { key, fileValue, settingsValue } of migrations) {
       // Only migrate if file has a value and settings store doesn't
@@ -255,55 +219,21 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     // Migrate file config to settings store if not already present
     await migrateConfigToSettings();
-
-    // Apply settings overrides
-    // Note: groupChannels from settings store are merged AFTER discovery runs (below)
-    if (currentSettings.defaultAuthorizedShips?.length) {
-      runtime.log?.(
-        `[tlon] Using defaultAuthorizedShips from settings store: ${currentSettings.defaultAuthorizedShips.join(", ")}`,
-      );
-    }
-    if (currentSettings.autoDiscoverChannels !== undefined) {
-      effectiveAutoDiscoverChannels = currentSettings.autoDiscoverChannels;
-      runtime.log?.(
-        `[tlon] Using autoDiscoverChannels from settings store: ${effectiveAutoDiscoverChannels}`,
-      );
-    }
-    if (currentSettings.dmAllowlist !== undefined) {
-      effectiveDmAllowlist = currentSettings.dmAllowlist;
-      runtime.log?.(
-        `[tlon] Using dmAllowlist from settings store: ${effectiveDmAllowlist.join(", ")}`,
-      );
-    }
-    if (currentSettings.showModelSig !== undefined) {
-      effectiveShowModelSig = currentSettings.showModelSig;
-    }
-    if (currentSettings.autoAcceptDmInvites !== undefined) {
-      effectiveAutoAcceptDmInvites = currentSettings.autoAcceptDmInvites;
-      runtime.log?.(
-        `[tlon] Using autoAcceptDmInvites from settings store: ${effectiveAutoAcceptDmInvites}`,
-      );
-    }
-    if (currentSettings.autoAcceptGroupInvites !== undefined) {
-      effectiveAutoAcceptGroupInvites = currentSettings.autoAcceptGroupInvites;
-      runtime.log?.(
-        `[tlon] Using autoAcceptGroupInvites from settings store: ${effectiveAutoAcceptGroupInvites}`,
-      );
-    }
-    if (currentSettings.groupInviteAllowlist !== undefined) {
-      effectiveGroupInviteAllowlist = currentSettings.groupInviteAllowlist;
-      runtime.log?.(
-        `[tlon] Using groupInviteAllowlist from settings store: ${effectiveGroupInviteAllowlist.join(", ")}`,
-      );
-    }
-    if (currentSettings.ownerShip) {
-      effectiveOwnerShip = normalizeShip(currentSettings.ownerShip);
-      runtime.log?.(`[tlon] Using ownerShip from settings store: ${effectiveOwnerShip}`);
-    }
-    if (currentSettings.pendingApprovals?.length) {
-      pendingApprovals = currentSettings.pendingApprovals;
-      runtime.log?.(`[tlon] Loaded ${pendingApprovals.length} pending approval(s) from settings`);
-    }
+    ({
+      effectiveDmAllowlist,
+      effectiveShowModelSig,
+      effectiveAutoAcceptDmInvites,
+      effectiveAutoAcceptGroupInvites,
+      effectiveGroupInviteAllowlist,
+      effectiveAutoDiscoverChannels,
+      effectiveOwnerShip,
+      pendingApprovals,
+      currentSettings,
+    } = applyTlonSettingsOverrides({
+      account,
+      currentSettings,
+      log: (message) => runtime.log?.(message),
+    }));
   } catch (err) {
     runtime.log?.(`[tlon] Settings store not available, using file config: ${String(err)}`);
   }
@@ -323,24 +253,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   // Merge manual config with auto-discovered channels
   if (account.groupChannels.length > 0) {
-    for (const ch of account.groupChannels) {
-      if (!groupChannels.includes(ch)) {
-        groupChannels.push(ch);
-      }
-    }
+    groupChannels = mergeUniqueStrings(groupChannels, account.groupChannels);
     runtime.log?.(
       `[tlon] Added ${account.groupChannels.length} manual groupChannels to monitoring`,
     );
   }
 
   // Also merge settings store groupChannels (may have been set via tlon settings command)
-  if (currentSettings.groupChannels?.length) {
-    for (const ch of currentSettings.groupChannels) {
-      if (!groupChannels.includes(ch)) {
-        groupChannels.push(ch);
-      }
-    }
-  }
+  groupChannels = mergeUniqueStrings(groupChannels, currentSettings.groupChannels);
 
   if (groupChannels.length > 0) {
     runtime.log?.(
