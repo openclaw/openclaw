@@ -286,15 +286,16 @@ async function handleTextMessage(
 
 async function handleImageMessage(params: ZaloImageMessageParams): Promise<void> {
   const { message, mediaMaxMb, account, core, runtime } = params;
-  const { photo, caption } = message;
+  const { photo, photo_url, caption } = message;
+  const imageUrl = photo_url ?? photo;
 
   let mediaPath: string | undefined;
   let mediaType: string | undefined;
 
-  if (photo) {
+  if (imageUrl) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo, maxBytes });
+      const fetched = await core.channel.media.fetchRemoteMedia({ url: imageUrl, maxBytes });
       const saved = await core.channel.media.saveMediaBuffer(
         fetched.buffer,
         fetched.contentType,
@@ -764,7 +765,12 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   }
 }
 
+function resolveZaloImageUrl(message: { photo?: string; photo_url?: string }): string | undefined {
+  return message.photo_url ?? message.photo;
+}
+
 export const __testing = {
   evaluateZaloGroupAccess,
   resolveZaloRuntimeGroupPolicy,
+  resolveZaloImageUrl,
 };
