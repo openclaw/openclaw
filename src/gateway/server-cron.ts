@@ -627,13 +627,24 @@ export function buildGatewayCronService(params: {
       );
 
       // Trả về kết quả của bước cuối cùng
-      return (
-        lastResult ?? {
-          status: "ok" as const,
-          sessionId: `cron:${job.id}`,
-          sessionKey: `cron:${job.id}`,
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      let sessionKey = `cron:${job.id}`;
+      if (job.sessionTarget.startsWith("session:")) {
+        const customSessionId = job.sessionTarget.slice(8).trim();
+        if (customSessionId) {
+          sessionKey = customSessionId;
         }
-      );
+      }
+      return await runCronIsolatedAgentTurn({
+        cfg: runtimeConfig,
+        deps: params.deps,
+        job,
+        message,
+        abortSignal,
+        agentId,
+        sessionKey,
+        lane: "cron",
+      });
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);

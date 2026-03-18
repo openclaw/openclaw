@@ -3,6 +3,7 @@ import type {
   ChannelGroupContext,
   GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/feishu";
+import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/feishu";
 import { normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
 
@@ -92,20 +93,18 @@ export function resolveFeishuGroupToolPolicy(
 }
 
 export function isFeishuGroupAllowed(params: {
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: "open" | "allowlist" | "disabled" | "allowall";
   allowFrom: Array<string | number>;
   senderId: string;
   senderIds?: Array<string | null | undefined>;
   senderName?: string | null;
 }): boolean {
-  const { groupPolicy } = params;
-  if (groupPolicy === "disabled") {
-    return false;
-  }
-  if (groupPolicy === "open") {
-    return true;
-  }
-  return resolveFeishuAllowlistMatch(params).allowed;
+  return evaluateSenderGroupAccessForPolicy({
+    groupPolicy: params.groupPolicy === "allowall" ? "open" : params.groupPolicy,
+    groupAllowFrom: params.allowFrom.map((entry) => String(entry)),
+    senderId: params.senderId,
+    isSenderAllowed: () => resolveFeishuAllowlistMatch(params).allowed,
+  }).allowed;
 }
 
 export function resolveFeishuReplyPolicy(params: {

@@ -11,7 +11,7 @@ export { resolveAcpInstallCommandHint, resolveConfiguredAcpBackendId } from "./i
 
 export const COMMAND = "/acp";
 export const ACP_SPAWN_USAGE =
-  "Usage: /acp spawn [agentId] [--mode persistent|oneshot] [--thread auto|here|off] [--cwd <path>] [--label <label>].";
+  "Usage: /acp spawn [harness-id] [--mode persistent|oneshot] [--thread auto|here|off] [--cwd <path>] [--label <label>].";
 export const ACP_STEER_USAGE =
   "Usage: /acp steer [--session <session-key|session-id|session-label>] <instruction>";
 export const ACP_SET_MODE_USAGE =
@@ -31,7 +31,7 @@ export const ACP_INSTALL_USAGE = "Usage: /acp install";
 export const ACP_DOCTOR_USAGE = "Usage: /acp doctor";
 export const ACP_SESSIONS_USAGE = "Usage: /acp sessions";
 export const ACP_STEER_OUTPUT_LIMIT = 800;
-export const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export { SESSION_ID_RE } from "../../../sessions/session-id.js";
 
 export type AcpAction =
   | "spawn"
@@ -77,6 +77,9 @@ export type ParsedSetCommandInput = {
   sessionToken?: string;
 };
 
+const ACP_UNICODE_DASH_PREFIX_RE =
+  /^[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]+/;
+
 export function stopWithText(text: string): CommandHandlerResult {
   return {
     shouldContinue: false,
@@ -118,9 +121,9 @@ function readOptionValue(params: { tokens: string[]; index: number; flag: string
       error?: string;
     }
   | { matched: false } {
-  const token = params.tokens[params.index] ?? "";
+  const token = normalizeAcpOptionToken(params.tokens[params.index] ?? "");
   if (token === params.flag) {
-    const nextValue = params.tokens[params.index + 1]?.trim() ?? "";
+    const nextValue = normalizeAcpOptionToken(params.tokens[params.index + 1] ?? "");
     if (!nextValue || nextValue.startsWith("--")) {
       return {
         matched: true,
@@ -152,6 +155,18 @@ function readOptionValue(params: { tokens: string[]; index: number; flag: string
   return { matched: false };
 }
 
+function normalizeAcpOptionToken(raw: string): string {
+  const token = raw.trim();
+  if (!token || token.startsWith("--")) {
+    return token;
+  }
+  const dashPrefix = token.match(ACP_UNICODE_DASH_PREFIX_RE)?.[0];
+  if (!dashPrefix) {
+    return token;
+  }
+  return `--${token.slice(dashPrefix.length)}`;
+}
+
 function resolveDefaultSpawnThreadMode(params: HandleCommandsParams): AcpSpawnThreadMode {
   if (resolveAcpCommandChannel(params) !== DISCORD_THREAD_BINDING_CHANNEL) {
     return "off";
@@ -164,16 +179,17 @@ export function parseSpawnInput(
   params: HandleCommandsParams,
   tokens: string[],
 ): { ok: true; value: ParsedSpawnInput } | { ok: false; error: string } {
+  const normalizedTokens = tokens.map((token) => normalizeAcpOptionToken(token));
   let mode: AcpRuntimeSessionMode = "persistent";
   let thread = resolveDefaultSpawnThreadMode(params);
   let cwd: string | undefined;
   let label: string | undefined;
   let rawAgentId: string | undefined;
 
-  for (let i = 0; i < tokens.length; ) {
-    const token = tokens[i] ?? "";
+  for (let i = 0; i < normalizedTokens.length; ) {
+    const token = normalizedTokens[i] ?? "";
 
-    const modeOption = readOptionValue({ tokens, index: i, flag: "--mode" });
+    const modeOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--mode" });
     if (modeOption.matched) {
       if (modeOption.error) {
         return { ok: false, error: `${modeOption.error}. ${ACP_SPAWN_USAGE}` };
@@ -190,7 +206,11 @@ export function parseSpawnInput(
       continue;
     }
 
-    const threadOption = readOptionValue({ tokens, index: i, flag: "--thread" });
+    const threadOption = readOptionValue({
+      tokens: normalizedTokens,
+      index: i,
+      flag: "--thread",
+    });
     if (threadOption.matched) {
       if (threadOption.error) {
         return { ok: false, error: `${threadOption.error}. ${ACP_SPAWN_USAGE}` };
@@ -207,7 +227,7 @@ export function parseSpawnInput(
       continue;
     }
 
-    const cwdOption = readOptionValue({ tokens, index: i, flag: "--cwd" });
+    const cwdOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--cwd" });
     if (cwdOption.matched) {
       if (cwdOption.error) {
         return { ok: false, error: `${cwdOption.error}. ${ACP_SPAWN_USAGE}` };
@@ -217,7 +237,7 @@ export function parseSpawnInput(
       continue;
     }
 
-    const labelOption = readOptionValue({ tokens, index: i, flag: "--label" });
+    const labelOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--label" });
     if (labelOption.matched) {
       if (labelOption.error) {
         return { ok: false, error: `${labelOption.error}. ${ACP_SPAWN_USAGE}` };
@@ -251,7 +271,7 @@ export function parseSpawnInput(
   if (!selectedAgent) {
     return {
       ok: false,
-      error: `ACP target agent is required. Pass an agent id or configure acp.defaultAgent. ${ACP_SPAWN_USAGE}`,
+      error: `ACP target harness id is required. Pass an ACP harness id (for example codex) or configure acp.defaultAgent. ${ACP_SPAWN_USAGE}`,
     };
   }
   const normalizedAgentId = normalizeAgentId(selectedAgent);
@@ -271,12 +291,13 @@ export function parseSpawnInput(
 export function parseSteerInput(
   tokens: string[],
 ): { ok: true; value: ParsedSteerInput } | { ok: false; error: string } {
+  const normalizedTokens = tokens.map((token) => normalizeAcpOptionToken(token));
   let sessionToken: string | undefined;
   const instructionTokens: string[] = [];
 
-  for (let i = 0; i < tokens.length; ) {
+  for (let i = 0; i < normalizedTokens.length; ) {
     const sessionOption = readOptionValue({
-      tokens,
+      tokens: normalizedTokens,
       index: i,
       flag: "--session",
     });
@@ -292,7 +313,7 @@ export function parseSteerInput(
       continue;
     }
 
-    instructionTokens.push(tokens[i]);
+    instructionTokens.push(tokens[i] ?? "");
     i += 1;
   }
 
@@ -380,7 +401,7 @@ export function resolveAcpHelpText(): string {
   return [
     "ACP commands:",
     "-----",
-    "/acp spawn [agentId] [--mode persistent|oneshot] [--thread auto|here|off] [--cwd <path>] [--label <label>]",
+    "/acp spawn [harness-id] [--mode persistent|oneshot] [--thread auto|here|off] [--cwd <path>] [--label <label>]",
     "/acp cancel [session-key|session-id|session-label]",
     "/acp steer [--session <session-key|session-id|session-label>] <instruction>",
     "/acp close [session-key|session-id|session-label]",
@@ -397,6 +418,7 @@ export function resolveAcpHelpText(): string {
     "/acp sessions",
     "",
     "Notes:",
+    "- /acp spawn harness-id is an ACP runtime harness alias (for example codex), not an OpenClaw agents.list id.",
     "- /focus and /unfocus also work with ACP session keys.",
     "- ACP dispatch of normal thread messages is controlled by acp.dispatch.enabled.",
   ].join("\n");

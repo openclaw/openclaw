@@ -6,7 +6,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { dispatchChannelMessageAction } from "./message-actions.js";
+import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
 import type { ChannelPlugin } from "./types.js";
 
 const handleAction = vi.fn(async () => jsonResult({ ok: true }));
@@ -25,6 +25,8 @@ const discordPlugin: ChannelPlugin = {
   actions: {
     listActions: () => ["kick"],
     supportsAction: ({ action }) => action === "kick",
+    requiresTrustedRequesterSender: ({ action, toolContext }) =>
+      Boolean(action === "kick" && toolContext),
     handleAction,
   },
 };

@@ -107,6 +107,40 @@ describe("doctor config flow", () => {
     ).toBe(false);
   });
 
+  it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        zalouser: {
+          groups: {
+            "Ops Room": { allow: true },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes("mutable allowlist") && line.includes("channels.zalouser.groups: Ops Room"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not warn on mutable Zalouser group entries when dangerous name matching is enabled", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        zalouser: {
+          dangerouslyAllowNameMatching: true,
+          groups: {
+            "Ops Room": { allow: true },
+          },
+        },
+      },
+    });
+
+    expect(doctorWarnings.some((line) => line.includes("channels.zalouser.groups"))).toBe(false);
+  });
+
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
@@ -143,6 +177,60 @@ describe("doctor config flow", () => {
       mode: "token",
       token: "ok",
     });
+  });
+
+  it("migrates legacy browser extension profiles to existing-session on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        browser: {
+          relayBindHost: "0.0.0.0",
+          profiles: {
+            chromeLive: {
+              driver: "extension",
+              color: "#00AA00",
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
+    expect(browser.relayBindHost).toBeUndefined();
+    expect(
+      ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
+    ).toBe("existing-session");
+  });
+
+  it("notes legacy browser extension migration changes", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          browser: {
+            relayBindHost: "127.0.0.1",
+            profiles: {
+              chromeLive: {
+                driver: "extension",
+                color: "#00AA00",
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const messages = noteSpy.mock.calls
+        .filter((call) => call[1] === "Doctor changes")
+        .map((call) => String(call[0]));
+      expect(
+        messages.some((line) => line.includes('browser.profiles.chromeLive.driver "extension"')),
+      ).toBe(true);
+      expect(messages.some((line) => line.includes("browser.relayBindHost"))).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
   });
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
@@ -247,6 +335,109 @@ describe("doctor config flow", () => {
       expect(cfg.channels.telegram.accounts.default.allowFrom).toEqual(["111"]);
       expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual(["222"]);
     } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not crash when Telegram allowFrom repair sees unavailable SecretRef-backed credentials", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const result = await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          channels: {
+            telegram: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+              allowFrom: ["@testuser"],
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const cfg = result.cfg as {
+        channels?: {
+          telegram?: {
+            allowFrom?: string[];
+            accounts?: Record<string, { allowFrom?: string[] }>;
+          };
+        };
+      };
+      const retainedAllowFrom =
+        cfg.channels?.telegram?.accounts?.default?.allowFrom ?? cfg.channels?.telegram?.allowFrom;
+      expect(retainedAllowFrom).toEqual(["@testuser"]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(
+        noteSpy.mock.calls.some((call) =>
+          String(call[0]).includes(
+            "configured Telegram bot credentials are unavailable in this command path",
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("warns and continues when Telegram account inspection hits inactive SecretRef surfaces", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const result = await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          channels: {
+            telegram: {
+              accounts: {
+                inactive: {
+                  enabled: false,
+                  botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+                  allowFrom: ["@testuser"],
+                },
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const cfg = result.cfg as {
+        channels?: {
+          telegram?: {
+            accounts?: Record<string, { allowFrom?: string[] }>;
+          };
+        };
+      };
+      expect(cfg.channels?.telegram?.accounts?.inactive?.allowFrom).toEqual(["@testuser"]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(
+        noteSpy.mock.calls.some((call) =>
+          String(call[0]).includes("Telegram account inactive: failed to inspect bot token"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some((call) =>
+          String(call[0]).includes(
+            "Telegram allowFrom contains @username entries, but no Telegram bot token is configured",
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
       vi.unstubAllGlobals();
     }
   });

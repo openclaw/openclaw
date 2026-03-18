@@ -108,11 +108,11 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
   return next;
 }
 
-function normalizeStoreSessionKey(sessionKey: string): string {
+export function normalizeStoreSessionKey(sessionKey: string): string {
   return sessionKey.trim().toLowerCase();
 }
 
-function resolveStoreSessionEntry(params: {
+export function resolveSessionStoreEntry(params: {
   store: Record<string, SessionEntry>;
   sessionKey: string;
 }): {
@@ -275,7 +275,7 @@ export function readSessionUpdatedAt(params: {
 }): number | undefined {
   try {
     const store = loadSessionStore(params.storePath);
-    const resolved = resolveStoreSessionEntry({ store, sessionKey: params.sessionKey });
+    const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
     return resolved.existing?.updatedAt;
   } catch {
     return undefined;
@@ -309,6 +309,12 @@ type SaveSessionStoreOptions = {
   skipMaintenance?: boolean;
   /** Active session key for warn-only maintenance. */
   activeSessionKey?: string;
+  /**
+   * Session keys that are allowed to drop persisted ACP metadata during this update.
+   * All other updates preserve existing `entry.acp` blocks when callers replace the
+   * whole session entry without carrying ACP state forward.
+   */
+  allowDropAcpMetaSessionKeys?: string[];
   /** Optional callback for warn-only maintenance. */
   onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
   /** Optional callback with maintenance stats after a save. */
@@ -335,6 +341,64 @@ function updateSessionStoreWriteCaches(params: {
     sizeBytes: fileStat?.sizeBytes,
     serialized: params.serialized,
   });
+}
+
+function resolveMutableSessionStoreKey(
+  store: Record<string, SessionEntry>,
+  sessionKey: string,
+): string | undefined {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (Object.prototype.hasOwnProperty.call(store, trimmed)) {
+    return trimmed;
+  }
+  const normalized = normalizeStoreSessionKey(trimmed);
+  if (Object.prototype.hasOwnProperty.call(store, normalized)) {
+    return normalized;
+  }
+  return Object.keys(store).find((key) => normalizeStoreSessionKey(key) === normalized);
+}
+
+function collectAcpMetadataSnapshot(
+  store: Record<string, SessionEntry>,
+): Map<string, NonNullable<SessionEntry["acp"]>> {
+  const snapshot = new Map<string, NonNullable<SessionEntry["acp"]>>();
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    if (entry?.acp) {
+      snapshot.set(sessionKey, entry.acp);
+    }
+  }
+  return snapshot;
+}
+
+function preserveExistingAcpMetadata(params: {
+  previousAcpByKey: Map<string, NonNullable<SessionEntry["acp"]>>;
+  nextStore: Record<string, SessionEntry>;
+  allowDropSessionKeys?: string[];
+}): void {
+  const allowDrop = new Set(
+    (params.allowDropSessionKeys ?? []).map((key) => normalizeStoreSessionKey(key)),
+  );
+  for (const [previousKey, previousAcp] of params.previousAcpByKey.entries()) {
+    const normalizedKey = normalizeStoreSessionKey(previousKey);
+    if (allowDrop.has(normalizedKey)) {
+      continue;
+    }
+    const nextKey = resolveMutableSessionStoreKey(params.nextStore, previousKey);
+    if (!nextKey) {
+      continue;
+    }
+    const nextEntry = params.nextStore[nextKey];
+    if (!nextEntry || nextEntry.acp) {
+      continue;
+    }
+    params.nextStore[nextKey] = {
+      ...nextEntry,
+      acp: previousAcp,
+    };
+  }
 }
 
 async function saveSessionStoreUnlocked(
@@ -405,20 +469,15 @@ async function saveSessionStoreUnlocked(
           .map((entry) => entry?.sessionId)
           .filter((id): id is string => Boolean(id)),
       );
-      for (const [sessionId, sessionFile] of removedSessionFiles) {
-        if (referencedSessionIds.has(sessionId)) {
-          continue;
-        }
-        const archived = archiveSessionTranscripts({
-          sessionId,
-          storePath,
-          sessionFile,
-          reason: "deleted",
-          restrictToStoreDir: true,
-        });
-        for (const archivedPath of archived) {
-          archivedDirs.add(path.dirname(archivedPath));
-        }
+      const archivedForDeletedSessions = archiveRemovedSessionTranscripts({
+        removedSessionFiles,
+        referencedSessionIds,
+        storePath,
+        reason: "deleted",
+        restrictToStoreDir: true,
+      });
+      for (const archivedDir of archivedForDeletedSessions) {
+        archivedDirs.add(archivedDir);
       }
       if (archivedDirs.size > 0 || maintenance.resetArchiveRetentionMs != null) {
         const targetDirs =
@@ -531,7 +590,13 @@ export async function updateSessionStore<T>(
   return await withSessionStoreLock(storePath, async () => {
     // Always re-read inside the lock to avoid clobbering concurrent writers.
     const store = loadSessionStore(storePath, { skipCache: true });
+    const previousAcpByKey = collectAcpMetadataSnapshot(store);
     const result = await mutator(store);
+    preserveExistingAcpMetadata({
+      previousAcpByKey,
+      nextStore: store,
+      allowDropSessionKeys: opts?.allowDropAcpMetaSessionKeys,
+    });
     await saveSessionStoreUnlocked(storePath, store, opts);
     return result;
   });
@@ -574,6 +639,32 @@ function rememberRemovedSessionFile(
   }
 }
 
+export function archiveRemovedSessionTranscripts(params: {
+  removedSessionFiles: Iterable<[string, string | undefined]>;
+  referencedSessionIds: ReadonlySet<string>;
+  storePath: string;
+  reason: "deleted" | "reset";
+  restrictToStoreDir?: boolean;
+}): Set<string> {
+  const archivedDirs = new Set<string>();
+  for (const [sessionId, sessionFile] of params.removedSessionFiles) {
+    if (params.referencedSessionIds.has(sessionId)) {
+      continue;
+    }
+    const archived = archiveSessionTranscripts({
+      sessionId,
+      storePath: params.storePath,
+      sessionFile,
+      reason: params.reason,
+      restrictToStoreDir: params.restrictToStoreDir,
+    });
+    for (const archivedPath of archived) {
+      archivedDirs.add(path.dirname(archivedPath));
+    }
+  }
+  return archivedDirs;
+}
+
 async function writeSessionStoreAtomic(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
@@ -590,7 +681,7 @@ async function writeSessionStoreAtomic(params: {
 async function persistResolvedSessionEntry(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
-  resolved: ReturnType<typeof resolveStoreSessionEntry>;
+  resolved: ReturnType<typeof resolveSessionStoreEntry>;
   next: SessionEntry;
 }): Promise<SessionEntry> {
   params.store[params.resolved.normalizedKey] = params.next;
@@ -713,7 +804,7 @@ export async function updateSessionStoreEntry(params: {
   const { storePath, sessionKey, update } = params;
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath, { skipCache: true });
-    const resolved = resolveStoreSessionEntry({ store, sessionKey });
+    const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const existing = resolved.existing;
     if (!existing) {
       return null;
@@ -744,7 +835,7 @@ export async function recordSessionMetaFromInbound(params: {
   return await updateSessionStore(
     storePath,
     (store) => {
-      const resolved = resolveStoreSessionEntry({ store, sessionKey });
+      const resolved = resolveSessionStoreEntry({ store, sessionKey });
       const existing = resolved.existing;
       const patch = deriveSessionMetaPatch({
         ctx,
@@ -793,7 +884,7 @@ export async function updateLastRoute(params: {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
-    const resolved = resolveStoreSessionEntry({ store, sessionKey });
+    const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const existing = resolved.existing;
     const now = Date.now();
     const explicitContext = normalizeDeliveryContext(params.deliveryContext);

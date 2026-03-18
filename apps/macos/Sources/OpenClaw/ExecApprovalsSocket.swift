@@ -5,7 +5,7 @@ import Foundation
 import OpenClawKit
 import OSLog
 
-struct ExecApprovalPromptRequest: Codable, Sendable {
+struct ExecApprovalPromptRequest: Codable {
     var command: String
     var cwd: String?
     var host: String?
@@ -87,6 +87,20 @@ private func readLineFromHandle(_ handle: FileHandle, maxBytes: Int) throws -> S
     }
     let lineData = buffer.subdata(in: 0..<newlineIndex)
     return String(data: lineData, encoding: .utf8)
+}
+
+func timingSafeHexStringEquals(_ lhs: String, _ rhs: String) -> Bool {
+    let lhsBytes = Array(lhs.utf8)
+    let rhsBytes = Array(rhs.utf8)
+    guard lhsBytes.count == rhsBytes.count else {
+        return false
+    }
+
+    var diff: UInt8 = 0
+    for index in lhsBytes.indices {
+        diff |= lhsBytes[index] ^ rhsBytes[index]
+    }
+    return diff == 0
 }
 
 enum ExecApprovalsSocketClient {
@@ -854,7 +868,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                 error: ExecHostError(code: "INVALID_REQUEST", message: "expired request", reason: "ttl"))
         }
         let expected = self.hmacHex(nonce: request.nonce, ts: request.ts, requestJson: request.requestJson)
-        if expected != request.hmac {
+        if !timingSafeHexStringEquals(expected, request.hmac) {
             return ExecHostResponse(
                 type: "exec-res",
                 id: request.id,

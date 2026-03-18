@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import {
@@ -166,7 +166,7 @@ function createMockAccount(
     configured: true,
     config: {
       serverUrl: "http://localhost:1234",
-      password: "test-password",
+      password: "test-password", // pragma: allowlist secret
       dmPolicy: "open",
       groupPolicy: "open",
       allowFrom: [],
@@ -261,153 +261,162 @@ describe("BlueBubbles webhook monitor", () => {
     unregister?.();
   });
 
-  describe("webhook parsing + auth handling", () => {
-    it("rejects non-POST requests", async () => {
-      const account = createMockAccount();
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
+  function setupWebhookTarget(params?: {
+    account?: ResolvedBlueBubblesAccount;
+    config?: OpenClawConfig;
+    core?: PluginRuntime;
+    statusSink?: (event: unknown) => void;
+  }) {
+    const account = params?.account ?? createMockAccount();
+    const config = params?.config ?? {};
+    const core = params?.core ?? createMockRuntime();
+    setBlueBubblesRuntime(core);
+    unregister = registerBlueBubblesWebhookTarget({
+      account,
+      config,
+      runtime: { log: vi.fn(), error: vi.fn() },
+      core,
+      path: "/bluebubbles-webhook",
+      statusSink: params?.statusSink,
+    });
+    return { account, config, core };
+  }
 
-      unregister = registerBlueBubblesWebhookTarget({
+  function createNewMessagePayload(dataOverrides: Record<string, unknown> = {}) {
+    return {
+      type: "new-message",
+      data: {
+        text: "hello",
+        handle: { address: "+15551234567" },
+        isGroup: false,
+        isFromMe: false,
+        guid: "msg-1",
+        ...dataOverrides,
+      },
+    };
+  }
+
+  function setRequestRemoteAddress(req: IncomingMessage, remoteAddress: string) {
+    (req as unknown as { socket: { remoteAddress: string } }).socket = {
+      remoteAddress,
+    };
+  }
+
+  async function dispatchWebhook(req: IncomingMessage) {
+    const res = createMockResponse();
+    const handled = await handleBlueBubblesWebhookRequest(req, res);
+    return { handled, res };
+  }
+
+  function createWebhookRequestForTest(params?: {
+    method?: string;
+    url?: string;
+    body?: unknown;
+    headers?: Record<string, string>;
+    remoteAddress?: string;
+  }) {
+    const req = createMockRequest(
+      params?.method ?? "POST",
+      params?.url ?? "/bluebubbles-webhook",
+      params?.body ?? {},
+      params?.headers,
+    );
+    if (params?.remoteAddress) {
+      setRequestRemoteAddress(req, params.remoteAddress);
+    }
+    return req;
+  }
+
+  function createHangingWebhookRequest(url = "/bluebubbles-webhook?password=test-password") {
+    const req = new EventEmitter() as IncomingMessage;
+    const destroyMock = vi.fn();
+    req.method = "POST";
+    req.url = url;
+    req.headers = {};
+    req.destroy = destroyMock as unknown as IncomingMessage["destroy"];
+    setRequestRemoteAddress(req, "127.0.0.1");
+    return { req, destroyMock };
+  }
+
+  function registerWebhookTargets(
+    params: Array<{
+      account: ResolvedBlueBubblesAccount;
+      statusSink?: (event: unknown) => void;
+    }>,
+  ) {
+    const config: OpenClawConfig = {};
+    const core = createMockRuntime();
+    setBlueBubblesRuntime(core);
+
+    const unregisterFns = params.map(({ account, statusSink }) =>
+      registerBlueBubblesWebhookTarget({
         account,
         config,
         runtime: { log: vi.fn(), error: vi.fn() },
         core,
         path: "/bluebubbles-webhook",
-      });
+        statusSink,
+      }),
+    );
 
-      const req = createMockRequest("GET", "/bluebubbles-webhook", {});
-      const res = createMockResponse();
+    unregister = () => {
+      for (const unregisterFn of unregisterFns) {
+        unregisterFn();
+      }
+    };
+  }
 
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
+  async function expectWebhookStatus(
+    req: IncomingMessage,
+    expectedStatus: number,
+    expectedBody?: string,
+  ) {
+    const { handled, res } = await dispatchWebhook(req);
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(expectedStatus);
+    if (expectedBody !== undefined) {
+      expect(res.body).toBe(expectedBody);
+    }
+    return res;
+  }
 
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(405);
+  describe("webhook parsing + auth handling", () => {
+    it("rejects non-POST requests", async () => {
+      setupWebhookTarget();
+      const req = createWebhookRequestForTest({ method: "GET" });
+      await expectWebhookStatus(req, 405);
     });
 
     it("accepts POST requests with valid JSON payload", async () => {
-      const account = createMockAccount();
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
-      unregister = registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
-      });
-
-      const payload = {
-        type: "new-message",
-        data: {
-          text: "hello",
-          handle: { address: "+15551234567" },
-          isGroup: false,
-          isFromMe: false,
-          guid: "msg-1",
-          date: Date.now(),
-        },
-      };
-
-      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
-      const res = createMockResponse();
-
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
-      expect(res.body).toBe("ok");
+      setupWebhookTarget();
+      const payload = createNewMessagePayload({ date: Date.now() });
+      const req = createWebhookRequestForTest({ body: payload });
+      await expectWebhookStatus(req, 200, "ok");
     });
 
     it("rejects requests with invalid JSON", async () => {
-      const account = createMockAccount();
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
-      unregister = registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
-      });
-
-      const req = createMockRequest("POST", "/bluebubbles-webhook", "invalid json {{");
-      const res = createMockResponse();
-
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(400);
+      setupWebhookTarget();
+      const req = createWebhookRequestForTest({ body: "invalid json {{" });
+      await expectWebhookStatus(req, 400);
     });
 
     it("accepts URL-encoded payload wrappers", async () => {
-      const account = createMockAccount();
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
-      unregister = registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
-      });
-
-      const payload = {
-        type: "new-message",
-        data: {
-          text: "hello",
-          handle: { address: "+15551234567" },
-          isGroup: false,
-          isFromMe: false,
-          guid: "msg-1",
-          date: Date.now(),
-        },
-      };
+      setupWebhookTarget();
+      const payload = createNewMessagePayload({ date: Date.now() });
       const encodedBody = new URLSearchParams({
         payload: JSON.stringify(payload),
       }).toString();
-
-      const req = createMockRequest("POST", "/bluebubbles-webhook", encodedBody);
-      const res = createMockResponse();
-
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
-      expect(res.body).toBe("ok");
+      const req = createWebhookRequestForTest({ body: encodedBody });
+      await expectWebhookStatus(req, 200, "ok");
     });
 
     it("returns 408 when request body times out (Slow-Loris protection)", async () => {
       vi.useFakeTimers();
       try {
-        const account = createMockAccount();
-        const config: OpenClawConfig = {};
-        const core = createMockRuntime();
-        setBlueBubblesRuntime(core);
-
-        unregister = registerBlueBubblesWebhookTarget({
-          account,
-          config,
-          runtime: { log: vi.fn(), error: vi.fn() },
-          core,
-          path: "/bluebubbles-webhook",
-        });
+        setupWebhookTarget();
 
         // Create a request that never sends data or ends (simulates slow-loris)
-        const req = new EventEmitter() as IncomingMessage;
-        req.method = "POST";
-        req.url = "/bluebubbles-webhook?password=test-password";
-        req.headers = {};
-        (req as unknown as { socket: { remoteAddress: string } }).socket = {
-          remoteAddress: "127.0.0.1",
-        };
-        req.destroy = vi.fn();
+        const { req, destroyMock } = createHangingWebhookRequest();
 
         const res = createMockResponse();
 
@@ -419,7 +428,7 @@ describe("BlueBubbles webhook monitor", () => {
         const handled = await handledPromise;
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(408);
-        expect(req.destroy).toHaveBeenCalled();
+        expect(destroyMock).toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
@@ -427,196 +436,62 @@ describe("BlueBubbles webhook monitor", () => {
 
     it("rejects unauthorized requests before reading the body", async () => {
       const account = createMockAccount({ password: "secret-token" });
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
-      unregister = registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
-      });
-
-      const req = new EventEmitter() as IncomingMessage;
-      req.method = "POST";
-      req.url = "/bluebubbles-webhook?password=wrong-token";
-      req.headers = {};
+      setupWebhookTarget({ account });
+      const { req } = createHangingWebhookRequest("/bluebubbles-webhook?password=wrong-token");
       const onSpy = vi.spyOn(req, "on");
-      (req as unknown as { socket: { remoteAddress: string } }).socket = {
-        remoteAddress: "127.0.0.1",
-      };
-
-      const res = createMockResponse();
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(401);
+      await expectWebhookStatus(req, 401);
       expect(onSpy).not.toHaveBeenCalledWith("data", expect.any(Function));
     });
 
     it("authenticates via password query parameter", async () => {
       const account = createMockAccount({ password: "secret-token" });
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
-      // Mock non-localhost request
-      const req = createMockRequest("POST", "/bluebubbles-webhook?password=secret-token", {
-        type: "new-message",
-        data: {
-          text: "hello",
-          handle: { address: "+15551234567" },
-          isGroup: false,
-          isFromMe: false,
-          guid: "msg-1",
-        },
-      });
-      (req as unknown as { socket: { remoteAddress: string } }).socket = {
+      setupWebhookTarget({ account });
+      const req = createWebhookRequestForTest({
+        url: "/bluebubbles-webhook?password=secret-token",
+        body: createNewMessagePayload(),
         remoteAddress: "192.168.1.100",
-      };
-
-      unregister = registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
       });
-
-      const res = createMockResponse();
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
+      await expectWebhookStatus(req, 200);
     });
 
     it("authenticates via x-password header", async () => {
       const account = createMockAccount({ password: "secret-token" });
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
-      const req = createMockRequest(
-        "POST",
-        "/bluebubbles-webhook",
-        {
-          type: "new-message",
-          data: {
-            text: "hello",
-            handle: { address: "+15551234567" },
-            isGroup: false,
-            isFromMe: false,
-            guid: "msg-1",
-          },
-        },
-        { "x-password": "secret-token" },
-      );
-      (req as unknown as { socket: { remoteAddress: string } }).socket = {
+      setupWebhookTarget({ account });
+      const req = createWebhookRequestForTest({
+        body: createNewMessagePayload(),
+        headers: { "x-password": "secret-token" }, // pragma: allowlist secret
         remoteAddress: "192.168.1.100",
-      };
-
-      unregister = registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
       });
-
-      const res = createMockResponse();
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
+      await expectWebhookStatus(req, 200);
     });
 
     it("rejects unauthorized requests with wrong password", async () => {
       const account = createMockAccount({ password: "secret-token" });
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
-      const req = createMockRequest("POST", "/bluebubbles-webhook?password=wrong-token", {
-        type: "new-message",
-        data: {
-          text: "hello",
-          handle: { address: "+15551234567" },
-          isGroup: false,
-          isFromMe: false,
-          guid: "msg-1",
-        },
-      });
-      (req as unknown as { socket: { remoteAddress: string } }).socket = {
+      setupWebhookTarget({ account });
+      const req = createWebhookRequestForTest({
+        url: "/bluebubbles-webhook?password=wrong-token",
+        body: createNewMessagePayload(),
         remoteAddress: "192.168.1.100",
-      };
-
-      unregister = registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
       });
-
-      const res = createMockResponse();
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(401);
+      await expectWebhookStatus(req, 401);
     });
 
     it("rejects ambiguous routing when multiple targets match the same password", async () => {
       const accountA = createMockAccount({ password: "secret-token" });
       const accountB = createMockAccount({ password: "secret-token" });
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
       const sinkA = vi.fn();
       const sinkB = vi.fn();
+      registerWebhookTargets([
+        { account: accountA, statusSink: sinkA },
+        { account: accountB, statusSink: sinkB },
+      ]);
 
-      const req = createMockRequest("POST", "/bluebubbles-webhook?password=secret-token", {
-        type: "new-message",
-        data: {
-          text: "hello",
-          handle: { address: "+15551234567" },
-          isGroup: false,
-          isFromMe: false,
-          guid: "msg-1",
-        },
-      });
-      (req as unknown as { socket: { remoteAddress: string } }).socket = {
+      const req = createWebhookRequestForTest({
+        url: "/bluebubbles-webhook?password=secret-token",
+        body: createNewMessagePayload(),
         remoteAddress: "192.168.1.100",
-      };
-
-      const unregisterA = registerBlueBubblesWebhookTarget({
-        account: accountA,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
-        statusSink: sinkA,
       });
-      const unregisterB = registerBlueBubblesWebhookTarget({
-        account: accountB,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
-        statusSink: sinkB,
-      });
-      unregister = () => {
-        unregisterA();
-        unregisterB();
-      };
-
-      const res = createMockResponse();
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(401);
+      await expectWebhookStatus(req, 401);
       expect(sinkA).not.toHaveBeenCalled();
       expect(sinkB).not.toHaveBeenCalled();
     });
@@ -624,107 +499,38 @@ describe("BlueBubbles webhook monitor", () => {
     it("ignores targets without passwords when a password-authenticated target matches", async () => {
       const accountStrict = createMockAccount({ password: "secret-token" });
       const accountWithoutPassword = createMockAccount({ password: undefined });
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
       const sinkStrict = vi.fn();
       const sinkWithoutPassword = vi.fn();
+      registerWebhookTargets([
+        { account: accountStrict, statusSink: sinkStrict },
+        { account: accountWithoutPassword, statusSink: sinkWithoutPassword },
+      ]);
 
-      const req = createMockRequest("POST", "/bluebubbles-webhook?password=secret-token", {
-        type: "new-message",
-        data: {
-          text: "hello",
-          handle: { address: "+15551234567" },
-          isGroup: false,
-          isFromMe: false,
-          guid: "msg-1",
-        },
-      });
-      (req as unknown as { socket: { remoteAddress: string } }).socket = {
+      const req = createWebhookRequestForTest({
+        url: "/bluebubbles-webhook?password=secret-token",
+        body: createNewMessagePayload(),
         remoteAddress: "192.168.1.100",
-      };
-
-      const unregisterStrict = registerBlueBubblesWebhookTarget({
-        account: accountStrict,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
-        statusSink: sinkStrict,
       });
-      const unregisterNoPassword = registerBlueBubblesWebhookTarget({
-        account: accountWithoutPassword,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
-        statusSink: sinkWithoutPassword,
-      });
-      unregister = () => {
-        unregisterStrict();
-        unregisterNoPassword();
-      };
-
-      const res = createMockResponse();
-      const handled = await handleBlueBubblesWebhookRequest(req, res);
-
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
+      await expectWebhookStatus(req, 200);
       expect(sinkStrict).toHaveBeenCalledTimes(1);
       expect(sinkWithoutPassword).not.toHaveBeenCalled();
     });
 
     it("requires authentication for loopback requests when password is configured", async () => {
       const account = createMockAccount({ password: "secret-token" });
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
+      setupWebhookTarget({ account });
       for (const remoteAddress of ["127.0.0.1", "::1", "::ffff:127.0.0.1"]) {
-        const req = createMockRequest("POST", "/bluebubbles-webhook", {
-          type: "new-message",
-          data: {
-            text: "hello",
-            handle: { address: "+15551234567" },
-            isGroup: false,
-            isFromMe: false,
-            guid: "msg-1",
-          },
-        });
-        (req as unknown as { socket: { remoteAddress: string } }).socket = {
+        const req = createWebhookRequestForTest({
+          body: createNewMessagePayload(),
           remoteAddress,
-        };
-
-        const loopbackUnregister = registerBlueBubblesWebhookTarget({
-          account,
-          config,
-          runtime: { log: vi.fn(), error: vi.fn() },
-          core,
-          path: "/bluebubbles-webhook",
         });
-
-        const res = createMockResponse();
-        const handled = await handleBlueBubblesWebhookRequest(req, res);
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(401);
-
-        loopbackUnregister();
+        await expectWebhookStatus(req, 401);
       }
     });
 
     it("rejects targets without passwords for loopback and proxied-looking requests", async () => {
       const account = createMockAccount({ password: undefined });
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
-      unregister = registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
-      });
+      setupWebhookTarget({ account });
 
       const headerVariants: Record<string, string>[] = [
         { host: "localhost" },
@@ -732,28 +538,12 @@ describe("BlueBubbles webhook monitor", () => {
         { host: "localhost", forwarded: "for=203.0.113.10;proto=https;host=example.com" },
       ];
       for (const headers of headerVariants) {
-        const req = createMockRequest(
-          "POST",
-          "/bluebubbles-webhook",
-          {
-            type: "new-message",
-            data: {
-              text: "hello",
-              handle: { address: "+15551234567" },
-              isGroup: false,
-              isFromMe: false,
-              guid: "msg-1",
-            },
-          },
+        const req = createWebhookRequestForTest({
+          body: createNewMessagePayload(),
           headers,
-        );
-        (req as unknown as { socket: { remoteAddress: string } }).socket = {
           remoteAddress: "127.0.0.1",
-        };
-        const res = createMockResponse();
-        const handled = await handleBlueBubblesWebhookRequest(req, res);
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(401);
+        });
+        await expectWebhookStatus(req, 401);
       }
     });
 
@@ -770,31 +560,13 @@ describe("BlueBubbles webhook monitor", () => {
       const { resolveChatGuidForTarget } = await import("./send.js");
       vi.mocked(resolveChatGuidForTarget).mockClear();
 
-      const account = createMockAccount({ groupPolicy: "open" });
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
-      unregister = registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
+      setupWebhookTarget({ account: createMockAccount({ groupPolicy: "open" }) });
+      const payload = createNewMessagePayload({
+        text: "hello from group",
+        isGroup: true,
+        chatId: "123",
+        date: Date.now(),
       });
-
-      const payload = {
-        type: "new-message",
-        data: {
-          text: "hello from group",
-          handle: { address: "+15551234567" },
-          isGroup: true,
-          isFromMe: false,
-          guid: "msg-1",
-          chatId: "123",
-          date: Date.now(),
-        },
-      };
 
       const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
       const res = createMockResponse();
@@ -819,31 +591,13 @@ describe("BlueBubbles webhook monitor", () => {
         return EMPTY_DISPATCH_RESULT;
       });
 
-      const account = createMockAccount({ groupPolicy: "open" });
-      const config: OpenClawConfig = {};
-      const core = createMockRuntime();
-      setBlueBubblesRuntime(core);
-
-      unregister = registerBlueBubblesWebhookTarget({
-        account,
-        config,
-        runtime: { log: vi.fn(), error: vi.fn() },
-        core,
-        path: "/bluebubbles-webhook",
+      setupWebhookTarget({ account: createMockAccount({ groupPolicy: "open" }) });
+      const payload = createNewMessagePayload({
+        text: "hello from group",
+        isGroup: true,
+        chat: { chatGuid: "iMessage;+;chat123456" },
+        date: Date.now(),
       });
-
-      const payload = {
-        type: "new-message",
-        data: {
-          text: "hello from group",
-          handle: { address: "+15551234567" },
-          isGroup: true,
-          isFromMe: false,
-          guid: "msg-1",
-          chat: { chatGuid: "iMessage;+;chat123456" },
-          date: Date.now(),
-        },
-      };
 
       const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
       const res = createMockResponse();

@@ -302,6 +302,24 @@ describe("browser chrome helpers", () => {
     await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
   });
 
+  it("blocks private CDP probes when strict SSRF policy is enabled", async () => {
+    const fetchSpy = vi.fn().mockRejectedValue(new Error("should not be called"));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      isChromeReachable("http://127.0.0.1:12345", 50, {
+        dangerouslyAllowPrivateNetwork: false,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      isChromeReachable("ws://127.0.0.1:19999", 50, {
+        dangerouslyAllowPrivateNetwork: false,
+      }),
+    ).resolves.toBe(false);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("reports cdpReady only when Browser.getVersion command succeeds", async () => {
     await withMockChromeCdpServer({
       wsPath: "/devtools/browser/health",
@@ -348,6 +366,16 @@ describe("browser chrome helpers", () => {
         await expect(isChromeCdpReady(baseUrl, 300, 150)).resolves.toBe(false);
       },
     });
+  });
+
+  it("probes WebSocket URLs via handshake instead of HTTP", async () => {
+    // For ws:// URLs, isChromeReachable should NOT call fetch at all —
+    // it should attempt a WebSocket handshake instead.
+    const fetchSpy = vi.fn().mockRejectedValue(new Error("should not be called"));
+    vi.stubGlobal("fetch", fetchSpy);
+    // No WS server listening → handshake fails → not reachable
+    await expect(isChromeReachable("ws://127.0.0.1:19999", 50)).resolves.toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("stopOpenClawChrome no-ops when process is already killed", async () => {
