@@ -20,4 +20,4 @@ export { createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
 export {
   synologyChatSetupAdapter,
   synologyChatSetupWizard,
-} from "../../extensions/synology-chat/setup-entry.js";
+} from "../../extensions/synology-chat/setup-api.js";

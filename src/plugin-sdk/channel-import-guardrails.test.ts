@@ -9,6 +9,7 @@ const ALLOWED_EXTENSION_PUBLIC_SEAMS = new Set([
   "index.js",
   "login-qr-api.js",
   "runtime-api.js",
+  "setup-api.js",
   "setup-entry.js",
 ]);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
