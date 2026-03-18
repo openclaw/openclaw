@@ -90,11 +90,11 @@ async function drainActiveRuns(
   channelManager: ChannelManager,
   channelId: ChannelId,
   accountId: string,
-  stopped: boolean,
+  isStopped: () => boolean,
 ): Promise<void> {
   const deadline = Date.now() + DRAIN_WINDOW_MS;
   let warned = false;
-  while (!stopped && Date.now() < deadline) {
+  while (!isStopped() && Date.now() < deadline) {
     const snap = channelManager.getRuntimeSnapshot();
     const accountSnap = snap.channelAccounts[channelId]?.[accountId];
     const activeRuns =
@@ -207,13 +207,19 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           try {
             if (status.running) {
-              await drainActiveRuns(channelManager, channelId as ChannelId, accountId, stopped);
+              await drainActiveRuns(
+                channelManager,
+                channelId as ChannelId,
+                accountId,
+                () => stopped,
+              );
               await channelManager.stopChannel(channelId as ChannelId, accountId);
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
-            record.lastRestartAt = now;
-            record.restartsThisHour.push({ at: now });
+            const restartedAt = Date.now();
+            record.lastRestartAt = restartedAt;
+            record.restartsThisHour.push({ at: restartedAt });
             restartRecords.set(key, record);
           } catch (err) {
             log.error?.(
