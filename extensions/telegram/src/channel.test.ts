@@ -573,3 +573,222 @@ describe("telegramPlugin outbound sendPayload forceDocument", () => {
     );
   });
 });
+
+describe("telegramPlugin threading", () => {
+  const threading = telegramPlugin.threading!;
+
+  describe("buildToolContext", () => {
+    it("returns currentChannelId and currentThreadTs when MessageThreadId is set", () => {
+      const result = threading.buildToolContext!({
+        cfg: {} as OpenClawConfig,
+        context: {
+          To: "telegram:1234567",
+          MessageThreadId: 42,
+        },
+        hasRepliedRef: { value: false },
+      });
+
+      expect(result).toMatchObject({
+        currentChannelId: "telegram:1234567",
+        currentThreadTs: "42",
+      });
+    });
+
+    it("returns currentThreadTs undefined when MessageThreadId is not set", () => {
+      const result = threading.buildToolContext!({
+        cfg: {} as OpenClawConfig,
+        context: {
+          To: "telegram:1234567",
+        },
+        hasRepliedRef: { value: false },
+      });
+
+      expect(result).toMatchObject({
+        currentChannelId: "telegram:1234567",
+        currentThreadTs: undefined,
+      });
+    });
+
+    it("returns currentChannelId undefined when To is empty", () => {
+      const result = threading.buildToolContext!({
+        cfg: {} as OpenClawConfig,
+        context: {
+          To: "",
+        },
+      });
+
+      expect(result).toMatchObject({
+        currentChannelId: undefined,
+        currentThreadTs: undefined,
+      });
+    });
+
+    it("passes hasRepliedRef through", () => {
+      const repliedRef = { value: true };
+      const result = threading.buildToolContext!({
+        cfg: {} as OpenClawConfig,
+        context: {
+          To: "telegram:1234567",
+          MessageThreadId: 42,
+        },
+        hasRepliedRef: repliedRef,
+      });
+
+      expect(result!.hasRepliedRef).toBe(repliedRef);
+    });
+
+    it("handles numeric MessageThreadId as string currentThreadTs", () => {
+      const result = threading.buildToolContext!({
+        cfg: {} as OpenClawConfig,
+        context: {
+          To: "telegram:-1001234567890",
+          MessageThreadId: 999,
+        },
+      });
+
+      expect(result!.currentThreadTs).toBe("999");
+    });
+
+    it("handles string MessageThreadId", () => {
+      const result = threading.buildToolContext!({
+        cfg: {} as OpenClawConfig,
+        context: {
+          To: "telegram:1234567",
+          MessageThreadId: "42",
+        },
+      });
+
+      expect(result!.currentThreadTs).toBe("42");
+    });
+  });
+
+  describe("resolveAutoThreadId", () => {
+    it("injects thread for matching DM chatId", () => {
+      const result = threading.resolveAutoThreadId!({
+        cfg: {} as OpenClawConfig,
+        to: "1234567",
+        toolContext: {
+          currentChannelId: "telegram:1234567",
+          currentThreadTs: "42",
+        },
+      });
+
+      expect(result).toBe("42");
+    });
+
+    it("injects thread when to has telegram: prefix and matches", () => {
+      const result = threading.resolveAutoThreadId!({
+        cfg: {} as OpenClawConfig,
+        to: "telegram:1234567",
+        toolContext: {
+          currentChannelId: "telegram:1234567",
+          currentThreadTs: "42",
+        },
+      });
+
+      expect(result).toBe("42");
+    });
+
+    it("skips when replyToId is set", () => {
+      const result = threading.resolveAutoThreadId!({
+        cfg: {} as OpenClawConfig,
+        to: "1234567",
+        toolContext: {
+          currentChannelId: "telegram:1234567",
+          currentThreadTs: "42",
+        },
+        replyToId: "msg-99",
+      });
+
+      expect(result).toBeUndefined();
+    });
+
+    it("skips when to already encodes a topic", () => {
+      const result = threading.resolveAutoThreadId!({
+        cfg: {} as OpenClawConfig,
+        to: "-1001234:topic:456",
+        toolContext: {
+          currentChannelId: "telegram:-1001234",
+          currentThreadTs: "42",
+        },
+      });
+
+      expect(result).toBeUndefined();
+    });
+
+    it("skips when to encodes a colon-separated thread", () => {
+      const result = threading.resolveAutoThreadId!({
+        cfg: {} as OpenClawConfig,
+        to: "-1001234:456",
+        toolContext: {
+          currentChannelId: "telegram:-1001234",
+          currentThreadTs: "42",
+        },
+      });
+
+      expect(result).toBeUndefined();
+    });
+
+    it("skips when chatIds do not match", () => {
+      const result = threading.resolveAutoThreadId!({
+        cfg: {} as OpenClawConfig,
+        to: "9999999",
+        toolContext: {
+          currentChannelId: "telegram:1234567",
+          currentThreadTs: "42",
+        },
+      });
+
+      expect(result).toBeUndefined();
+    });
+
+    it("skips when toolContext has no currentThreadTs", () => {
+      const result = threading.resolveAutoThreadId!({
+        cfg: {} as OpenClawConfig,
+        to: "1234567",
+        toolContext: {
+          currentChannelId: "telegram:1234567",
+        },
+      });
+
+      expect(result).toBeUndefined();
+    });
+
+    it("skips when toolContext has no currentChannelId", () => {
+      const result = threading.resolveAutoThreadId!({
+        cfg: {} as OpenClawConfig,
+        to: "1234567",
+        toolContext: {
+          currentThreadTs: "42",
+        },
+      });
+
+      expect(result).toBeUndefined();
+    });
+
+    it("skips when toolContext is undefined", () => {
+      const result = threading.resolveAutoThreadId!({
+        cfg: {} as OpenClawConfig,
+        to: "1234567",
+        toolContext: undefined,
+      });
+
+      expect(result).toBeUndefined();
+    });
+
+    it("works for group forum topics — injects thread for matching group chatId", () => {
+      // When context is in a group forum topic, currentChannelId includes the topic
+      // but sending to bare group chatId should still inject the thread
+      const result = threading.resolveAutoThreadId!({
+        cfg: {} as OpenClawConfig,
+        to: "telegram:group:-1001234567890",
+        toolContext: {
+          currentChannelId: "telegram:-1001234567890",
+          currentThreadTs: "77",
+        },
+      });
+
+      expect(result).toBe("77");
+    });
+  });
+});
