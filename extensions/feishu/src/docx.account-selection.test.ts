@@ -67,4 +67,37 @@ describe("feishu_doc account selection", () => {
 
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
   });
+
+  test("blocks execution when configured defaultAccount disables doc", async () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          defaultAccount: "b",
+          accounts: {
+            a: { appId: "app-a", appSecret: "sec-a", tools: { doc: true } }, // pragma: allowlist secret
+            b: { appId: "app-b", appSecret: "sec-b", tools: { doc: false } }, // pragma: allowlist secret
+          },
+        },
+      },
+    } as OpenClawPluginApi["config"];
+
+    const { api, resolveTool } = createToolFactoryHarness(cfg);
+    registerFeishuDocTools(api);
+
+    const docTool = resolveTool("feishu_doc", { agentAccountId: "a" });
+    const result = await docTool.execute("call-disabled", {
+      action: "list_blocks",
+      doc_token: "d",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          error: 'Feishu doc is disabled for account "b".',
+        }),
+      }),
+    );
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+  });
 });

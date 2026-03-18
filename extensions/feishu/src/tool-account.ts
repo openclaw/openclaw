@@ -1,6 +1,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
+import { resolveFeishuAccount, resolveFeishuAccountConfigState } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveToolsConfig } from "./tools-config.js";
 import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
@@ -36,6 +36,33 @@ export function resolveFeishuToolAccount(params: {
       readConfiguredDefaultAccountId(params.api.config) ??
       normalizeOptionalAccountId(params.defaultAccountId),
   });
+}
+
+export function resolveFeishuToolAccountConfigState(params: {
+  api: Pick<OpenClawPluginApi, "config">;
+  executeParams?: AccountAwareParams;
+  defaultAccountId?: string;
+}) {
+  if (!params.api.config) {
+    throw new Error("Feishu config unavailable");
+  }
+  return resolveFeishuAccountConfigState({
+    cfg: params.api.config,
+    accountId:
+      normalizeOptionalAccountId(params.executeParams?.accountId) ??
+      readConfiguredDefaultAccountId(params.api.config) ??
+      normalizeOptionalAccountId(params.defaultAccountId),
+  });
+}
+
+export function isFeishuToolEnabledForRoutedAccount(params: {
+  api: Pick<OpenClawPluginApi, "config">;
+  executeParams?: AccountAwareParams;
+  defaultAccountId?: string;
+  tool: keyof Required<FeishuToolsConfig>;
+}): boolean {
+  const account = resolveFeishuToolAccountConfigState(params);
+  return resolveToolsConfig(account.config.tools)[params.tool];
 }
 
 export function createFeishuToolClient(params: {

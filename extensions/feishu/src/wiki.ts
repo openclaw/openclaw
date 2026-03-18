@@ -1,7 +1,12 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccountConfigs } from "./accounts.js";
-import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import {
+  createFeishuToolClient,
+  isFeishuToolEnabledForRoutedAccount,
+  resolveAnyEnabledFeishuToolsConfig,
+  resolveFeishuToolAccountConfigState,
+} from "./tool-account.js";
 import {
   jsonToolResult,
   toolExecutionErrorResult,
@@ -183,6 +188,23 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
         async execute(_toolCallId, params) {
           const p = params as FeishuWikiExecuteParams;
           try {
+            const account = resolveFeishuToolAccountConfigState({
+              api,
+              executeParams: p,
+              defaultAccountId,
+            });
+            if (
+              !isFeishuToolEnabledForRoutedAccount({
+                api,
+                executeParams: p,
+                defaultAccountId,
+                tool: "wiki",
+              })
+            ) {
+              return jsonToolResult({
+                error: `Feishu wiki is disabled for account "${account.accountId}".`,
+              });
+            }
             const client = createFeishuToolClient({
               api,
               executeParams: p,

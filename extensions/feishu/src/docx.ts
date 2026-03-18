@@ -20,7 +20,9 @@ import {
 import { getFeishuRuntime } from "./runtime.js";
 import {
   createFeishuToolClient,
+  isFeishuToolEnabledForRoutedAccount,
   resolveAnyEnabledFeishuToolsConfig,
+  resolveFeishuToolAccountConfigState,
   resolveFeishuToolAccount,
 } from "./tool-account.js";
 
@@ -1273,6 +1275,23 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           async execute(_toolCallId, params) {
             const p = params as FeishuDocExecuteParams;
             try {
+              const account = resolveFeishuToolAccountConfigState({
+                api,
+                executeParams: p,
+                defaultAccountId,
+              });
+              if (
+                !isFeishuToolEnabledForRoutedAccount({
+                  api,
+                  executeParams: p,
+                  defaultAccountId,
+                  tool: "doc",
+                })
+              ) {
+                return json({
+                  error: `Feishu doc is disabled for account "${account.accountId}".`,
+                });
+              }
               const client = getClient(p, defaultAccountId);
               switch (p.action) {
                 case "read":
@@ -1442,6 +1461,21 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         parameters: Type.Object({}),
         async execute() {
           try {
+            const account = resolveFeishuToolAccountConfigState({
+              api,
+              defaultAccountId: ctx.agentAccountId,
+            });
+            if (
+              !isFeishuToolEnabledForRoutedAccount({
+                api,
+                defaultAccountId: ctx.agentAccountId,
+                tool: "scopes",
+              })
+            ) {
+              return json({
+                error: `Feishu scopes are disabled for account "${account.accountId}".`,
+              });
+            }
             const result = await listAppScopes(getClient(undefined, ctx.agentAccountId));
             return json(result);
           } catch (err) {

@@ -1,9 +1,13 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { listEnabledFeishuAccountConfigs, resolveFeishuAccountConfigState } from "./accounts.js";
+import { listEnabledFeishuAccountConfigs } from "./accounts.js";
 import { FeishuChatSchema, type FeishuChatParams } from "./chat-schema.js";
-import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
-import { resolveToolsConfig } from "./tools-config.js";
+import {
+  createFeishuToolClient,
+  isFeishuToolEnabledForRoutedAccount,
+  resolveAnyEnabledFeishuToolsConfig,
+  resolveFeishuToolAccountConfigState,
+} from "./tool-account.js";
 
 function json(data: unknown) {
   return {
@@ -151,11 +155,19 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
         async execute(_toolCallId, params) {
           const p = params as FeishuChatExecuteParams;
           try {
-            const account = resolveFeishuAccountConfigState({
-              cfg: api.config,
-              accountId: p.accountId ?? defaultAccountId ?? undefined,
+            const account = resolveFeishuToolAccountConfigState({
+              api,
+              executeParams: p,
+              defaultAccountId,
             });
-            if (!resolveToolsConfig(account.config.tools).chat) {
+            if (
+              !isFeishuToolEnabledForRoutedAccount({
+                api,
+                executeParams: p,
+                defaultAccountId,
+                tool: "chat",
+              })
+            ) {
               return json({
                 error: `Feishu chat is disabled for account "${account.accountId}".`,
               });

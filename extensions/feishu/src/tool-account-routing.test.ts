@@ -162,6 +162,29 @@ describe("feishu tool account routing", () => {
     expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
 
+  test("chat tool checks the same routed account precedence as execution", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        defaultAccount: "b",
+        toolsA: { chat: true },
+        toolsB: { chat: false },
+      }),
+    );
+    registerFeishuChatTools(api);
+
+    const tool = resolveTool("feishu_chat", { agentAccountId: "a" });
+    const result = await tool.execute("call", { action: "info", chat_id: "oc_b" });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          error: 'Feishu chat is disabled for account "b".',
+        }),
+      }),
+    );
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+  });
+
   test("perm tool registers when only second account enables it and routes to agentAccountId", async () => {
     const { api, resolveTool } = createToolFactoryHarness(
       createConfig({
