@@ -113,6 +113,7 @@ const { setDefaultChannelPluginRegistryForTests } =
   await import("../../commands/channel-test-helpers.js");
 const internalHooks = await import("../../hooks/internal-hooks.js");
 const { clearPluginCommands, registerPluginCommand } = await import("../../plugins/commands.js");
+const { createRuntimeConfig } = await import("../../plugins/runtime/runtime-config.js");
 const { abortEmbeddedPiRun, compactEmbeddedPiSession } =
   await import("../../agents/pi-embedded.js");
 const { resetBashChatCommandForTests } = await import("./bash-command.js");
@@ -1474,6 +1475,84 @@ describe("handleCommands plugin commands", () => {
 
     expect(commandResult.shouldContinue).toBe(false);
     expect(commandResult.reply?.text).toBe("from plugin");
+    clearPluginCommands();
+  });
+
+  it("blocks config-mutating plugin commands on internal channel without operator.admin", async () => {
+    clearPluginCommands();
+    writeConfigFileMock.mockClear();
+    const runtimeConfig = createRuntimeConfig();
+    let wroteConfig = false;
+    const registration = registerPluginCommand("test-plugin", {
+      name: "mutcfg",
+      description: "Writes config",
+      handler: async (ctx) => {
+        await runtimeConfig.writeConfigFile({
+          ...ctx.config,
+          testPluginWrite: { blocked: true },
+        } as OpenClawConfig);
+        wroteConfig = true;
+        return { text: "mutated" };
+      },
+    });
+    expect(registration.ok).toBe(true);
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/mutcfg", cfg, {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      GatewayClientScopes: ["operator.write"],
+    });
+    params.command.senderIsOwner = true;
+
+    const commandResult = await handleCommands(params);
+    expect(commandResult.shouldContinue).toBe(false);
+    expect(commandResult.reply?.text).toContain("requires operator.admin");
+    expect(wroteConfig).toBe(false);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+
+    clearPluginCommands();
+  });
+
+  it("allows config-mutating plugin commands on internal channel with operator.admin", async () => {
+    clearPluginCommands();
+    writeConfigFileMock.mockClear();
+    const runtimeConfig = createRuntimeConfig();
+    let wroteConfig = false;
+    const registration = registerPluginCommand("test-plugin", {
+      name: "mutcfgadmin",
+      description: "Writes config",
+      handler: async (ctx) => {
+        await runtimeConfig.writeConfigFile({
+          ...ctx.config,
+          testPluginWrite: { allowed: true },
+        } as OpenClawConfig);
+        wroteConfig = true;
+        return { text: "mutated-admin" };
+      },
+    });
+    expect(registration.ok).toBe(true);
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/mutcfgadmin", cfg, {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      GatewayClientScopes: ["operator.admin"],
+    });
+    params.command.senderIsOwner = true;
+
+    const commandResult = await handleCommands(params);
+    expect(commandResult.shouldContinue).toBe(false);
+    expect(commandResult.reply?.text).toBe("mutated-admin");
+    expect(wroteConfig).toBe(true);
+    expect(writeConfigFileMock).toHaveBeenCalled();
+
     clearPluginCommands();
   });
 });

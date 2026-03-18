@@ -35,6 +35,7 @@ export const handlePluginCommand: CommandHandler = async (
     args: match.args,
     senderId: command.senderId,
     channel: command.channel,
+    gatewayClientScopes: params.ctx.GatewayClientScopes,
     channelId: command.channelId,
     isAuthorizedSender: command.isAuthorizedSender,
     commandBody: command.commandBodyNormalized,

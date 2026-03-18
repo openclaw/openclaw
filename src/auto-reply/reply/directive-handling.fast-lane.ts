@@ -62,6 +62,7 @@ export async function applyInlineDirectivesFastLane(
 
   const directiveAck = await handleDirectiveOnly({
     cfg,
+    ctx,
     directives,
     sessionEntry,
     sessionStore,

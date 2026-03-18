@@ -5,7 +5,10 @@ import {
 } from "../../agents/auth-profiles.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { updateSessionStore } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import type { MsgContext } from "../templating.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import { parseInlineDirectives } from "./directive-handling.js";
 import {
@@ -644,5 +647,82 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
     expect(sessionEntry.thinkingLevel).toBe("off");
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
+  });
+
+  it("blocks /exec persistence for internal operator.write clients", async () => {
+    vi.mocked(updateSessionStore).mockClear();
+    const directives = parseInlineDirectives("/exec host=gateway");
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const ctx = {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      GatewayClientScopes: ["operator.write"],
+    } as MsgContext;
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        ctx,
+        directives,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("requires operator.admin");
+    expect(sessionEntry.execHost).toBeUndefined();
+    expect(sessionStore["agent:main:dm:1"]?.execHost).toBeUndefined();
+    expect(vi.mocked(updateSessionStore)).not.toHaveBeenCalled();
+  });
+
+  it("blocks /exec persistence for internal operator.write clients with trailing text", async () => {
+    vi.mocked(updateSessionStore).mockClear();
+    const directives = parseInlineDirectives("/exec host=gateway hello");
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const ctx = {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      GatewayClientScopes: ["operator.write"],
+    } as MsgContext;
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        ctx,
+        directives,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("requires operator.admin");
+    expect(sessionEntry.execHost).toBeUndefined();
+    expect(sessionStore["agent:main:dm:1"]?.execHost).toBeUndefined();
+  });
+
+  it("allows /exec persistence for internal operator.admin clients", async () => {
+    vi.mocked(updateSessionStore).mockClear();
+    const directives = parseInlineDirectives("/exec host=gateway");
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const ctx = {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      GatewayClientScopes: ["operator.admin"],
+    } as MsgContext;
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        ctx,
+        directives,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Exec defaults set");
+    expect(sessionEntry.execHost).toBe("gateway");
+    expect(sessionStore["agent:main:dm:1"]?.execHost).toBe("gateway");
+    expect(vi.mocked(updateSessionStore)).toHaveBeenCalled();
   });
 });

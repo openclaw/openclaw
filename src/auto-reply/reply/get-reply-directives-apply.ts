@@ -162,6 +162,7 @@ export async function applyInlineDirectiveOverrides(params: {
     const currentThinkLevel = resolvedDefaultThinkLevel;
     const directiveReply = await handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
+      ctx,
       currentThinkLevel,
       currentFastMode,
       currentVerboseLevel,
@@ -251,6 +252,7 @@ export async function applyInlineDirectiveOverrides(params: {
     directives,
     effectiveModelDirective,
     cfg,
+    ctx,
     agentDir,
     sessionEntry,
     sessionStore,

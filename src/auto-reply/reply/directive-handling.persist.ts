@@ -15,15 +15,27 @@ import { type SessionEntry, updateSessionStore } from "../../config/sessions.js"
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { MsgContext } from "../templating.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { enqueueModeSwitchEvents } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
+function canPersistExecDefaults(ctx?: MsgContext): boolean {
+  const channel = (ctx?.Provider ?? ctx?.Surface ?? "").trim().toLowerCase();
+  if (!channel || !isInternalMessageChannel(channel)) {
+    return true;
+  }
+  const scopes = ctx?.GatewayClientScopes ?? [];
+  return scopes.includes("operator.admin");
+}
+
 export async function persistInlineDirectives(params: {
   directives: InlineDirectives;
   effectiveModelDirective?: string;
   cfg: OpenClawConfig;
+  ctx?: MsgContext;
   agentDir?: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -57,6 +69,7 @@ export async function persistInlineDirectives(params: {
     initialModelLabel,
     formatModelSwitchEvent,
     agentCfg,
+    ctx,
   } = params;
   let { provider, model } = params;
   const activeAgentId = sessionKey
@@ -75,6 +88,8 @@ export async function persistInlineDirectives(params: {
       directives.elevatedLevel !== undefined &&
       elevatedEnabled &&
       elevatedAllowed;
+    const execPersistenceBlocked =
+      directives.hasExecDirective && directives.hasExecOptions && !canPersistExecDefaults(ctx);
     let reasoningChanged =
       directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
     let updated = false;
@@ -113,7 +128,7 @@ export async function persistInlineDirectives(params: {
         (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
       updated = true;
     }
-    if (directives.hasExecDirective && directives.hasExecOptions) {
+    if (directives.hasExecDirective && directives.hasExecOptions && !execPersistenceBlocked) {
       if (directives.execHost) {
         sessionEntry.execHost = directives.execHost;
         updated = true;
