@@ -44,6 +44,7 @@ type SettingsHost = {
     navCollapsed: boolean;
     navWidth: number;
     navGroupsCollapsed: Record<string, boolean>;
+    borderRadius: number;
   };
   theme: ThemeName & ThemeMode;
   themeMode: ThemeMode;
@@ -147,6 +148,7 @@ const createHost = (tab: Tab): SettingsHost => ({
     navCollapsed: false,
     navWidth: 220,
     navGroupsCollapsed: {},
+    borderRadius: 50,
   },
   theme: "claw" as unknown as ThemeName & ThemeMode,
   themeMode: "system",

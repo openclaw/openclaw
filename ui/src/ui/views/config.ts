@@ -49,6 +49,8 @@ export type ConfigProps = {
   themeMode: ThemeMode;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+  borderRadius: number;
+  setBorderRadius: (value: number) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -510,22 +512,11 @@ function renderDiffValue(path: string, value: unknown, _uiHints: ConfigUiHints):
 type ThemeOption = { id: ThemeName; label: string; description: string; icon: TemplateResult };
 const THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw", description: "Chroma family", icon: icons.zap },
-  { id: "knot", label: "Knot", description: "Knot family", icon: icons.link },
-  { id: "dash", label: "Dash", description: "Field family", icon: icons.barChart },
+  { id: "knot", label: "Knot", description: "Blue contrast", icon: icons.link },
+  { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
 ];
 
 function renderAppearanceSection(props: ConfigProps) {
-  const MODE_OPTIONS: Array<{
-    id: ThemeMode;
-    label: string;
-    description: string;
-    icon: TemplateResult;
-  }> = [
-    { id: "system", label: "System", description: "Follow OS light or dark", icon: icons.monitor },
-    { id: "light", label: "Light", description: "Force light mode", icon: icons.sun },
-    { id: "dark", label: "Dark", description: "Force dark mode", icon: icons.moon },
-  ];
-
   return html`
     <div class="settings-appearance">
       <div class="settings-appearance__section">
@@ -560,33 +551,46 @@ function renderAppearanceSection(props: ConfigProps) {
       </div>
 
       <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Mode</h3>
-        <p class="settings-appearance__hint">Choose light or dark mode for the selected theme.</p>
-        <div class="settings-theme-grid">
-          ${MODE_OPTIONS.map(
-            (opt) => html`
-              <button
-                class="settings-theme-card ${opt.id === props.themeMode ? "settings-theme-card--active" : ""}"
-                title=${opt.description}
-                @click=${(e: Event) => {
-                  if (opt.id !== props.themeMode) {
-                    const context: ThemeTransitionContext = {
-                      element: (e.currentTarget as HTMLElement) ?? undefined,
-                    };
-                    props.setThemeMode(opt.id, context);
-                  }
-                }}
-              >
-                <span class="settings-theme-card__icon" aria-hidden="true">${opt.icon}</span>
-                <span class="settings-theme-card__label">${opt.label}</span>
-                ${
-                  opt.id === props.themeMode
-                    ? html`<span class="settings-theme-card__check" aria-hidden="true">${icons.check}</span>`
-                    : nothing
-                }
-              </button>
-            `,
-          )}
+        <h3 class="settings-appearance__heading">Roundness</h3>
+        <p class="settings-appearance__hint">Adjust corner radius across the UI.</p>
+        <div class="settings-slider">
+          <div class="settings-slider__header">
+            <span class="settings-slider__label">
+              <span class="settings-slider__key-swatch settings-slider__key-swatch--sharp"></span>
+              Square
+            </span>
+            <span class="settings-slider__value">${props.borderRadius}%</span>
+            <span class="settings-slider__label">
+              Round
+              <span class="settings-slider__key-swatch settings-slider__key-swatch--round"></span>
+            </span>
+          </div>
+          <input
+            type="range"
+            class="settings-slider__input"
+            min="0"
+            max="100"
+            step="1"
+            .value=${String(props.borderRadius)}
+            @input=${(e: Event) => {
+              const v = Number((e.target as HTMLInputElement).value);
+              props.setBorderRadius(v);
+            }}
+          />
+          <div class="settings-slider__preview">
+            <div
+              class="settings-slider__preview-swatch"
+              style="border-radius: ${Math.round(10 * (props.borderRadius / 50))}px"
+            ></div>
+            <div
+              class="settings-slider__preview-swatch"
+              style="border-radius: ${Math.round(14 * (props.borderRadius / 50))}px"
+            ></div>
+            <div
+              class="settings-slider__preview-swatch"
+              style="border-radius: ${Math.round(20 * (props.borderRadius / 50))}px"
+            ></div>
+          </div>
         </div>
       </div>
 
