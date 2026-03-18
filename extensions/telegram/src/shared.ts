@@ -77,7 +77,7 @@ export function createTelegramPluginBase(params: {
   setup: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setup"]>;
 }): Pick<
   ChannelPlugin<ResolvedTelegramAccount>,
-  "id" | "meta" | "setupWizard" | "capabilities" | "reload" | "configSchema" | "config" | "setup"
+  "id" | "meta" | "setupWizard" | "capabilities" | "reload" | "configSchema" | "config" | "setup" | "streaming"
 > {
   return {
     id: TELEGRAM_CHANNEL,
