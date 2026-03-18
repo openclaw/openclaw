@@ -319,8 +319,11 @@ function persistSettings(next: UiSettings) {
     ...(next.locale ? { locale: next.locale } : {}),
   };
   const serialized = JSON.stringify(persisted);
-  storage?.setItem(scopedKey, serialized);
-  // Keep the legacy unscoped key in sync for older readers and migration tests,
-  // but never include the session token in persistent storage.
-  storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
+  try {
+    storage?.setItem(scopedKey, serialized);
+    storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
+  } catch {
+    // best-effort — quota exceeded or security restrictions should not
+    // prevent in-memory settings and visual updates from being applied
+  }
 }
