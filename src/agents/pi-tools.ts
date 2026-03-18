@@ -92,7 +92,7 @@ function applyMessageProviderToolPolicy(
 
 function applyModelProviderToolPolicy(
   tools: AnyAgentTool[],
-  params?: { modelCompat?: ModelCompatConfig },
+  params?: { modelCompat?: unknown; modelProvider?: string },
 ): AnyAgentTool[] {
   if (!hasNativeWebSearchTool(params?.modelCompat)) {
     return tools;

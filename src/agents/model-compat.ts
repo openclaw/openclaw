@@ -4,9 +4,7 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 export const XAI_TOOL_SCHEMA_PROFILE = "xai";
 export const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
 
-function extractModelCompat(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): ModelCompatConfig | undefined {
+function extractModelCompat(modelOrCompat: unknown): ModelCompatConfig | undefined {
   if (!modelOrCompat || typeof modelOrCompat !== "object") {
     return undefined;
   }
