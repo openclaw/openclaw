@@ -1,30 +1,58 @@
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { buildGoogleImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import {
+  GOOGLE_GEMINI_DEFAULT_MODEL,
+  applyGoogleGeminiModelDefault,
+} from "openclaw/plugin-sdk/provider-models";
 import {
   createPluginBackedWebSearchProvider,
   getScopedCredentialValue,
   setScopedCredentialValue,
-} from "../../src/agents/tools/web-search-plugin-factory.js";
-import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+} from "openclaw/plugin-sdk/provider-web-search";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { googleMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 
-const googlePlugin = {
+export default definePluginEntry({
   id: "google",
   name: "Google Plugin",
   description: "Bundled Google plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: "google",
       label: "Google AI Studio",
       docsPath: "/providers/models",
       envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-      auth: [],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: "google",
+          methodId: "api-key",
+          label: "Google Gemini API key",
+          hint: "AI Studio / Gemini API key",
+          optionKey: "geminiApiKey",
+          flagName: "--gemini-api-key",
+          envVar: "GEMINI_API_KEY",
+          promptMessage: "Enter Gemini API key",
+          defaultModel: GOOGLE_GEMINI_DEFAULT_MODEL,
+          expectedProviders: ["google"],
+          applyConfig: (cfg) => applyGoogleGeminiModelDefault(cfg).next,
+          wizard: {
+            choiceId: "gemini-api-key",
+            choiceLabel: "Google Gemini API key",
+            groupId: "google",
+            groupLabel: "Google",
+            groupHint: "Gemini API key + OAuth",
+          },
+        }),
+      ],
       resolveDynamicModel: (ctx) =>
         resolveGoogle31ForwardCompatModel({ providerId: "google", ctx }),
       isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     });
     registerGoogleGeminiCliProvider(api);
+    api.registerImageGenerationProvider(buildGoogleImageGenerationProvider());
+    api.registerMediaUnderstandingProvider(googleMediaUnderstandingProvider);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "gemini",
@@ -41,6 +69,4 @@ const googlePlugin = {
       }),
     );
   },
-};
-
-export default googlePlugin;
+});

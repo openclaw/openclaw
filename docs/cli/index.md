@@ -101,6 +101,8 @@ openclaw [--dev] [--profile <name>] <command>
     get
     set
     unset
+    file
+    validate
   completion
   doctor
   dashboard
@@ -283,8 +285,9 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 Manage extensions and their config:
 
 - `openclaw plugins list` — discover plugins (use `--json` for machine output).
-- `openclaw plugins info <id>` — show details for a plugin.
-- `openclaw plugins install <path|.tgz|npm-spec>` — install a plugin (or add a plugin path to `plugins.load.paths`).
+- `openclaw plugins inspect <id>` — show details for a plugin (`info` is an alias).
+- `openclaw plugins install <path|.tgz|npm-spec|plugin@marketplace>` — install a plugin (or add a plugin path to `plugins.load.paths`).
+- `openclaw plugins marketplace list <marketplace>` — list marketplace entries before install.
 - `openclaw plugins enable <id>` / `disable <id>` — toggle `plugins.entries.<id>.enabled`.
 - `openclaw plugins doctor` — report plugin load errors.
 
@@ -317,22 +320,22 @@ Initialize config + workspace.
 Options:
 
 - `--workspace <dir>`: agent workspace path (default `~/.openclaw/workspace`).
-- `--wizard`: run the onboarding wizard.
-- `--non-interactive`: run wizard without prompts.
-- `--mode <local|remote>`: wizard mode.
+- `--wizard`: run onboarding.
+- `--non-interactive`: run onboarding without prompts.
+- `--mode <local|remote>`: onboard mode.
 - `--remote-url <url>`: remote Gateway URL.
 - `--remote-token <token>`: remote Gateway token.
 
-Wizard auto-runs when any wizard flags are present (`--non-interactive`, `--mode`, `--remote-url`, `--remote-token`).
+Onboarding auto-runs when any onboarding flags are present (`--non-interactive`, `--mode`, `--remote-url`, `--remote-token`).
 
 ### `onboard`
 
-Interactive wizard to set up gateway, workspace, and skills.
+Interactive onboarding for gateway, workspace, and skills.
 
 Options:
 
 - `--workspace <dir>`
-- `--reset` (reset config + credentials + sessions before wizard)
+- `--reset` (reset config + credentials + sessions before onboarding)
 - `--reset-scope <config|config+creds+sessions|full>` (default `config+creds+sessions`; use `full` to also remove workspace)
 - `--non-interactive`
 - `--mode <local|remote>`
@@ -392,7 +395,14 @@ subcommand launches the wizard.
 Subcommands:
 
 - `config get <path>`: print a config value (dot/bracket path).
-- `config set <path> <value>`: set a value (JSON5 or raw string).
+- `config set`: supports four assignment modes:
+  - value mode: `config set <path> <value>` (JSON5-or-string parsing)
+  - SecretRef builder mode: `config set <path> --ref-provider <provider> --ref-source <source> --ref-id <id>`
+  - provider builder mode: `config set secrets.providers.<alias> --provider-source <env|file|exec> ...`
+  - batch mode: `config set --batch-json '<json>'` or `config set --batch-file <path>`
+- `config set --dry-run`: validate assignments without writing `openclaw.json`.
+- `config set --dry-run --json`: emit machine-readable dry-run output (checks, operations, errors).
+- `config set --strict-json`: require JSON5 parsing for path/value input. `--json` remains a legacy alias for strict parsing outside dry-run output mode.
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
 - `config validate`: validate the current config against the schema without starting the gateway.

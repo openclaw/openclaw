@@ -5,8 +5,7 @@
  * These commands are processed before built-in commands and before agent invocation.
  */
 
-import { parseDiscordTarget } from "../../extensions/discord/src/targets.js";
-import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
+import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import {
@@ -131,7 +130,38 @@ export function validatePluginCommandDefinition(
   if (!command.description.trim()) {
     return "Command description cannot be empty";
   }
-  return validateCommandName(command.name.trim());
+  const nameError = validateCommandName(command.name.trim());
+  if (nameError) {
+    return nameError;
+  }
+  for (const [label, alias] of Object.entries(command.nativeNames ?? {})) {
+    if (typeof alias !== "string") {
+      continue;
+    }
+    const aliasError = validateCommandName(alias.trim());
+    if (aliasError) {
+      return `Native command alias "${label}" invalid: ${aliasError}`;
+    }
+  }
+  return null;
+}
+
+function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
+  const keys = new Set<string>();
+  const push = (value: string | undefined) => {
+    const normalized = value?.trim().toLowerCase();
+    if (!normalized) {
+      return;
+    }
+    keys.add(`/${normalized}`);
+  };
+
+  push(command.name);
+  push(command.nativeNames?.default);
+  push(command.nativeNames?.telegram);
+  push(command.nativeNames?.discord);
+
+  return [...keys];
 }
 
 /**
@@ -155,22 +185,31 @@ export function registerPluginCommand(
 
   const name = command.name.trim();
   const description = command.description.trim();
-
-  const key = `/${name.toLowerCase()}`;
-
-  // Check for duplicate registration
-  if (pluginCommands.has(key)) {
-    const existing = pluginCommands.get(key)!;
-    return {
-      ok: false,
-      error: `Command "${name}" already registered by plugin "${existing.pluginId}"`,
-    };
-  }
-
-  pluginCommands.set(key, {
+  const normalizedCommand = {
     ...command,
     name,
     description,
+  };
+  const invocationKeys = listPluginInvocationKeys(normalizedCommand);
+  const key = `/${name.toLowerCase()}`;
+
+  // Check for duplicate registration
+  for (const invocationKey of invocationKeys) {
+    const existing =
+      pluginCommands.get(invocationKey) ??
+      Array.from(pluginCommands.values()).find((candidate) =>
+        listPluginInvocationKeys(candidate).includes(invocationKey),
+      );
+    if (existing) {
+      return {
+        ok: false,
+        error: `Command "${invocationKey.slice(1)}" already registered by plugin "${existing.pluginId}"`,
+      };
+    }
+  }
+
+  pluginCommands.set(key, {
+    ...normalizedCommand,
     pluginId,
     pluginName: opts?.pluginName,
     pluginRoot: opts?.pluginRoot,
@@ -220,7 +259,11 @@ export function matchPluginCommand(
   const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
 
   const key = commandName.toLowerCase();
-  const command = pluginCommands.get(key);
+  const command =
+    pluginCommands.get(key) ??
+    Array.from(pluginCommands.values()).find((candidate) =>
+      listPluginInvocationNames(candidate).includes(key),
+    );
 
   if (!command) {
     return null;
@@ -286,12 +329,15 @@ function resolveBindingConversationFromCommand(params: {
     if (!rawTarget) {
       return null;
     }
-    const target = parseTelegramTarget(rawTarget);
+    const target = parseExplicitTargetForChannel("telegram", rawTarget);
+    if (!target) {
+      return null;
+    }
     return {
       channel: "telegram",
       accountId,
-      conversationId: target.chatId,
-      threadId: params.messageThreadId ?? target.messageThreadId,
+      conversationId: target.to,
+      threadId: params.messageThreadId ?? target.threadId,
     };
   }
   if (params.channel === "discord") {
@@ -304,14 +350,14 @@ function resolveBindingConversationFromCommand(params: {
     if (!rawTarget || rawTarget.startsWith("slash:")) {
       return null;
     }
-    const target = parseDiscordTarget(rawTarget, { defaultKind: "channel" });
+    const target = parseExplicitTargetForChannel("discord", rawTarget);
     if (!target) {
       return null;
     }
     return {
       channel: "discord",
       accountId,
-      conversationId: `${target.kind}:${target.id}`,
+      conversationId: `${target.chatType === "direct" ? "user" : "channel"}:${target.to}`,
     };
   }
   return null;
@@ -454,6 +500,10 @@ function resolvePluginNativeName(
     return defaultOverride.trim();
   }
   return command.name;
+}
+
+function listPluginInvocationNames(command: OpenClawPluginCommandDefinition): string[] {
+  return listPluginInvocationKeys(command);
 }
 
 /**

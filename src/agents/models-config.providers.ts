@@ -1,3 +1,8 @@
+import {
+  QIANFAN_BASE_URL,
+  QIANFAN_DEFAULT_MODEL_ID,
+} from "../../extensions/qianfan/provider-catalog.js";
+import { XIAOMI_DEFAULT_MODEL_ID } from "../../extensions/xiaomi/provider-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
@@ -6,24 +11,23 @@ import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import { normalizeGoogleModelId } from "./model-id-normalization.js";
 import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
-import {
-  QIANFAN_BASE_URL,
-  QIANFAN_DEFAULT_MODEL_ID,
-  XIAOMI_DEFAULT_MODEL_ID,
-} from "./models-config.providers.static.js";
+export { buildKimiCodingProvider } from "../../extensions/kimi-coding/provider-catalog.js";
+export { buildKilocodeProvider } from "../../extensions/kilocode/provider-catalog.js";
 export {
-  buildKimiCodingProvider,
-  buildKilocodeProvider,
-  buildNvidiaProvider,
-  buildModelStudioProvider,
-  buildQianfanProvider,
-  buildXiaomiProvider,
   MODELSTUDIO_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_ID,
+  buildModelStudioProvider,
+} from "../../extensions/modelstudio/provider-catalog.js";
+export { buildNvidiaProvider } from "../../extensions/nvidia/provider-catalog.js";
+export {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
+  buildQianfanProvider,
+} from "../../extensions/qianfan/provider-catalog.js";
+export {
   XIAOMI_DEFAULT_MODEL_ID,
-} from "./models-config.providers.static.js";
+  buildXiaomiProvider,
+} from "../../extensions/xiaomi/provider-catalog.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -613,10 +617,22 @@ type ProviderApiKeyResolver = (provider: string) => {
   discoveryApiKey?: string;
 };
 
+type ProviderAuthResolver = (
+  provider: string,
+  options?: { oauthMarker?: string },
+) => {
+  apiKey: string | undefined;
+  discoveryApiKey?: string;
+  mode: "api_key" | "oauth" | "token" | "none";
+  source: "env" | "profile" | "none";
+  profileId?: string;
+};
+
 type ImplicitProviderContext = ImplicitProviderParams & {
   authStore: ReturnType<typeof ensureAuthProfileStore>;
   env: NodeJS.ProcessEnv;
   resolveProviderApiKey: ProviderApiKeyResolver;
+  resolveProviderAuth: ProviderAuthResolver;
 };
 
 function mergeImplicitProviderSet(
@@ -664,6 +680,8 @@ async function resolvePluginImplicitProviders(
       env: ctx.env,
       resolveProviderApiKey: (providerId) =>
         ctx.resolveProviderApiKey(providerId?.trim() || provider.id),
+      resolveProviderAuth: (providerId, options) =>
+        ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
     });
     mergeImplicitProviderSet(
       discovered,
@@ -700,11 +718,74 @@ export async function resolveImplicitProviders(
       discoveryApiKey: fromProfiles?.discoveryApiKey,
     };
   };
+  const resolveProviderAuth: ProviderAuthResolver = (
+    provider: string,
+    options?: { oauthMarker?: string },
+  ) => {
+    const envVar = resolveEnvApiKeyVarName(provider, env);
+    if (envVar) {
+      return {
+        apiKey: envVar,
+        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
+        mode: "api_key",
+        source: "env",
+      };
+    }
+
+    const ids = listProfilesForProvider(authStore, provider);
+    let oauthCandidate:
+      | {
+          apiKey: string | undefined;
+          discoveryApiKey?: string;
+          mode: "oauth";
+          source: "profile";
+          profileId: string;
+        }
+      | undefined;
+    for (const id of ids) {
+      const cred = authStore.profiles[id];
+      if (!cred) {
+        continue;
+      }
+      if (cred.type === "oauth") {
+        oauthCandidate ??= {
+          apiKey: options?.oauthMarker,
+          discoveryApiKey: toDiscoveryApiKey(cred.access),
+          mode: "oauth",
+          source: "profile",
+          profileId: id,
+        };
+        continue;
+      }
+      const resolved = resolveApiKeyFromCredential(cred, env);
+      if (!resolved) {
+        continue;
+      }
+      return {
+        apiKey: resolved.apiKey,
+        discoveryApiKey: resolved.discoveryApiKey,
+        mode: cred.type,
+        source: "profile",
+        profileId: id,
+      };
+    }
+    if (oauthCandidate) {
+      return oauthCandidate;
+    }
+
+    return {
+      apiKey: undefined,
+      discoveryApiKey: undefined,
+      mode: "none",
+      source: "none",
+    };
+  };
   const context: ImplicitProviderContext = {
     ...params,
     authStore,
     env,
     resolveProviderApiKey,
+    resolveProviderAuth,
   };
 
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "simple"));

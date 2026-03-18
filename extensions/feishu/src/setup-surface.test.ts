@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelSetupFlowAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 
 vi.mock("./probe.js", () => ({
   probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),
@@ -56,7 +56,7 @@ async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: st
   });
 }
 
-const feishuConfigureAdapter = buildChannelSetupFlowAdapterFromSetupWizard({
+const feishuConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
   plugin: feishuPlugin,
   wizard: feishuPlugin.setupWizard!,
 });
