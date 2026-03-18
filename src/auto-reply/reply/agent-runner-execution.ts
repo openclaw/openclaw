@@ -23,6 +23,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -527,6 +528,16 @@ export async function runAgentTurnWithFallback(params: {
 
       break;
     } catch (err) {
+      // Suppress drain errors silently — the gateway is about to restart and
+      // the message will be retried on the next boot.  Sending an error reply
+      // for every rejected task during drain floods the user's chat (#30643).
+      if (err instanceof GatewayDrainingError) {
+        defaultRuntime.log(
+          `Suppressed drain error reply for session ${params.sessionKey ?? "unknown"}`,
+        );
+        return { kind: "final", payload: { text: "" } };
+      }
+
       const message = err instanceof Error ? err.message : String(err);
       const isBilling = isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
