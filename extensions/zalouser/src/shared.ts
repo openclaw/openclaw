@@ -1,11 +1,6 @@
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/zalouser";
-import {
-  buildChannelConfigSchema,
-  deleteAccountFromConfigSection,
-  formatAllowFromLowercase,
-  setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk/zalouser";
+import { buildChannelConfigSchema, formatAllowFromLowercase } from "openclaw/plugin-sdk/zalouser";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -26,6 +21,27 @@ export const zalouserMeta = {
   order: 85,
   quickstartAllowFrom: false,
 } satisfies ChannelPlugin<ResolvedZalouserAccount>["meta"];
+
+const zalouserConfigAdapter = createScopedChannelConfigAdapter<ResolvedZalouserAccount>({
+  sectionKey: "zalouser",
+  listAccountIds: listZalouserAccountIds,
+  resolveAccount: (cfg, accountId) => resolveZalouserAccountSync({ cfg, accountId }),
+  defaultAccountId: resolveDefaultZalouserAccountId,
+  clearBaseFields: [
+    "profile",
+    "name",
+    "dmPolicy",
+    "allowFrom",
+    "historyLimit",
+    "groupAllowFrom",
+    "groupPolicy",
+    "groups",
+    "messagePrefix",
+  ],
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(zalouser|zlu):/i }),
+});
 
 export function createZalouserPluginBase(params: {
   setupWizard: NonNullable<ChannelPlugin<ResolvedZalouserAccount>["setupWizard"]>;
@@ -50,34 +66,7 @@ export function createZalouserPluginBase(params: {
     reload: { configPrefixes: ["channels.zalouser"] },
     configSchema: buildChannelConfigSchema(ZalouserConfigSchema),
     config: {
-      listAccountIds: (cfg) => listZalouserAccountIds(cfg),
-      resolveAccount: (cfg, accountId) => resolveZalouserAccountSync({ cfg, accountId }),
-      defaultAccountId: (cfg) => resolveDefaultZalouserAccountId(cfg),
-      setAccountEnabled: ({ cfg, accountId, enabled }) =>
-        setAccountEnabledInConfigSection({
-          cfg,
-          sectionKey: "zalouser",
-          accountId,
-          enabled,
-          allowTopLevel: true,
-        }),
-      deleteAccount: ({ cfg, accountId }) =>
-        deleteAccountFromConfigSection({
-          cfg,
-          sectionKey: "zalouser",
-          accountId,
-          clearBaseFields: [
-            "profile",
-            "name",
-            "dmPolicy",
-            "allowFrom",
-            "historyLimit",
-            "groupAllowFrom",
-            "groupPolicy",
-            "groups",
-            "messagePrefix",
-          ],
-        }),
+      ...zalouserConfigAdapter,
       isConfigured: async (account) => await checkZcaAuthenticated(account.profile),
       describeAccount: (account) => ({
         accountId: account.accountId,
@@ -85,10 +74,6 @@ export function createZalouserPluginBase(params: {
         enabled: account.enabled,
         configured: undefined,
       }),
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        mapAllowFromEntries(resolveZalouserAccountSync({ cfg, accountId }).config.allowFrom),
-      formatAllowFrom: ({ allowFrom }) =>
-        formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(zalouser|zlu):/i }),
     },
     setup: params.setup,
   };

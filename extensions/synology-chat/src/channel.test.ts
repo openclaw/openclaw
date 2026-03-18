@@ -57,6 +57,16 @@ describe("createSynologyChatPlugin", () => {
       const plugin = createSynologyChatPlugin();
       expect(plugin.config.defaultAccountId?.({})).toBe("default");
     });
+
+    it("formats allowFrom entries through the shared adapter", () => {
+      const plugin = createSynologyChatPlugin();
+      expect(
+        plugin.config.formatAllowFrom?.({
+          cfg: {},
+          allowFrom: ["  USER1  ", 42],
+        }),
+      ).toEqual(["user1", "42"]);
+    });
   });
 
   describe("security", () => {

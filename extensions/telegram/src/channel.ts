@@ -55,7 +55,7 @@ import {
   createTelegramPluginBase,
   findTelegramTokenOwnerAccountId,
   formatDuplicateTelegramTokenReason,
-  telegramConfigAccessors,
+  telegramConfigAdapter,
 } from "./shared.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";
@@ -325,7 +325,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
       channelId: "telegram",
       normalize: ({ cfg, accountId, values }) =>
-        telegramConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+        telegramConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
       resolvePaths: (scope) => ({
         readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
         writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
