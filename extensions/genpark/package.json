@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/genpark",
+  "version": "2026.3.18",
+  "description": "OpenClaw GenPark Circle and Marketplace integration plugin",
+  "type": "module",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts"
+  }
+}

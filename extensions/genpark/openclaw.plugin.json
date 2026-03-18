@@ -1,0 +1,13 @@
+{
+  "id": "genpark",
+  "channels": ["genpark"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "genpark_api_token": {
+        "type": "string"
+      }
+    }
+  }
+}
