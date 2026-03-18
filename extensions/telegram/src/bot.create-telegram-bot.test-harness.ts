@@ -7,6 +7,9 @@ import { beforeEach, vi } from "vitest";
 
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
+type LoadConfigMock = MockFn<
+  (configPath?: string, defaultsPath?: string, dotenvPath?: string) => OpenClawConfig
+>;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
@@ -39,14 +42,14 @@ vi.doMock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
-const { loadConfig } = vi.hoisted((): { loadConfig: AnyMock } => ({
+const { loadConfig } = vi.hoisted((): { loadConfig: LoadConfigMock } => ({
   loadConfig: vi.fn(() => ({}) as OpenClawConfig),
 }));
 const { resolveStorePathMock } = vi.hoisted((): { resolveStorePathMock: AnyMock } => ({
   resolveStorePathMock: vi.fn((storePath?: string) => storePath ?? sessionStorePath),
 }));
 
-export function getLoadConfigMock(): AnyMock {
+export function getLoadConfigMock(): LoadConfigMock {
   return loadConfig;
 }
 vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {

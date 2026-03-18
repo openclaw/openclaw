@@ -33,4 +33,5 @@ export function createWebSearchTool(options?: {
 export const __testing = {
   SEARCH_CACHE,
   ...runtimeTesting,
+  resolveSearchProvider: runtimeTesting.resolveWebSearchProviderId,
 };

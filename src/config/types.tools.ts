@@ -465,6 +465,42 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
+      /** @deprecated Legacy Brave top-level API key compatibility. */
+      apiKey?: SecretInput;
+      /** @deprecated Legacy Brave provider-specific config compatibility. */
+      brave?: {
+        apiKey?: SecretInput;
+        mode?: "web" | "llm-context";
+      };
+      /** @deprecated Legacy Firecrawl provider-specific config compatibility. */
+      firecrawl?: {
+        apiKey?: SecretInput;
+        baseUrl?: string;
+      };
+      /** @deprecated Legacy Gemini provider-specific config compatibility. */
+      gemini?: {
+        apiKey?: SecretInput;
+        model?: string;
+      };
+      /** @deprecated Legacy Grok provider-specific config compatibility. */
+      grok?: {
+        apiKey?: SecretInput;
+        baseUrl?: string;
+        model?: string;
+        inlineCitations?: boolean;
+      };
+      /** @deprecated Legacy Kimi provider-specific config compatibility. */
+      kimi?: {
+        apiKey?: SecretInput;
+        baseUrl?: string;
+        model?: string;
+      };
+      /** @deprecated Legacy Perplexity provider-specific config compatibility. */
+      perplexity?: {
+        apiKey?: SecretInput;
+        baseUrl?: string;
+        model?: string;
+      };
     };
     fetch?: {
       /** Enable web fetch tool (default: true). */

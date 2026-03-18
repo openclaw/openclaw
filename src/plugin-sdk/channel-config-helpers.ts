@@ -41,8 +41,11 @@ export function resolveOptionalConfigString(
 }
 
 /** Build the shared allowlist/default target adapter surface for account-scoped channel configs. */
-export function createScopedAccountConfigAccessors<ResolvedAccount>(params: {
-  resolveAccount: (params: { cfg: OpenClawConfig; accountId?: string | null }) => ResolvedAccount;
+export function createScopedAccountConfigAccessors<
+  ResolvedAccount,
+  Config extends OpenClawConfig = OpenClawConfig,
+>(params: {
+  resolveAccount: (params: { cfg: Config; accountId?: string | null }) => ResolvedAccount;
   resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: ResolvedAccount) => string | number | null | undefined;
@@ -51,7 +54,7 @@ export function createScopedAccountConfigAccessors<ResolvedAccount>(params: {
   "resolveAllowFrom" | "formatAllowFrom" | "resolveDefaultTo"
 > {
   const base = {
-    resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
+    resolveAllowFrom: ({ cfg, accountId }: { cfg: Config; accountId?: string | null }) =>
       mapAllowFromEntries(params.resolveAllowFrom(params.resolveAccount({ cfg, accountId }))),
     formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
       params.formatAllowFrom(allowFrom),
@@ -160,7 +163,7 @@ export function createScopedChannelConfigAdapter<
       clearBaseFields: params.clearBaseFields,
       allowTopLevel: params.allowTopLevel,
     }),
-    ...createScopedAccountConfigAccessors<AccessorAccount>({
+    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
       resolveAccount: resolveAccessorAccount,
       resolveAllowFrom: params.resolveAllowFrom,
       formatAllowFrom: params.formatAllowFrom,
@@ -316,7 +319,7 @@ export function createTopLevelChannelConfigAdapter<
       deleteMode: params.deleteMode,
       clearBaseFields: params.clearBaseFields,
     }),
-    ...createScopedAccountConfigAccessors<AccessorAccount>({
+    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
       resolveAccount: resolveAccessorAccount,
       resolveAllowFrom: params.resolveAllowFrom,
       formatAllowFrom: params.formatAllowFrom,
@@ -438,7 +441,7 @@ export function createHybridChannelConfigAdapter<
       clearBaseFields: params.clearBaseFields,
       preserveSectionOnDefaultDelete: params.preserveSectionOnDefaultDelete,
     }),
-    ...createScopedAccountConfigAccessors<AccessorAccount>({
+    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
       resolveAccount: resolveAccessorAccount,
       resolveAllowFrom: params.resolveAllowFrom,
       formatAllowFrom: params.formatAllowFrom,
