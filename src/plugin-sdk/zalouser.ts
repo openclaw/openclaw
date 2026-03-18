@@ -1,9 +1,13 @@
 // Narrow plugin-sdk surface for the bundled zalouser plugin.
 // Keep this list additive and scoped to symbols used under extensions/zalouser.
 
+import {
+  createOptionalChannelSetupAdapter,
+  createOptionalChannelSetupWizard,
+} from "./optional-channel-setup.js";
+
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
-export type { ChannelDock } from "../channels/dock.js";
 export { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 export {
   deleteAccountFromConfigSection,
@@ -11,18 +15,11 @@ export {
 } from "../channels/plugins/config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
-export type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../channels/plugins/onboarding-types.js";
-export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
-  promptAccountId,
-  resolveAccountIdForConfigure,
   setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-wizard-helpers.js";
 export {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
@@ -79,3 +76,17 @@ export {
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { buildBaseAccountStatusSnapshot } from "./status-helpers.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
+
+export const zalouserSetupAdapter = createOptionalChannelSetupAdapter({
+  channel: "zalouser",
+  label: "Zalo Personal",
+  npmSpec: "@openclaw/zalouser",
+  docsPath: "/channels/zalouser",
+});
+
+export const zalouserSetupWizard = createOptionalChannelSetupWizard({
+  channel: "zalouser",
+  label: "Zalo Personal",
+  npmSpec: "@openclaw/zalouser",
+  docsPath: "/channels/zalouser",
+});

@@ -1,9 +1,12 @@
-import { createAccountActionGate } from "../../../src/channels/plugins/account-action-gate.js";
-import { createAccountListHelpers } from "../../../src/channels/plugins/account-helpers.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DiscordAccountConfig, DiscordActionConfig } from "../../../src/config/types.js";
-import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
-import { normalizeAccountId } from "../../../src/routing/session-key.js";
+import {
+  createAccountActionGate,
+  createAccountListHelpers,
+  normalizeAccountId,
+  resolveAccountEntry,
+  type OpenClawConfig,
+  type DiscordAccountConfig,
+  type DiscordActionConfig,
+} from "./runtime-api.js";
 import { resolveDiscordToken } from "./token.js";
 
 export type ResolvedDiscordAccount = {
