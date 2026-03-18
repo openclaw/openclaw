@@ -294,7 +294,8 @@ If `command -v` fails or PATH looks wrong, stop and reply in blocked mode instea
   - `kubectl --context "$K8S_CONTEXT" -n <ns> exec <pod> -- <command>`
   - useful for: env vars (`env | grep`), process state (`ps aux`), filesystem checks (`ls`, `cat`, `df -h`), network (`curl`, `nslookup`), config files
   - prefer logs/describe first; use exec when logs are insufficient or you need live container state
-  - for multi-container pods: `kubectl exec <pod> -c <container> -- <command>`
+  - use exec responsibly: read-only debugging commands preferred, avoid modifying container state in production
+  - for multi-container pods: `kubectl --context "$K8S_CONTEXT" -n <ns> exec <pod> -c <container> -- <command>`
 - If GitHub auth fails:
   - stop retrying clone/fetch loops
   - say exact failing command and continue with local repo/chart evidence if sufficient
