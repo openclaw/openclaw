@@ -68,6 +68,8 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("sbt_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("GRADLE_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("gradle_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("ANT_OPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("ant_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
     expect(isDangerousHostEnvVarName("GRADLE_USER_HOME")).toBe(false);

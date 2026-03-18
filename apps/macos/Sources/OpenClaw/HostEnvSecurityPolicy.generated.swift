@@ -33,7 +33,8 @@ enum HostEnvSecurityPolicy {
         "GLIBC_TUNABLES",
         "MAVEN_OPTS",
         "SBT_OPTS",
-        "GRADLE_OPTS"
+        "GRADLE_OPTS",
+        "ANT_OPTS"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
