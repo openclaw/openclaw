@@ -40,6 +40,7 @@ import {
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-utils.fs.js";
 import type {
   GatewayAgentRow,
@@ -781,7 +782,7 @@ export function resolveSessionModelRef(
       // with provider="openrouter") into { provider: "anthropic" }, discarding
       // the stored OpenRouter provider and causing direct API calls to a
       // provider the user has no credentials for.
-      return { provider: runtimeProvider, model: runtimeModel };
+      return { provider: normalizeProviderId(runtimeProvider), model: runtimeModel };
     }
     const parsedRuntime = parseModelRef(runtimeModel, provider || DEFAULT_PROVIDER);
     if (parsedRuntime) {
@@ -805,7 +806,7 @@ export function resolveSessionModelRef(
       // with providerOverride="openrouter") into { provider: "anthropic" }, discarding
       // the stored OpenRouter provider and causing direct API calls to a
       // provider the user has no credentials for.
-      return { provider: explicitProviderOverride, model: storedModelOverride };
+      return { provider: normalizeProviderId(explicitProviderOverride), model: storedModelOverride };
     }
     // No explicit providerOverride — parse the model string for provider prefix
     const parsedOverride = parseModelRef(storedModelOverride, provider || DEFAULT_PROVIDER);
