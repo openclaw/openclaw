@@ -10,6 +10,7 @@ import {
   buildAllPluginInspectReports,
   buildPluginInspectReport,
   buildPluginStatusReport,
+  formatPluginCompatibilityNotice,
   type PluginStatusReport,
 } from "../../plugins/status.js";
 import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
@@ -33,6 +34,11 @@ function buildPluginInspectJson(params: {
   report: PluginStatusReport;
 }): {
   inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>;
+  compatibilityWarnings: Array<{
+    code: string;
+    severity: string;
+    message: string;
+  }>;
   install: PluginInstallRecord | null;
 } | null {
   const inspect = buildPluginInspectReport({
@@ -45,6 +51,11 @@ function buildPluginInspectJson(params: {
   }
   return {
     inspect,
+    compatibilityWarnings: inspect.compatibility.map((warning) => ({
+      code: warning.code,
+      severity: warning.severity,
+      message: formatPluginCompatibilityNotice(warning),
+    })),
     install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
   };
 }
@@ -54,6 +65,11 @@ function buildAllPluginInspectJson(params: {
   report: PluginStatusReport;
 }): Array<{
   inspect: ReturnType<typeof buildAllPluginInspectReports>[number];
+  compatibilityWarnings: Array<{
+    code: string;
+    severity: string;
+    message: string;
+  }>;
   install: PluginInstallRecord | null;
 }> {
   return buildAllPluginInspectReports({
@@ -61,6 +77,11 @@ function buildAllPluginInspectJson(params: {
     report: params.report,
   }).map((inspect) => ({
     inspect,
+    compatibilityWarnings: inspect.compatibility.map((warning) => ({
+      code: warning.code,
+      severity: warning.severity,
+      message: formatPluginCompatibilityNotice(warning),
+    })),
     install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
   }));
 }

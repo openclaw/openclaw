@@ -1,5 +1,5 @@
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
 import {
   contextEngineCompactMock,
@@ -13,6 +13,7 @@ import {
   resolveMemorySearchConfigMock,
   resolveModelMock,
   resolveSessionAgentIdMock,
+  resetCompactHooksHarnessMocks,
   sanitizeSessionHistoryMock,
   sessionAbortCompactionMock,
   sessionCompactImpl,
@@ -34,6 +35,23 @@ type SessionHookEvent = {
   sessionKey?: string;
   context?: Record<string, unknown>;
 };
+type PostCompactionSyncParams = {
+  reason: string;
+  sessionFiles: string[];
+};
+type PostCompactionSync = (params?: unknown) => Promise<void>;
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
 
 function mockResolvedModel() {
   resolveModelMock.mockReset();
@@ -86,11 +104,15 @@ const sessionHook = (action: string): SessionHookEvent | undefined =>
     return event?.type === "session" && event.action === action;
   })?.[0] as SessionHookEvent | undefined;
 
-beforeEach(async () => {
+beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
   compactEmbeddedPiSessionDirect = loaded.compactEmbeddedPiSessionDirect;
   compactEmbeddedPiSession = loaded.compactEmbeddedPiSession;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
+});
+
+beforeEach(() => {
+  resetCompactHooksHarnessMocks();
 });
 
 describe("compactEmbeddedPiSessionDirect hooks", () => {
@@ -388,11 +410,12 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
   });
 
   it("awaits post-compaction memory sync in await mode when postCompactionForce is true", async () => {
-    let releaseSync: (() => void) | undefined;
-    const syncGate = new Promise<void>((resolve) => {
-      releaseSync = resolve;
+    const syncStarted = createDeferred<PostCompactionSyncParams>();
+    const syncRelease = createDeferred<void>();
+    const sync = vi.fn<PostCompactionSync>(async (params) => {
+      syncStarted.resolve(params as PostCompactionSyncParams);
+      await syncRelease.promise;
     });
-    const sync = vi.fn(() => syncGate);
     getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
     let settled = false;
 
@@ -405,14 +428,12 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     void resultPromise.then(() => {
       settled = true;
     });
-    await vi.waitFor(() => {
-      expect(sync).toHaveBeenCalledWith({
-        reason: "post-compaction",
-        sessionFiles: [TEST_SESSION_FILE],
-      });
+    await expect(syncStarted.promise).resolves.toEqual({
+      reason: "post-compaction",
+      sessionFiles: [TEST_SESSION_FILE],
     });
     expect(settled).toBe(false);
-    releaseSync?.();
+    syncRelease.resolve(undefined);
     const result = await resultPromise;
     expect(result.ok).toBe(true);
     expect(settled).toBe(true);
@@ -435,12 +456,17 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
   });
 
   it("fires post-compaction memory sync without awaiting it in async mode", async () => {
-    const sync = vi.fn(async () => {});
-    let resolveManager: ((value: { manager: { sync: typeof sync } }) => void) | undefined;
-    const managerGate = new Promise<{ manager: { sync: typeof sync } }>((resolve) => {
-      resolveManager = resolve;
+    const sync = vi.fn<PostCompactionSync>(async () => {});
+    const managerRequested = createDeferred<void>();
+    const managerGate = createDeferred<{ manager: { sync: PostCompactionSync } }>();
+    const syncStarted = createDeferred<PostCompactionSyncParams>();
+    sync.mockImplementation(async (params) => {
+      syncStarted.resolve(params as PostCompactionSyncParams);
     });
-    getMemorySearchManagerMock.mockImplementation(() => managerGate);
+    getMemorySearchManagerMock.mockImplementation(async () => {
+      managerRequested.resolve(undefined);
+      return await managerGate.promise;
+    });
     let settled = false;
 
     const resultPromise = compactEmbeddedPiSessionDirect(
@@ -449,26 +475,19 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       }),
     );
 
-    await vi.waitFor(() => {
-      expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
-    });
+    await managerRequested.promise;
     void resultPromise.then(() => {
       settled = true;
     });
-    await vi.waitFor(() => {
-      expect(settled).toBe(true);
-    });
+    await resultPromise;
+    expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(true);
     expect(sync).not.toHaveBeenCalled();
-    resolveManager?.({ manager: { sync } });
-    await managerGate;
-    await vi.waitFor(() => {
-      expect(sync).toHaveBeenCalledWith({
-        reason: "post-compaction",
-        sessionFiles: [TEST_SESSION_FILE],
-      });
+    managerGate.resolve({ manager: { sync } });
+    await expect(syncStarted.promise).resolves.toEqual({
+      reason: "post-compaction",
+      sessionFiles: [TEST_SESSION_FILE],
     });
-    const result = await resultPromise;
-    expect(result.ok).toBe(true);
   });
 
   it("registers the Ollama api provider before compaction", async () => {

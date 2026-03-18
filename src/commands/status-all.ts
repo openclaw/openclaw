@@ -25,6 +25,7 @@ import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { readTailscaleStatusJson } from "../infra/tailscale.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../infra/update-check.js";
+import { buildPluginCompatibilityNotices } from "../plugins/status.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
@@ -238,6 +239,7 @@ export async function statusAllCommand(
             }
           })()
         : null;
+    const pluginCompatibility = buildPluginCompatibilityNotices({ config: cfg });
 
     const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
     const dashboard = controlUiEnabled
@@ -360,6 +362,7 @@ export async function statusAllCommand(
         tailscale,
         tailscaleHttpsUrl,
         skillStatus,
+        pluginCompatibility,
         channelsStatus,
         channelIssues,
         gatewayReachable,
