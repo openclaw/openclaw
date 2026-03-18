@@ -121,6 +121,27 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("still warns when local provider probe is unavailable because the gateway is too old", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: false,
+        error: "gateway memory probe unavailable: unknown method: doctor.memory.status",
+      },
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("gateway reports local embeddings are not ready");
+    expect(message).toContain("unknown method: doctor.memory.status");
+  });
+
   it("does not warn when local provider has an explicit hf: modelPath", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",

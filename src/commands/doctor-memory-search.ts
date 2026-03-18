@@ -9,6 +9,7 @@ import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
 import { hasConfiguredMemorySecretInput } from "../memory/secret-input.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
+import type { GatewayMemoryProbe } from "./doctor-gateway-health.js";
 
 /**
  * Check whether memory search has a usable embedding provider.
@@ -17,11 +18,7 @@ import { resolveUserPath } from "../utils.js";
 export async function noteMemorySearchHealth(
   cfg: OpenClawConfig,
   opts?: {
-    gatewayMemoryProbe?: {
-      checked: boolean;
-      ready: boolean;
-      error?: string;
-    };
+    gatewayMemoryProbe?: GatewayMemoryProbe;
   },
 ): Promise<void> {
   const agentId = resolveDefaultAgentId(cfg);
@@ -218,12 +215,6 @@ function providerEnvVar(provider: string): string {
   }
 }
 
-type GatewayMemoryProbe = {
-  checked: boolean;
-  ready: boolean;
-  error?: string;
-};
-
 function buildGatewayProbeWarning(probe: GatewayMemoryProbe | undefined): string | null {
   if (!probe?.checked || probe.ready) {
     return null;
@@ -235,6 +226,28 @@ function buildGatewayProbeWarning(probe: GatewayMemoryProbe | undefined): string
 }
 
 function isTransientGatewayMemoryProbeUnavailable(probe: GatewayMemoryProbe | undefined): boolean {
+  const detail = extractGatewayMemoryProbeUnavailableDetail(probe);
+  return Boolean(
+    detail &&
+    [
+      /\btimeout\b/i,
+      /\btimed out\b/i,
+      /\bETIMEDOUT\b/i,
+      /\bECONNRESET\b/i,
+      /\bECONNREFUSED\b/i,
+      /\bEPIPE\b/i,
+      /fetch failed/i,
+    ].some((pattern) => pattern.test(detail)),
+  );
+}
+
+function extractGatewayMemoryProbeUnavailableDetail(
+  probe: GatewayMemoryProbe | undefined,
+): string | null {
   const detail = probe?.error?.trim();
-  return Boolean(detail && /^gateway memory probe unavailable:/i.test(detail));
+  if (!detail) {
+    return null;
+  }
+  const match = /^gateway memory probe unavailable:\s*(.+)$/i.exec(detail);
+  return match?.[1]?.trim() || null;
 }
