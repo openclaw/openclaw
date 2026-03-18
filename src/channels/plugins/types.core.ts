@@ -21,6 +21,43 @@ export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
 
 export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
 
+/**
+ * Discovery-time inputs passed to channel action adapters when the core is
+ * asking what an agent should be allowed to see. This is intentionally
+ * smaller than execution context: it carries routing/account scope, but no
+ * tool params or runtime handles.
+ */
+export type ChannelMessageActionDiscoveryContext = {
+  cfg: OpenClawConfig;
+  currentChannelId?: string | null;
+  currentChannelProvider?: string | null;
+  currentThreadTs?: string | null;
+  currentMessageId?: string | number | null;
+  accountId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
+  requesterSenderId?: string | null;
+};
+
+/**
+ * Plugin-owned schema fragments for the shared `message` tool.
+ * `current-channel` means expose the fields only when that provider is the
+ * active runtime channel. `all-configured` keeps the fields visible even while
+ * another configured channel is active, which is useful for cross-channel
+ * sends from cron or isolated agents.
+ */
+export type ChannelMessageToolSchemaContribution = {
+  properties: Record<string, TSchema>;
+  visibility?: "current-channel" | "all-configured";
+};
+
+export type ChannelMessageToolDiscovery = {
+  actions?: readonly ChannelMessageActionName[] | null;
+  capabilities?: readonly ChannelMessageCapability[] | null;
+  schema?: ChannelMessageToolSchemaContribution | ChannelMessageToolSchemaContribution[] | null;
+};
+
 export type ChannelSetupInput = {
   name?: string;
   token?: string;
@@ -424,6 +461,9 @@ export type ChannelMessageActionContext = {
    * never be sourced from tool/model-controlled params.
    */
   requesterSenderId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
   gateway?: {
     url?: string;
     token?: string;
@@ -444,14 +484,38 @@ export type ChannelToolSend = {
 
 export type ChannelMessageActionAdapter = {
   /**
+   * Preferred unified discovery surface for the shared `message` tool.
+   * When provided, this is authoritative and should return the scoped actions,
+   * capabilities, and schema fragments together so they cannot drift.
+   */
+  describeMessageTool?: (
+    params: ChannelMessageActionDiscoveryContext,
+  ) => ChannelMessageToolDiscovery | null | undefined;
+  /**
    * Advertise agent-discoverable actions for this channel.
+   * Legacy fallback used when `describeMessageTool` is not implemented.
    * Keep this aligned with any gated capability checks. Poll discovery is
    * not inferred from `outbound.sendPoll`, so channels that want agents to
    * create polls should include `"poll"` here when enabled.
    */
-  listActions?: (params: { cfg: OpenClawConfig }) => ChannelMessageActionName[];
+  listActions?: (params: ChannelMessageActionDiscoveryContext) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
-  getCapabilities?: (params: { cfg: OpenClawConfig }) => readonly ChannelMessageCapability[];
+  getCapabilities?: (
+    params: ChannelMessageActionDiscoveryContext,
+  ) => readonly ChannelMessageCapability[];
+  /**
+   * Extend the shared `message` tool schema with channel-owned fields.
+   * Legacy fallback used when `describeMessageTool` is not implemented.
+   * Keep this aligned with `listActions` and `getCapabilities` so the exposed
+   * schema matches what the channel can actually execute in the current scope.
+   */
+  getToolSchema?: (
+    params: ChannelMessageActionDiscoveryContext,
+  ) =>
+    | ChannelMessageToolSchemaContribution
+    | ChannelMessageToolSchemaContribution[]
+    | null
+    | undefined;
   requiresTrustedRequesterSender?: (params: {
     action: ChannelMessageActionName;
     toolContext?: ChannelThreadingToolContext;
