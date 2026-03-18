@@ -1,0 +1,60 @@
+{
+  "unit": {
+    "isolated": [
+      {
+        "file": "src/plugins/contracts/runtime.contract.test.ts",
+        "reason": "Async runtime imports + provider refresh seams; keep out of the shared lane."
+      },
+      {
+        "file": "src/security/temp-path-guard.test.ts",
+        "reason": "Filesystem guard scans are sensitive to contention."
+      },
+      {
+        "file": "src/infra/git-commit.test.ts",
+        "reason": "Mutates process.cwd() and core loader seams."
+      },
+      {
+        "file": "extensions/imessage/src/monitor.shutdown.unhandled-rejection.test.ts",
+        "reason": "Touches process-level unhandledRejection listeners."
+      }
+    ],
+    "singletonIsolated": [
+      {
+        "file": "src/cli/command-secret-gateway.test.ts",
+        "reason": "Clean in isolation, but can hang after sharing the broad lane."
+      }
+    ],
+    "threadSingleton": [
+      {
+        "file": "src/channels/plugins/actions/actions.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/infra/outbound/deliver.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/infra/outbound/deliver.lifecycle.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/infra/outbound/message.channels.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/infra/outbound/message-action-runner.poll.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      },
+      {
+        "file": "src/tts/tts.test.ts",
+        "reason": "Terminates cleanly under threads, but not process forks on this host."
+      }
+    ],
+    "vmForkSingleton": [
+      {
+        "file": "src/channels/plugins/contracts/inbound.telegram.contract.test.ts",
+        "reason": "Needs the vmForks lane when targeted."
+      }
+    ]
+  }
+}
