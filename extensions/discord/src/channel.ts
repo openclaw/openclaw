@@ -77,6 +77,8 @@ function formatDiscordIntents(intents?: {
 }
 
 const discordMessageActions: ChannelMessageActionAdapter = {
+  describeMessageTool: (ctx) =>
+    getDiscordRuntime().channel.discord.messageActions?.describeMessageTool?.(ctx) ?? null,
   listActions: (ctx) =>
     getDiscordRuntime().channel.discord.messageActions?.listActions?.(ctx) ?? [],
   getCapabilities: (ctx) =>
