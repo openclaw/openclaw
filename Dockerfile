@@ -96,7 +96,15 @@ RUN pnpm ui:build
 # Prune dev dependencies and strip build-only metadata before copying
 # runtime assets into the final image.
 FROM build AS runtime-assets
+ARG OPENCLAW_EXTENSIONS
 RUN CI=true pnpm prune --prod && \
+    if [ -n "$OPENCLAW_EXTENSIONS" ]; then \
+      for ext in $OPENCLAW_EXTENSIONS; do \
+        if [ -f "extensions/$ext/package.json" ]; then \
+          npm install --prefix "extensions/$ext" --omit=dev --silent; \
+        fi; \
+      done; \
+    fi && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete
 
 # ── Runtime base images ─────────────────────────────────────────
@@ -145,6 +153,10 @@ COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
 COPY --from=runtime-assets --chown=node:node /app/extensions ./extensions
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
+
+# In npm-installed Docker images, prefer the copied source extension tree for
+# bundled discovery so package metadata that points at source entries stays valid.
+ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/app/extensions
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a

@@ -392,6 +392,16 @@ describe("channel import guardrails", () => {
     }
   });
 
+  it("keeps bundled extension source files off legacy core send-deps src imports", () => {
+    const legacyCoreSendDepsImport = /["'][^"']*src\/infra\/outbound\/send-deps\.[cm]?[jt]s["']/;
+    for (const file of collectExtensionSourceFiles()) {
+      const text = readFileSync(file, "utf8");
+      expect(text, `${file} should not import src/infra/outbound/send-deps.*`).not.toMatch(
+        legacyCoreSendDepsImport,
+      );
+    }
+  });
+
   it("keeps core production files off extension private src imports", () => {
     for (const file of collectCoreSourceFiles()) {
       const text = readFileSync(file, "utf8");
