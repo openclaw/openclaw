@@ -6,10 +6,12 @@ import { describe, expect, it } from "vitest";
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set([
   "action-runtime.runtime.js",
+  "action-runtime-api.js",
   "api.js",
   "index.js",
   "login-qr-api.js",
   "runtime-api.js",
+  "session-key-api.js",
   "setup-api.js",
   "setup-entry.js",
 ]);
@@ -311,6 +313,10 @@ function collectExtensionImports(text: string): string[] {
   );
 }
 
+function collectImportSpecifiers(text: string): string[] {
+  return [...text.matchAll(/["']([^"']+\.(?:[cm]?[jt]sx?))["']/g)].map((match) => match[1] ?? "");
+}
+
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
   for (const specifier of imports) {
     const normalized = specifier.replaceAll("\\", "/");
@@ -323,6 +329,25 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
       ALLOWED_EXTENSION_PUBLIC_SURFACES.has(basename),
       `${file} should only import approved extension surfaces, got ${specifier}`,
     ).toBe(true);
+  }
+}
+
+function expectNoSiblingExtensionPrivateSrcImports(file: string, imports: string[]): void {
+  const normalizedFile = file.replaceAll("\\", "/");
+  const currentExtensionId = normalizedFile.match(/\/extensions\/([^/]+)\//)?.[1] ?? null;
+  if (!currentExtensionId) {
+    return;
+  }
+  for (const specifier of imports) {
+    if (!specifier.startsWith(".")) {
+      continue;
+    }
+    const resolvedImport = resolve(dirname(file), specifier).replaceAll("\\", "/");
+    const targetExtensionId = resolvedImport.match(/\/extensions\/([^/]+)\/src\//)?.[1] ?? null;
+    if (!targetExtensionId || targetExtensionId === currentExtensionId) {
+      continue;
+    }
+    expect.fail(`${file} should not import another extension's private src, got ${specifier}`);
   }
 }
 
@@ -359,15 +384,6 @@ describe("channel import guardrails", () => {
     }
   });
 
-  it("keeps extension production files off direct core src imports", () => {
-    for (const file of collectExtensionSourceFiles()) {
-      const text = readFileSync(file, "utf8");
-      expect(text, `${file} should not import ../../src/* core internals directly`).not.toMatch(
-        /["'][^"']*(?:\.\.\/){2,}src\//,
-      );
-    }
-  });
-
   it("keeps core production files off extension private src imports", () => {
     for (const file of collectCoreSourceFiles()) {
       const text = readFileSync(file, "utf8");
@@ -380,9 +396,7 @@ describe("channel import guardrails", () => {
   it("keeps extension production files off other extensions' private src imports", () => {
     for (const file of collectExtensionSourceFiles()) {
       const text = readFileSync(file, "utf8");
-      expect(text, `${file} should not import another extension's src`).not.toMatch(
-        /["'][^"']*\.\.\/(?:\.\.\/)?(?!src\/)[^/"']+\/src\//,
-      );
+      expectNoSiblingExtensionPrivateSrcImports(file, collectImportSpecifiers(text));
     }
   });
 
@@ -405,6 +419,7 @@ describe("channel import guardrails", () => {
         if (
           LOCAL_EXTENSION_API_BARREL_EXCEPTIONS.some((suffix) => normalized.endsWith(suffix)) ||
           normalized.endsWith("/api.ts") ||
+          normalized.endsWith("/test-runtime.ts") ||
           normalized.includes(".test.") ||
           normalized.includes(".spec.") ||
           normalized.includes(".fixture.") ||

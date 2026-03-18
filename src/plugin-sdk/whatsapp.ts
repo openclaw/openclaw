@@ -52,7 +52,7 @@ export {
 export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-} from "../../extensions/whatsapp/src/group-policy.js";
+} from "../../extensions/whatsapp/api.js";
 export {
   createWhatsAppOutboundBase,
   resolveWhatsAppGroupIntroHint,

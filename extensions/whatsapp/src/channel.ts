@@ -12,6 +12,9 @@ import {
   DEFAULT_ACCOUNT_ID,
   formatWhatsAppConfigAllowFromEntries,
   readStringParam,
+  resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
   resolveWhatsAppOutboundTarget,
   resolveWhatsAppHeartbeatRecipients,
   resolveWhatsAppMentionStripRegexes,
@@ -48,6 +51,11 @@ function parseWhatsAppExplicitTarget(raw: string) {
 
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   ...createWhatsAppPluginBase({
+    groups: {
+      resolveRequireMention: resolveWhatsAppGroupRequireMention,
+      resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
+      resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
+    },
     setupWizard: whatsappSetupWizardProxy,
     setup: whatsappSetupAdapter,
     isConfigured: async (account) =>
