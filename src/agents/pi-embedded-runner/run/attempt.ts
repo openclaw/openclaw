@@ -2430,6 +2430,7 @@ export async function runEmbeddedAttempt(
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
           conversationId: params.messageTo ?? undefined,
+          accountId: params.agentAccountId ?? undefined,
         };
         const hookResult = await resolvePromptBuildHookResult({
           prompt: params.prompt,
