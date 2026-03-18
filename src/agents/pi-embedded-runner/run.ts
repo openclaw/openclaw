@@ -851,7 +851,11 @@ export async function runEmbeddedPiAgent(
       ): AuthProfileFailureReason | null => {
         // Timeouts are transport/model-path failures, not auth health signals,
         // so they should not persist auth-profile failure state.
-        if (!failoverReason || failoverReason === "timeout") {
+        // Overloaded errors (529) are transient server-side capacity issues —
+        // the auth profile itself is healthy.  Marking it as failed causes an
+        // exponential cooldown (60s → 5min → 25min → 1h) that makes the
+        // profile unusable long after the provider has recovered.
+        if (!failoverReason || failoverReason === "timeout" || failoverReason === "overloaded") {
           return null;
         }
         return failoverReason;
