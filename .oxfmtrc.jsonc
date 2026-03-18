@@ -16,6 +16,7 @@
     "dist/",
     "docs/_layouts/",
     "node_modules/",
+    ".planning/",
     "patches/",
     "pnpm-lock.yaml/",
     "src/gateway/server-methods/CLAUDE.md",
