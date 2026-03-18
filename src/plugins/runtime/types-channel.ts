@@ -197,7 +197,7 @@ export type PluginRuntimeChannel = {
     probeSignal: typeof import("../../../extensions/signal/runtime-api.js").probeSignal;
     sendMessageSignal: typeof import("../../../extensions/signal/runtime-api.js").sendMessageSignal;
     monitorSignalProvider: typeof import("../../../extensions/signal/runtime-api.js").monitorSignalProvider;
-    messageActions: typeof import("../../channels/plugins/actions/signal.js").signalMessageActions;
+    messageActions: typeof import("../../../extensions/signal/runtime-api.js").signalMessageActions;
   };
   imessage: {
     monitorIMessageProvider: typeof import("../../../extensions/imessage/runtime-api.js").monitorIMessageProvider;
