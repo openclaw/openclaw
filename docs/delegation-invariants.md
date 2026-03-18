@@ -2,7 +2,7 @@
 
 > Status: **Initial draft for discussion** (docs-only).
 >
-> Goal: define a minimal “thin waist” invariant layer + stable hook points to keep runtimes **agent-light** as agents shift from assisting to delegated execution.
+> Goal: define a minimal "thin waist" invariant layer + stable hook points to keep runtimes **agent-light** as agents shift from assisting to delegated execution.
 >
 > Non-goal: standardize all tools, workflows, UIs, or provider integrations.
 
@@ -10,15 +10,16 @@
 
 ## Motivation
 
-As interaction shifts from **Human–App–Cloud** to **Human–Agent–Cloud**, several details that used to be “in-app UX” become **cross-ecosystem invariants**:
+As interaction shifts from **Human-App-Cloud** to **Human-Agent-Cloud**, several details that used to be "in-app UX" become **cross-ecosystem invariants**:
 
 - **Confirm** must represent execution authority (scope/limits/TTL) and be revocable, not a generic click.
 - **Stop/Takeover** must be deterministic (stop step vs stop chain) and specify takeover semantics.
 - **Receipts** must anchor accountability before irreversible commits.
 
 Without a thin waist, ecosystems drift to:
-1) **Fragmentation / lock-in** (each runtime defines its own semantics)
-2) **Core creep / bloat** (policies/adapters accumulate until the runtime becomes the next platform/OS)
+
+1. **Fragmentation / lock-in** (each runtime defines its own semantics)
+2. **Core creep / bloat** (policies/adapters accumulate until the runtime becomes the next platform/OS)
 
 ---
 
@@ -43,7 +44,8 @@ This draft defines only **three primitives** and their **minimal required fields
 
 **Goal:** encode bounded, revocable authority with explicit scope.
 
-Required fields (minimal):
+### Required fields (minimal)
+
 - `confirm_id`
 - `timestamp` (ISO-8601)
 - `scope` (what is authorized)
@@ -52,11 +54,14 @@ Required fields (minimal):
 - `revocable` (boolean)
 - `risk_level` (e.g., `"low" | "medium" | "high"`)
 
-Scope (minimal structure):
+### Scope (minimal structure)
+
 - `workflow_id`
 - `step_ids` (optional; if omitted, applies to a workflow scope)
 - `targets` (optional; resource identifiers)
 - `capabilities` (optional; tool categories or verbs)
+
+### Minimal JSON example
 
 ```json
 {
@@ -83,18 +88,22 @@ Scope (minimal structure):
 
 ## STOP / TAKEOVER (deterministic intervention)
 
-**Goal:** make “Stop” deterministic and auditably scoped in a multi-step delegated workflow.
+**Goal:** make "Stop" deterministic and auditably scoped in a multi-step delegated workflow.
 
-Required fields (minimal):
+### Required fields (minimal)
+
 - `request_id`
 - `timestamp` (ISO-8601)
 - `workflow_id`
 - `stop_scope` (`"step" | "chain"`)
 
-Optional fields (recommended):
+### Optional fields (recommended)
+
 - `step_id` (required if `stop_scope="step"`)
 - `takeover_mode` (`"human" | "pause" | "delegate_to_other_agent"`)
 - `reason`
+
+### Minimal JSON example
 
 ```json
 {
@@ -114,7 +123,8 @@ Optional fields (recommended):
 
 **Goal:** create an auditable record before irreversible commits.
 
-Required fields (minimal):
+### Required fields (minimal)
+
 - `receipt_id`
 - `timestamp` (ISO-8601)
 - `actor` (runtime/gateway/agent identity)
@@ -124,11 +134,14 @@ Required fields (minimal):
 - `authorization_ref` (e.g., `confirm_id`)
 - `result` (`"success" | "failure" | "partial"`)
 
-Optional fields (recommended):
+### Optional fields (recommended)
+
 - `step_id`
 - `side_effects` (summary)
 - `evidence_refs` (links to logs/txns/screenshots)
 - `error` (if `result="failure"`)
+
+### Minimal JSON example
 
 ```json
 {
@@ -157,6 +170,7 @@ Optional fields (recommended):
 **Goal:** allow governance/policy/auditing to be pluggable or externalizable (service/cloud-side) rather than accumulating inside core.
 
 Suggested hooks (names are illustrative):
+
 - `before_confirm(confirm_request)`
 - `after_confirm(confirm_record)`
 - `before_execute(action_request)`
@@ -166,6 +180,7 @@ Suggested hooks (names are illustrative):
 - `emit_receipt(receipt_record)`
 
 Notes:
+
 - This is **not** attempting to define a universal tool protocol.
 - Tool routing protocols (e.g., MCP/A2A/tool routers) help integration but do not guarantee these invariants.
 - UI fallback can remain a universal path for closed/legacy systems, while structured execution can use faster paths where available.
