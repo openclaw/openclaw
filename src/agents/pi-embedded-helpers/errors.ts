@@ -855,7 +855,9 @@ function isJsonApiInternalServerError(raw: string): boolean {
   const value = raw.toLowerCase();
   // Anthropic often wraps transient 500s in JSON payloads like:
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
-  return value.includes('"type":"api_error"') && value.includes("internal server error");
+  // We now check for any api_error type, not just "internal server error" messages,
+  // since providers like MiniMax may return different error messages (e.g., "unknown error, 520")
+  return value.includes('"type":"api_error"');
 }
 
 export function parseImageDimensionError(raw: string): {
