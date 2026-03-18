@@ -9,7 +9,6 @@ import {
   appendBootstrapPromptWarning,
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
-  type BootstrapBudgetAnalysis,
 } from "./bootstrap-budget.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { buildToolSummaryMap } from "./tool-summaries.js";
