@@ -23,7 +23,9 @@ export function formatNextRun(ms?: number | null) {
 }
 
 export function formatSessionTokens(row: GatewaySessionRow) {
-  if (row.totalTokens == null) {
+  // When totalTokensFresh is false, totalTokens may be stale/historical
+  // (e.g., accumulated from previous compaction) and should not be displayed.
+  if (row.totalTokens == null || row.totalTokensFresh === false) {
     return "n/a";
   }
   const total = row.totalTokens ?? 0;
