@@ -1,7 +1,10 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-core";
 
-const buildPromptSection: MemoryPromptSectionBuilder = ({ availableTools, citationsMode }) => {
+export const buildPromptSection: MemoryPromptSectionBuilder = ({
+  availableTools,
+  citationsMode,
+}) => {
   if (!availableTools.has("memory_search") && !availableTools.has("memory_get")) {
     return [];
   }
