@@ -44,7 +44,6 @@ import {
   setTheme as setThemeInternal,
   setThemeMode as setThemeModeInternal,
   onPopState as onPopStateInternal,
-  applyBorderRadius,
 } from "./app-settings.ts";
 import {
   resetToolStream as resetToolStreamInternal,
@@ -564,7 +563,6 @@ export class OpenClawApp extends LitElement {
   }
 
   setBorderRadius(value: number) {
-    applyBorderRadius(value);
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
       ...this.settings,
       borderRadius: value,
