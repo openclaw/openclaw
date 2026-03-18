@@ -1,10 +1,14 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { WebSearchProviderPlugin } from "../../plugins/types.js";
-import { createWebSearchTool as createLegacyWebSearchTool } from "./web-search-core.js";
 
 type ConfiguredWebSearchProvider = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]
 >["provider"];
+
+export type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
+  ? Web extends { search?: infer Search }
+    ? Search
+    : undefined
+  : undefined;
 
 function cloneWithDescriptors<T extends object>(value: T | undefined): T {
   const next = Object.create(Object.getPrototypeOf(value ?? {})) as T;
@@ -14,7 +18,7 @@ function cloneWithDescriptors<T extends object>(value: T | undefined): T {
   return next;
 }
 
-function withForcedProvider(
+export function withForcedProvider(
   config: OpenClawConfig | undefined,
   provider: ConfiguredWebSearchProvider,
 ): OpenClawConfig {
@@ -29,33 +33,6 @@ function withForcedProvider(
   next.tools = tools;
 
   return next;
-}
-
-export function createPluginBackedWebSearchProvider(
-  provider: Omit<WebSearchProviderPlugin, "createTool"> & {
-    id: ConfiguredWebSearchProvider;
-  },
-): WebSearchProviderPlugin {
-  return {
-    ...provider,
-    createTool: (ctx) => {
-      const tool = createLegacyWebSearchTool({
-        config: withForcedProvider(ctx.config, provider.id),
-        runtimeWebSearch: ctx.runtimeMetadata,
-      });
-      if (!tool) {
-        return null;
-      }
-      return {
-        description: tool.description,
-        parameters: tool.parameters as Record<string, unknown>,
-        execute: async (args) => {
-          const result = await tool.execute(`web-search:${provider.id}`, args);
-          return (result.details ?? {}) as Record<string, unknown>;
-        },
-      };
-    },
-  };
 }
 
 export function getTopLevelCredentialValue(searchConfig?: Record<string, unknown>): unknown {
@@ -91,4 +68,25 @@ export function setScopedCredentialValue(
     return;
   }
   (scoped as Record<string, unknown>).apiKey = value;
+}
+
+export function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
+  const search = cfg?.tools?.web?.search;
+  if (!search || typeof search !== "object") {
+    return undefined;
+  }
+  return search as WebSearchConfig;
+}
+
+export function resolveSearchEnabled(params: {
+  search?: WebSearchConfig;
+  sandboxed?: boolean;
+}): boolean {
+  if (typeof params.search?.enabled === "boolean") {
+    return params.search.enabled;
+  }
+  if (params.sandboxed) {
+    return true;
+  }
+  return true;
 }

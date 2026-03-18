@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/plugin-runtime";
+import { enablePluginInConfig } from "../../../src/plugins/enable.js";
+import type { WebSearchProviderPlugin } from "../../../src/plugins/types.js";
 import { runFirecrawlSearch } from "./firecrawl-client.js";
 
 const GenericFirecrawlSearchSchema = Type.Object(
@@ -46,8 +47,11 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://www.firecrawl.dev/",
     docsUrl: "https://docs.openclaw.ai/tools/firecrawl",
     autoDetectOrder: 60,
+    credentialPath: "tools.web.search.firecrawl.apiKey",
+    inactiveSecretPaths: ["tools.web.search.firecrawl.apiKey"],
     getCredentialValue: getScopedCredentialValue,
     setCredentialValue: setScopedCredentialValue,
+    applySelectionConfig: (config) => enablePluginInConfig(config, "firecrawl").config,
     createTool: (ctx) => ({
       description:
         "Search the web using Firecrawl. Returns structured results with snippets from Firecrawl Search. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
