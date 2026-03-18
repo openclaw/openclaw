@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/zalo";
 import { resolveZaloAccount } from "./accounts.js";
 import type { ZaloFetch } from "./api.js";
 import { sendMessage, sendPhoto } from "./api.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { resolveZaloToken } from "./token.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 export type ZaloSendOptions = {
   token?: string;
