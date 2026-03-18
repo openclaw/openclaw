@@ -213,29 +213,24 @@ type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   groups?: ChannelPlugin<TResolvedAccount>["groups"];
 };
 
-type ChannelPluginBaseOptionalKeys =
-  | "setupWizard"
-  | "capabilities"
-  | "agentPrompt"
-  | "streaming"
-  | "reload"
-  | "gatewayMethods"
-  | "configSchema"
-  | "config"
-  | "security"
-  | "groups";
-
-type CreatedChannelPluginBase<
-  TResolvedAccount,
-  TOptions extends CreateChannelPluginBaseOptions<TResolvedAccount> =
-    CreateChannelPluginBaseOptions<TResolvedAccount>,
-> = Pick<ChannelPlugin<TResolvedAccount>, "id" | "meta" | "setup"> & {
-  [K in Extract<
-    ChannelPluginBaseOptionalKeys,
-    keyof TOptions
-  >]-?: ChannelPlugin<TResolvedAccount>[K];
-} & Partial<
-    Pick<ChannelPlugin<TResolvedAccount>, Exclude<ChannelPluginBaseOptionalKeys, keyof TOptions>>
+type CreatedChannelPluginBase<TResolvedAccount> = Pick<
+  ChannelPlugin<TResolvedAccount>,
+  "id" | "meta" | "setup"
+> &
+  Partial<
+    Pick<
+      ChannelPlugin<TResolvedAccount>,
+      | "setupWizard"
+      | "capabilities"
+      | "agentPrompt"
+      | "streaming"
+      | "reload"
+      | "gatewayMethods"
+      | "configSchema"
+      | "config"
+      | "security"
+      | "groups"
+    >
   >;
 
 function resolvePluginConfigSchema(
@@ -295,10 +290,9 @@ export function defineSetupPluginEntry<TPlugin>(plugin: TPlugin) {
 }
 
 // Shared base object for channel plugins that only need to override a few optional surfaces.
-export function createChannelPluginBase<
-  TResolvedAccount,
-  TOptions extends CreateChannelPluginBaseOptions<TResolvedAccount>,
->(params: TOptions): CreatedChannelPluginBase<TResolvedAccount, TOptions> {
+export function createChannelPluginBase<TResolvedAccount>(
+  params: CreateChannelPluginBaseOptions<TResolvedAccount>,
+): CreatedChannelPluginBase<TResolvedAccount> {
   return {
     id: params.id,
     meta: {
@@ -316,5 +310,5 @@ export function createChannelPluginBase<
     ...(params.security ? { security: params.security } : {}),
     ...(params.groups ? { groups: params.groups } : {}),
     setup: params.setup,
-  } as CreatedChannelPluginBase<TResolvedAccount, TOptions>;
+  } as CreatedChannelPluginBase<TResolvedAccount>;
 }
