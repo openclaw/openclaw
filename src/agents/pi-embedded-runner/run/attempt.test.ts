@@ -16,6 +16,7 @@ import {
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
   wrapStreamFnRepairMalformedToolCallArguments,
+  wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
@@ -776,6 +777,63 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCallB.name).toBe("write");
     expect(finalToolCallA.id).toBe("edit:22");
     expect(finalToolCallB.id).toBe("call_auto_1");
+  });
+});
+
+describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
+  it("drops malformed assistant tool calls from outbound context before provider replay", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        stopReason: "error",
+        content: [{ type: "toolCall", name: "read", arguments: {} }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+    expect(seenContext.messages).not.toBe(messages);
+  });
+
+  it("preserves outbound context when all assistant tool calls are valid", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toBe(messages);
   });
 });
 

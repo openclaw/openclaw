@@ -81,7 +81,10 @@ import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
+import {
+  sanitizeToolCallInputs,
+  sanitizeToolUseResultPairing,
+} from "../../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
@@ -793,6 +796,30 @@ export function wrapStreamFnTrimToolCallNames(
       );
     }
     return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames);
+  };
+}
+
+export function wrapStreamFnSanitizeMalformedToolCalls(
+  baseFn: StreamFn,
+  allowedToolNames?: Set<string>,
+): StreamFn {
+  return (model, context, options) => {
+    const ctx = context as unknown as { messages?: unknown };
+    const messages = ctx?.messages;
+    if (!Array.isArray(messages)) {
+      return baseFn(model, context, options);
+    }
+    const sanitized = sanitizeToolCallInputs(messages as AgentMessage[], {
+      allowedToolNames,
+    });
+    if (sanitized === messages) {
+      return baseFn(model, context, options);
+    }
+    const nextContext = {
+      ...(context as unknown as Record<string, unknown>),
+      messages: sanitized,
+    } as unknown;
+    return baseFn(model, nextContext as typeof context, options);
   };
 }
 
@@ -2100,6 +2127,10 @@ export async function runEmbeddedAttempt(
       // Some models emit tool names with surrounding whitespace (e.g. " read ").
       // pi-agent-core dispatches tool calls with exact string matching, so normalize
       // names on the live response stream before tool execution.
+      activeSession.agent.streamFn = wrapStreamFnSanitizeMalformedToolCalls(
+        activeSession.agent.streamFn,
+        allowedToolNames,
+      );
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
         allowedToolNames,
