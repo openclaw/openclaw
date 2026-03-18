@@ -94,6 +94,9 @@ vi.mock("../../pi-embedded-subscribe.js", () => ({
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: hoisted.getGlobalHookRunnerMock,
+  initializeGlobalHookRunner: () => {},
+  getGlobalPluginRegistry: () => null,
+  resetGlobalHookRunner: () => {},
 }));
 
 vi.mock("../../../infra/machine-name.js", () => ({
@@ -210,6 +213,13 @@ vi.mock("../../openai-ws-stream.js", () => ({
 
 vi.mock("../../anthropic-payload-log.js", () => ({
   createAnthropicPayloadLogger: () => undefined,
+}));
+
+vi.mock("../../../image-generation/runtime.js", () => ({
+  listRuntimeImageGenerationProviders: () => [],
+  generateImage: async () => {
+    throw new Error("generateImage not implemented in this test");
+  },
 }));
 
 vi.mock("../../cache-trace.js", () => ({
@@ -634,6 +644,98 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
         timestamp: expect.any(Number),
       }),
     );
+  });
+});
+
+describe("runEmbeddedAttempt rate-limit retry lifecycle", () => {
+  const tempPaths: string[] = [];
+
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness({
+      subscribeImpl: () => {
+        const unsubscribe = vi.fn();
+        return { ...createSubscriptionMock(), unsubscribe };
+      },
+    });
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
+  });
+
+  it("waits for SDK waitForRetry() before unsubscribing on final 429", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rl-workspace-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rl-agent-dir-"));
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
+    tempPaths.push(workspaceDir, agentDir);
+    await fs.writeFile(sessionFile, "", "utf8");
+
+    let resolveRetry: (() => void) | null = null;
+    const retryPromise = new Promise<void>((resolve) => {
+      resolveRetry = resolve;
+    });
+
+    hoisted.createAgentSessionMock.mockImplementation(async () => {
+      const session = createDefaultEmbeddedSession({
+        prompt: async (s) => {
+          s.messages = [
+            ...s.messages,
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "" }],
+              stopReason: "error",
+              errorMessage: "429 qpm exceeded",
+              provider: "openai",
+              model: "gpt-test",
+              usage: { input: 1, output: 0, total: 1 },
+            },
+          ];
+        },
+      });
+      (session.agent as unknown as { waitForRetry?: () => Promise<void> }).waitForRetry = () =>
+        retryPromise;
+      return { session };
+    });
+
+    const runPromise = runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:main",
+      sessionFile,
+      workspaceDir,
+      agentDir,
+      config: {},
+      prompt: "hello",
+      timeoutMs: 10_000,
+      runId: "run-rate-limit",
+      provider: "openai",
+      modelId: "gpt-test",
+      model: testModel,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+    });
+
+    // Let the attempt set up the embedded subscription + reach the retry wait.
+    // If it unsubscribed early, we'd see it here.
+    for (let i = 0; i < 10; i += 1) {
+      if (hoisted.subscribeEmbeddedPiSessionMock.mock.calls.length > 0) {
+        break;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.resolve();
+    }
+    const firstSubscription = hoisted.subscribeEmbeddedPiSessionMock.mock.results[0]?.value as
+      | { unsubscribe?: ReturnType<typeof vi.fn> }
+      | undefined;
+    expect(firstSubscription?.unsubscribe).toBeDefined();
+    expect(firstSubscription?.unsubscribe).not.toHaveBeenCalled();
+
+    resolveRetry?.();
+    const result = await runPromise;
+    expect(result.promptError).toBeNull();
+    expect(firstSubscription?.unsubscribe).toHaveBeenCalledTimes(1);
   });
 });
 

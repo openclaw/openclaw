@@ -66,6 +66,7 @@ import { createBundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
+  isRateLimitAssistantError,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
@@ -161,6 +162,40 @@ type PromptBuildHookRunner = {
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
 const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
+
+type RetryAwareAgent = {
+  waitForRetry?: (() => Promise<void>) | undefined;
+};
+
+const DEFAULT_WAIT_FOR_RETRY_TIMEOUT_MS = 30_000;
+
+async function waitForAgentRetryBestEffort(
+  agent: RetryAwareAgent | null | undefined,
+  timeoutMs: number,
+): Promise<void> {
+  const waitForRetry = agent?.waitForRetry;
+  if (typeof waitForRetry !== "function") {
+    return;
+  }
+  const resolved = Symbol("resolved");
+  const timedOut = Symbol("timeout");
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      waitForRetry.call(agent).then(() => resolved),
+      new Promise<symbol>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(timedOut), timeoutMs);
+        timeoutHandle.unref?.();
+      }),
+    ]);
+  } catch {
+    // Best-effort during cleanup.
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
 
 // Persist a hidden context reminder so the next turn knows why the runner stopped.
 function buildSessionsYieldContextMessage(message: string): string {
@@ -2711,6 +2746,34 @@ export async function runEmbeddedAttempt(
         }
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
+
+        // pi-agent-core can schedule rate-limit retries that fire after the initial
+        // prompt call resolves (especially on the final model call). If we tear down
+        // the embedded subscription/run handle immediately, the eventual successful
+        // retry response has no live reply pipeline and is silently dropped (#49645).
+        //
+        // Best-effort: when the last assistant message is a rate-limit error, wait
+        // briefly for the SDK's retry lifecycle to settle (if available), then
+        // refresh the snapshot so delivery/subscribers observe the final result.
+        const lastAssistantPreRetry = messagesSnapshot
+          .slice()
+          .toReversed()
+          .find(
+            (m) => m && typeof m === "object" && (m as { role?: unknown }).role === "assistant",
+          );
+        const shouldWaitForRateLimitRetry =
+          !aborted &&
+          !promptError &&
+          lastAssistantPreRetry &&
+          isRateLimitAssistantError(lastAssistantPreRetry as never);
+        if (shouldWaitForRateLimitRetry) {
+          await waitForAgentRetryBestEffort(
+            activeSession.agent as unknown as RetryAwareAgent,
+            DEFAULT_WAIT_FOR_RETRY_TIMEOUT_MS,
+          );
+          messagesSnapshot = activeSession.messages.slice();
+          sessionIdUsed = activeSession.sessionId;
+        }
 
         if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
           try {
