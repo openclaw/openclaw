@@ -5,10 +5,12 @@ import { describe, expect, it } from "vitest";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ALLOWED_EXTENSION_PUBLIC_SEAMS = new Set([
+  "action-runtime.runtime.js",
   "api.js",
   "index.js",
   "login-qr-api.js",
   "runtime-api.js",
+  "setup-api.js",
   "setup-entry.js",
 ]);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
@@ -24,7 +26,6 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "msteams",
   "nostr",
   "nextcloud-talk",
-  "nostr",
   "signal",
   "slack",
   "synology-chat",
@@ -117,19 +118,29 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
 ];
 
 const LOCAL_EXTENSION_API_BARREL_GUARDS = [
+  "bluebubbles",
   "device-pair",
   "diagnostics-otel",
   "diffs",
+  "feishu",
   "llm-task",
   "line",
+  "matrix",
   "mattermost",
   "memory-lancedb",
+  "msteams",
   "nextcloud-talk",
   "synology-chat",
   "talk-voice",
   "thread-ownership",
   "tlon",
   "voice-call",
+] as const;
+
+const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
+  // Direct import avoids a circular init path:
+  // accounts.ts -> runtime-api.ts -> openclaw/plugin-sdk/matrix -> extensions/matrix/api.ts -> accounts.ts
+  "extensions/matrix/src/matrix/accounts.ts",
 ] as const;
 
 function readSource(path: string): string {
@@ -185,8 +196,8 @@ function collectExtensionSourceFiles(): string[] {
         fullPath.includes(".fixture.") ||
         fullPath.includes(".snap") ||
         fullPath.includes("test-support") ||
-        fullPath.endsWith("/api.ts") ||
-        fullPath.endsWith("/runtime-api.ts")
+        entry.name === "api.ts" ||
+        entry.name === "runtime-api.ts"
       ) {
         continue;
       }
@@ -264,7 +275,7 @@ function collectExtensionFiles(extensionId: string): string[] {
         fullPath.includes(".spec.") ||
         fullPath.includes(".fixture.") ||
         fullPath.includes(".snap") ||
-        fullPath.endsWith("/runtime-api.ts")
+        entry.name === "runtime-api.ts"
       ) {
         continue;
       }
@@ -328,6 +339,15 @@ describe("channel import guardrails", () => {
     }
   });
 
+  it("keeps extension production files off direct core src imports", () => {
+    for (const file of collectExtensionSourceFiles()) {
+      const text = readFileSync(file, "utf8");
+      expect(text, `${file} should not import ../../src/* core internals directly`).not.toMatch(
+        /["'][^"']*(?:\.\.\/){2,}src\//,
+      );
+    }
+  });
+
   it("keeps core production files off extension private src imports", () => {
     for (const file of collectCoreSourceFiles()) {
       const text = readFileSync(file, "utf8");
@@ -363,6 +383,7 @@ describe("channel import guardrails", () => {
       for (const file of collectExtensionFiles(extensionId)) {
         const normalized = file.replaceAll("\\", "/");
         if (
+          LOCAL_EXTENSION_API_BARREL_EXCEPTIONS.some((suffix) => normalized.endsWith(suffix)) ||
           normalized.endsWith("/api.ts") ||
           normalized.includes(".test.") ||
           normalized.includes(".spec.") ||

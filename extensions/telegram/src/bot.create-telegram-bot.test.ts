@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
 import { useFrozenTime, useRealTime } from "../../../test/helpers/extensions/frozen-time.js";
-import {
+const {
   answerCallbackQuerySpy,
   botCtorSpy,
   commandSpy,
@@ -26,13 +26,25 @@ import {
   sequentializeSpy,
   setMessageReactionSpy,
   setMyCommandsSpy,
+  telegramBotDepsForTest,
+  telegramBotRuntimeForTest,
   throttlerSpy,
   useSpy,
-} from "./bot.create-telegram-bot.test-harness.js";
+} = await import("./bot.create-telegram-bot.test-harness.js");
 import { resolveTelegramFetch } from "./fetch.js";
 
 // Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
-const { createTelegramBot, getTelegramSequentialKey } = await import("./bot.js");
+const {
+  createTelegramBot: createTelegramBotBase,
+  getTelegramSequentialKey,
+  setTelegramBotRuntimeForTest,
+} = await import("./bot.js");
+setTelegramBotRuntimeForTest(telegramBotRuntimeForTest);
+const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
+  createTelegramBotBase({
+    ...opts,
+    telegramDeps: telegramBotDepsForTest,
+  });
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();

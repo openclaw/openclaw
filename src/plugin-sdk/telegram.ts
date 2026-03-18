@@ -46,18 +46,17 @@ export {
   resolveConfiguredFromCredentialStatuses,
 } from "../channels/account-snapshot-fields.js";
 export {
-  listTelegramDirectoryGroupsFromConfig,
-  listTelegramDirectoryPeersFromConfig,
-} from "../channels/plugins/directory-config.js";
-
-export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
 export {
+  listTelegramDirectoryGroupsFromConfig,
+  listTelegramDirectoryPeersFromConfig,
+} from "../../extensions/telegram/src/directory-config.js";
+export {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
-} from "../channels/plugins/group-mentions.js";
+} from "../../extensions/telegram/src/group-policy.js";
 export { TelegramConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { buildTokenChannelStatusSummary } from "./status-helpers.js";

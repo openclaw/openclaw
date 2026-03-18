@@ -8,6 +8,8 @@ import {
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
   collectAllowlistProviderGroupPolicyWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -19,16 +21,13 @@ import {
   missingTargetError,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
-  resolveGoogleChatGroupRequireMention,
   runPassiveAccountLifecycle,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type ChannelStatusIssue,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/googlechat";
-import { GoogleChatConfigSchema } from "openclaw/plugin-sdk/googlechat";
-import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+} from "../runtime-api.js";
+import { GoogleChatConfigSchema } from "../runtime-api.js";
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
@@ -36,6 +35,7 @@ import {
   type ResolvedGoogleChatAccount,
 } from "./accounts.js";
 import { googlechatMessageActions } from "./actions.js";
+import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
@@ -98,7 +98,7 @@ const resolveGoogleChatDmPolicy = createScopedDmSecurityResolver<ResolvedGoogleC
 });
 
 const googlechatActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => googlechatMessageActions.listActions?.(ctx) ?? [],
+  describeMessageTool: (ctx) => googlechatMessageActions.describeMessageTool?.(ctx) ?? null,
   extractToolSend: (ctx) => googlechatMessageActions.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
     if (!googlechatMessageActions.handleAction) {

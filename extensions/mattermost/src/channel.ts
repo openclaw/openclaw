@@ -1,9 +1,10 @@
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
-import { createScopedAccountConfigAccessors } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
-  buildAccountScopedDmSecurityPolicy,
-  collectAllowlistProviderRestrictSendersWarnings,
-} from "openclaw/plugin-sdk/channel-policy";
+  createScopedAccountConfigAccessors,
+  createScopedChannelConfigBase,
+  createScopedDmSecurityResolver,
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
 import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-runtime";
 import type { ChannelMessageToolDiscovery } from "openclaw/plugin-sdk/channel-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
@@ -31,15 +32,14 @@ import {
   buildChannelConfigSchema,
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-  setAccountEnabledInConfigSection,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
   type ChannelPlugin,
 } from "./runtime-api.js";
 import { getMattermostRuntime } from "./runtime.js";
+import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 
@@ -258,6 +258,22 @@ const mattermostConfigAccessors = createScopedAccountConfigAccessors({
     }),
 });
 
+const mattermostConfigBase = createScopedChannelConfigBase<ResolvedMattermostAccount>({
+  sectionKey: "mattermost",
+  listAccountIds: listMattermostAccountIds,
+  resolveAccount: (cfg, accountId) => resolveMattermostAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultMattermostAccountId,
+  clearBaseFields: ["botToken", "baseUrl", "name"],
+});
+
+const resolveMattermostDmPolicy = createScopedDmSecurityResolver<ResolvedMattermostAccount>({
+  channelKey: "mattermost",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+  normalizeEntry: (raw) => normalizeAllowEntry(raw),
+});
+
 export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   id: "mattermost",
   meta: {
@@ -295,24 +311,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   reload: { configPrefixes: ["channels.mattermost"] },
   configSchema: buildChannelConfigSchema(MattermostConfigSchema),
   config: {
-    listAccountIds: (cfg) => listMattermostAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveMattermostAccount({ cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultMattermostAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg,
-        sectionKey: "mattermost",
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg,
-        sectionKey: "mattermost",
-        accountId,
-        clearBaseFields: ["botToken", "baseUrl", "name"],
-      }),
+    ...mattermostConfigBase,
     isConfigured: (account) => Boolean(account.botToken && account.baseUrl),
     describeAccount: (account) => ({
       accountId: account.accountId,
@@ -325,18 +324,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     ...mattermostConfigAccessors,
   },
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "mattermost",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dmPolicy,
-        allowFrom: account.config.allowFrom ?? [],
-        policyPathSuffix: "dmPolicy",
-        normalizeEntry: (raw) => normalizeAllowEntry(raw),
-      });
-    },
+    resolveDmPolicy: resolveMattermostDmPolicy,
     collectWarnings: ({ account, cfg }) => {
       return collectAllowlistProviderRestrictSendersWarnings({
         cfg,
@@ -361,6 +349,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeMattermostMessagingTarget,
+    resolveOutboundSessionRoute: (params) => resolveMattermostOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: looksLikeMattermostTargetId,
       hint: "<channelId|user:ID|channel:ID>",

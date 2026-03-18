@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   formatIMessageChatTarget,
+  inferIMessageTargetChatType,
   isAllowedIMessageSender,
+  looksLikeIMessageExplicitTargetId,
   normalizeIMessageHandle,
   parseIMessageTarget,
 } from "./targets.js";
@@ -82,6 +84,18 @@ describe("imessage targets", () => {
   it("formats chat targets", () => {
     expect(formatIMessageChatTarget(42)).toBe("chat_id:42");
     expect(formatIMessageChatTarget(undefined)).toBe("");
+  });
+
+  it("only treats explicit chat targets as immediate ids", () => {
+    expect(looksLikeIMessageExplicitTargetId("chat_id:42")).toBe(true);
+    expect(looksLikeIMessageExplicitTargetId("sms:+15552223333")).toBe(true);
+    expect(looksLikeIMessageExplicitTargetId("+15552223333")).toBe(false);
+    expect(looksLikeIMessageExplicitTargetId("user@example.com")).toBe(false);
+  });
+
+  it("infers direct and group chat types from normalized targets", () => {
+    expect(inferIMessageTargetChatType("+15552223333")).toBe("direct");
+    expect(inferIMessageTargetChatType("chat_id:42")).toBe("group");
   });
 });
 

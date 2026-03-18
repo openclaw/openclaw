@@ -3,18 +3,12 @@ import {
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   formatDocsLink,
   hasConfiguredSecretInput,
   patchChannelConfigForAccount,
 } from "openclaw/plugin-sdk/setup";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  SlackConfigSchema,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/slack-core";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
@@ -23,6 +17,13 @@ import {
   type ResolvedSlackAccount,
 } from "./accounts.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
+import {
+  buildChannelConfigSchema,
+  getChatChannelMeta,
+  SlackConfigSchema,
+  type ChannelPlugin,
+  type OpenClawConfig,
+} from "./runtime-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
@@ -176,7 +177,7 @@ export function createSlackPluginBase(params: {
   | "config"
   | "setup"
 > {
-  return {
+  return createChannelPluginBase({
     id: SLACK_CHANNEL,
     meta: {
       ...getChatChannelMeta(SLACK_CHANNEL),
@@ -220,5 +221,17 @@ export function createSlackPluginBase(params: {
       ...slackConfigAccessors,
     },
     setup: params.setup,
-  };
+  }) as Pick<
+    ChannelPlugin<ResolvedSlackAccount>,
+    | "id"
+    | "meta"
+    | "setupWizard"
+    | "capabilities"
+    | "agentPrompt"
+    | "streaming"
+    | "reload"
+    | "configSchema"
+    | "config"
+    | "setup"
+  >;
 }
