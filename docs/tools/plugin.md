@@ -228,6 +228,13 @@ responsible for forwarding the current chat/session identity into the plugin
 discovery boundary so the shared `message` tool exposes the right channel-owned
 surface for the current turn.
 
+For channel-owned execution helpers, bundled plugins should keep the execution
+runtime inside their own extension modules. Core no longer owns the Discord,
+Slack, Telegram, or WhatsApp message-action runtimes under `src/agents/tools`.
+We do not publish separate `plugin-sdk/*-action-runtime` subpaths, and bundled
+plugins should import their own local runtime code directly from their
+extension-owned modules.
+
 ## Capability ownership model
 
 OpenClaw treats a native plugin as the ownership boundary for a **company** or a
