@@ -7,6 +7,7 @@ import type {
   LeaveEvent,
   PostbackEvent,
 } from "@line/bot-sdk";
+import { evaluateMatchedGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   clearHistoryEntriesIfEnabled,
@@ -30,7 +31,6 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
-import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
