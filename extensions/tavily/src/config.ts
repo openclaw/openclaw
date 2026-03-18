@@ -27,7 +27,21 @@ function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   return search as WebSearchConfig;
 }
 
+type PluginEntryConfig = {
+  webSearch?: {
+    apiKey?: unknown;
+    baseUrl?: string;
+  };
+};
+
 export function resolveTavilySearchConfig(cfg?: OpenClawConfig): TavilySearchConfig {
+  // Prefer the new plugin config path (plugins.entries.tavily.config.webSearch).
+  const pluginConfig = cfg?.plugins?.entries?.tavily?.config as PluginEntryConfig;
+  const pluginWebSearch = pluginConfig?.webSearch;
+  if (pluginWebSearch && typeof pluginWebSearch === "object" && !Array.isArray(pluginWebSearch)) {
+    return pluginWebSearch;
+  }
+  // Fall back to the legacy config path (tools.web.search.tavily).
   const search = resolveSearchConfig(cfg);
   if (!search || typeof search !== "object") {
     return undefined;
@@ -51,6 +65,7 @@ function normalizeConfiguredSecret(value: unknown, path: string): string | undef
 export function resolveTavilyApiKey(cfg?: OpenClawConfig): string | undefined {
   const search = resolveTavilySearchConfig(cfg);
   return (
+    normalizeConfiguredSecret(search?.apiKey, "plugins.entries.tavily.config.webSearch.apiKey") ||
     normalizeConfiguredSecret(search?.apiKey, "tools.web.search.tavily.apiKey") ||
     normalizeSecretInput(process.env.TAVILY_API_KEY) ||
     undefined

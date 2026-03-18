@@ -17,6 +17,7 @@ const LEGACY_PROVIDER_MAP = {
   grok: "xai",
   kimi: "moonshot",
   perplexity: "perplexity",
+  tavily: "tavily",
 } as const;
 
 type LegacyProviderId = keyof typeof LEGACY_PROVIDER_MAP;
