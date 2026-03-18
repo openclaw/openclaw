@@ -15,6 +15,7 @@ import {
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
+import { validateDenyCommandEntries } from "../config/validate-deny-commands.js";
 import { validateConfigObjectRaw } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
@@ -70,6 +71,7 @@ type ConfigSetOperation = {
 const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
 const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
+const GATEWAY_NODES_DENY_COMMANDS_PATH: PathSegment[] = ["gateway", "nodes", "denyCommands"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
 const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
   "openclaw config set gateway.port 19001 --strict-json",
@@ -333,6 +335,14 @@ function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
   return (
     path.length === expected.length && path.every((segment, index) => segment === expected[index])
   );
+}
+
+function pathStartsWith(path: PathSegment[], prefix: PathSegment[]): boolean {
+  return prefix.every((segment, index) => path[index] === segment);
+}
+
+function pathOverlaps(path: PathSegment[], target: PathSegment[]): boolean {
+  return pathStartsWith(path, target) || pathStartsWith(target, path);
 }
 
 function ensureValidOllamaProviderForApiKeySet(
@@ -1012,6 +1022,22 @@ export async function runConfigSet(opts: {
       operations,
     });
     const nextConfig = next as OpenClawConfig;
+    if (
+      operations.some((operation) =>
+        pathOverlaps(operation.setPath, GATEWAY_NODES_DENY_COMMANDS_PATH),
+      )
+    ) {
+      const denyCommandsResult = validateDenyCommandEntries(
+        nextConfig.gateway?.nodes?.denyCommands,
+        nextConfig,
+      );
+      if (!denyCommandsResult.valid) {
+        throw new Error(
+          "Invalid denyCommands entries:\n" +
+            denyCommandsResult.errors.map((error) => `- ${error}`).join("\n"),
+        );
+      }
+    }
 
     if (opts.cliOptions.dryRun) {
       const hasJsonMode = operations.some((operation) => operation.inputMode === "json");

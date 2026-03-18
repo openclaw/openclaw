@@ -299,6 +299,57 @@ describe("config cli", () => {
     });
   });
 
+  describe("config set - denyCommands validation", () => {
+    it("rejects unknown denyCommands leaf writes", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "gateway.nodes.denyCommands", '["sendd"]']),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining('Unknown command "sendd"'));
+    });
+
+    it("rejects parent object writes that smuggle invalid denyCommands", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "gateway.nodes", '{"denyCommands":["sendd"]}']),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining('Unknown command "sendd"'));
+    });
+
+    it("accepts parent object writes when allowCommands makes the command known", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "gateway.nodes",
+        '{"allowCommands":["custom.mycommand"],"denyCommands":["custom.mycommand"]}',
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.nodes).toEqual({
+        allowCommands: ["custom.mycommand"],
+        denyCommands: ["custom.mycommand"],
+      });
+    });
+  });
+
   describe("config get", () => {
     it("redacts sensitive values", async () => {
       const resolved: OpenClawConfig = {
