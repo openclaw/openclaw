@@ -28,7 +28,7 @@ export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
-} from "../channels/plugins/group-mentions.js";
+} from "../../extensions/bluebubbles/src/group-policy.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export {
@@ -62,13 +62,13 @@ export {
 export { buildSecretInputSchema } from "./secret-input-schema.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
-export type { ParsedChatTarget } from "../../extensions/imessage/src/target-parsing-helpers.js";
+export type { ParsedChatTarget } from "../../extensions/imessage/api.js";
 export {
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
-} from "../../extensions/imessage/src/target-parsing-helpers.js";
+} from "../../extensions/imessage/api.js";
 export { stripMarkdown } from "../line/markdown-to-line.js";
 export { parseFiniteNumber } from "../infra/parse-finite-number.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";

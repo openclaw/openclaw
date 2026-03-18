@@ -4,16 +4,16 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeSkill } from "../../../src/agents/skills.e2e-test-helpers.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import {
+  pluginCommandMocks,
+  resetPluginCommandMocks,
+} from "../../../test/helpers/extensions/telegram-plugin-command.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createNativeCommandTestParams,
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
-import {
-  pluginCommandMocks,
-  resetPluginCommandMocks,
-} from "./bot-native-commands.plugin-command-test-support.js";
 
 const tempDirs: string[] = [];
 

@@ -49,6 +49,7 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
     registerImageGenerationProvider() {},
     registerWebSearchProvider() {},
     registerInteractiveHandler() {},
+    onConversationBindingResolved() {},
     registerHook() {},
     registerHttpRoute() {},
     registerCommand() {},

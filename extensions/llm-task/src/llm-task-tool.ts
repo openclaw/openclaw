@@ -8,8 +8,8 @@ import {
   normalizeThinkLevel,
   resolvePreferredOpenClawTmpDir,
   supportsXHighThinking,
-} from "openclaw/plugin-sdk/llm-task";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/llm-task";
+} from "../api.js";
+import type { OpenClawPluginApi } from "../api.js";
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
