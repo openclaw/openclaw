@@ -860,4 +860,35 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+  it("does not shadow billing errors that carry api_error type", () => {
+    // A provider may wrap a billing error in a JSON payload with "type":"api_error".
+    // The billing classifier must win over the broad api_error transient match.
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"insufficient credits"}}',
+      ),
+    ).toBe("billing");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"Payment required"}}',
+      ),
+    ).toBe("billing");
+  });
+  it("does not shadow auth errors that carry api_error type", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"invalid api key"}}',
+      ),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"unauthorized"}}',
+      ),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"permission_error"}}',
+      ),
+    ).toBe("auth_permanent");
+  });
 });

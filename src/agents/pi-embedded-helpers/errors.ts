@@ -739,8 +739,15 @@ function isJsonApiInternalServerError(raw: string): boolean {
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
   // Non-standard providers (e.g. MiniMax) may use different message text:
   // {"type":"api_error","message":"unknown error, 520 (1000)"}
-  // Any api_error type indicates a provider-side failure regardless of message text.
-  return value.includes('"type":"api_error"');
+  if (!value.includes('"type":"api_error"')) {
+    return false;
+  }
+  // Billing and auth errors can also carry "type":"api_error". Exclude them so
+  // the more specific classifiers further down the chain handle them correctly.
+  if (isBillingErrorMessage(raw) || isAuthErrorMessage(raw) || isAuthPermanentErrorMessage(raw)) {
+    return false;
+  }
+  return true;
 }
 
 export function parseImageDimensionError(raw: string): {
@@ -893,23 +900,26 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     // Treat remaining transient 5xx provider failures as retryable transport issues.
     return "timeout";
   }
-  if (isJsonApiInternalServerError(raw)) {
-    return "timeout";
-  }
-  if (isCloudCodeAssistFormatError(raw)) {
-    return "format";
-  }
+  // Billing and auth classifiers run before the broad isJsonApiInternalServerError
+  // check so that provider errors like {"type":"api_error","message":"insufficient
+  // balance"} are correctly classified as "billing"/"auth" rather than "timeout".
   if (isBillingErrorMessage(raw)) {
     return "billing";
-  }
-  if (isTimeoutErrorMessage(raw)) {
-    return "timeout";
   }
   if (isAuthPermanentErrorMessage(raw)) {
     return "auth_permanent";
   }
   if (isAuthErrorMessage(raw)) {
     return "auth";
+  }
+  if (isJsonApiInternalServerError(raw)) {
+    return "timeout";
+  }
+  if (isCloudCodeAssistFormatError(raw)) {
+    return "format";
+  }
+  if (isTimeoutErrorMessage(raw)) {
+    return "timeout";
   }
   return null;
 }
