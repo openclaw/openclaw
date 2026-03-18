@@ -113,7 +113,8 @@ async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTar
  * Resolve bot display name with fallback chain:
  * 1. Account config name
  * 2. Agent name from config
- * 3. "OpenClaw" as generic fallback
+ * 3. Agent identity name from config
+ * 4. "OpenClaw" as generic fallback
  */
 function resolveBotDisplayName(params: {
   accountName?: string;
@@ -127,6 +128,9 @@ function resolveBotDisplayName(params: {
   const agent = config.agents?.list?.find((a) => a.id === agentId);
   if (agent?.name?.trim()) {
     return agent.name.trim();
+  }
+  if (agent?.identity?.name?.trim()) {
+    return agent.identity.name.trim();
   }
   return "OpenClaw";
 }
