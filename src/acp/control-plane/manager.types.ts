@@ -62,6 +62,15 @@ export type AcpRunTurnInput = {
   requestId: string;
   signal?: AbortSignal;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
+  /**
+   * Called synchronously when the combined abort signal fires inside runTurn —
+   * this covers ALL abort sources that can short-circuit onEvent, including the
+   * withTimeout signal AND the internal cancelSession controller. Callers can
+   * use this to set a "turn is no longer active" flag so in-flight onEvent
+   * callbacks can suppress stale deliver() calls after the abort fires.
+   * refs PR #36860 comment 2924797850.
+   */
+  onCombinedAbort?: () => void;
 };
 
 export type AcpCloseSessionInput = {

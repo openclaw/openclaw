@@ -128,6 +128,20 @@ function createAcpConfigWithVisibleToolTags(): OpenClawConfig {
   });
 }
 
+function createLiveDeliveryConfig(): OpenClawConfig {
+  return createAcpTestConfig({
+    acp: {
+      enabled: true,
+      stream: {
+        deliveryMode: "live" as const,
+        coalesceIdleMs: 0,
+        maxChunkChars: 64,
+        tagVisibility: { tool_call: true },
+      },
+    },
+  });
+}
+
 async function runDispatch(params: {
   bodyForAgent: string;
   cfg?: OpenClawConfig;
@@ -413,6 +427,299 @@ describe("tryDispatchAcpReply", () => {
       expect(onReplyStart).not.toHaveBeenCalled();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes an abort signal to runTurn for timeout protection", async () => {
+    setReadyAcpResolution();
+    let receivedSignal: AbortSignal | undefined;
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({
+        onEvent,
+        signal,
+      }: {
+        onEvent: (event: unknown) => Promise<void>;
+        signal?: AbortSignal;
+      }) => {
+        receivedSignal = signal;
+        await onEvent({ type: "done" });
+      },
+    );
+
+    await runDispatch({ bodyForAgent: "hello" });
+
+    expect(managerMocks.runTurn).toHaveBeenCalledTimes(1);
+    expect(receivedSignal).toBeDefined();
+    expect(typeof receivedSignal!.aborted).toBe("boolean");
+    expect(receivedSignal!.aborted).toBe(false);
+  });
+
+  it("aborts runTurn when the turn timeout fires", async () => {
+    vi.useFakeTimers();
+    try {
+      setReadyAcpResolution();
+      let receivedSignal: AbortSignal | undefined;
+      managerMocks.runTurn.mockImplementationOnce(
+        ({ signal }: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            receivedSignal = signal;
+            signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }),
+      );
+
+      const dispatchPromise = runDispatch({ bodyForAgent: "stall" });
+      await vi.runAllTimersAsync();
+      await expect(dispatchPromise).resolves.toBeDefined();
+      expect(receivedSignal!.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards in-flight onEvent delivery after turn abort fires (turnAbortFired gate)", async () => {
+    // Regression: when the withTimeout abort fires, Promise.race resolves
+    // immediately but the abandoned work(signal) promise may still have a
+    // projector.onEvent callback mid-await. Without the turnAbortFired gate,
+    // that in-flight callback can call delivery.deliver() after the timeout
+    // error reply has already been sent, emitting contradictory responses.
+    // refs review comment 2921609064 on PR #36860.
+    vi.useFakeTimers();
+    try {
+      setReadyAcpResolution();
+      let capturedOnEvent: ((event: unknown) => Promise<void>) | undefined;
+      const { dispatcher } = createDispatcher();
+
+      managerMocks.runTurn.mockImplementationOnce(
+        ({ onEvent }: { onEvent: (event: unknown) => Promise<void>; signal?: AbortSignal }) => {
+          capturedOnEvent = onEvent;
+          // Hang indefinitely — simulates a stalled SSE connection.
+          // Promise.race in withTimeout handles the abort; we don't
+          // need to explicitly reject here.
+          return new Promise<void>(() => {});
+        },
+      );
+
+      const dispatchPromise = runDispatch({ bodyForAgent: "stall", dispatcher });
+      // Fire the withTimeout turn timer (MIN_ACP_TURN_TIMEOUT_MS = 30_000ms).
+      await vi.runAllTimersAsync();
+      // Dispatch completes via the error path once the timeout fires.
+      await dispatchPromise;
+
+      // turnAbortFired is now true. Simulate a stale in-flight onEvent call
+      // that was mid-await when the abort fired (e.g., awaiting an upstream
+      // delivery while the timeout expired).
+      expect(capturedOnEvent).toBeDefined();
+      await capturedOnEvent!({
+        type: "text_delta",
+        text: "stale-post-abort",
+        tag: "agent_message_chunk",
+      });
+
+      // No block content should have been delivered — the entry guard and
+      // the deliver() wrapper both discard stale events after abort fires.
+      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+      // The timeout error reply IS delivered via the direct delivery.deliver()
+      // call in the catch block, which bypasses the turnAbortFired gate.
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+        expect.objectContaining({ isError: true }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards in-flight onEvent delivery when cancelSession combined abort fires (onCombinedAbort gate)", async () => {
+    // Regression: turnAbortFired was only set from the withTimeout signal, but
+    // cancelSession aborts the manager's internal controller (which fires the
+    // combined signal), not the withTimeout signal. An in-flight
+    // projector.onEvent could therefore call deliver() after runTurn exited via
+    // the cancel path — emitting stale content before the error reply.
+    // Fix: onCombinedAbort sets turnAbortFired for ALL abort sources, not just
+    // timeout. refs review comment 2924797850 on PR #36860.
+    setReadyAcpResolution();
+
+    let capturedOnEvent: ((event: unknown) => Promise<void>) | undefined;
+    const { dispatcher } = createDispatcher();
+
+    managerMocks.runTurn.mockImplementationOnce(
+      ({
+        onEvent,
+        onCombinedAbort,
+      }: {
+        onEvent: (event: unknown) => Promise<void>;
+        onCombinedAbort?: () => void;
+      }) => {
+        capturedOnEvent = onEvent;
+        // Simulate cancelSession: the combined signal fires (sets turnAbortFired
+        // via onCombinedAbort), then runTurn rejects — matching the real path
+        // where internalAbortController.abort() fires the combined signal before
+        // the runtime error propagates back.
+        onCombinedAbort?.();
+        return Promise.reject(new AcpRuntimeError("ACP_TURN_FAILED", "Session was cancelled."));
+      },
+    );
+
+    await runDispatch({ bodyForAgent: "cancel-test", dispatcher });
+
+    // Simulate a stale in-flight onEvent callback that was mid-await when the
+    // combined abort fired. turnAbortFired must already be true (set by
+    // onCombinedAbort) so deliver() is blocked.
+    expect(capturedOnEvent).toBeDefined();
+    await capturedOnEvent!({
+      type: "text_delta",
+      text: "stale-post-cancel",
+      tag: "agent_message_chunk",
+    });
+
+    // No block content should have been delivered — turnAbortFired was set
+    // by onCombinedAbort before the in-flight onEvent could call deliver().
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    // The cancel error reply IS delivered via the direct delivery.deliver()
+    // call in the catch block, which bypasses the turnAbortFired gate.
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ isError: true }),
+    );
+  });
+
+  it("awaits in-flight projector delivery before sending timeout error reply", async () => {
+    // Regression: when the abort fires while delivery.deliver() is mid-await
+    // (e.g. an in-flight routeReply during a live tool event), the catch path
+    // used to send the timeout error reply concurrently with the still-running
+    // delivery. With lastDeliveryPromise tracking, the catch path awaits
+    // settlement first (bounded by 5 s), serialising the sends.
+    // refs review comments 2921919543 and 2922136054 on PR #36860.
+    vi.useFakeTimers();
+    try {
+      setReadyAcpResolution();
+
+      let resolveDeliver!: () => void;
+      const deliverBarrier = new Promise<void>((res) => {
+        resolveDeliver = res;
+      });
+
+      const routeReplyOrder: string[] = [];
+      routeMocks.routeReply
+        .mockImplementationOnce(async () => {
+          // In-flight tool delivery: hang on barrier so the turn timeout fires
+          // while this send is still in progress.
+          routeReplyOrder.push("tool-start");
+          await deliverBarrier;
+          routeReplyOrder.push("tool-done");
+          return { ok: true, messageId: "live-tool" };
+        })
+        .mockImplementationOnce(async () => {
+          // Timeout error reply — must arrive after the tool delivery settles.
+          routeReplyOrder.push("error");
+          return { ok: true, messageId: "error-reply" };
+        });
+
+      managerMocks.runTurn.mockImplementationOnce(
+        async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+          // Emit a tool_call event. In live mode with tool_call visible this
+          // triggers an immediate params.deliver("tool", ...) call inside the
+          // projector, which reaches delivery.deliver() → routeReply and hangs
+          // on deliverBarrier. runTurn (and therefore withTimeout's work
+          // promise) remains suspended until deliverBarrier is resolved.
+          await onEvent({
+            type: "tool_call",
+            tag: "tool_call",
+            toolCallId: "tc-live-1",
+            status: "in_progress",
+            title: "Live tool",
+            text: "Live tool (in_progress)",
+          });
+        },
+      );
+
+      const dispatchPromise = runDispatch({
+        bodyForAgent: "run live tool",
+        cfg: createLiveDeliveryConfig(),
+        shouldRouteToOriginating: true,
+      });
+
+      // Advance only enough to fire the turn timeout (default 600 s via
+      // resolveAgentTimeoutMs with no config override). Using advanceTimersByTimeAsync
+      // rather than runAllTimersAsync is intentional: runAllTimersAsync would also
+      // fire the 5 s bounded-wait timer that the catch block registers
+      // (Promise.race([lastDeliveryPromise, setTimeout(5_000)])), causing the
+      // error reply to be sent before the in-flight delivery settles.
+      // By advancing exactly to the turn timeout we leave the 5 s safety timer
+      // unfired so that Promise.race can still resolve via lastDeliveryPromise.
+      const TURN_TIMEOUT_MS = 600_000;
+      await vi.advanceTimersByTimeAsync(TURN_TIMEOUT_MS);
+
+      // dispatchPromise is still pending: the catch block is suspended inside
+      // Promise.race([lastDeliveryPromise, setTimeout(5_000)]) waiting for
+      // either the delivery or the 5 s safety timeout. Resolve the barrier now
+      // (within the 5 s window) so the race settles via lastDeliveryPromise.
+      resolveDeliver();
+
+      await dispatchPromise;
+
+      // The error reply (routed via routeReply when shouldRouteToOriginating)
+      // must appear only after the in-flight tool delivery has settled.
+      expect(routeReplyOrder).toEqual(["tool-start", "tool-done", "error"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends timeout error reply even when in-flight delivery stalls beyond bounded wait", async () => {
+    // Regression guard for PR #36860 comment 2922136054: if the in-flight
+    // delivery promise never settles, the 5 s safety timer in
+    // Promise.race([lastDeliveryPromise, setTimeout(5_000)]) must unblock the
+    // catch path so the timeout error reply is still sent.
+    vi.useFakeTimers();
+    try {
+      setReadyAcpResolution();
+
+      // deliverBarrier is never resolved — simulates a stalled routed send.
+      const deliverBarrier = new Promise<void>(() => {});
+
+      const routeReplyOrder: string[] = [];
+      routeMocks.routeReply
+        .mockImplementationOnce(async () => {
+          routeReplyOrder.push("tool-start");
+          await deliverBarrier; // hangs forever
+          routeReplyOrder.push("tool-done");
+          return { ok: true, messageId: "live-tool" };
+        })
+        .mockImplementationOnce(async () => {
+          routeReplyOrder.push("error");
+          return { ok: true, messageId: "error-reply" };
+        });
+
+      managerMocks.runTurn.mockImplementationOnce(
+        async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+          await onEvent({
+            type: "tool_call",
+            tag: "tool_call",
+            toolCallId: "tc-stall-1",
+            status: "in_progress",
+            title: "Stalling tool",
+            text: "Stalling tool (in_progress)",
+          });
+        },
+      );
+
+      const dispatchPromise = runDispatch({
+        bodyForAgent: "run stalling tool",
+        cfg: createLiveDeliveryConfig(),
+        shouldRouteToOriginating: true,
+      });
+
+      // Fire the turn timeout AND the 5 s safety timer in one shot.
+      // The stalled delivery never resolves, so Promise.race resolves via
+      // the safety timeout and the error reply is sent regardless.
+      await vi.runAllTimersAsync();
+
+      await dispatchPromise;
+
+      // "tool-done" never pushes because deliverBarrier is unresolved, but
+      // the error reply MUST still be delivered (safety timer unblocked the catch).
+      expect(routeReplyOrder).toEqual(["tool-start", "error"]);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

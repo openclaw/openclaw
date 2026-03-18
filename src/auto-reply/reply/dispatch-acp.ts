@@ -10,6 +10,7 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -21,6 +22,7 @@ import {
   normalizeAttachmentPath,
   normalizeAttachments,
 } from "../../media-understanding/attachments.normalize.js";
+import { withTimeout } from "../../node-host/with-timeout.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { maybeApplyTtsToPayload, resolveTtsConfig } from "../../tts/tts.js";
 import {
@@ -32,6 +34,8 @@ import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+
+const MIN_ACP_TURN_TIMEOUT_MS = 30_000;
 
 type DispatchProcessedRecorder = (
   outcome: "completed" | "skipped" | "error",
@@ -249,10 +253,44 @@ export async function tryDispatchAcpReply(params: {
           resolveAgentIdFromSessionKey(sessionKey)
         ).trim()
       : resolveAgentIdFromSessionKey(sessionKey);
+  // turnAbortFired flag: set to true when ANY abort source causes runTurn to
+  // short-circuit onEvent — including the withTimeout signal (timeout path)
+  // and AcpSessionManager's internal cancelSession controller (cancel path).
+  // In-flight projector.onEvent callbacks that are mid-await when the abort
+  // fires will find turnAbortFired=true on their next deliver() call and
+  // silently discard the stale output, preventing contradictory responses
+  // (error reply followed by block content from the abandoned turn).
+  // The withTimeout signal sets it via a pre-runTurn listener (early abort
+  // coverage); onCombinedAbort sets it for ALL sources once the combined
+  // signal is constructed inside runTurn (cancelSession coverage).
+  // refs review comments 2921609064 and 2924797850 on PR #36860.
+  let turnAbortFired = false;
+  // Tracks the last projector-initiated delivery promise so the catch path can
+  // await settlement before sending the timeout error reply — prevents concurrent
+  // sends when the abort fires while delivery.deliver() is mid-await (e.g. an
+  // in-flight TTS or routeReply call in live mode). Initialized to a resolved
+  // promise so the catch path is a no-op when no delivery has started yet.
+  // refs review comment 2921919543 on PR #36860.
+  let lastDeliveryPromise: Promise<boolean> = Promise.resolve(false);
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
-    deliver: delivery.deliver,
+    deliver: async (kind, payload, meta) => {
+      if (turnAbortFired) {
+        return false;
+      }
+      const deliveryInFlight = delivery.deliver(kind, payload, meta);
+      // Record the settled form so the catch path can await any in-flight send
+      // before dispatching the timeout error reply.
+      lastDeliveryPromise = deliveryInFlight.catch(() => false);
+      const result = await deliveryInFlight;
+      // Re-check after awaiting: if the abort fired mid-delivery, discard the
+      // result so queuedFinal is not incorrectly updated for the aborted turn.
+      if (turnAbortFired) {
+        return false;
+      }
+      return result;
+    },
     provider: params.ctx.Surface ?? params.ctx.Provider,
     accountId: params.ctx.AccountId,
   });
@@ -301,15 +339,57 @@ export async function tryDispatchAcpReply(params: {
       );
     }
 
-    await acpManager.runTurn({
+    // Guard against stalled upstream streams: abort the turn after the configured
+    // agent timeout (agents.defaults.timeoutSeconds, default 600s). Without this,
+    // a silently hung SSE connection blocks the session queue forever. refs #17258
+    const turnTimeoutMs = resolveAgentTimeoutMs({
       cfg: params.cfg,
-      sessionKey,
-      text: promptText,
-      attachments: attachments.length > 0 ? attachments : undefined,
-      mode: "prompt",
-      requestId: resolveAcpRequestId(params.ctx),
-      onEvent: async (event) => await projector.onEvent(event),
+      minMs: MIN_ACP_TURN_TIMEOUT_MS,
     });
+    await withTimeout(
+      (signal) => {
+        // Pre-runTurn listener on the withTimeout signal: sets turnAbortFired
+        // synchronously when the timeout fires, before any microtask runs.
+        // This covers early abort (e.g. during runTurn's setup await points)
+        // before the combined signal is constructed inside manager.core.
+        signal?.addEventListener(
+          "abort",
+          () => {
+            turnAbortFired = true;
+          },
+          { once: true },
+        );
+        return acpManager.runTurn({
+          cfg: params.cfg,
+          sessionKey,
+          text: promptText,
+          attachments: attachments.length > 0 ? attachments : undefined,
+          mode: "prompt",
+          requestId: resolveAcpRequestId(params.ctx),
+          onEvent: (event) => {
+            // Entry guard: skip events that arrive after the abort fires.
+            // The deliver() wrapper above catches the in-flight case where
+            // the abort fires while projector.onEvent is already awaiting.
+            if (turnAbortFired) {
+              return Promise.resolve();
+            }
+            return projector.onEvent(event);
+          },
+          // onCombinedAbort fires when the combined signal (timeout OR
+          // cancelSession internal controller) aborts inside runTurn.
+          // This broadens the guard beyond the withTimeout signal alone,
+          // ensuring in-flight deliver() calls are suppressed for ALL abort
+          // sources — not just the timeout path.
+          // refs review comment 2924797850 on PR #36860.
+          onCombinedAbort: () => {
+            turnAbortFired = true;
+          },
+          signal,
+        });
+      },
+      turnTimeoutMs,
+      "ACP turn",
+    );
 
     await projector.flush(true);
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
@@ -368,6 +448,22 @@ export async function tryDispatchAcpReply(params: {
     params.markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {
+    // Await any in-flight projector delivery before sending the timeout error
+    // reply — prevents concurrent sends when the abort fires mid-delivery.
+    // Bound the wait to 5 s so that a stalled routed-send never prevents the
+    // error reply from being emitted (refs PR #36860 comment 2922136054).
+    // refs review comment 2921919543 on PR #36860.
+    let boundedWaitHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        lastDeliveryPromise,
+        new Promise<void>((resolve) => {
+          boundedWaitHandle = setTimeout(resolve, 5_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(boundedWaitHandle);
+    }
     await projector.flush(true);
     const acpError = toAcpRuntimeError({
       error: err,
