@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import {
@@ -228,6 +229,23 @@ describe("gateway hot reload", () => {
             baseUrl: "https://api.openai.com/v1",
             apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             models: [],
+          },
+        },
+      },
+    });
+  }
+
+  async function writeOpenAiModelsConfig(modelIds: string[]) {
+    await writeConfigFile({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            models: modelIds.map((id) => ({
+              id,
+              name: id.toUpperCase(),
+            })),
           },
         },
       },
@@ -652,6 +670,84 @@ describe("gateway hot reload", () => {
         sessionKey,
       });
     });
+  });
+
+  it("refreshes the model catalog after hot reload changes provider models", async () => {
+    process.env.OPENAI_API_KEY = "sk-hot-reload"; // pragma: allowlist secret
+    await writeOpenAiModelsConfig(["gpt-hot-a"]);
+
+    const started = await startServerWithClient();
+    const { server, ws, envSnapshot } = started;
+    try {
+      await connectOk(ws);
+
+      const modelsPath = path.join(resolveOpenClawAgentDir(), "models.json");
+      const listInitial = await rpcReq(ws, "models.list");
+      expect(listInitial.ok).toBe(true);
+      const initialModelsJson = JSON.parse(await fs.readFile(modelsPath, "utf8")) as {
+        providers?: {
+          openai?: {
+            models?: Array<{ id?: string }>;
+          };
+        };
+      };
+      expect(initialModelsJson.providers?.openai?.models?.map((model) => model.id)).toContain(
+        "gpt-hot-a",
+      );
+      expect(initialModelsJson.providers?.openai?.models?.map((model) => model.id)).not.toContain(
+        "gpt-hot-b",
+      );
+
+      await writeOpenAiModelsConfig(["gpt-hot-a", "gpt-hot-b"]);
+      const nextConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              models: [
+                { id: "gpt-hot-a", name: "GPT-HOT-A" },
+                { id: "gpt-hot-b", name: "GPT-HOT-B" },
+              ],
+            },
+          },
+        },
+      };
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+      await onHotReload?.(
+        {
+          changedPaths: ["models.providers.openai.models"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["models.providers.openai.models"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartBrowserControl: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          restartChannels: new Set(),
+          noopPaths: [],
+        },
+        nextConfig,
+      );
+
+      const reloadedModelsJson = JSON.parse(await fs.readFile(modelsPath, "utf8")) as {
+        providers?: {
+          openai?: {
+            models?: Array<{ id?: string }>;
+          };
+        };
+      };
+      expect(reloadedModelsJson.providers?.openai?.models?.map((model) => model.id)).toContain(
+        "gpt-hot-b",
+      );
+    } finally {
+      envSnapshot.restore();
+      ws.close();
+      await server.close();
+    }
   });
 
   it("emits one-shot degraded and recovered system events for web search secret reload transitions", async () => {
