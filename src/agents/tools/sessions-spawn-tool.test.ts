@@ -185,7 +185,7 @@ describe("sessions_spawn tool", () => {
     );
   });
 
-  it("rejects resumeSessionId without runtime=acp", async () => {
+  it("ignores resumeSessionId without runtime=acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
@@ -195,8 +195,17 @@ describe("sessions_spawn tool", () => {
       resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
     });
 
-    expect(JSON.stringify(result)).toContain("resumeSessionId is only supported for runtime=acp");
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:1",
+      runId: "run-subagent",
+    });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "resume prior work",
+      }),
+      expect.any(Object),
+    );
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
@@ -224,7 +233,7 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it('rejects streamTo when runtime is not "acp"', async () => {
+  it('ignores streamTo when runtime is not "acp"', async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
@@ -236,12 +245,17 @@ describe("sessions_spawn tool", () => {
     });
 
     expect(result.details).toMatchObject({
-      status: "error",
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:1",
+      runId: "run-subagent",
     });
-    const details = result.details as { error?: string };
-    expect(details.error).toContain("streamTo is only supported for runtime=acp");
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "analyze file",
+      }),
+      expect.any(Object),
+    );
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("keeps attachment content schema unconstrained for llama.cpp grammar safety", () => {

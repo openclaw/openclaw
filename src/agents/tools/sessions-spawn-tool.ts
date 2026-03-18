@@ -97,7 +97,7 @@ export function createSessionsSpawnTool(
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
-      const resumeSessionId = readStringParam(params, "resumeSessionId");
+      const resumeSessionIdRaw = readStringParam(params, "resumeSessionId");
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cwd = readStringParam(params, "cwd");
@@ -105,7 +105,9 @@ export function createSessionsSpawnTool(
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
-      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const streamToRaw = params.streamTo === "parent" ? "parent" : undefined;
+      const resumeSessionId = runtime === "acp" ? resumeSessionIdRaw : undefined;
+      const streamTo = runtime === "acp" ? streamToRaw : undefined;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -126,20 +128,6 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
-
-      if (streamTo && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
-        });
-      }
-
-      if (resumeSessionId && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `resumeSessionId is only supported for runtime=acp; got runtime=${runtime}`,
-        });
-      }
 
       if (runtime === "acp") {
         if (Array.isArray(attachments) && attachments.length > 0) {
