@@ -62,6 +62,8 @@ export interface ShadowDivergence {
   readonly baselineResult: ExecutionKind;
   readonly currentScore: number;
   readonly agreed: boolean;
+  /** Kind before embedding cache override; undefined when no embedding override occurred. */
+  readonly preOverrideKind?: ExecutionKind;
 }
 
 const MAX_LOG_SIZE = 1000;

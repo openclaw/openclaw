@@ -161,73 +161,17 @@ export function isComplete(message: string, config: SmartHandlerConfig): boolean
 
 /**
  * Classify execution intent from message content.
+ * Delegates to classifyMessage and extracts the ExecutionIntent fields.
  */
 export function classifyExecutionIntent(
   message: string,
   config: SmartHandlerConfig,
 ): ExecutionIntent {
-  // Defense-in-depth: truncate input to prevent regex backtracking on adversarial messages
-  const truncated = message.length > 2000 ? message.slice(0, 2000) : message;
-  const input_finalized = isComplete(truncated, config);
-  const trimmed = truncated.trim();
-  const execution_expected = input_finalized && trimmed.length >= config.minMessageLength;
-
-  const stripped = stripCodeAndQuotes(trimmed);
-
-  // Priority 1: Custom user phrases
-  const customMatch = matchCustomPhrase(truncated, config);
-  if (customMatch) {
-    return {
-      input_finalized,
-      execution_expected,
-      execution_kind: customMatch.kind,
-    };
-  }
-
-  // Check chat patterns first on the stripped text
-  const isChatPattern = CHAT_PATTERNS.some((pattern) => pattern.test(stripped));
-  if (isChatPattern) {
-    return {
-      input_finalized,
-      execution_expected,
-      execution_kind: "chat",
-    };
-  }
-
-  // Score all kinds
-  const scored = scoreMessage(stripped, trimmed);
-  const winner = resolveTie(scored);
-
-  let execution_kind: ExecutionKind;
-  if (winner.score > config.scoreThreshold) {
-    execution_kind = winner.kind;
-  } else if (execution_expected) {
-    // Below threshold but input is finalized — check if task patterns match
-    const hasTaskPattern = TASK_PATTERNS.some((pattern) => pattern.test(stripped));
-    execution_kind = hasTaskPattern ? "run" : "unknown";
-  } else {
-    execution_kind = "unknown";
-  }
-
-  // Chat/task conflict resolution: if scored as chat but task patterns match, override
-  if (execution_kind === "chat") {
-    const hasTaskPattern = TASK_PATTERNS.some((pattern) => pattern.test(stripped));
-    if (hasTaskPattern) {
-      // Re-score without chat, pick next best
-      const nonChat = scored.filter((s) => s.kind !== "chat");
-      const nextBest = resolveTie(nonChat);
-      if (nextBest.score > config.scoreThreshold) {
-        execution_kind = nextBest.kind;
-      } else {
-        execution_kind = "run";
-      }
-    }
-  }
-
+  const mc = classifyMessage(message, config);
   return {
-    input_finalized,
-    execution_expected,
-    execution_kind,
+    input_finalized: mc.input_finalized,
+    execution_expected: mc.execution_expected,
+    execution_kind: mc.kind,
   };
 }
 
@@ -268,7 +212,7 @@ export function toMessageClassification(
 
 /**
  * Classify a message and return a full MessageClassification.
- * Combines classifyExecutionIntent logic with score tracking.
+ * This is the single classification implementation; classifyExecutionIntent delegates here.
  */
 export function classifyMessage(
   message: string,

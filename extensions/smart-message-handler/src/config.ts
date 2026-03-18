@@ -39,10 +39,10 @@ export function getConfig(api: PluginApi): SmartHandlerConfig {
   return {
     enabled: typeof merged.enabled === "boolean" ? merged.enabled : DEFAULT_CONFIG.enabled,
     incompleteSignals: Array.isArray(merged.incompleteSignals)
-      ? merged.incompleteSignals
+      ? merged.incompleteSignals.filter((s: unknown) => typeof s === "string")
       : DEFAULT_CONFIG.incompleteSignals,
     completeSignals: Array.isArray(merged.completeSignals)
-      ? merged.completeSignals
+      ? merged.completeSignals.filter((s: unknown) => typeof s === "string")
       : DEFAULT_CONFIG.completeSignals,
     baseDebounceMultiplier:
       typeof merged.baseDebounceMultiplier === "number"
@@ -83,7 +83,9 @@ export function getConfig(api: PluginApi): SmartHandlerConfig {
         ? merged.locale
         : DEFAULT_CONFIG.locale,
     scoreThreshold:
-      typeof merged.scoreThreshold === "number"
+      typeof merged.scoreThreshold === "number" &&
+      Number.isFinite(merged.scoreThreshold) &&
+      merged.scoreThreshold > 0
         ? merged.scoreThreshold
         : DEFAULT_CONFIG.scoreThreshold,
     modelRoutingEnabled:

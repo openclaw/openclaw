@@ -36,27 +36,28 @@ const TOOL_KIND_MAP: Record<string, ExecutionKind> = {
   pip: "install",
 };
 
-let lastPredictedKind: ExecutionKind = "unknown";
+const lastPredictions = new Map<string, ExecutionKind>();
 
-export function setLastPrediction(kind: ExecutionKind): void {
-  lastPredictedKind = kind;
+export function setLastPrediction(kind: ExecutionKind, sessionKey: string): void {
+  lastPredictions.set(sessionKey, kind);
 }
 
-export function getLastPrediction(): ExecutionKind {
-  return lastPredictedKind;
+export function getLastPrediction(sessionKey: string): ExecutionKind {
+  return lastPredictions.get(sessionKey) || "unknown";
 }
 
-export function recordToolUsage(toolName: string): void {
+export function recordToolUsage(toolName: string, sessionKey: string): void {
   const normalizedTool = toolName.toLowerCase();
   const expectedKind = TOOL_KIND_MAP[normalizedTool];
   if (!expectedKind) {
     return;
   } // Unknown tool, skip
 
-  const matched = lastPredictedKind === expectedKind;
+  const predicted = lastPredictions.get(sessionKey) || "unknown";
+  const matched = predicted === expectedKind;
   const entry: FeedbackEntry = {
     timestamp: Date.now(),
-    predictedKind: lastPredictedKind,
+    predictedKind: predicted,
     actualToolName: normalizedTool,
     matched,
   };
@@ -143,7 +144,7 @@ export function resetFeedback(): void {
   ringBuffer.fill(null);
   writeIndex = 0;
   entryCount = 0;
-  lastPredictedKind = "unknown";
+  lastPredictions.clear();
 }
 
 export function getFeedbackLog(): readonly FeedbackEntry[] {

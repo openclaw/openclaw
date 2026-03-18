@@ -4,6 +4,18 @@ import type { ExecutionKind } from "./types.ts";
 
 const ALLOWED_PREFIX = resolve(join(process.env.HOME || "", ".openclaw/"));
 
+const VALID_KINDS = new Set<string>([
+  "search",
+  "install",
+  "read",
+  "run",
+  "write",
+  "debug",
+  "analyze",
+  "chat",
+  "unknown",
+]);
+
 interface CacheEntry {
   readonly text: string;
   readonly kind: ExecutionKind;
@@ -37,7 +49,18 @@ export function loadEmbeddingCache(path: string): boolean {
     if (!data.entries || !Array.isArray(data.entries) || !data.dimension) {
       return false;
     }
-    cache = data as EmbeddingCache;
+    const validEntries = data.entries.filter(
+      (e: unknown): e is CacheEntry =>
+        typeof e === "object" &&
+        e !== null &&
+        typeof (e as Record<string, unknown>).text === "string" &&
+        VALID_KINDS.has((e as Record<string, unknown>).kind as string) &&
+        Array.isArray((e as Record<string, unknown>).vector) &&
+        ((e as Record<string, unknown>).vector as unknown[]).every(
+          (v: unknown) => typeof v === "number",
+        ),
+    );
+    cache = { entries: validEntries, dimension: data.dimension };
     return true;
   } catch {
     return false;

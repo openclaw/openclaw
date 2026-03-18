@@ -70,6 +70,9 @@ function scheduleFlush(): void {
     flushTimer = null;
     await flushWriteBuffer();
   }, FLUSH_INTERVAL_MS);
+  if (flushTimer && typeof flushTimer === "object" && "unref" in flushTimer) {
+    (flushTimer as { unref: () => void }).unref();
+  }
 }
 
 async function flushWriteBuffer(): Promise<void> {
@@ -206,11 +209,40 @@ export function loadPersistedMetrics(since?: number): MetricsLogEntry[] {
   }
   try {
     const content = readFileSync(logPath, "utf-8");
-    const entries = content
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as MetricsLogEntry);
+    const entries: MetricsLogEntry[] = [];
+    const VALID_KINDS = new Set<string>([
+      "search",
+      "install",
+      "read",
+      "run",
+      "write",
+      "debug",
+      "analyze",
+      "chat",
+      "unknown",
+    ]);
+
+    for (const line of content.trim().split("\n")) {
+      if (!line) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line);
+        // Validate entry shape before accepting
+        if (
+          typeof parsed.t === "number" &&
+          typeof parsed.s === "string" &&
+          VALID_KINDS.has(parsed.k) &&
+          typeof parsed.si === "boolean"
+        ) {
+          entries.push(parsed as MetricsLogEntry);
+        }
+        // Skip entries with invalid shape silently
+      } catch {
+        // Skip malformed lines
+      }
+    }
+
     if (since) {
       return entries.filter((e) => e.t >= since);
     }
@@ -224,7 +256,9 @@ export function aggregatePersistedMetrics(entries: MetricsLogEntry[]): Classific
   const result = createEmptyMetrics();
   for (const e of entries) {
     result.totalClassifications++;
-    result.kindDistribution[e.k]++;
+    if (e.k in result.kindDistribution) {
+      result.kindDistribution[e.k]++;
+    }
     if (e.si) {
       result.signalInjected++;
     }

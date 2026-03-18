@@ -91,6 +91,8 @@
       "scoreThreshold": {
         "type": "number",
         "default": 5.0,
+        "minimum": 0,
+        "exclusiveMinimum": true,
         "description": "Minimum weighted score for a kind to win classification"
       },
       "modelRoutingEnabled": {

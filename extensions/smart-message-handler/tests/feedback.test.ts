@@ -17,14 +17,15 @@ describe("feedback", () => {
     resetFeedback();
   });
 
-  it("setLastPrediction updates the prediction", () => {
-    setLastPrediction("debug");
-    expect(getLastPrediction()).toBe("debug");
+  it("setLastPrediction updates the prediction per session", () => {
+    setLastPrediction("debug", "s1");
+    expect(getLastPrediction("s1")).toBe("debug");
+    expect(getLastPrediction("s2")).toBe("unknown");
   });
 
   it("recordToolUsage creates a matched entry when prediction aligns", () => {
-    setLastPrediction("search");
-    recordToolUsage("grep");
+    setLastPrediction("search", "s1");
+    recordToolUsage("grep", "s1");
     const log = getFeedbackLog();
     expect(log.length).toBe(1);
     expect(log[0].matched).toBe(true);
@@ -33,35 +34,46 @@ describe("feedback", () => {
   });
 
   it("recordToolUsage creates a mismatched entry when prediction differs", () => {
-    setLastPrediction("write");
-    recordToolUsage("grep");
+    setLastPrediction("write", "s1");
+    recordToolUsage("grep", "s1");
     const log = getFeedbackLog();
     expect(log.length).toBe(1);
     expect(log[0].matched).toBe(false);
   });
 
   it("recordToolUsage skips unknown tool names", () => {
-    setLastPrediction("debug");
-    recordToolUsage("unknown_tool_xyz");
+    setLastPrediction("debug", "s1");
+    recordToolUsage("unknown_tool_xyz", "s1");
     const log = getFeedbackLog();
     expect(log.length).toBe(0);
   });
 
   it("recordToolUsage normalizes tool name to lowercase", () => {
-    setLastPrediction("read");
-    recordToolUsage("READ");
+    setLastPrediction("read", "s1");
+    recordToolUsage("READ", "s1");
     const log = getFeedbackLog();
     expect(log.length).toBe(1);
     expect(log[0].actualToolName).toBe("read");
     expect(log[0].matched).toBe(true);
   });
 
+  it("recordToolUsage isolates predictions across sessions", () => {
+    setLastPrediction("search", "s1");
+    setLastPrediction("write", "s2");
+    recordToolUsage("grep", "s1"); // match for s1 (search)
+    recordToolUsage("grep", "s2"); // mismatch for s2 (write)
+    const log = getFeedbackLog();
+    expect(log.length).toBe(2);
+    expect(log[0].matched).toBe(true);
+    expect(log[1].matched).toBe(false);
+  });
+
   it("getFeedbackStats returns correct match rate", () => {
-    setLastPrediction("search");
-    recordToolUsage("grep"); // match
-    recordToolUsage("find"); // match
-    setLastPrediction("write");
-    recordToolUsage("grep"); // mismatch
+    setLastPrediction("search", "s1");
+    recordToolUsage("grep", "s1"); // match
+    recordToolUsage("find", "s1"); // match
+    setLastPrediction("write", "s1");
+    recordToolUsage("grep", "s1"); // mismatch
     const stats = getFeedbackStats();
     expect(stats.total).toBe(3);
     expect(stats.matchRate).toBe("66.7%");
@@ -76,28 +88,30 @@ describe("feedback", () => {
   });
 
   it("enforces MAX_FEEDBACK limit by dropping oldest entries", () => {
-    setLastPrediction("run");
+    setLastPrediction("run", "s1");
     // Record 510 tool usages to exceed the 500 limit
     for (let i = 0; i < 510; i++) {
-      recordToolUsage("bash");
+      recordToolUsage("bash", "s1");
     }
     const log = getFeedbackLog();
     expect(log.length).toBe(500);
   });
 
-  it("resetFeedback clears log and resets prediction", () => {
-    setLastPrediction("debug");
-    recordToolUsage("bash");
+  it("resetFeedback clears log and resets all session predictions", () => {
+    setLastPrediction("debug", "s1");
+    setLastPrediction("search", "s2");
+    recordToolUsage("bash", "s1");
     resetFeedback();
-    expect(getLastPrediction()).toBe("unknown");
+    expect(getLastPrediction("s1")).toBe("unknown");
+    expect(getLastPrediction("s2")).toBe("unknown");
     expect(getFeedbackLog().length).toBe(0);
   });
 
   it("formatFeedbackReport produces a readable report", () => {
-    setLastPrediction("search");
-    recordToolUsage("grep");
-    setLastPrediction("write");
-    recordToolUsage("grep");
+    setLastPrediction("search", "s1");
+    recordToolUsage("grep", "s1");
+    setLastPrediction("write", "s1");
+    recordToolUsage("grep", "s1");
     const report = formatFeedbackReport();
     expect(report.includes("Feedback Report")).toBe(true);
     expect(report.includes("Total observations: 2")).toBe(true);

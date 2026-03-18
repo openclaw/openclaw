@@ -5,6 +5,14 @@ import { DEFAULT_CONFIG } from "./types.ts";
 
 const CLASSIFIER_VERSION = "2.0-weighted";
 
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 /**
  * Build a structured pre-computed verdict from a classified ExecutionIntent.
  * Downstream consumers can read this directly instead of re-running classification.
@@ -51,13 +59,13 @@ export function buildDynamicExecutionSignal(
 
   return `
 <message_classification>
-<kind>${classification.kind}</kind>
-<confidence>${classification.confidence}</confidence>
-<input_finalized>${classification.input_finalized}</input_finalized>
-<execution_expected>${classification.execution_expected}</execution_expected>
-<suggested_tier>${classification.suggested_tier}</suggested_tier>
-<score>${classification.score}</score>
-<classifier_version>${classification.classifier_version}</classifier_version>
+<kind>${escapeXml(String(classification.kind))}</kind>
+<confidence>${escapeXml(String(classification.confidence))}</confidence>
+<input_finalized>${escapeXml(String(classification.input_finalized))}</input_finalized>
+<execution_expected>${escapeXml(String(classification.execution_expected))}</execution_expected>
+<suggested_tier>${escapeXml(String(classification.suggested_tier))}</suggested_tier>
+<score>${escapeXml(String(classification.score))}</score>
+<classifier_version>${escapeXml(String(classification.classifier_version))}</classifier_version>
 </message_classification>
 `.trim();
 }

@@ -77,7 +77,7 @@ export default function register(api: PluginApi) {
       const currentConfig = getConfig(api);
 
       // 2. session check
-      const sessionKey = ctx.sessionKey || "default";
+      const sessionKey = ctx.sessionKey;
       if (currentConfig.disableForLocalMainSession && sessionKey === "agent:main:main") {
         logDebug(
           currentConfig,
@@ -91,8 +91,12 @@ export default function register(api: PluginApi) {
 
       // 3. recordMessage
       const lastMessage = event.prompt || "";
-      sessionStore = recordMessage(sessionStore, sessionKey);
-      const sessionState = getSession(sessionStore, sessionKey);
+      if (!lastMessage.trim()) {
+        return {}; // empty message: skip session recording and classification
+      }
+      const sessionId = sessionKey || "default";
+      sessionStore = recordMessage(sessionStore, sessionId);
+      const sessionState = getSession(sessionStore, sessionId);
 
       // 4. debounce calculation
       const multiplier = calculateDebounceMultiplier(lastMessage, sessionState, currentConfig);
@@ -121,11 +125,14 @@ export default function register(api: PluginApi) {
         runtimePhrases.length > 0
           ? { ...currentConfig, customPhrases: [...currentConfig.customPhrases, ...runtimePhrases] }
           : currentConfig;
-      let classification =
-        classificationCache.get(sessionKey) || classifyMessage(lastMessage, effectiveConfig);
-      classificationCache.delete(sessionKey); // consumed; avoid memory leak
+      const cached = sessionKey ? classificationCache.get(sessionKey) : undefined;
+      let classification = cached || classifyMessage(lastMessage, effectiveConfig);
+      if (sessionKey) {
+        classificationCache.delete(sessionKey);
+      } // consumed; avoid memory leak
 
       // Embedding cache override
+      const preOverrideKind = classification.kind;
       if (currentConfig.embeddingCacheEnabled && isEmbeddingCacheLoaded()) {
         const textMatch = findBestTextMatch(lastMessage, 0.6);
         if (textMatch) {
@@ -152,7 +159,7 @@ export default function register(api: PluginApi) {
       }
 
       // 6. buildDynamicExecutionSignal (classification XML)
-      setLastPrediction(classification.kind);
+      setLastPrediction(classification.kind, sessionId);
       logDebug(currentConfig, `Classification:`, classification, api.logger);
 
       const signal = buildDynamicExecutionSignal(classification, currentConfig.locale);
@@ -181,6 +188,7 @@ export default function register(api: PluginApi) {
           baselineResult: baselineIntent.execution_kind,
           currentScore: classification.score,
           agreed: classification.kind === baselineIntent.execution_kind,
+          preOverrideKind: preOverrideKind !== classification.kind ? preOverrideKind : undefined,
         });
       }
 
@@ -208,8 +216,10 @@ export default function register(api: PluginApi) {
         ? { ...currentConfig, customPhrases: [...currentConfig.customPhrases, ...runtimePhrases] }
         : currentConfig;
     const classification = classifyMessage(lastMessage, effectiveConfig);
-    const sessionKey = ctx.sessionKey || "default";
-    classificationCache.set(sessionKey, classification);
+    const sessionKey = ctx.sessionKey;
+    if (sessionKey) {
+      classificationCache.set(sessionKey, classification);
+    }
 
     if (classification.confidence === "low") {
       return {};
@@ -225,8 +235,8 @@ export default function register(api: PluginApi) {
     return {};
   });
 
-  api.on("after_tool_call", (event) => {
-    recordToolUsage(event.toolName);
+  api.on("after_tool_call", (event, ctx) => {
+    recordToolUsage(event.toolName, ctx.sessionKey || "default");
   });
 
   api.registerCommand({
