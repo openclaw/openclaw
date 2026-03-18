@@ -86,6 +86,18 @@ export function resolveTrackedSlackBlockReplyThreadTs(params: {
   return params.usedBlockReplyThreadTs;
 }
 
+export function resolveSlackDraftPreviewThreadTs(params: {
+  replyToMode: "off" | "first" | "all";
+  plannedThreadTs?: string;
+  usedReplyThreadTs?: string;
+}): string | undefined {
+  return resolveSlackDeliveryThreadTs({
+    plannedThreadTs: params.plannedThreadTs,
+    usedReplyThreadTs: params.usedReplyThreadTs,
+    allowUsedReplyThreadTs: params.replyToMode === "all",
+  });
+}
+
 function shouldUseStreaming(params: {
   streamingEnabled: boolean;
   threadTs: string | undefined;
@@ -450,10 +462,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     accountId: account.accountId,
     maxChars: Math.min(ctx.textLimit, 4000),
     resolveThreadTs: () => {
-      const ts = resolveSlackDeliveryThreadTs({
+      const ts = resolveSlackDraftPreviewThreadTs({
+        replyToMode: prepared.replyToMode,
         plannedThreadTs: replyPlan.nextThreadTs(),
         usedReplyThreadTs: usedBlockReplyThreadTs,
-        allowUsedReplyThreadTs: true,
       });
       if (ts) {
         usedReplyThreadTs ??= ts;

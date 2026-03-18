@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isSlackStreamingEnabled,
+  resolveSlackDraftPreviewThreadTs,
   resolveSlackDeliveryThreadTs,
   resolveSlackStreamingThreadHint,
   resolveTrackedSlackBlockReplyThreadTs,
@@ -106,6 +107,28 @@ describe("slack block delivery thread reuse", () => {
         deliveredThreadTs: "reply-tag.1",
         usedBlockReplyThreadTs: "3000.1",
         trackBlockReplyThreadTs: false,
+      }),
+    ).toBe("3000.1");
+  });
+});
+
+describe("slack draft preview thread reuse", () => {
+  it("does not reuse the cached thread in first mode once planning is exhausted", () => {
+    expect(
+      resolveSlackDraftPreviewThreadTs({
+        replyToMode: "first",
+        plannedThreadTs: undefined,
+        usedReplyThreadTs: "3000.1",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("can reuse the cached thread in all mode when planning is exhausted", () => {
+    expect(
+      resolveSlackDraftPreviewThreadTs({
+        replyToMode: "all",
+        plannedThreadTs: undefined,
+        usedReplyThreadTs: "3000.1",
       }),
     ).toBe("3000.1");
   });
