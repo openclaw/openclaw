@@ -30,13 +30,25 @@ export const saveSessionStore = library.saveSessionStore;
 export const toWhatsappJid = library.toWhatsappJid;
 export const waitForever = library.waitForever;
 
-// Legacy direct file entrypoint only. Package root exports now live in library.ts.
-export async function runLegacyCliEntry(argv: string[] = process.argv): Promise<void> {
+type LegacyCliDeps = {
+  installGaxiosFetchCompat: () => Promise<void>;
+  runCli: (argv: string[]) => Promise<void>;
+};
+
+async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
   const [{ installGaxiosFetchCompat }, { runCli }] = await Promise.all([
     import("./infra/gaxios-fetch-compat.js"),
     import("./cli/run-main.js"),
   ]);
+  return { installGaxiosFetchCompat, runCli };
+}
 
+// Legacy direct file entrypoint only. Package root exports now live in library.ts.
+export async function runLegacyCliEntry(
+  argv: string[] = process.argv,
+  deps?: LegacyCliDeps,
+): Promise<void> {
+  const { installGaxiosFetchCompat, runCli } = deps ?? (await loadLegacyCliDeps());
   await installGaxiosFetchCompat();
   await runCli(argv);
 }

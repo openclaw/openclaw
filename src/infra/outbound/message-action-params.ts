@@ -6,8 +6,8 @@ import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins
 import type { OpenClawConfig } from "../../config/config.js";
 import { createRootScopedReadFile } from "../../infra/fs-safe.js";
 import { extensionForMime } from "../../media/mime.js";
+import { loadWebMedia } from "../../media/web-media.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
-import { loadWebMedia } from "../../plugin-sdk/web-media.js";
 
 export const readBooleanParam = readBooleanParamShared;
 

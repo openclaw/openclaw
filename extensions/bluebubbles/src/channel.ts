@@ -4,7 +4,14 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import { collectOpenGroupPolicyRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
+import {
+  createOpenGroupPolicyRestrictSendersWarningCollector,
+  projectWarningCollector,
+} from "openclaw/plugin-sdk/channel-policy";
+import {
+  createPairingPrefixStripper,
+  createTextPairingAdapter,
+} from "openclaw/plugin-sdk/channel-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   listBlueBubblesAccountIds,
@@ -68,6 +75,17 @@ const resolveBlueBubblesDmPolicy = createScopedDmSecurityResolver<ResolvedBlueBu
   normalizeEntry: (raw) => normalizeBlueBubblesHandle(raw.replace(/^bluebubbles:/i, "")),
 });
 
+const collectBlueBubblesSecurityWarnings =
+  createOpenGroupPolicyRestrictSendersWarningCollector<ResolvedBlueBubblesAccount>({
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
+    defaultGroupPolicy: "allowlist",
+    surface: "BlueBubbles groups",
+    openScope: "any member",
+    groupPolicyPath: "channels.bluebubbles.groupPolicy",
+    groupAllowFromPath: "channels.bluebubbles.groupAllowFrom",
+    mentionGated: false,
+  });
+
 const meta = {
   id: "bluebubbles",
   label: "BlueBubbles",
@@ -123,17 +141,10 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   actions: bluebubblesMessageActions,
   security: {
     resolveDmPolicy: resolveBlueBubblesDmPolicy,
-    collectWarnings: ({ account }) => {
-      const groupPolicy = account.config.groupPolicy ?? "allowlist";
-      return collectOpenGroupPolicyRestrictSendersWarnings({
-        groupPolicy,
-        surface: "BlueBubbles groups",
-        openScope: "any member",
-        groupPolicyPath: "channels.bluebubbles.groupPolicy",
-        groupAllowFromPath: "channels.bluebubbles.groupAllowFrom",
-        mentionGated: false,
-      });
-    },
+    collectWarnings: projectWarningCollector(
+      ({ account }: { account: ResolvedBlueBubblesAccount }) => account,
+      collectBlueBubblesSecurityWarnings,
+    ),
   },
   messaging: {
     normalizeTarget: normalizeBlueBubblesMessagingTarget,
@@ -226,17 +237,18 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
     },
   },
   setup: blueBubblesSetupAdapter,
-  pairing: {
+  pairing: createTextPairingAdapter({
     idLabel: "bluebubblesSenderId",
-    normalizeAllowEntry: (entry) => normalizeBlueBubblesHandle(entry.replace(/^bluebubbles:/i, "")),
-    notifyApproval: async ({ cfg, id }) => {
+    message: PAIRING_APPROVED_MESSAGE,
+    normalizeAllowEntry: createPairingPrefixStripper(/^bluebubbles:/i, normalizeBlueBubblesHandle),
+    notify: async ({ cfg, id, message }) => {
       await (
         await loadBlueBubblesChannelRuntime()
-      ).sendMessageBlueBubbles(id, PAIRING_APPROVED_MESSAGE, {
+      ).sendMessageBlueBubbles(id, message, {
         cfg: cfg,
       });
     },
-  },
+  }),
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 4000,

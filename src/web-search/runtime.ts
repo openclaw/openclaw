@@ -61,19 +61,14 @@ function readProviderEnvValue(envVars: string[]): string | undefined {
   return undefined;
 }
 
-function hasProviderCredential(
-  providerId: string,
+function hasEntryCredential(
+  provider: Pick<
+    PluginWebSearchProviderEntry,
+    "credentialPath" | "envVars" | "getConfiguredCredentialValue" | "getCredentialValue"
+  >,
   config: OpenClawConfig | undefined,
   search: WebSearchConfig | undefined,
 ): boolean {
-  const providers = resolvePluginWebSearchProviders({
-    config,
-    bundledAllowlistCompat: true,
-  });
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    return false;
-  }
   const rawValue =
     provider.getConfiguredCredentialValue?.(config) ??
     provider.getCredentialValue(search as Record<string, unknown> | undefined);
@@ -120,7 +115,7 @@ export function resolveWebSearchProviderId(params: {
 
   if (!raw) {
     for (const provider of providers) {
-      if (!hasProviderCredential(provider.id, params.config, params.search)) {
+      if (!hasEntryCredential(provider, params.config, params.search)) {
         continue;
       }
       logVerbose(
