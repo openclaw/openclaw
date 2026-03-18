@@ -4,7 +4,6 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/infra/warning-filter.ts!",
-  "src/channels/plugins/agent-tools/whatsapp-login.ts!",
   "extensions/telegram/src/audit.ts!",
   "extensions/telegram/src/token.ts!",
   "src/line/accounts.ts!",
