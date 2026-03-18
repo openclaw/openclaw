@@ -6,7 +6,8 @@
   "type": "module",
   "dependencies": {
     "@morphllm/morphsdk": "^0.2.143",
-    "@sinclair/typebox": "0.34.48"
+    "@sinclair/typebox": "0.34.48",
+    "ai": ">=5.0.0"
   },
   "openclaw": {
     "extensions": [
