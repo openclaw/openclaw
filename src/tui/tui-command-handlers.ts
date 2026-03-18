@@ -16,7 +16,12 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
-import { normalizeTuiAliasName, parseTuiAliasArgs, saveTuiAliases } from "./tui-aliases.js";
+import {
+  normalizeTuiAliasName,
+  parseTuiAliasArgs,
+  saveTuiAliases,
+  type TuiAliasMap,
+} from "./tui-aliases.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
@@ -244,8 +249,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
-  const persistAliases = async () => {
-    await saveTuiAliases(state.tuiAliases);
+  const persistAliases = async (aliases: TuiAliasMap) => {
+    await saveTuiAliases(aliases);
+    state.tuiAliases = aliases;
     refreshAutocomplete();
   };
 
@@ -554,12 +560,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem("usage: /alias <name> <prompt> or /alias <name>");
           break;
         }
-        state.tuiAliases = {
+        const nextAliases = {
           ...state.tuiAliases,
           [aliasName]: aliasPrompt,
         };
         try {
-          await persistAliases();
+          await persistAliases(nextAliases);
           chatLog.addSystem(`alias saved: ${aliasName}`);
         } catch (err) {
           chatLog.addSystem(`alias save failed: ${sanitizeRenderableText(String(err))}`);
@@ -578,9 +584,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         const nextAliases = { ...state.tuiAliases };
         delete nextAliases[aliasName];
-        state.tuiAliases = nextAliases;
         try {
-          await persistAliases();
+          await persistAliases(nextAliases);
           chatLog.addSystem(`alias removed: ${aliasName}`);
         } catch (err) {
           chatLog.addSystem(`alias remove failed: ${sanitizeRenderableText(String(err))}`);

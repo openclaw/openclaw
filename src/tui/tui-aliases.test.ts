@@ -29,6 +29,10 @@ describe("parseTuiAliasArgs", () => {
     ]);
   });
 
+  it("keeps hash fragments in unquoted prompts", () => {
+    expect(parseTuiAliasArgs("review check #49141")).toEqual(["review", "check", "#49141"]);
+  });
+
   it("returns null for unterminated quotes", () => {
     expect(parseTuiAliasArgs(`review "oops`)).toBeNull();
   });
@@ -54,6 +58,14 @@ describe("tui alias store", () => {
   it("returns an empty map when the alias file does not exist", async () => {
     await withTempHome(async () => {
       await expect(loadTuiAliases()).resolves.toEqual({});
+    });
+  });
+
+  it("throws non-ENOENT read errors so callers can surface them", async () => {
+    await withTempHome(async () => {
+      const filePath = resolveTuiAliasStorePath();
+      await fs.mkdir(filePath, { recursive: true });
+      await expect(loadTuiAliases()).rejects.toThrow();
     });
   });
 });
