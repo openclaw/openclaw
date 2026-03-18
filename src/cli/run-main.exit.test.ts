@@ -14,8 +14,8 @@ vi.mock("./route.js", () => ({
   tryRouteCli: tryRouteCliMock,
 }));
 
-vi.mock("../infra/dotenv.js", () => ({
-  loadDotEnv: loadDotEnvMock,
+vi.mock("./dotenv.js", () => ({
+  loadCliDotEnv: loadDotEnvMock,
 }));
 
 vi.mock("../infra/env.js", () => ({

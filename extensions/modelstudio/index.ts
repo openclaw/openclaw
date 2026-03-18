@@ -1,22 +1,22 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildModelStudioProvider } from "../../src/agents/models-config.providers.static.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import {
   applyModelStudioConfig,
   applyModelStudioConfigCn,
   applyModelStudioStandardConfig,
   applyModelStudioStandardConfigCn,
   MODELSTUDIO_DEFAULT_MODEL_REF,
-} from "../../src/commands/onboard-auth.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+} from "./onboard.js";
+import { buildModelStudioProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "modelstudio";
 
-const modelStudioPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Model Studio Provider",
   description: "Bundled Model Studio provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Model Studio",
@@ -134,25 +134,14 @@ const modelStudioPlugin = {
       ],
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          const explicitProvider = ctx.config.models?.providers?.[PROVIDER_ID];
-          const explicitBaseUrl =
-            typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
-          return {
-            provider: {
-              ...buildModelStudioProvider(),
-              ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-              apiKey,
-            },
-          };
-        },
+        run: (ctx) =>
+          buildSingleProviderApiKeyCatalog({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildModelStudioProvider,
+            allowExplicitBaseUrl: true,
+          }),
       },
     });
   },
-};
-
-export default modelStudioPlugin;
+});

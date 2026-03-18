@@ -1,7 +1,12 @@
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import { applyTlonSetupConfig, type TlonSetupInput, tlonSetupAdapter } from "./setup-core.js";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
+import {
+  applyTlonSetupConfig,
+  createTlonSetupWizardBase,
+  resolveTlonSetupConfigured,
+  resolveTlonSetupStatusLines,
+  type TlonSetupInput,
+  tlonSetupAdapter,
+} from "./setup-core.js";
 import { normalizeShip } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
 import { isBlockedUrbitHostname, validateUrbitBaseUrl } from "./urbit/base-url.js";
@@ -21,91 +26,9 @@ function parseList(value: string): string[] {
 
 export { tlonSetupAdapter } from "./setup-core.js";
 
-export const tlonSetupWizard: ChannelSetupWizard = {
-  channel,
-  status: {
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs setup",
-    configuredHint: "configured",
-    unconfiguredHint: "urbit messenger",
-    configuredScore: 1,
-    unconfiguredScore: 4,
-    resolveConfigured: ({ cfg }) => {
-      const accountIds = listTlonAccountIds(cfg);
-      return accountIds.length > 0
-        ? accountIds.some((accountId) => isConfigured(resolveTlonAccount(cfg, accountId)))
-        : isConfigured(resolveTlonAccount(cfg, DEFAULT_ACCOUNT_ID));
-    },
-    resolveStatusLines: ({ cfg }) => {
-      const accountIds = listTlonAccountIds(cfg);
-      const configured =
-        accountIds.length > 0
-          ? accountIds.some((accountId) => isConfigured(resolveTlonAccount(cfg, accountId)))
-          : isConfigured(resolveTlonAccount(cfg, DEFAULT_ACCOUNT_ID));
-      return [`Tlon: ${configured ? "configured" : "needs setup"}`];
-    },
-  },
-  introNote: {
-    title: "Tlon setup",
-    lines: [
-      "You need your Urbit ship URL and login code.",
-      "Example URL: https://your-ship-host",
-      "Example ship: ~sampel-palnet",
-      "If your ship URL is on a private network (LAN/localhost), you must explicitly allow it during setup.",
-      `Docs: ${formatDocsLink("/channels/tlon", "channels/tlon")}`,
-    ],
-  },
-  credentials: [],
-  textInputs: [
-    {
-      inputKey: "ship",
-      message: "Ship name",
-      placeholder: "~sampel-palnet",
-      currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).ship ?? undefined,
-      validate: ({ value }) => (String(value ?? "").trim() ? undefined : "Required"),
-      normalizeValue: ({ value }) => normalizeShip(String(value).trim()),
-      applySet: async ({ cfg, accountId, value }) =>
-        applyTlonSetupConfig({
-          cfg,
-          accountId,
-          input: { ship: value },
-        }),
-    },
-    {
-      inputKey: "url",
-      message: "Ship URL",
-      placeholder: "https://your-ship-host",
-      currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).url ?? undefined,
-      validate: ({ value }) => {
-        const next = validateUrbitBaseUrl(String(value ?? ""));
-        if (!next.ok) {
-          return next.error;
-        }
-        return undefined;
-      },
-      normalizeValue: ({ value }) => String(value).trim(),
-      applySet: async ({ cfg, accountId, value }) =>
-        applyTlonSetupConfig({
-          cfg,
-          accountId,
-          input: { url: value },
-        }),
-    },
-    {
-      inputKey: "code",
-      message: "Login code",
-      placeholder: "lidlut-tabwed-pillex-ridrup",
-      currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).code ?? undefined,
-      validate: ({ value }) => (String(value ?? "").trim() ? undefined : "Required"),
-      normalizeValue: ({ value }) => String(value).trim(),
-      applySet: async ({ cfg, accountId, value }) =>
-        applyTlonSetupConfig({
-          cfg,
-          accountId,
-          input: { code: value },
-        }),
-    },
-  ],
+export const tlonSetupWizard = createTlonSetupWizardBase({
+  resolveConfigured: async ({ cfg }) => await resolveTlonSetupConfigured(cfg),
+  resolveStatusLines: async ({ cfg }) => await resolveTlonSetupStatusLines(cfg),
   finalize: async ({ cfg, accountId, prompter }) => {
     let next = cfg;
     const resolved = resolveTlonAccount(next, accountId);
@@ -181,4 +104,4 @@ export const tlonSetupWizard: ChannelSetupWizard = {
 
     return { cfg: next };
   },
-};
+});

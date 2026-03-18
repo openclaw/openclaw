@@ -5,7 +5,7 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../../src/auto-reply/inbound-debounce.js";
-import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import { setFeishuRuntime } from "./runtime.js";
 import type { ResolvedFeishuAccount } from "./types.js";
