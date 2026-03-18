@@ -9,13 +9,6 @@ import {
   hasConfiguredSecretInput,
   patchChannelConfigForAccount,
 } from "openclaw/plugin-sdk/setup";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  SlackConfigSchema,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/slack-core";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
@@ -24,6 +17,13 @@ import {
   type ResolvedSlackAccount,
 } from "./accounts.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
+import {
+  buildChannelConfigSchema,
+  getChatChannelMeta,
+  SlackConfigSchema,
+  type ChannelPlugin,
+  type OpenClawConfig,
+} from "./runtime-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
