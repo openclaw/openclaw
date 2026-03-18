@@ -58,7 +58,13 @@ export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): stri
 
 export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
 const pluginPkg = JSON.parse(fs.readFileSync(path.join(ACPX_PLUGIN_ROOT, "package.json"), "utf8"));
-export const ACPX_PINNED_VERSION: string = pluginPkg.dependencies.acpx;
+const acpxVersion: unknown = pluginPkg?.dependencies?.acpx;
+if (typeof acpxVersion !== "string" || acpxVersion.trim() === "") {
+  throw new Error(
+    `Could not read acpx version from ${path.join(ACPX_PLUGIN_ROOT, "package.json")} — expected a non-empty string at dependencies.acpx`
+  );
+}
+export const ACPX_PINNED_VERSION: string = acpxVersion.replace(/^[^0-9]*/, "");
 export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
 export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
   return `npm install --omit=dev --no-save --package-lock=false acpx@${version}`;
