@@ -71,7 +71,9 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   const providerHint = ctx.Provider?.trim().toLowerCase();
 
   const parts = from.split(":").filter(Boolean);
-  const head = parts[0]?.trim().toLowerCase() ?? "";
+  const normalizedParts = parts.map((part) => part.trim().toLowerCase());
+  const startIndex = normalizedParts[0] === "agent" && normalizedParts.length >= 3 ? 2 : 0;
+  const head = normalizedParts[startIndex] ?? "";
   const headIsSurface = head ? getGroupSurfaces().has(head) : false;
 
   const provider = headIsSurface
@@ -81,7 +83,7 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     return null;
   }
 
-  const second = parts[1]?.trim().toLowerCase();
+  const second = normalizedParts[startIndex + 1];
   const secondIsKind = second === "group" || second === "channel";
   const kind = secondIsKind
     ? second
@@ -90,8 +92,8 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
       : "group";
   const id = headIsSurface
     ? secondIsKind
-      ? parts.slice(2).join(":")
-      : parts.slice(1).join(":")
+      ? parts.slice(startIndex + 2).join(":")
+      : parts.slice(startIndex + 1).join(":")
     : from;
   const finalId = id.trim().toLowerCase();
   if (!finalId) {

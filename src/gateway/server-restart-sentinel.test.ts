@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
@@ -78,6 +78,25 @@ vi.mock("../infra/system-events.js", () => ({
 
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.consumeRestartSentinel.mockResolvedValue({
+    payload: {
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "+15550002",
+        accountId: "acct-2",
+      },
+    },
+  });
+  mocks.parseSessionThreadInfo.mockReturnValue({ baseSessionKey: null, threadId: undefined });
+  mocks.loadSessionEntry.mockReturnValue({ cfg: {}, entry: {} });
+  mocks.resolveAnnounceTargetFromKey.mockReturnValue(null);
+  mocks.deliveryContextFromSession.mockReturnValue(undefined);
+  mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "+15550002" });
+});
+
 describe("scheduleRestartSentinelWake", () => {
   it("forwards session context to outbound delivery", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
@@ -90,5 +109,56 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     );
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("falls back to base session delivery only when the current session route is incomplete", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce({
+      payload: {
+        sessionKey: "agent:main:slack:channel:C0AL50GP89M:thread:1773827207.576549",
+        deliveryContext: {
+          channel: "slack",
+        },
+      },
+    });
+    mocks.parseSessionThreadInfo.mockReturnValueOnce({
+      baseSessionKey: "agent:main:slack:channel:C0ALZAZ6ZBK",
+      threadId: "1773827207.576549",
+    });
+    mocks.loadSessionEntry
+      .mockReturnValueOnce({
+        cfg: {},
+        entry: {
+          deliveryContext: {
+            channel: "slack",
+          },
+        },
+      })
+      .mockReturnValueOnce({
+        cfg: {},
+        entry: {
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:C0AL50GP89M",
+            accountId: "default",
+          },
+        },
+      });
+    mocks.deliveryContextFromSession
+      .mockReturnValueOnce({ channel: "slack" })
+      .mockReturnValueOnce({
+        channel: "slack",
+        to: "channel:C0AL50GP89M",
+        accountId: "default",
+      });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true as const, to: "channel:C0AL50GP89M" });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "channel:C0AL50GP89M",
+      }),
+    );
   });
 });

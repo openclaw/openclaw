@@ -40,13 +40,20 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
   // Handles race condition where store wasn't flushed before restart
   const sentinelContext = payload.deliveryContext;
   let sessionDeliveryContext = deliveryContextFromSession(entry);
-  if (!sessionDeliveryContext && baseSessionKey && baseSessionKey !== sessionKey) {
+  if (
+    (!sessionDeliveryContext || !sessionDeliveryContext.channel || !sessionDeliveryContext.to) &&
+    baseSessionKey &&
+    baseSessionKey !== sessionKey
+  ) {
     const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
-    sessionDeliveryContext = deliveryContextFromSession(baseEntry);
+    const baseDeliveryContext = deliveryContextFromSession(baseEntry);
+    sessionDeliveryContext = mergeDeliveryContext(sessionDeliveryContext, baseDeliveryContext);
   }
 
+  const trustedSentinelContext =
+    sentinelContext?.channel && sentinelContext?.to ? sentinelContext : undefined;
   const origin = mergeDeliveryContext(
-    sentinelContext,
+    trustedSentinelContext,
     mergeDeliveryContext(sessionDeliveryContext, parsedTarget ?? undefined),
   );
 
