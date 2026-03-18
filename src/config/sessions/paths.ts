@@ -455,6 +455,19 @@ export async function ensureManagedSessionsDirForAgent(
   return await ensurePrivateSessionsDir(resolveManagedSessionsDirForAgent(agentId, opts));
 }
 
+export async function ensureSessionDirForFile(
+  sessionFile: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
+): Promise<string> {
+  const sessionDir = path.dirname(path.resolve(sessionFile));
+  if (isManagedSessionsDir(sessionDir, env, homedir)) {
+    return await ensurePrivateSessionsDir(sessionDir);
+  }
+  await fsPromises.mkdir(sessionDir, { recursive: true });
+  return sessionDir;
+}
+
 export function isManagedSessionsDir(
   sessionsDir: string,
   env: NodeJS.ProcessEnv = process.env,
