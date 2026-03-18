@@ -1839,6 +1839,46 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).not.toHaveBeenCalled();
   });
+  it("keeps captioned native skill invocations on the generic DM path", async () => {
+    commandSpy.mockClear();
+    replySpy.mockClear();
+    listSkillCommandsForAgents.mockReturnValue([
+      {
+        name: "demo_skill",
+        skillName: "demo-skill",
+        description: "Demo skill",
+      },
+    ]);
+
+    loadConfig.mockReturnValue({
+      commands: { native: true, nativeSkills: true, text: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 1234, type: "private" },
+        from: { id: 456, username: "testuser" },
+        caption: "/demo_skill hello",
+        date: 1736380800,
+        message_id: 43,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0]?.[0] as { Body?: string };
+    expect(payload.Body).toContain("/demo_skill hello");
+  });
   it("keeps /skill on the generic message path when Telegram native commands are disabled", async () => {
     replySpy.mockClear();
 
