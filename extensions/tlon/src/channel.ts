@@ -1,3 +1,4 @@
+import { createHybridChannelConfigBase } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -37,6 +38,16 @@ const tlonSetupWizardProxy = createTlonSetupWizardBase({
     ).tlonSetupWizard.finalize!(params),
 }) satisfies NonNullable<ChannelPlugin["setupWizard"]>;
 
+const tlonConfigBase = createHybridChannelConfigBase({
+  sectionKey: TLON_CHANNEL_ID,
+  listAccountIds: (cfg: OpenClawConfig) => listTlonAccountIds(cfg),
+  resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
+    resolveTlonAccount(cfg, accountId ?? undefined),
+  defaultAccountId: () => "default",
+  clearBaseFields: ["ship", "code", "url", "name"],
+  preserveSectionOnDefaultDelete: true,
+});
+
 export const tlonPlugin: ChannelPlugin = {
   id: TLON_CHANNEL_ID,
   meta: {
@@ -60,70 +71,7 @@ export const tlonPlugin: ChannelPlugin = {
   reload: { configPrefixes: ["channels.tlon"] },
   configSchema: tlonChannelConfigSchema,
   config: {
-    listAccountIds: (cfg) => listTlonAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveTlonAccount(cfg, accountId ?? undefined),
-    defaultAccountId: () => "default",
-    setAccountEnabled: ({ cfg, accountId, enabled }) => {
-      const useDefault = !accountId || accountId === "default";
-      if (useDefault) {
-        return {
-          ...cfg,
-          channels: {
-            ...cfg.channels,
-            tlon: {
-              ...cfg.channels?.tlon,
-              enabled,
-            },
-          },
-        } as OpenClawConfig;
-      }
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          tlon: {
-            ...cfg.channels?.tlon,
-            accounts: {
-              ...cfg.channels?.tlon?.accounts,
-              [accountId]: {
-                ...cfg.channels?.tlon?.accounts?.[accountId],
-                enabled,
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
-    },
-    deleteAccount: ({ cfg, accountId }) => {
-      const useDefault = !accountId || accountId === "default";
-      if (useDefault) {
-        const {
-          ship: _ship,
-          code: _code,
-          url: _url,
-          name: _name,
-          ...rest
-        } = cfg.channels?.tlon ?? {};
-        return {
-          ...cfg,
-          channels: {
-            ...cfg.channels,
-            tlon: rest,
-          },
-        } as OpenClawConfig;
-      }
-      const { [accountId]: _removed, ...remainingAccounts } = cfg.channels?.tlon?.accounts ?? {};
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          tlon: {
-            ...cfg.channels?.tlon,
-            accounts: remainingAccounts,
-          },
-        },
-      } as OpenClawConfig;
-    },
+    ...tlonConfigBase,
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({
       accountId: account.accountId,
