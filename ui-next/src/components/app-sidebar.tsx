@@ -6,6 +6,7 @@ import {
   Brain,
   Bug,
   Database,
+  DollarSign,
   Eye,
   FileText,
   FolderKanban,
@@ -240,6 +241,12 @@ const navData = {
       url: "/activity",
       icon: ScrollText,
       subtitle: "Activity feed",
+    },
+    {
+      title: "Budgets",
+      url: "/budgets",
+      icon: DollarSign,
+      subtitle: "Cost budgets and incidents",
     },
   ],
   mcp: [
