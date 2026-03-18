@@ -14,6 +14,7 @@ import {
   wrapWebContent,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
+import type { WebSearchProviderPlugin } from "../../src/plugins/types.js";
 
 const XAI_WEB_SEARCH_ENDPOINT = "https://api.x.ai/v1/responses";
 const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
@@ -200,7 +201,7 @@ async function runXaiWebSearch(params: {
   return payload;
 }
 
-export function createXaiWebSearchProvider() {
+export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "grok",
     label: "Grok (xAI)",
@@ -210,8 +211,8 @@ export function createXaiWebSearchProvider() {
     signupUrl: "https://console.x.ai/",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 30,
-    credentialPath: "tools.web.search.grok.apiKey",
-    inactiveSecretPaths: ["tools.web.search.grok.apiKey"],
+    credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.xai.config.webSearch.apiKey"],
     getCredentialValue: (searchConfig?: Record<string, unknown>) =>
       getScopedCredentialValue(searchConfig, "grok"),
     setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) =>
