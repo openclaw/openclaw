@@ -3,10 +3,10 @@ import { normalizeGoogleModelId } from "../../agents/model-id-normalization.js";
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import {
   assertOkOrThrowHttpError,
-  normalizeBaseUrl,
   postJsonRequest,
 } from "../../media-understanding/providers/shared.js";
 import type { ImageGenerationProviderPlugin } from "../../plugins/types.js";
+import { normalizeGeminiBaseUrl } from "../../utils/gemini-url.js";
 
 const DEFAULT_GOOGLE_IMAGE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
@@ -95,7 +95,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProviderPlu
       }
 
       const model = normalizeGoogleImageModel(req.model);
-      const baseUrl = normalizeBaseUrl(
+      const baseUrl = normalizeGeminiBaseUrl(
         resolveGoogleBaseUrl(req.cfg),
         DEFAULT_GOOGLE_IMAGE_BASE_URL,
       );
