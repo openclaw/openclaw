@@ -1,3 +1,5 @@
+import path from "node:path";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi, type Mock } from "vitest";
 
@@ -6,9 +8,48 @@ export const middlewareUseSpy: Mock = vi.fn();
 export const onSpy: Mock = vi.fn();
 export const stopSpy: Mock = vi.fn();
 export const sendChatActionSpy: Mock = vi.fn();
-export const undiciFetchSpy: Mock = vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
-  globalThis.fetch(input, init),
-);
+function defaultUndiciFetch(input: RequestInfo | URL, init?: RequestInit) {
+  return globalThis.fetch(input, init);
+}
+
+export const undiciFetchSpy: Mock = vi.fn(defaultUndiciFetch);
+
+export function resetUndiciFetchMock() {
+  undiciFetchSpy.mockReset();
+  undiciFetchSpy.mockImplementation(defaultUndiciFetch);
+}
+
+type FetchRemoteMediaFn = typeof import("openclaw/plugin-sdk/media-runtime").fetchRemoteMedia;
+
+async function defaultFetchRemoteMedia(
+  params: Parameters<FetchRemoteMediaFn>[0],
+): ReturnType<FetchRemoteMediaFn> {
+  if (!params.fetchImpl) {
+    throw new MediaFetchError("fetch_failed", `Missing fetchImpl for ${params.url}`);
+  }
+  const response = await params.fetchImpl(params.url, {
+    redirect: "manual",
+  });
+  if (!response.ok) {
+    throw new MediaFetchError(
+      "http_error",
+      `Failed to fetch media from ${params.url}: HTTP ${response.status} ${response.statusText}`,
+    );
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  return {
+    buffer: Buffer.from(arrayBuffer),
+    contentType: response.headers.get("content-type") ?? undefined,
+    fileName: params.filePathHint ? path.basename(params.filePathHint) : undefined,
+  } as Awaited<ReturnType<FetchRemoteMediaFn>>;
+}
+
+export const fetchRemoteMediaSpy: Mock = vi.fn(defaultFetchRemoteMedia);
+
+export function resetFetchRemoteMediaMock() {
+  fetchRemoteMediaSpy.mockReset();
+  fetchRemoteMediaSpy.mockImplementation(defaultFetchRemoteMedia);
+}
 
 async function defaultSaveMediaBuffer(buffer: Buffer, contentType?: string) {
   return {
@@ -56,12 +97,7 @@ const apiStub: ApiStub = {
   setMyCommands: vi.fn(async () => undefined),
 };
 
-beforeEach(() => {
-  resetInboundDedupe();
-  resetSaveMediaBufferMock();
-});
-
-vi.mock("grammy", () => ({
+export const telegramBotRuntimeForTest = {
   Bot: class {
     api = apiStub;
     use = middlewareUseSpy;
@@ -71,20 +107,73 @@ vi.mock("grammy", () => ({
     catch = vi.fn();
     constructor(public token: string) {}
   },
-  InputFile: class {},
-  webhookCallback: vi.fn(),
-}));
-
-vi.mock("@grammyjs/runner", () => ({
   sequentialize: () => vi.fn(),
-}));
+  apiThrottler: () => throttlerSpy(),
+};
+
+const mediaHarnessReplySpy = vi.hoisted(() => vi.fn(async () => undefined));
+type DispatchReplyWithBufferedBlockDispatcherFn =
+  typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher;
+type DispatchReplyHarnessParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
+
+let actualDispatchReplyWithBufferedBlockDispatcherPromise:
+  | Promise<DispatchReplyWithBufferedBlockDispatcherFn>
+  | undefined;
+
+async function getActualDispatchReplyWithBufferedBlockDispatcher() {
+  actualDispatchReplyWithBufferedBlockDispatcherPromise ??=
+    import("../../../src/auto-reply/reply/provider-dispatcher.js").then(
+      (module) =>
+        module.dispatchReplyWithBufferedBlockDispatcher as DispatchReplyWithBufferedBlockDispatcherFn,
+    );
+  return await actualDispatchReplyWithBufferedBlockDispatcherPromise;
+}
+
+async function dispatchReplyWithBufferedBlockDispatcherViaActual(
+  params: DispatchReplyHarnessParams,
+) {
+  const actualDispatchReplyWithBufferedBlockDispatcher =
+    await getActualDispatchReplyWithBufferedBlockDispatcher();
+  return await actualDispatchReplyWithBufferedBlockDispatcher({
+    ...params,
+    replyResolver: async (ctx, _cfg, opts) => {
+      await opts?.onReplyStart?.();
+      return await mediaHarnessReplySpy(ctx, opts);
+    },
+  });
+}
+
+const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
+  vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
+    dispatchReplyWithBufferedBlockDispatcherViaActual,
+  ),
+);
+export const telegramBotDepsForTest = {
+  loadConfig: () => ({
+    channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+  }),
+  resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/telegram-media-sessions.json"),
+  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
+  enqueueSystemEvent: vi.fn(),
+  dispatchReplyWithBufferedBlockDispatcher: mediaHarnessDispatchReplyWithBufferedBlockDispatcher,
+  listSkillCommandsForAgents: vi.fn(() => []),
+  wasSentByBot: vi.fn(() => false),
+};
+
+beforeEach(() => {
+  resetInboundDedupe();
+  resetSaveMediaBufferMock();
+  resetUndiciFetchMock();
+  resetFetchRemoteMediaMock();
+});
 
 const throttlerSpy = vi.fn(() => "throttler");
-vi.mock("@grammyjs/transformer-throttler", () => ({
-  apiThrottler: () => throttlerSpy(),
+
+vi.doMock("./bot.runtime.js", () => ({
+  ...telegramBotRuntimeForTest,
 }));
 
-vi.mock("undici", async (importOriginal) => {
+vi.doMock("undici", async (importOriginal) => {
   const actual = await importOriginal<typeof import("undici")>();
   return {
     ...actual,
@@ -92,10 +181,16 @@ vi.mock("undici", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+vi.doMock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   const mockModule = Object.create(null) as Record<string, unknown>;
   Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
+  Object.defineProperty(mockModule, "fetchRemoteMedia", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: (...args: Parameters<typeof fetchRemoteMediaSpy>) => fetchRemoteMediaSpy(...args),
+  });
   Object.defineProperty(mockModule, "saveMediaBuffer", {
     configurable: true,
     enumerable: true,
@@ -105,36 +200,48 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   return mockModule;
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig: () => ({
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
     }),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
     updateLastRoute: vi.fn(async () => undefined),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
-  upsertChannelPairingRequest: vi.fn(async () => ({
-    code: "PAIRCODE",
-    created: true,
-  })),
-}));
+vi.doMock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+  return {
+    ...actual,
+    findModelInCatalog: vi.fn(() => undefined),
+    loadModelCatalog: vi.fn(async () => []),
+    modelSupportsVision: vi.fn(() => false),
+    resolveDefaultModelForAgent: vi.fn(() => ({
+      provider: "openai",
+      model: "gpt-test",
+    })),
+  };
+});
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => {
-  const replySpy = vi.fn(async (_ctx, opts) => {
-    await opts?.onReplyStart?.();
-    return undefined;
-  });
-  return { getReplyFromConfig: replySpy, __replySpy: replySpy };
+vi.doMock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    readChannelAllowFromStore: vi.fn(async () => [] as string[]),
+    upsertChannelPairingRequest: vi.fn(async () => ({
+      code: "PAIRCODE",
+      created: true,
+    })),
+  };
+});
+
+vi.doMock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    getReplyFromConfig: mediaHarnessReplySpy,
+    __replySpy: mediaHarnessReplySpy,
+  };
 });

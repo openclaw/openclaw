@@ -39,11 +39,20 @@ describe("compaction hook wiring", () => {
   function createCompactionEndCtx(params: {
     runId: string;
     messages?: unknown[];
+    sessionFile?: string;
+    sessionKey?: string;
     compactionCount?: number;
     withRetryHooks?: boolean;
   }) {
     return {
-      params: { runId: params.runId, session: { messages: params.messages ?? [] } },
+      params: {
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+        session: {
+          messages: params.messages ?? [],
+          sessionFile: params.sessionFile,
+        },
+      },
       state: { compactionInFlight: true },
       log: { debug: vi.fn(), warn: vi.fn() },
       maybeResolveCompactionWait: vi.fn(),
@@ -107,6 +116,8 @@ describe("compaction hook wiring", () => {
     const ctx = createCompactionEndCtx({
       runId: "r2",
       messages: [1, 2],
+      sessionFile: "/tmp/session.jsonl",
+      sessionKey: "agent:main:web-xyz",
       compactionCount: 1,
     });
 
@@ -122,13 +133,16 @@ describe("compaction hook wiring", () => {
     expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
 
     const afterCalls = hookMocks.runner.runAfterCompaction.mock.calls as unknown as Array<
-      [unknown]
+      [unknown, unknown]
     >;
     const event = afterCalls[0]?.[0] as
-      | { messageCount?: number; compactedCount?: number }
+      | { messageCount?: number; compactedCount?: number; sessionFile?: string }
       | undefined;
     expect(event?.messageCount).toBe(2);
     expect(event?.compactedCount).toBe(1);
+    expect(event?.sessionFile).toBe("/tmp/session.jsonl");
+    const hookCtx = afterCalls[0]?.[1] as { sessionKey?: string } | undefined;
+    expect(hookCtx?.sessionKey).toBe("agent:main:web-xyz");
     expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(1);
     expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
     expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
