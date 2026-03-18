@@ -99,9 +99,14 @@ export function readSessionMessages(
       try {
         const start = Math.max(0, stat.size - MAX_TAIL_BYTES);
         const buf = Buffer.allocUnsafe(stat.size - start);
-        fs.readSync(fd, buf, 0, buf.length, start);
-        content = buf.toString("utf-8");
+        // Capture bytesRead: if the file shrank between statSync and readSync (TOCTOU),
+        // readSync returns fewer bytes than buf.length — slice to avoid feeding
+        // uninitialized memory into the UTF-8 / JSON pipeline.
+        const bytesRead = fs.readSync(fd, buf, 0, buf.length, start);
+        content = buf.toString("utf-8", 0, bytesRead);
         // If we started mid-line, drop the partial first line.
+        // Note: messages before the 2 MB boundary are intentionally omitted to keep
+        // this RPC fast; the UI will show the most recent history only.
         const firstNewline = content.indexOf("\n");
         if (firstNewline >= 0 && start > 0) {
           content = content.slice(firstNewline + 1);
@@ -125,6 +130,9 @@ export function readSessionMessages(
     }
     if (trimmed.length > MAX_LINE_CHARS) {
       // Skip lines that are too large to safely parse on the RPC path.
+      console.warn(
+        `[session-utils] skipping oversized line in session ${sessionId}: ${trimmed.length} chars (max ${MAX_LINE_CHARS})`,
+      );
       continue;
     }
     try {
