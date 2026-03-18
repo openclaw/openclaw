@@ -153,6 +153,30 @@ describe("createGigachatStreamFn tool calling", () => {
     ]);
   });
 
+  it("parses a final SSE frame even when the stream closes without a trailing newline", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseByteStream([
+        Buffer.from('data: {"choices":[{"delta":{"content":"final tail"}}]}', "utf8"),
+      ]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      { messages: [], tools: [] } as never,
+      { apiKey: "token" } as never,
+    );
+
+    const event = await stream.result();
+
+    expect(event.content).toEqual([{ type: "text", text: "final tail" }]);
+  });
+
   it("sanitizes historical assistant/tool result names in the outbound request", async () => {
     request.mockResolvedValueOnce({
       status: 200,
