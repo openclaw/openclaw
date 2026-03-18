@@ -1,15 +1,5 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import {
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
-} from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
-import {
-  buildChannelConfigSchema,
-  DiscordConfigSchema,
-  getChatChannelMeta,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/discord-core";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,
@@ -17,6 +7,14 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import {
+  createScopedAccountConfigAccessors,
+  createScopedChannelConfigBase,
+  buildChannelConfigSchema,
+  DiscordConfigSchema,
+  getChatChannelMeta,
+  type ChannelPlugin,
+} from "./runtime-api.js";
 import { createDiscordSetupWizardProxy } from "./setup-core.js";
 
 export const DISCORD_CHANNEL = "discord" as const;
