@@ -138,7 +138,7 @@ export type CommandAllowFrom = Record<string, Array<string | number>>;
 export type CommandsConfig = {
   /** Enable native command registration when supported (default: "auto"). */
   native?: NativeCommandsSetting;
-  /** Enable native skill command registration when supported (default: "auto"). */
+  /** Enable native skill command registration when supported (default: false). */
   nativeSkills?: NativeCommandsSetting;
   /** Enable text command parsing (default: true). */
   text?: boolean;

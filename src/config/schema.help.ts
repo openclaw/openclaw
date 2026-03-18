@@ -1072,7 +1072,7 @@ export const FIELD_HELP: Record<string, string> = {
   "commands.native":
     "Registers native slash/menu commands with channels that support command registration (Discord, Slack, Telegram). Keep enabled for discoverability unless you intentionally run text-only command workflows.",
   "commands.nativeSkills":
-    "Registers native skill commands so users can invoke skills directly from provider command menus where supported. Keep aligned with your skill policy so exposed commands match what operators expect.",
+    'Registers native skill commands so users can invoke skills directly from provider command menus where supported (default: false). Set to true or "auto" to enable. Disabled by default because large skill sets can exhaust platform command limits (Telegram/Discord 100-command cap).',
   "commands.text":
     "Enables text-command parsing in chat input in addition to native command surfaces where available. Keep this enabled for compatibility across channels that do not support native command registration.",
   "commands.bash":
