@@ -3,9 +3,9 @@ import {
   normalizeInteractiveReply,
   type ChannelMessageActionContext,
 } from "openclaw/plugin-sdk/channel-runtime";
-import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/slack-core";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks } from "./blocks-render.js";
+import { readNumberParam, readStringParam } from "./runtime-api.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
