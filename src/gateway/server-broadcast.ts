@@ -157,6 +157,12 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         continue;
       }
       if (slow) {
+        // Advance seq before disconnecting so the reconnecting client sees a
+        // forward gap and triggers onGap.  The old global ++seq advanced before
+        // the buffer check, so omitting this would be a regression.
+        if (!isTargeted) {
+          advanceSeq(c);
+        }
         try {
           c.socket.close(1008, "slow consumer");
         } catch {
