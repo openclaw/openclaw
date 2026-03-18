@@ -1,0 +1,2 @@
+import { a as resolveBinaryVersion, c as resolveVersionFromModuleUrl, i as readVersionFromPackageJsonForModuleUrl, n as VERSION, o as resolveRuntimeServiceVersion, r as readVersionFromBuildInfoForModuleUrl, s as resolveUsableRuntimeVersion, t as RUNTIME_SERVICE_VERSION_FALLBACK } from "./version-Dubp0iGu.js";
+export { RUNTIME_SERVICE_VERSION_FALLBACK, VERSION, readVersionFromBuildInfoForModuleUrl, readVersionFromPackageJsonForModuleUrl, resolveBinaryVersion, resolveRuntimeServiceVersion, resolveUsableRuntimeVersion, resolveVersionFromModuleUrl };

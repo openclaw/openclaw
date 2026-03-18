@@ -1,0 +1,32 @@
+import { g as DEFAULT_ACCOUNT_ID, v as normalizeAccountId } from "./session-key-BwICpQs5.js";
+import { It as resolveAllowlistProviderRuntimeGroupPolicy, Lt as resolveDefaultGroupPolicy, Pt as init_runtime_group_policy, W as getChatChannelMeta } from "./runtime-CDMAx_h4.js";
+import { B as resolveWhatsAppOutboundTarget, G as collectAllowlistProviderGroupPolicyWarnings, I as createPluginRuntimeStore, L as createWhatsAppOutboundBase, Of as WhatsAppConfigSchema, R as resolveWhatsAppGroupIntroHint, Xl as resolveWhatsAppGroupToolPolicy, Y as collectOpenGroupPolicyRouteAllowlistWarnings, Yl as resolveWhatsAppGroupRequireMention, Zu as createActionGate, mt as resolveWhatsAppHeartbeatRecipients, nd as readStringParam, z as resolveWhatsAppMentionStripRegexes } from "./setup-wizard-helpers-BPw-E_P4.js";
+import "./provider-env-vars-CWXfFyDU.js";
+import "./logger-D1gzveLR.js";
+import "./tmp-openclaw-dir-DgWJsVV_.js";
+import "./subsystem-0lZt3jI5.js";
+import { c as init_utils, f as normalizeE164 } from "./utils-DknlDzAi.js";
+import "./fetch-CysqlwhH.js";
+import "./retry-CyJj_oar.js";
+import { t as emptyPluginConfigSchema } from "./config-schema-X8cahxVt.js";
+import "./paths-BDsrA18Z.js";
+import "./signal-FT4PyBH3.js";
+import { a as formatPairingApproveHint, i as buildAccountScopedDmSecurityPolicy, n as deleteAccountFromConfigSection, r as setAccountEnabledInConfigSection, u as buildChannelConfigSchema } from "./config-helpers-BQX8LEv1.js";
+import "./fetch-CKhAJuFk.js";
+import "./exec-DEBhRlDf.js";
+import "./agent-scope-CgozsAuQ.js";
+import { r as migrateBaseNameToDefaultAccount, t as applyAccountNameToChannelSection } from "./setup-helpers-vyA9zMMX.js";
+import { L as resolveWhatsAppConfigAllowFrom, M as formatWhatsAppConfigAllowFromEntries, R as resolveWhatsAppConfigDefaultTo, _ as listWhatsAppDirectoryGroupsFromConfig, v as listWhatsAppDirectoryPeersFromConfig, z as normalizeWhatsAppAllowFromEntries } from "./reply-prefix-Dcd4HlHm.js";
+import "./logger-CXkOEiRn.js";
+import "./fetch-guard-DryYzke6.js";
+import "./resolve-route-CPxNiUBg.js";
+import "./pairing-token-ukgXF6GK.js";
+import "./query-expansion-t4qzEE5Z.js";
+import "./redact-DkskT6Xp.js";
+import { t as PAIRING_APPROVED_MESSAGE } from "./channel-plugin-common-Cs4waNSc.js";
+import "./secret-file-CCHXecQt.js";
+//#region src/plugin-sdk/whatsapp.ts
+init_runtime_group_policy();
+init_utils();
+//#endregion
+export { DEFAULT_ACCOUNT_ID, PAIRING_APPROVED_MESSAGE, WhatsAppConfigSchema, applyAccountNameToChannelSection, buildAccountScopedDmSecurityPolicy, buildChannelConfigSchema, collectAllowlistProviderGroupPolicyWarnings, collectOpenGroupPolicyRouteAllowlistWarnings, createActionGate, createPluginRuntimeStore, createWhatsAppOutboundBase, deleteAccountFromConfigSection, emptyPluginConfigSchema, formatPairingApproveHint, formatWhatsAppConfigAllowFromEntries, getChatChannelMeta, listWhatsAppDirectoryGroupsFromConfig, listWhatsAppDirectoryPeersFromConfig, migrateBaseNameToDefaultAccount, normalizeAccountId, normalizeE164, normalizeWhatsAppAllowFromEntries, readStringParam, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, resolveWhatsAppConfigAllowFrom, resolveWhatsAppConfigDefaultTo, resolveWhatsAppGroupIntroHint, resolveWhatsAppGroupRequireMention, resolveWhatsAppGroupToolPolicy, resolveWhatsAppHeartbeatRecipients, resolveWhatsAppMentionStripRegexes, resolveWhatsAppOutboundTarget, setAccountEnabledInConfigSection };

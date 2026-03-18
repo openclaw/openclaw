@@ -1,0 +1,38 @@
+import { g as DEFAULT_ACCOUNT_ID, s as init_session_key, v as normalizeAccountId } from "./session-key-BwICpQs5.js";
+import { Bt as warnMissingProviderGroupPolicyFallbackOnce, Ht as buildChannelKeyCandidates, It as resolveAllowlistProviderRuntimeGroupPolicy, Kt as resolveChannelEntryMatchWithFallback, Lt as resolveDefaultGroupPolicy, Nt as GROUP_POLICY_BLOCKED_LABEL, Ot as evaluateMatchedGroupAccessForPolicy, Pt as init_runtime_group_policy, Un as createAccountListHelpers, Wn as init_account_helpers, Wt as normalizeChannelSlug, _n as normalizeSecretInputString, fn as hasConfiguredSecretInput, gn as normalizeResolvedSecretInputString, jt as init_group_access, pn as init_types_secrets, qt as resolveNestedAllowlistDecision } from "./runtime-CDMAx_h4.js";
+import { Cp as readRequestBodyWithLimit, Eo as issuePairingChallenge, Fo as buildSecretInputSchema, Gt as readStoreAllowFromForDmPolicy, Ja as listConfiguredAccountIds, Jt as resolveDmGroupAccessWithCommandGate, Oo as createScopedPairingAccess, Ro as logInboundDrop, To as createPersistentDedupe, Ya as resolveAccountWithDefaultFallback, c as promptSingleChannelSecretInput, en as resolveMentionGatingWithBypass, m as setTopLevelChannelDmPolicyWithAllowFrom, n as buildSingleChannelSecretPromptState, r as mergeAllowFromEntries, t as addWildcardAllowFrom, tn as waitForAbortSignal, u as runSingleChannelSecretStep, wp as requestBodyErrorToText, xp as isRequestBodyLimitError } from "./setup-wizard-helpers-BPw-E_P4.js";
+import "./provider-env-vars-CWXfFyDU.js";
+import "./logger-D1gzveLR.js";
+import "./tmp-openclaw-dir-DgWJsVV_.js";
+import "./subsystem-0lZt3jI5.js";
+import "./utils-DknlDzAi.js";
+import "./fetch-CysqlwhH.js";
+import "./retry-CyJj_oar.js";
+import { t as emptyPluginConfigSchema } from "./config-schema-X8cahxVt.js";
+import "./paths-BDsrA18Z.js";
+import { A as ToolPolicySchema, K as buildRuntimeAccountStatusSnapshot, U as buildBaseChannelStatusSummary } from "./signal-FT4PyBH3.js";
+import { T as MarkdownConfigSchema, a as formatPairingApproveHint, g as DmPolicySchema, h as DmConfigSchema, j as ReplyRuntimeConfigSchemaShape, n as deleteAccountFromConfigSection, p as BlockStreamingCoalesceSchema, q as requireOpenAllowFrom, r as setAccountEnabledInConfigSection, t as clearAccountEntryFields, u as buildChannelConfigSchema, y as GroupPolicySchema } from "./config-helpers-BQX8LEv1.js";
+import "./fetch-CKhAJuFk.js";
+import "./exec-DEBhRlDf.js";
+import "./agent-scope-CgozsAuQ.js";
+import { a as patchScopedAccountConfig, t as applyAccountNameToChannelSection } from "./setup-helpers-vyA9zMMX.js";
+import { N as mapAllowFromEntries, n as createReplyPrefixOptions, u as formatDocsLink } from "./reply-prefix-Dcd4HlHm.js";
+import "./logger-CXkOEiRn.js";
+import { t as fetchWithSsrFGuard } from "./fetch-guard-DryYzke6.js";
+import "./resolve-route-CPxNiUBg.js";
+import "./pairing-token-ukgXF6GK.js";
+import "./query-expansion-t4qzEE5Z.js";
+import "./redact-DkskT6Xp.js";
+import "./channel-plugin-common-Cs4waNSc.js";
+import "./secret-file-CCHXecQt.js";
+import { a as resolveOutboundMediaUrls, n as formatTextWithAttachmentLinks, t as createNormalizedOutboundDeliverer } from "./reply-payload-4ACAf9Rp.js";
+import { n as dispatchInboundReplyWithBase } from "./inbound-reply-dispatch-BiJFwXGs.js";
+import { t as createLoggerBackedRuntime } from "./runtime-YgND8u9Q.js";
+//#region src/plugin-sdk/nextcloud-talk.ts
+init_account_helpers();
+init_group_access();
+init_runtime_group_policy();
+init_types_secrets();
+init_session_key();
+//#endregion
+export { BlockStreamingCoalesceSchema, DEFAULT_ACCOUNT_ID, DmConfigSchema, DmPolicySchema, GROUP_POLICY_BLOCKED_LABEL, GroupPolicySchema, MarkdownConfigSchema, ReplyRuntimeConfigSchemaShape, ToolPolicySchema, addWildcardAllowFrom, applyAccountNameToChannelSection, buildBaseChannelStatusSummary, buildChannelConfigSchema, buildChannelKeyCandidates, buildRuntimeAccountStatusSnapshot, buildSecretInputSchema, buildSingleChannelSecretPromptState, clearAccountEntryFields, createAccountListHelpers, createLoggerBackedRuntime, createNormalizedOutboundDeliverer, createPersistentDedupe, createReplyPrefixOptions, createScopedPairingAccess, deleteAccountFromConfigSection, dispatchInboundReplyWithBase, emptyPluginConfigSchema, evaluateMatchedGroupAccessForPolicy, fetchWithSsrFGuard, formatDocsLink, formatPairingApproveHint, formatTextWithAttachmentLinks, hasConfiguredSecretInput, isRequestBodyLimitError, issuePairingChallenge, listConfiguredAccountIds, logInboundDrop, mapAllowFromEntries, mergeAllowFromEntries, normalizeAccountId, normalizeChannelSlug, normalizeResolvedSecretInputString, normalizeSecretInputString, patchScopedAccountConfig, promptSingleChannelSecretInput, readRequestBodyWithLimit, readStoreAllowFromForDmPolicy, requestBodyErrorToText, requireOpenAllowFrom, resolveAccountWithDefaultFallback, resolveAllowlistProviderRuntimeGroupPolicy, resolveChannelEntryMatchWithFallback, resolveDefaultGroupPolicy, resolveDmGroupAccessWithCommandGate, resolveMentionGatingWithBypass, resolveNestedAllowlistDecision, resolveOutboundMediaUrls, runSingleChannelSecretStep, setAccountEnabledInConfigSection, setTopLevelChannelDmPolicyWithAllowFrom, waitForAbortSignal, warnMissingProviderGroupPolicyFallbackOnce };

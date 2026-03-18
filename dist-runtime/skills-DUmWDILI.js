@@ -1,0 +1,857 @@
+import { M as init_tmp_openclaw_dir, N as resolvePreferredOpenClawTmpDir } from "./globals-B6h30oSy.js";
+import { n as init_subsystem, t as createSubsystemLogger } from "./subsystem-CZwunM2N.js";
+import { b as resolveUserPath, d as init_utils, t as CONFIG_DIR } from "./utils-BiUV1eIQ.js";
+import { a as resolveMemorySlotDecision, i as resolveEffectiveEnableState, r as normalizePluginsConfig } from "./config-state-CkhXLglq.js";
+import { d as isPathInside, n as normalizeSkillFilter } from "./filter-Qe6Ch68_.js";
+import { n as loadPluginManifestRegistry } from "./manifest-registry-DZywV-kg.js";
+import { n as resolveOpenClawPackageRootSync } from "./openclaw-root-0nFkqMDM.js";
+import { c as shouldIncludeSkill, d as resolveSkillInvocationPolicy, l as parseFrontmatter, u as resolveOpenClawMetadata } from "./env-overrides-Dbt5eAZJ.js";
+import { r as isPathInsideWithRealpath } from "./scan-paths-Zo6qyBUS.js";
+import { n as assertNoPathAliasEscape } from "./path-alias-guards-SF-nwQor.js";
+import { URL, fileURLToPath } from "node:url";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { formatSkillsForPrompt, loadSkillsFromDir } from "@mariozechner/pi-coding-agent";
+//#region src/agents/sandbox-paths.ts
+init_tmp_openclaw_dir();
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+const HTTP_URL_RE = /^https?:\/\//i;
+const DATA_URL_RE = /^data:/i;
+const SANDBOX_CONTAINER_WORKDIR = "/workspace";
+function normalizeUnicodeSpaces(str) {
+	return str.replace(UNICODE_SPACES, " ");
+}
+function normalizeAtPrefix(filePath) {
+	return filePath.startsWith("@") ? filePath.slice(1) : filePath;
+}
+function expandPath(filePath) {
+	const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
+	if (normalized === "~") return os.homedir();
+	if (normalized.startsWith("~/")) return os.homedir() + normalized.slice(1);
+	return normalized;
+}
+function resolveToCwd(filePath, cwd) {
+	const expanded = expandPath(filePath);
+	if (path.isAbsolute(expanded)) return expanded;
+	return path.resolve(cwd, expanded);
+}
+function resolveSandboxInputPath(filePath, cwd) {
+	return resolveToCwd(filePath, cwd);
+}
+function resolveSandboxPath(params) {
+	const resolved = resolveSandboxInputPath(params.filePath, params.cwd);
+	const rootResolved = path.resolve(params.root);
+	const relative = path.relative(rootResolved, resolved);
+	if (!relative || relative === "") return {
+		resolved,
+		relative: ""
+	};
+	if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`);
+	return {
+		resolved,
+		relative
+	};
+}
+async function assertSandboxPath(params) {
+	const resolved = resolveSandboxPath(params);
+	const policy = {
+		allowFinalSymlinkForUnlink: params.allowFinalSymlinkForUnlink,
+		allowFinalHardlinkForUnlink: params.allowFinalHardlinkForUnlink
+	};
+	await assertNoPathAliasEscape({
+		absolutePath: resolved.resolved,
+		rootPath: params.root,
+		boundaryLabel: "sandbox root",
+		policy
+	});
+	return resolved;
+}
+function assertMediaNotDataUrl(media) {
+	const raw = media.trim();
+	if (DATA_URL_RE.test(raw)) throw new Error("data: URLs are not supported for media. Use buffer instead.");
+}
+async function resolveSandboxedMediaSource(params) {
+	const raw = params.media.trim();
+	if (!raw) return raw;
+	if (HTTP_URL_RE.test(raw)) return raw;
+	let candidate = raw;
+	if (/^file:\/\//i.test(candidate)) {
+		const workspaceMappedFromUrl = mapContainerWorkspaceFileUrl({
+			fileUrl: candidate,
+			sandboxRoot: params.sandboxRoot
+		});
+		if (workspaceMappedFromUrl) candidate = workspaceMappedFromUrl;
+		else try {
+			candidate = fileURLToPath(candidate);
+		} catch {
+			throw new Error(`Invalid file:// URL for sandboxed media: ${raw}`);
+		}
+	}
+	const containerWorkspaceMapped = mapContainerWorkspacePath({
+		candidate,
+		sandboxRoot: params.sandboxRoot
+	});
+	if (containerWorkspaceMapped) candidate = containerWorkspaceMapped;
+	const tmpMediaPath = await resolveAllowedTmpMediaPath({
+		candidate,
+		sandboxRoot: params.sandboxRoot
+	});
+	if (tmpMediaPath) return tmpMediaPath;
+	return (await assertSandboxPath({
+		filePath: candidate,
+		cwd: params.sandboxRoot,
+		root: params.sandboxRoot
+	})).resolved;
+}
+function mapContainerWorkspaceFileUrl(params) {
+	let parsed;
+	try {
+		parsed = new URL(params.fileUrl);
+	} catch {
+		return;
+	}
+	if (parsed.protocol !== "file:") return;
+	const normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+	if (normalizedPathname !== SANDBOX_CONTAINER_WORKDIR && !normalizedPathname.startsWith(`${SANDBOX_CONTAINER_WORKDIR}/`)) return;
+	return mapContainerWorkspacePath({
+		candidate: normalizedPathname,
+		sandboxRoot: params.sandboxRoot
+	});
+}
+function mapContainerWorkspacePath(params) {
+	const normalized = params.candidate.replace(/\\/g, "/");
+	if (normalized === SANDBOX_CONTAINER_WORKDIR) return path.resolve(params.sandboxRoot);
+	const prefix = `${SANDBOX_CONTAINER_WORKDIR}/`;
+	if (!normalized.startsWith(prefix)) return;
+	const rel = normalized.slice(prefix.length);
+	if (!rel) return path.resolve(params.sandboxRoot);
+	return path.resolve(params.sandboxRoot, ...rel.split("/").filter(Boolean));
+}
+async function resolveAllowedTmpMediaPath(params) {
+	if (!path.isAbsolute(expandPath(params.candidate))) return;
+	const resolved = path.resolve(resolveSandboxInputPath(params.candidate, params.sandboxRoot));
+	const openClawTmpDir = path.resolve(resolvePreferredOpenClawTmpDir());
+	if (!isPathInside(openClawTmpDir, resolved)) return;
+	await assertNoTmpAliasEscape({
+		filePath: resolved,
+		tmpRoot: openClawTmpDir
+	});
+	return resolved;
+}
+async function assertNoTmpAliasEscape(params) {
+	await assertNoPathAliasEscape({
+		absolutePath: params.filePath,
+		rootPath: params.tmpRoot,
+		boundaryLabel: "tmp root"
+	});
+}
+function shortPath(value) {
+	if (value.startsWith(os.homedir())) return `~${value.slice(os.homedir().length)}`;
+	return value;
+}
+//#endregion
+//#region src/agents/skills/bundled-dir.ts
+function looksLikeSkillsDir(dir) {
+	try {
+		const entries = fs.readdirSync(dir, { withFileTypes: true });
+		for (const entry of entries) {
+			if (entry.name.startsWith(".")) continue;
+			const fullPath = path.join(dir, entry.name);
+			if (entry.isFile() && entry.name.endsWith(".md")) return true;
+			if (entry.isDirectory()) {
+				if (fs.existsSync(path.join(fullPath, "SKILL.md"))) return true;
+			}
+		}
+	} catch {
+		return false;
+	}
+	return false;
+}
+function resolveBundledSkillsDir(opts = {}) {
+	const override = process.env.OPENCLAW_BUNDLED_SKILLS_DIR?.trim();
+	if (override) return override;
+	try {
+		const execPath = opts.execPath ?? process.execPath;
+		const execDir = path.dirname(execPath);
+		const sibling = path.join(execDir, "skills");
+		if (fs.existsSync(sibling)) return sibling;
+	} catch {}
+	try {
+		const moduleUrl = opts.moduleUrl ?? import.meta.url;
+		const moduleDir = path.dirname(fileURLToPath(moduleUrl));
+		const packageRoot = resolveOpenClawPackageRootSync({
+			argv1: opts.argv1 ?? process.argv[1],
+			moduleUrl,
+			cwd: opts.cwd ?? process.cwd()
+		});
+		if (packageRoot) {
+			const candidate = path.join(packageRoot, "skills");
+			if (looksLikeSkillsDir(candidate)) return candidate;
+		}
+		let current = moduleDir;
+		for (let depth = 0; depth < 6; depth += 1) {
+			const candidate = path.join(current, "skills");
+			if (looksLikeSkillsDir(candidate)) return candidate;
+			const next = path.dirname(current);
+			if (next === current) break;
+			current = next;
+		}
+	} catch {}
+}
+//#endregion
+//#region src/agents/skills/plugin-skills.ts
+init_subsystem();
+const log = createSubsystemLogger("skills");
+function resolvePluginSkillDirs(params) {
+	const workspaceDir = (params.workspaceDir ?? "").trim();
+	if (!workspaceDir) return [];
+	const registry = loadPluginManifestRegistry({
+		workspaceDir,
+		config: params.config
+	});
+	if (registry.plugins.length === 0) return [];
+	const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
+	const acpEnabled = params.config?.acp?.enabled !== false;
+	const memorySlot = normalizedPlugins.slots.memory;
+	let selectedMemoryPluginId = null;
+	const seen = /* @__PURE__ */ new Set();
+	const resolved = [];
+	for (const record of registry.plugins) {
+		if (!record.skills || record.skills.length === 0) continue;
+		if (!resolveEffectiveEnableState({
+			id: record.id,
+			origin: record.origin,
+			config: normalizedPlugins,
+			rootConfig: params.config
+		}).enabled) continue;
+		if (!acpEnabled && record.id === "acpx") continue;
+		const memoryDecision = resolveMemorySlotDecision({
+			id: record.id,
+			kind: record.kind,
+			slot: memorySlot,
+			selectedId: selectedMemoryPluginId
+		});
+		if (!memoryDecision.enabled) continue;
+		if (memoryDecision.selected && record.kind === "memory") selectedMemoryPluginId = record.id;
+		for (const raw of record.skills) {
+			const trimmed = raw.trim();
+			if (!trimmed) continue;
+			const candidate = path.resolve(record.rootDir, trimmed);
+			if (!fs.existsSync(candidate)) {
+				log.warn(`plugin skill path not found (${record.id}): ${candidate}`);
+				continue;
+			}
+			if (!isPathInsideWithRealpath(record.rootDir, candidate, { requireRealpath: true })) {
+				log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`);
+				continue;
+			}
+			if (seen.has(candidate)) continue;
+			seen.add(candidate);
+			resolved.push(candidate);
+		}
+	}
+	return resolved;
+}
+//#endregion
+//#region src/agents/skills/serialize.ts
+const SKILLS_SYNC_QUEUE = /* @__PURE__ */ new Map();
+async function serializeByKey(key, task) {
+	const next = (SKILLS_SYNC_QUEUE.get(key) ?? Promise.resolve()).then(task, task);
+	SKILLS_SYNC_QUEUE.set(key, next);
+	try {
+		return await next;
+	} finally {
+		if (SKILLS_SYNC_QUEUE.get(key) === next) SKILLS_SYNC_QUEUE.delete(key);
+	}
+}
+//#endregion
+//#region src/agents/skills/workspace.ts
+init_subsystem();
+init_utils();
+const fsp = fs.promises;
+const skillsLogger = createSubsystemLogger("skills");
+const skillCommandDebugOnce = /* @__PURE__ */ new Set();
+/**
+* Replace the user's home directory prefix with `~` in skill file paths
+* to reduce system prompt token usage. Models understand `~` expansion,
+* and the read tool resolves `~` to the home directory.
+*
+* Example: `/Users/alice/.bun/.../skills/github/SKILL.md`
+*       → `~/.bun/.../skills/github/SKILL.md`
+*
+* Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
+*/
+function compactSkillPaths(skills) {
+	const home = os.homedir();
+	if (!home) return skills;
+	const prefix = home.endsWith(path.sep) ? home : home + path.sep;
+	return skills.map((s) => ({
+		...s,
+		filePath: s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath
+	}));
+}
+function debugSkillCommandOnce(messageKey, message, meta) {
+	if (skillCommandDebugOnce.has(messageKey)) return;
+	skillCommandDebugOnce.add(messageKey);
+	skillsLogger.debug(message, meta);
+}
+function filterSkillEntries(entries, config, skillFilter, eligibility) {
+	let filtered = entries.filter((entry) => shouldIncludeSkill({
+		entry,
+		config,
+		eligibility
+	}));
+	if (skillFilter !== void 0) {
+		const normalized = normalizeSkillFilter(skillFilter) ?? [];
+		const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
+		skillsLogger.debug(`Applying skill filter: ${label}`);
+		filtered = normalized.length > 0 ? filtered.filter((entry) => normalized.includes(entry.skill.name)) : [];
+		skillsLogger.debug(`After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`);
+	}
+	return filtered;
+}
+const SKILL_COMMAND_MAX_LENGTH = 32;
+const SKILL_COMMAND_FALLBACK = "skill";
+const SKILL_COMMAND_DESCRIPTION_MAX_LENGTH = 100;
+const DEFAULT_MAX_CANDIDATES_PER_ROOT = 300;
+const DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE = 200;
+const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
+const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 3e4;
+const DEFAULT_MAX_SKILL_FILE_BYTES = 256e3;
+function sanitizeSkillCommandName(raw) {
+	return raw.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "").slice(0, SKILL_COMMAND_MAX_LENGTH) || SKILL_COMMAND_FALLBACK;
+}
+function resolveUniqueSkillCommandName(base, used) {
+	const normalizedBase = base.toLowerCase();
+	if (!used.has(normalizedBase)) return base;
+	for (let index = 2; index < 1e3; index += 1) {
+		const suffix = `_${index}`;
+		const maxBaseLength = Math.max(1, SKILL_COMMAND_MAX_LENGTH - suffix.length);
+		const candidate = `${base.slice(0, maxBaseLength)}${suffix}`;
+		const candidateKey = candidate.toLowerCase();
+		if (!used.has(candidateKey)) return candidate;
+	}
+	return `${base.slice(0, Math.max(1, SKILL_COMMAND_MAX_LENGTH - 2))}_x`;
+}
+function resolveSkillsLimits(config) {
+	const limits = config?.skills?.limits;
+	return {
+		maxCandidatesPerRoot: limits?.maxCandidatesPerRoot ?? DEFAULT_MAX_CANDIDATES_PER_ROOT,
+		maxSkillsLoadedPerSource: limits?.maxSkillsLoadedPerSource ?? DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE,
+		maxSkillsInPrompt: limits?.maxSkillsInPrompt ?? DEFAULT_MAX_SKILLS_IN_PROMPT,
+		maxSkillsPromptChars: limits?.maxSkillsPromptChars ?? DEFAULT_MAX_SKILLS_PROMPT_CHARS,
+		maxSkillFileBytes: limits?.maxSkillFileBytes ?? DEFAULT_MAX_SKILL_FILE_BYTES
+	};
+}
+function listChildDirectories(dir) {
+	try {
+		const entries = fs.readdirSync(dir, { withFileTypes: true });
+		const dirs = [];
+		for (const entry of entries) {
+			if (entry.name.startsWith(".")) continue;
+			if (entry.name === "node_modules") continue;
+			const fullPath = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				dirs.push(entry.name);
+				continue;
+			}
+			if (entry.isSymbolicLink()) try {
+				if (fs.statSync(fullPath).isDirectory()) dirs.push(entry.name);
+			} catch {}
+		}
+		return dirs;
+	} catch {
+		return [];
+	}
+}
+function tryRealpath(filePath) {
+	try {
+		return fs.realpathSync(filePath);
+	} catch {
+		return null;
+	}
+}
+function warnEscapedSkillPath(params) {
+	skillsLogger.warn("Skipping skill path that resolves outside its configured root.", {
+		source: params.source,
+		rootDir: params.rootDir,
+		path: params.candidatePath,
+		realPath: params.candidateRealPath
+	});
+}
+function resolveContainedSkillPath(params) {
+	const candidateRealPath = tryRealpath(params.candidatePath);
+	if (!candidateRealPath) return null;
+	if (isPathInside(params.rootRealPath, candidateRealPath)) return candidateRealPath;
+	warnEscapedSkillPath({
+		source: params.source,
+		rootDir: params.rootDir,
+		candidatePath: path.resolve(params.candidatePath),
+		candidateRealPath
+	});
+	return null;
+}
+function filterLoadedSkillsInsideRoot(params) {
+	return params.skills.filter((skill) => {
+		if (!resolveContainedSkillPath({
+			source: params.source,
+			rootDir: params.rootDir,
+			rootRealPath: params.rootRealPath,
+			candidatePath: skill.baseDir
+		})) return false;
+		const skillFileRealPath = resolveContainedSkillPath({
+			source: params.source,
+			rootDir: params.rootDir,
+			rootRealPath: params.rootRealPath,
+			candidatePath: skill.filePath
+		});
+		return Boolean(skillFileRealPath);
+	});
+}
+function resolveNestedSkillsRoot(dir, opts) {
+	const nested = path.join(dir, "skills");
+	try {
+		if (!fs.existsSync(nested) || !fs.statSync(nested).isDirectory()) return { baseDir: dir };
+	} catch {
+		return { baseDir: dir };
+	}
+	const nestedDirs = listChildDirectories(nested);
+	const scanLimit = Math.max(0, opts?.maxEntriesToScan ?? 100);
+	const toScan = scanLimit === 0 ? [] : nestedDirs.slice(0, Math.min(nestedDirs.length, scanLimit));
+	for (const name of toScan) {
+		const skillMd = path.join(nested, name, "SKILL.md");
+		if (fs.existsSync(skillMd)) return {
+			baseDir: nested,
+			note: `Detected nested skills root at ${nested}`
+		};
+	}
+	return { baseDir: dir };
+}
+function unwrapLoadedSkills(loaded) {
+	if (Array.isArray(loaded)) return loaded;
+	if (loaded && typeof loaded === "object" && "skills" in loaded) {
+		const skills = loaded.skills;
+		if (Array.isArray(skills)) return skills;
+	}
+	return [];
+}
+function loadSkillEntries(workspaceDir, opts) {
+	const limits = resolveSkillsLimits(opts?.config);
+	const loadSkills = (params) => {
+		const rootDir = path.resolve(params.dir);
+		const rootRealPath = tryRealpath(rootDir) ?? rootDir;
+		const baseDir = resolveNestedSkillsRoot(params.dir, { maxEntriesToScan: limits.maxCandidatesPerRoot }).baseDir;
+		const baseDirRealPath = resolveContainedSkillPath({
+			source: params.source,
+			rootDir,
+			rootRealPath,
+			candidatePath: baseDir
+		});
+		if (!baseDirRealPath) return [];
+		const rootSkillMd = path.join(baseDir, "SKILL.md");
+		if (fs.existsSync(rootSkillMd)) {
+			const rootSkillRealPath = resolveContainedSkillPath({
+				source: params.source,
+				rootDir,
+				rootRealPath: baseDirRealPath,
+				candidatePath: rootSkillMd
+			});
+			if (!rootSkillRealPath) return [];
+			try {
+				const size = fs.statSync(rootSkillRealPath).size;
+				if (size > limits.maxSkillFileBytes) {
+					skillsLogger.warn("Skipping skills root due to oversized SKILL.md.", {
+						dir: baseDir,
+						filePath: rootSkillMd,
+						size,
+						maxSkillFileBytes: limits.maxSkillFileBytes
+					});
+					return [];
+				}
+			} catch {
+				return [];
+			}
+			return filterLoadedSkillsInsideRoot({
+				skills: unwrapLoadedSkills(loadSkillsFromDir({
+					dir: baseDir,
+					source: params.source
+				})),
+				source: params.source,
+				rootDir,
+				rootRealPath: baseDirRealPath
+			});
+		}
+		const childDirs = listChildDirectories(baseDir);
+		const suspicious = childDirs.length > limits.maxCandidatesPerRoot;
+		const maxCandidates = Math.max(0, limits.maxSkillsLoadedPerSource);
+		const limitedChildren = childDirs.slice().sort().slice(0, maxCandidates);
+		if (suspicious) skillsLogger.warn("Skills root looks suspiciously large, truncating discovery.", {
+			dir: params.dir,
+			baseDir,
+			childDirCount: childDirs.length,
+			maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
+			maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource
+		});
+		else if (childDirs.length > maxCandidates) skillsLogger.warn("Skills root has many entries, truncating discovery.", {
+			dir: params.dir,
+			baseDir,
+			childDirCount: childDirs.length,
+			maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource
+		});
+		const loadedSkills = [];
+		for (const name of limitedChildren) {
+			const skillDir = path.join(baseDir, name);
+			if (!resolveContainedSkillPath({
+				source: params.source,
+				rootDir,
+				rootRealPath: baseDirRealPath,
+				candidatePath: skillDir
+			})) continue;
+			const skillMd = path.join(skillDir, "SKILL.md");
+			if (!fs.existsSync(skillMd)) continue;
+			const skillMdRealPath = resolveContainedSkillPath({
+				source: params.source,
+				rootDir,
+				rootRealPath: baseDirRealPath,
+				candidatePath: skillMd
+			});
+			if (!skillMdRealPath) continue;
+			try {
+				const size = fs.statSync(skillMdRealPath).size;
+				if (size > limits.maxSkillFileBytes) {
+					skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
+						skill: name,
+						filePath: skillMd,
+						size,
+						maxSkillFileBytes: limits.maxSkillFileBytes
+					});
+					continue;
+				}
+			} catch {
+				continue;
+			}
+			const loaded = loadSkillsFromDir({
+				dir: skillDir,
+				source: params.source
+			});
+			loadedSkills.push(...filterLoadedSkillsInsideRoot({
+				skills: unwrapLoadedSkills(loaded),
+				source: params.source,
+				rootDir,
+				rootRealPath: baseDirRealPath
+			}));
+			if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) break;
+		}
+		if (loadedSkills.length > limits.maxSkillsLoadedPerSource) return loadedSkills.slice().sort((a, b) => a.name.localeCompare(b.name)).slice(0, limits.maxSkillsLoadedPerSource);
+		return loadedSkills;
+	};
+	const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+	const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
+	const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
+	const extraDirs = (opts?.config?.skills?.load?.extraDirs ?? []).map((d) => typeof d === "string" ? d.trim() : "").filter(Boolean);
+	const pluginSkillDirs = resolvePluginSkillDirs({
+		workspaceDir,
+		config: opts?.config
+	});
+	const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
+	const bundledSkills = bundledSkillsDir ? loadSkills({
+		dir: bundledSkillsDir,
+		source: "openclaw-bundled"
+	}) : [];
+	const extraSkills = mergedExtraDirs.flatMap((dir) => {
+		return loadSkills({
+			dir: resolveUserPath(dir),
+			source: "openclaw-extra"
+		});
+	});
+	const managedSkills = loadSkills({
+		dir: managedSkillsDir,
+		source: "openclaw-managed"
+	});
+	const personalAgentsSkills = loadSkills({
+		dir: path.resolve(os.homedir(), ".agents", "skills"),
+		source: "agents-skills-personal"
+	});
+	const projectAgentsSkills = loadSkills({
+		dir: path.resolve(workspaceDir, ".agents", "skills"),
+		source: "agents-skills-project"
+	});
+	const workspaceSkills = loadSkills({
+		dir: workspaceSkillsDir,
+		source: "openclaw-workspace"
+	});
+	const merged = /* @__PURE__ */ new Map();
+	for (const skill of extraSkills) merged.set(skill.name, skill);
+	for (const skill of bundledSkills) merged.set(skill.name, skill);
+	for (const skill of managedSkills) merged.set(skill.name, skill);
+	for (const skill of personalAgentsSkills) merged.set(skill.name, skill);
+	for (const skill of projectAgentsSkills) merged.set(skill.name, skill);
+	for (const skill of workspaceSkills) merged.set(skill.name, skill);
+	return Array.from(merged.values()).map((skill) => {
+		let frontmatter = {};
+		try {
+			frontmatter = parseFrontmatter(fs.readFileSync(skill.filePath, "utf-8"));
+		} catch {}
+		return {
+			skill,
+			frontmatter,
+			metadata: resolveOpenClawMetadata(frontmatter),
+			invocation: resolveSkillInvocationPolicy(frontmatter)
+		};
+	});
+}
+function escapeXml(str) {
+	return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+/**
+* Compact skill catalog: name + location only (no description).
+* Used as a fallback when the full format exceeds the char budget,
+* preserving awareness of all skills before resorting to dropping.
+*/
+function formatSkillsCompact(skills) {
+	const visible = skills.filter((s) => !s.disableModelInvocation);
+	if (visible.length === 0) return "";
+	const lines = [
+		"\n\nThe following skills provide specialized instructions for specific tasks.",
+		"Use the read tool to load a skill's file when the task matches its name.",
+		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+		"",
+		"<available_skills>"
+	];
+	for (const skill of visible) {
+		lines.push("  <skill>");
+		lines.push(`    <name>${escapeXml(skill.name)}</name>`);
+		lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+		lines.push("  </skill>");
+	}
+	lines.push("</available_skills>");
+	return lines.join("\n");
+}
+const COMPACT_WARNING_OVERHEAD = 150;
+function applySkillsPromptLimits(params) {
+	const limits = resolveSkillsLimits(params.config);
+	const total = params.skills.length;
+	const byCount = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
+	let skillsForPrompt = byCount;
+	let truncated = total > byCount.length;
+	let compact = false;
+	const fitsFull = (skills) => formatSkillsForPrompt(skills).length <= limits.maxSkillsPromptChars;
+	const compactBudget = limits.maxSkillsPromptChars - COMPACT_WARNING_OVERHEAD;
+	const fitsCompact = (skills) => formatSkillsCompact(skills).length <= compactBudget;
+	if (!fitsFull(skillsForPrompt)) if (fitsCompact(skillsForPrompt)) compact = true;
+	else {
+		compact = true;
+		let lo = 0;
+		let hi = skillsForPrompt.length;
+		while (lo < hi) {
+			const mid = Math.ceil((lo + hi) / 2);
+			if (fitsCompact(skillsForPrompt.slice(0, mid))) lo = mid;
+			else hi = mid - 1;
+		}
+		skillsForPrompt = skillsForPrompt.slice(0, lo);
+		truncated = true;
+	}
+	return {
+		skillsForPrompt,
+		truncated,
+		compact
+	};
+}
+function buildWorkspaceSkillSnapshot(workspaceDir, opts) {
+	const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
+	const skillFilter = normalizeSkillFilter(opts?.skillFilter);
+	return {
+		prompt,
+		skills: eligible.map((entry) => ({
+			name: entry.skill.name,
+			primaryEnv: entry.metadata?.primaryEnv,
+			requiredEnv: entry.metadata?.requires?.env?.slice()
+		})),
+		...skillFilter === void 0 ? {} : { skillFilter },
+		resolvedSkills,
+		version: opts?.snapshotVersion
+	};
+}
+function buildWorkspaceSkillsPrompt(workspaceDir, opts) {
+	return resolveWorkspaceSkillPromptState(workspaceDir, opts).prompt;
+}
+function resolveWorkspaceSkillPromptState(workspaceDir, opts) {
+	const eligible = filterSkillEntries(opts?.entries ?? loadSkillEntries(workspaceDir, opts), opts?.config, opts?.skillFilter, opts?.eligibility);
+	const promptEntries = eligible.filter((entry) => entry.invocation?.disableModelInvocation !== true);
+	const remoteNote = opts?.eligibility?.remote?.note?.trim();
+	const resolvedSkills = promptEntries.map((entry) => entry.skill);
+	const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
+		skills: compactSkillPaths(resolvedSkills),
+		config: opts?.config
+	});
+	return {
+		eligible,
+		prompt: [
+			remoteNote,
+			truncated ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}${compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.` : compact ? `⚠️ Skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.` : "",
+			compact ? formatSkillsCompact(skillsForPrompt) : formatSkillsForPrompt(skillsForPrompt)
+		].filter(Boolean).join("\n"),
+		resolvedSkills
+	};
+}
+function resolveSkillsPromptForRun(params) {
+	const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
+	if (snapshotPrompt) return snapshotPrompt;
+	if (params.entries && params.entries.length > 0) {
+		const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
+			entries: params.entries,
+			config: params.config
+		});
+		return prompt.trim() ? prompt : "";
+	}
+	return "";
+}
+function loadWorkspaceSkillEntries(workspaceDir, opts) {
+	return loadSkillEntries(workspaceDir, opts);
+}
+function resolveUniqueSyncedSkillDirName(base, used) {
+	if (!used.has(base)) {
+		used.add(base);
+		return base;
+	}
+	for (let index = 2; index < 1e4; index += 1) {
+		const candidate = `${base}-${index}`;
+		if (!used.has(candidate)) {
+			used.add(candidate);
+			return candidate;
+		}
+	}
+	let fallbackIndex = 1e4;
+	let fallback = `${base}-${fallbackIndex}`;
+	while (used.has(fallback)) {
+		fallbackIndex += 1;
+		fallback = `${base}-${fallbackIndex}`;
+	}
+	used.add(fallback);
+	return fallback;
+}
+function resolveSyncedSkillDestinationPath(params) {
+	const sourceDirName = path.basename(params.entry.skill.baseDir).trim();
+	if (!sourceDirName || sourceDirName === "." || sourceDirName === "..") return null;
+	return resolveSandboxPath({
+		filePath: resolveUniqueSyncedSkillDirName(sourceDirName, params.usedDirNames),
+		cwd: params.targetSkillsDir,
+		root: params.targetSkillsDir
+	}).resolved;
+}
+async function syncSkillsToWorkspace(params) {
+	const sourceDir = resolveUserPath(params.sourceWorkspaceDir);
+	const targetDir = resolveUserPath(params.targetWorkspaceDir);
+	if (sourceDir === targetDir) return;
+	await serializeByKey(`syncSkills:${targetDir}`, async () => {
+		const targetSkillsDir = path.join(targetDir, "skills");
+		const entries = loadSkillEntries(sourceDir, {
+			config: params.config,
+			managedSkillsDir: params.managedSkillsDir,
+			bundledSkillsDir: params.bundledSkillsDir
+		});
+		await fsp.rm(targetSkillsDir, {
+			recursive: true,
+			force: true
+		});
+		await fsp.mkdir(targetSkillsDir, { recursive: true });
+		const usedDirNames = /* @__PURE__ */ new Set();
+		for (const entry of entries) {
+			let dest = null;
+			try {
+				dest = resolveSyncedSkillDestinationPath({
+					targetSkillsDir,
+					entry,
+					usedDirNames
+				});
+			} catch (error) {
+				const message = error instanceof Error ? error.message : JSON.stringify(error);
+				skillsLogger.warn(`Failed to resolve safe destination for ${entry.skill.name}: ${message}`);
+				continue;
+			}
+			if (!dest) {
+				skillsLogger.warn(`Failed to resolve safe destination for ${entry.skill.name}: invalid source directory name`);
+				continue;
+			}
+			try {
+				await fsp.cp(entry.skill.baseDir, dest, {
+					recursive: true,
+					force: true
+				});
+			} catch (error) {
+				const message = error instanceof Error ? error.message : JSON.stringify(error);
+				skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
+			}
+		}
+	});
+}
+function filterWorkspaceSkillEntries(entries, config) {
+	return filterSkillEntries(entries, config);
+}
+function buildWorkspaceSkillCommandSpecs(workspaceDir, opts) {
+	const userInvocable = filterSkillEntries(opts?.entries ?? loadSkillEntries(workspaceDir, opts), opts?.config, opts?.skillFilter, opts?.eligibility).filter((entry) => entry.invocation?.userInvocable !== false);
+	const used = /* @__PURE__ */ new Set();
+	for (const reserved of opts?.reservedNames ?? []) used.add(reserved.toLowerCase());
+	const specs = [];
+	for (const entry of userInvocable) {
+		const rawName = entry.skill.name;
+		const base = sanitizeSkillCommandName(rawName);
+		if (base !== rawName) debugSkillCommandOnce(`sanitize:${rawName}:${base}`, `Sanitized skill command name "${rawName}" to "/${base}".`, {
+			rawName,
+			sanitized: `/${base}`
+		});
+		const unique = resolveUniqueSkillCommandName(base, used);
+		if (unique !== base) debugSkillCommandOnce(`dedupe:${rawName}:${unique}`, `De-duplicated skill command name for "${rawName}" to "/${unique}".`, {
+			rawName,
+			deduped: `/${unique}`
+		});
+		used.add(unique.toLowerCase());
+		const rawDescription = entry.skill.description?.trim() || rawName;
+		const description = rawDescription.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH ? rawDescription.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…" : rawDescription;
+		const dispatch = (() => {
+			const kindRaw = (entry.frontmatter?.["command-dispatch"] ?? entry.frontmatter?.["command_dispatch"] ?? "").trim().toLowerCase();
+			if (!kindRaw) return;
+			if (kindRaw !== "tool") return;
+			const toolName = (entry.frontmatter?.["command-tool"] ?? entry.frontmatter?.["command_tool"] ?? "").trim();
+			if (!toolName) {
+				debugSkillCommandOnce(`dispatch:missingTool:${rawName}`, `Skill command "/${unique}" requested tool dispatch but did not provide command-tool. Ignoring dispatch.`, {
+					skillName: rawName,
+					command: unique
+				});
+				return;
+			}
+			const argModeRaw = (entry.frontmatter?.["command-arg-mode"] ?? entry.frontmatter?.["command_arg_mode"] ?? "").trim().toLowerCase();
+			if (!(!argModeRaw || argModeRaw === "raw" ? "raw" : null)) debugSkillCommandOnce(`dispatch:badArgMode:${rawName}:${argModeRaw}`, `Skill command "/${unique}" requested tool dispatch but has unknown command-arg-mode. Falling back to raw.`, {
+				skillName: rawName,
+				command: unique,
+				argMode: argModeRaw
+			});
+			return {
+				kind: "tool",
+				toolName,
+				argMode: "raw"
+			};
+		})();
+		specs.push({
+			name: unique,
+			skillName: rawName,
+			description,
+			...dispatch ? { dispatch } : {}
+		});
+	}
+	return specs;
+}
+//#endregion
+//#region src/agents/skills.ts
+function resolveSkillsInstallPreferences(config) {
+	const raw = config?.skills?.install;
+	const preferBrew = raw?.preferBrew ?? true;
+	const manager = (typeof raw?.nodeManager === "string" ? raw.nodeManager.trim() : "").toLowerCase();
+	return {
+		preferBrew,
+		nodeManager: manager === "pnpm" || manager === "yarn" || manager === "bun" || manager === "npm" ? manager : "npm"
+	};
+}
+//#endregion
+export { filterWorkspaceSkillEntries as a, syncSkillsToWorkspace as c, assertMediaNotDataUrl as d, assertSandboxPath as f, resolveSandboxedMediaSource as h, buildWorkspaceSkillsPrompt as i, resolvePluginSkillDirs as l, resolveSandboxPath as m, buildWorkspaceSkillCommandSpecs as n, loadWorkspaceSkillEntries as o, resolveSandboxInputPath as p, buildWorkspaceSkillSnapshot as r, resolveSkillsPromptForRun as s, resolveSkillsInstallPreferences as t, resolveBundledSkillsDir as u };

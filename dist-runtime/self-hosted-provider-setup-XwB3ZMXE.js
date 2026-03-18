@@ -1,0 +1,12 @@
+import "./logger-BOdgfoqz.js";
+import "./tmp-openclaw-dir-DgEKZnX6.js";
+import "./paths-CbmqEZIn.js";
+import "./subsystem-CsPxmH8p.js";
+import "./utils-CMc9mmF8.js";
+import "./retry-CgLvWye-.js";
+import "./paths-DAoqckDF.js";
+import "./kilocode-shared-Ci8SRxXc.js";
+import { f as SELF_HOSTED_DEFAULT_CONTEXT_WINDOW, i as buildSglangProvider, m as SELF_HOSTED_DEFAULT_MAX_TOKENS, p as SELF_HOSTED_DEFAULT_COST, s as buildVllmProvider } from "./models-config.providers.discovery-gVOHvGnm.js";
+import "./upsert-with-lock-BkGBN4WL.js";
+import { a as promptAndConfigureOpenAICompatibleSelfHostedProviderAuth, i as promptAndConfigureOpenAICompatibleSelfHostedProvider, n as configureOpenAICompatibleSelfHostedProviderNonInteractive, r as discoverOpenAICompatibleSelfHostedProvider, t as applyProviderDefaultModel } from "./self-hosted-provider-setup-Bgv4n1Xv.js";
+export { SELF_HOSTED_DEFAULT_CONTEXT_WINDOW, SELF_HOSTED_DEFAULT_COST, SELF_HOSTED_DEFAULT_MAX_TOKENS, applyProviderDefaultModel, buildSglangProvider, buildVllmProvider, configureOpenAICompatibleSelfHostedProviderNonInteractive, discoverOpenAICompatibleSelfHostedProvider, promptAndConfigureOpenAICompatibleSelfHostedProvider, promptAndConfigureOpenAICompatibleSelfHostedProviderAuth };
