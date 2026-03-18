@@ -514,7 +514,7 @@ Cost event recording, budget policies, enforcement, and incident tracking. Hooks
 - [x] 4.7 Protocol schemas — create `src/gateway/protocol/schema/budgets.ts`
 - [x] 4.8 RPC handlers — create `src/gateway/server-methods/budgets.ts` with 8 budget/cost handlers
 - [x] 4.9 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
-- [ ] 4.10 Gateway events — emit `budget.warning` and `budget.exceeded` for real-time UI notifications
+- [x] 4.10 Gateway events — emit `budget.warning` and `budget.exceeded` for real-time UI notifications
 - [ ] 4.11 UI cost dashboard — `/budgets` with spend charts, policy CRUD, incident list, alert badges
 - [ ] 4.12 Tests — cost recording, budget enforcement (warn/block), reconciliation, handler tests
 

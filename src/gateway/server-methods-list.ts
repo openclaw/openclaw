@@ -288,4 +288,6 @@ export const GATEWAY_EVENTS = [
   "exec.approval.requested",
   "exec.approval.resolved",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  "budget.warning",
+  "budget.exceeded",
 ];

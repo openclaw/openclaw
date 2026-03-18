@@ -136,7 +136,7 @@ export function startGatewayMaintenanceTimers(params: {
   // Hourly budget policy reconciliation — creates incidents when thresholds are crossed
   const runBudgetReconcile = () => {
     try {
-      reconcileBudgets();
+      reconcileBudgets(params.broadcast);
     } catch (err) {
       params.logHealth.error(`budget reconciliation failed: ${formatError(err)}`);
     }

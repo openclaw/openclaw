@@ -7,11 +7,13 @@ import { getAggregateCost } from "./cost-event-store-sqlite.js";
 import type { BudgetPolicy, BudgetIncident } from "./types.js";
 import { listWorkspaces } from "./workspace-store-sqlite.js";
 
+type BroadcastFn = (event: string, payload: unknown) => void;
+
 /**
  * Reconciles costs against budget policies and emits incidents if thresholds are breached.
  * Intended to run periodically via a cron job or hook.
  */
-export function reconcileBudgets() {
+export function reconcileBudgets(broadcast?: BroadcastFn) {
   const workspaces = listWorkspaces();
   const now = new Date();
 
@@ -26,7 +28,7 @@ export function reconcileBudgets() {
     );
 
     for (const policy of policies) {
-      checkPolicy(policy, sinceUtcMonth, activeIncidents);
+      checkPolicy(policy, sinceUtcMonth, activeIncidents, broadcast);
     }
   }
 }
@@ -35,6 +37,7 @@ function checkPolicy(
   policy: BudgetPolicy,
   sinceUtcMonth: number,
   activeIncidents: BudgetIncident[],
+  broadcast?: BroadcastFn,
 ) {
   const sinceUtc = policy.windowKind === "calendar_month_utc" ? sinceUtcMonth : undefined;
 
@@ -81,6 +84,18 @@ function checkPolicy(
         workspaceId: policy.workspaceId,
         policyId: policy.id,
         type: newIncidentType,
+        agentId,
+        spentMicrocents,
+        limitMicrocents: limit,
+        message,
+      });
+      // Emit gateway event so connected clients can react in real time
+      const eventName = newIncidentType === "hard_stop" ? "budget.exceeded" : "budget.warning";
+      broadcast?.(eventName, {
+        workspaceId: policy.workspaceId,
+        policyId: policy.id,
+        scopeType: policy.scopeType,
+        scopeId: policy.scopeId,
         agentId,
         spentMicrocents,
         limitMicrocents: limit,
