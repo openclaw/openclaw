@@ -27,7 +27,6 @@ const { resolveKimiApiKey, resolveKimiModel, resolveKimiBaseUrl, extractKimiCita
   moonshotTesting;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
-const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
 const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
 const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
 const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
@@ -231,10 +230,7 @@ describe("web_search kimi config resolution", () => {
   it("extracts citations from search_results", () => {
     expect(
       extractKimiCitations({
-        search_results: [
-          { url: "https://example.com/one" },
-          { url: "https://example.com/two" },
-        ],
+        search_results: [{ url: "https://example.com/one" }, { url: "https://example.com/two" }],
       }),
     ).toEqual(["https://example.com/one", "https://example.com/two"]);
   });
