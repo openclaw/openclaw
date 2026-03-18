@@ -52,22 +52,63 @@ const DEFAULT_CATEGORY_CAPABILITIES = {
   finishingFlow: true
 };
 
+function normalizeFields(fields) {
+  if (fields === 'full' || fields === 'write') return fields;
+  return 'lean';
+}
+
+function toStructuredError(source, status, message) {
+  return JSON.stringify({
+    source,
+    status,
+    message: String(message || 'Unknown error').slice(0, 200)
+  });
+}
+
+function parseError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    return JSON.parse(message);
+  } catch (_) {
+    return { message };
+  }
+}
+
+function extractSupabaseMessage(body) {
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed?.message === 'string' && parsed.message.trim()) {
+      return parsed.message.trim();
+    }
+    if (typeof parsed?.error === 'string' && parsed.error.trim()) {
+      return parsed.error.trim();
+    }
+    if (typeof parsed?.details === 'string' && parsed.details.trim()) {
+      return parsed.details.trim();
+    }
+  } catch (_) {
+    // fall through to raw body
+  }
+  return String(body || 'Unknown Supabase error');
+}
+
 // --- Supabase REST helper ---
 async function supabaseGet(tableOrView, params = '') {
   const url = `${SUPABASE_URL}/rest/v1/${tableOrView}?${params}`;
   const res = await fetch(url, { headers: HEADERS });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Supabase ${res.status}: ${body}`);
+    throw new Error(toStructuredError('supabase', res.status, extractSupabaseMessage(body)));
   }
   return res.json();
 }
 
 // --- Query implementations ---
 
-async function itemLookup(search) {
+async function itemLookup(search, fields) {
   if (!search) throw new Error('search param required');
   const term = encodeURIComponent(`*${search}*`);
+  const mode = normalizeFields(fields);
 
   // Search ALL paths in parallel, then merge and deduplicate
   const [bySidemark, byItemName, byProjectPO, byProjectQuote] = await Promise.all([
@@ -155,42 +196,80 @@ async function itemLookup(search) {
     }
   }
 
-  const formatted = formatItems(merged);
+  const readinessMap = await getReadinessMap(merged.map(r => r.id));
+  const formatter = getFormatter(mode);
+  const formattedEntries = merged.map(row => {
+    const item = formatter(row);
+    const readiness = readinessMap[row.id];
 
-  // Enrich with readiness data
-  const readinessMap = await getReadinessMap(formatted.map(r => r.id));
-  for (const item of formatted) {
-    const rd = readinessMap[item.id];
-    item.fully_ready = rd?.fully_ready ?? null;
-    item.blockers = deriveBlockers(rd, item.category);
-  }
+    if (mode === 'full') {
+      item.fully_ready = readiness?.fully_ready ?? null;
+      item.blockers = deriveBlockers(readiness, row.category);
+    } else {
+      item.description = row.description || null;
+      item.line_total = lineTotalForRow(row);
+      item.work_completed = formatDateForLean(row.work_completed_at);
+      item.blockers = deriveBlockers(readiness, row.category);
+    }
+
+    return { row, item };
+  });
 
   // Separate operational items from quote-stage items
-  const operational = formatted.filter(r => r.status !== 'quote');
-  const quoteStage = formatted.filter(r => r.status === 'quote');
+  const operational = formattedEntries
+    .filter(entry => entry.row.status !== 'quote')
+    .map(entry => entry.item);
+  const quoteStage = formattedEntries
+    .filter(entry => entry.row.status === 'quote')
+    .map(entry => entry.item);
+  const truncated = hasReachedLimit(bySidemark, 30)
+    || hasReachedLimit(byItemName, 30)
+    || hasReachedLimit(byProjectPO, 40)
+    || hasReachedLimit(byProjectQuote, 20);
 
   // If there are operational items, return those (with quote-stage noted separately)
   if (operational.length > 0) {
     if (quoteStage.length > 0) {
-      return { items: operational, quote_stage_count: quoteStage.length, quote_stage_note: `${quoteStage.length} additional item(s) still at quote stage (not yet ordered)` };
+      return makeQueryResult({
+        items: operational,
+        quote_stage_count: quoteStage.length,
+        quote_stage_note: `${quoteStage.length} additional item(s) still at quote stage (not yet ordered)`
+      }, {
+        count: operational.length,
+        total: operational.length,
+        truncated
+      });
     }
-    return operational;
+    return makeQueryResult(operational, {
+      count: operational.length,
+      total: operational.length,
+      truncated
+    });
   }
 
   // If only quote-stage items exist, return them with a clear label
   if (quoteStage.length > 0) {
-    return { items: quoteStage, all_quote_stage: true, note: 'All matching items are still at quote stage — none have been ordered yet' };
+    return makeQueryResult({
+      items: quoteStage,
+      all_quote_stage: true,
+      note: 'All matching items are still at quote stage — none have been ordered yet'
+    }, {
+      count: quoteStage.length,
+      total: quoteStage.length,
+      truncated
+    });
   }
 
-  return [];
+  return makeQueryResult([], { count: 0, total: 0, truncated });
 }
 
-async function quoteLookup(search) {
+async function quoteLookup(search, fields) {
   if (!search) throw new Error('search param required');
 
   const rawSearch = String(search).trim();
   const term = encodeURIComponent(`*${rawSearch}*`);
   const exactQuoteNumber = encodeURIComponent(rawSearch);
+  const mode = normalizeFields(fields);
   const quoteSelect =
     'select=id,quote_number,sidemark,reference,status,grand_total,deposit_amount,xero_quote_id,xero_quote_number,created_at,updated_at,clients(name,company),projects(name)';
 
@@ -239,14 +318,22 @@ async function quoteLookup(search) {
     const bTime = Date.parse(b.updated_at || b.created_at || 0);
     return bTime - aTime;
   });
+  const truncated = hasReachedLimit(byQuoteNumber, 100)
+    || hasReachedLimit(bySidemark, 100)
+    || hasReachedLimit(byReference, 100)
+    || hasReachedLimit(byClient, 100);
 
   if (merged.length === 0) {
-    return {
+    return makeQueryResult({
       type: 'quote_lookup',
       search: rawSearch,
       results: [],
       message: `No quotes found matching '${rawSearch}'`
-    };
+    }, {
+      count: 0,
+      total: 0,
+      truncated
+    });
   }
 
   const lineItemsByQuoteId = {};
@@ -259,49 +346,31 @@ async function quoteLookup(search) {
       '&order=created_at.asc'
     ].join(''));
 
-    lineItemsByQuoteId[quote.id] = rows.map(item => ({
-      id: item.id,
-      item_name: item.item_name || null,
-      description: item.description || null,
-      item_type: item.item_type || null,
-      quantity: item.quantity,
-      sell_price: item.sell_price,
-      has_skirt: item.has_skirt,
-      skirt_style: item.skirt_style,
-      contrast_welt: item.contrast_welt,
-      welting_type: item.welting_type,
-      estimated_fabric_yardage: item.estimated_fabric_yardage,
-      form_data: item.form_data,
-      quote_item_status: item.quote_item_status || null
-    }));
+    lineItemsByQuoteId[quote.id] = rows.map(item => formatQuoteLineItem(item, mode));
   }));
 
-  return {
+  const results = merged.map(quote => formatQuoteRecord(
+    quote,
+    lineItemsByQuoteId[quote.id] || [],
+    mode
+  ));
+
+  return makeQueryResult({
     type: 'quote_lookup',
     search: rawSearch,
-    results: merged.map(quote => ({
-      id: quote.id,
-      quote_number: quote.quote_number,
-      sidemark: quote.sidemark,
-      reference: quote.reference,
-      status: quote.status,
-      grand_total: quote.grand_total,
-      deposit_amount: quote.deposit_amount,
-      xero_quote_id: quote.xero_quote_id || null,
-      xero_quote_number: quote.xero_quote_number || null,
-      client_name: quote.clients?.name || quote.clients?.company || null,
-      project_name: quote.projects?.name || null,
-      created_at: quote.created_at,
-      updated_at: quote.updated_at,
-      line_items: lineItemsByQuoteId[quote.id] || []
-    }))
-  };
+    results
+  }, {
+    count: results.length,
+    total: results.length,
+    truncated
+  });
 }
 
-async function invoicedItems(search) {
+async function invoicedItems(search, fields) {
   if (!search) throw new Error('search param required');
 
   const term = encodeURIComponent(`*${String(search).trim()}*`);
+  const mode = normalizeFields(fields);
   const baseSelect = [
     'select=id,description,sidemark,item_name,category,status,sell_price,quantity,',
     'xero_invoice_id,xero_credit_note_id,invoiced_at,paid_at,',
@@ -352,7 +421,10 @@ async function invoicedItems(search) {
   }
 
   const total = merged.length;
-  const truncated = total > 50;
+  const truncated = total > 50
+    || hasReachedLimit(bySidemark, 100)
+    || hasReachedLimit(byItemName, 100)
+    || hasReachedLimit(byProject, 100);
   const limited = merged.slice(0, 50);
   const ids = limited.map(row => row.id);
 
@@ -364,17 +436,20 @@ async function invoicedItems(search) {
     getReadinessMap(ids)
   ]);
 
-  return {
-    results: limited.map(item => {
+  const formatter = getFormatter(mode);
+  const results = limited.map(item => {
+    const client = item.pos?.projects?.clients;
+    const readiness = readinessMap[item.id];
+    const lineTotal = lineTotalForRow(item);
+    const deposits = roundCurrency(depositMap[item.id] || 0);
+    const payments = roundCurrency(paymentMap[item.id] || 0);
+    const credits = roundCurrency(creditMap[item.id] || 0);
+    const balanceRemaining = roundCurrency(lineTotal - deposits - payments - credits);
+
+    if (mode === 'full') {
       const quantity = Number(item.quantity ?? 1);
       const sellPrice = Number(item.sell_price ?? 0);
-      const lineTotal = roundCurrency(sellPrice * quantity);
-      const deposits = roundCurrency(depositMap[item.id] || 0);
-      const payments = roundCurrency(paymentMap[item.id] || 0);
-      const credits = roundCurrency(creditMap[item.id] || 0);
-      const balanceRemaining = roundCurrency(lineTotal - deposits - payments - credits);
-      const client = item.pos?.projects?.clients;
-      const readiness = readinessMap[item.id];
+      const fullLineTotal = roundCurrency(sellPrice * quantity);
 
       return {
         id: item.id,
@@ -389,7 +464,7 @@ async function invoicedItems(search) {
         po_number: item.pos?.po_number || null,
         sell_price: item.sell_price,
         quantity: item.quantity,
-        line_total: lineTotal,
+        line_total: fullLineTotal,
         deposits,
         payments,
         credits,
@@ -401,17 +476,32 @@ async function invoicedItems(search) {
         fully_ready: readiness?.fully_ready ?? null,
         blockers: deriveBlockers(readiness, item.category)
       };
-    }),
-    count: limited.length,
+    }
+
+    const base = formatter(item);
+    base.line_total = lineTotal;
+    base.deposits = deposits;
+    base.payments = payments;
+    base.credits = credits;
+    base.balance_remaining = balanceRemaining;
+    base.xero_invoice_id = item.xero_invoice_id || null;
+    base.xero_contact_id = client?.xero_contact_id || null;
+    return base;
+  });
+
+  return makeQueryResult(results, {
+    count: results.length,
     total,
     truncated
-  };
+  });
 }
 
-async function readyForProduction() {
+async function readyForProduction(fields) {
+  const mode = normalizeFields(fields);
+
   // Step 1: Get fully ready items from readiness view
   const ready = await supabaseGet('order_item_readiness', [
-    'select=id,sidemark,item_name,category,project_name,target_completion_date',
+    'select=id,sidemark,item_name,status,category,project_name,target_completion_date',
     '&fully_ready=eq.true',
     '&on_hold=eq.false',
     '&status=eq.active',
@@ -419,7 +509,9 @@ async function readyForProduction() {
     '&limit=100'
   ].join(''));
 
-  if (ready.length === 0) return [];
+  if (ready.length === 0) {
+    return makeQueryResult([], { count: 0, total: 0, truncated: false });
+  }
 
   // Step 2: Check which ones are NOT yet in production
   const ids = ready.map(r => r.id);
@@ -438,7 +530,7 @@ async function readyForProduction() {
       `select=id,pos(projects(clients(name,company)))`,
       `&id=in.(${ids.join(',')})`,
     ].join('')),
-    getDescriptionMap(ids)
+    mode === 'full' ? getDescriptionMap(ids) : Promise.resolve({})
   ]);
   const clientMap = {};
   for (const row of clientLookup) {
@@ -446,22 +538,42 @@ async function readyForProduction() {
     clientMap[row.id] = c?.name || c?.company || null;
   }
 
-  return ready
+  const formatter = getFormatter(mode);
+  const results = ready
     .filter(r => !startedIds.has(r.id))
-    .map(r => ({
-      id: r.id,
-      description: descMap[r.id] || null,
-      sidemark: r.sidemark || r.item_name,
-      category: r.category,
-      project: r.project_name,
-      client: clientMap[r.id] || r.project_name,
-      target_completion: r.target_completion_date
-    }));
+    .map(r => {
+      const row = {
+        ...r,
+        _project: r.project_name,
+        _client: clientMap[r.id] || r.project_name
+      };
+
+      if (mode === 'full') {
+        return {
+          id: r.id,
+          description: descMap[r.id] || null,
+          sidemark: r.sidemark || r.item_name,
+          category: r.category,
+          project: r.project_name,
+          client: clientMap[r.id] || r.project_name,
+          target_completion: r.target_completion_date
+        };
+      }
+
+      return formatter(row);
+    });
+
+  return makeQueryResult(results, {
+    count: results.length,
+    total: results.length,
+    truncated: hasReachedLimit(ready, 100)
+  });
 }
 
-async function waitingOnFabric() {
+async function waitingOnFabric(fields) {
+  const mode = normalizeFields(fields);
   const rows = await supabaseGet('order_item_readiness', [
-    'select=id,sidemark,item_name,category,project_name,target_completion_date,',
+    'select=id,sidemark,item_name,status,category,project_name,target_completion_date,',
     'has_fabric_entries,fabric_inspected',
     '&all_fabric_received=eq.false',
     '&status=eq.active',
@@ -473,25 +585,45 @@ async function waitingOnFabric() {
   const ids = rows.map(r => r.id);
   const [clientMap, descMap] = await Promise.all([
     getClientMap(ids),
-    getDescriptionMap(ids)
+    mode === 'full' ? getDescriptionMap(ids) : Promise.resolve({})
   ]);
 
-  return rows.map(r => ({
-    id: r.id,
-    description: descMap[r.id] || null,
-    sidemark: r.sidemark || r.item_name,
-    category: r.category,
-    project: r.project_name,
-    client: clientMap[r.id] || r.project_name,
-    target_completion: r.target_completion_date,
-    has_any_fabric: r.has_fabric_entries,
-    fabric_inspected: r.fabric_inspected
-  }));
+  const formatter = getFormatter(mode);
+  const results = rows.map(r => {
+    const row = {
+      ...r,
+      _project: r.project_name,
+      _client: clientMap[r.id] || r.project_name
+    };
+
+    if (mode === 'full') {
+      return {
+        id: r.id,
+        description: descMap[r.id] || null,
+        sidemark: r.sidemark || r.item_name,
+        category: r.category,
+        project: r.project_name,
+        client: clientMap[r.id] || r.project_name,
+        target_completion: r.target_completion_date,
+        has_any_fabric: r.has_fabric_entries,
+        fabric_inspected: r.fabric_inspected
+      };
+    }
+
+    return formatter(row);
+  });
+
+  return makeQueryResult(results, {
+    count: results.length,
+    total: results.length,
+    truncated: hasReachedLimit(rows, 100)
+  });
 }
 
-async function inProduction(department) {
+async function inProduction(department, fields) {
+  const mode = normalizeFields(fields);
   let filter = [
-    'select=id,description,sidemark,item_name,category,production_department,production_started_at,',
+    'select=id,description,sidemark,item_name,status,category,sell_price,quantity,on_hold,production_department,production_started_at,',
     'target_completion_date,',
     'pos(po_number,projects(name,clients(name,company)))',
     '&status=eq.active',
@@ -505,10 +637,16 @@ async function inProduction(department) {
   filter.push('&limit=100');
 
   const rows = await supabaseGet('order_items', filter.join(''));
-  return formatItems(rows);
+  const results = formatItems(rows, mode);
+  return makeQueryResult(results, {
+    count: results.length,
+    total: results.length,
+    truncated: hasReachedLimit(rows, 100)
+  });
 }
 
-async function drawingsNeedingReview() {
+async function drawingsNeedingReview(fields) {
+  const mode = normalizeFields(fields);
   const rows = await supabaseGet('drawings', [
     'select=id,drawing_type,status,version_number,created_at,',
     'order_items(id,description,sidemark,item_name,category,',
@@ -519,32 +657,71 @@ async function drawingsNeedingReview() {
     '&limit=50'
   ].join(''));
 
-  return rows.map(r => ({
-    item_id: r.order_items?.id || null,
-    item_description: r.order_items?.description || null,
-    drawing_type: r.drawing_type,
-    version: r.version_number,
-    submitted: r.created_at,
-    sidemark: r.order_items?.sidemark || r.order_items?.item_name,
-    category: r.order_items?.category,
-    project: r.order_items?.pos?.projects?.name,
-    client: r.order_items?.pos?.projects?.clients?.name || r.order_items?.pos?.projects?.clients?.company
-  }));
+  const results = rows.map(r => {
+    const lean = {
+      drawing_type: r.drawing_type,
+      version: r.version_number,
+      submitted: r.created_at,
+      sidemark: r.order_items?.sidemark || r.order_items?.item_name || null,
+      category: r.order_items?.category || null,
+      project: r.order_items?.pos?.projects?.name || null,
+      client: r.order_items?.pos?.projects?.clients?.name || r.order_items?.pos?.projects?.clients?.company || null
+    };
+
+    if (mode === 'write') {
+      return {
+        item_id: r.order_items?.id || null,
+        ...lean
+      };
+    }
+
+    if (mode !== 'full') {
+      return lean;
+    }
+
+    return {
+      item_id: r.order_items?.id || null,
+      item_description: r.order_items?.description || null,
+      ...lean
+    };
+  });
+
+  return makeQueryResult(results, {
+    count: results.length,
+    total: results.length,
+    truncated: hasReachedLimit(rows, 50)
+  });
 }
 
-async function readyForPickup() {
+async function readyForPickup(fields) {
+  const mode = normalizeFields(fields);
   const rows = await supabaseGet('order_items', [
-    'select=id,description,sidemark,item_name,category,sell_price,quantity,work_completed_at,',
+    'select=id,description,sidemark,item_name,status,category,sell_price,quantity,on_hold,production_department,work_completed_at,',
     'target_completion_date,',
     'pos(po_number,projects(name,clients(name,company)))',
     '&status=eq.ready%20for%20pick%20up',
     '&order=work_completed_at.asc',
     '&limit=100'
   ].join(''));
-  return formatItems(rows);
+  const formatter = getFormatter(mode);
+  const results = rows.map(row => {
+    if (mode === 'full') return formatter(row);
+
+    const base = formatter(row);
+    base.line_total = lineTotalForRow(row);
+    base.work_completed = formatDateForLean(row.work_completed_at);
+    return base;
+  });
+
+  return makeQueryResult(results, {
+    count: results.length,
+    total: results.length,
+    truncated: hasReachedLimit(rows, 100)
+  });
 }
 
-async function overdueItems() {
+async function overdueItems(fields) {
+  const mode = normalizeFields(fields);
   const today = new Date().toISOString().split('T')[0];
   const rows = await supabaseGet('order_item_readiness', [
     'select=id,sidemark,item_name,status,category,project_name,target_completion_date,',
@@ -559,35 +736,64 @@ async function overdueItems() {
   const ids = rows.map(r => r.id);
   const [clientMap, descMap] = await Promise.all([
     getClientMap(ids),
-    getDescriptionMap(ids)
+    mode === 'full' ? getDescriptionMap(ids) : Promise.resolve({})
   ]);
 
-  return rows.map(r => ({
-    id: r.id,
-    description: descMap[r.id] || null,
-    sidemark: r.sidemark || r.item_name,
-    category: r.category,
-    project: r.project_name,
-    client: clientMap[r.id] || r.project_name,
-    target_completion: r.target_completion_date,
-    days_overdue: Math.floor((Date.now() - new Date(r.target_completion_date).getTime()) / 86400000),
-    blockers: getBlockerList(r, r.category)
-  }));
+  const formatter = getFormatter(mode);
+  const results = rows.map(r => {
+    const daysOverdue = Math.floor((Date.now() - new Date(r.target_completion_date).getTime()) / 86400000);
+    const blockers = deriveBlockers(r, r.category);
+    const row = {
+      ...r,
+      _project: r.project_name,
+      _client: clientMap[r.id] || r.project_name
+    };
+
+    if (mode === 'full') {
+      return {
+        id: r.id,
+        description: descMap[r.id] || null,
+        sidemark: r.sidemark || r.item_name,
+        category: r.category,
+        project: r.project_name,
+        client: clientMap[r.id] || r.project_name,
+        target_completion: r.target_completion_date,
+        days_overdue: daysOverdue,
+        blockers
+      };
+    }
+
+    const base = formatter(row);
+    base.days_overdue = daysOverdue;
+    base.blockers = blockers;
+    return base;
+  });
+
+  return makeQueryResult(results, {
+    count: results.length,
+    total: results.length,
+    truncated: hasReachedLimit(rows, 100)
+  });
 }
 
-async function projectOverview(search) {
+async function projectOverview(search, fields) {
   if (!search) throw new Error('search param required');
   const term = encodeURIComponent(`*${search}*`);
+  const mode = normalizeFields(fields);
 
   const summaries = await supabaseGet('project_summary', [
-    `select=*`,
+    'select=project_id,project_name,project_status,client_name,client_company,total_items,completed_items,active_items,on_hold_items,ready_items,blocked_client_items,blocked_prestigio_items',
     `&project_name=ilike.${term}`,
     '&limit=5'
   ].join(''));
 
-  if (summaries.length === 0) return [];
+  if (summaries.length === 0) {
+    return makeQueryResult([], { count: 0, total: 0, truncated: false });
+  }
 
   const projectId = summaries[0].project_id;
+  const summary = summaries[0];
+  const summaryClient = summary.client_name || summary.client_company || null;
 
   // Get items via PO path
   const items = await supabaseGet('order_items', [
@@ -617,10 +823,17 @@ async function projectOverview(search) {
 
   const allItems = [...items, ...quoteItems];
   const readinessMap = await getReadinessMap(allItems.map(r => r.id));
+  const formatter = getFormatter(mode);
+  const formattedItems = allItems.map(r => {
+    const row = {
+      ...r,
+      _project: summary.project_name || resolveProjectName(r),
+      _client: summaryClient
+    };
+    const readiness = readinessMap[r.id];
+    const blockers = deriveBlockers(readiness, r.category);
 
-  return {
-    summary: summaries[0],
-    items: allItems.map(r => {
+    if (mode === 'full') {
       const rd = readinessMap[r.id];
       return {
         id: r.id,
@@ -636,8 +849,25 @@ async function projectOverview(search) {
         line_total: (r.sell_price || 0) * (r.quantity || 1),
         target_completion: r.target_completion_date
       };
-    })
-  };
+    }
+
+    const base = formatter(row);
+    base.fully_ready = readiness?.fully_ready ?? null;
+    base.blockers = blockers;
+    base.line_total = lineTotalForRow(r);
+    return base;
+  });
+
+  return makeQueryResult({
+    summary,
+    items: formattedItems
+  }, {
+    count: formattedItems.length,
+    total: formattedItems.length,
+    truncated: hasReachedLimit(summaries, 5)
+      || hasReachedLimit(items, 100)
+      || hasReachedLimit(quoteItems, 50)
+  });
 }
 
 async function pipelineSummary() {
@@ -654,9 +884,10 @@ async function pipelineSummary() {
   return counts;
 }
 
-async function collectionsOwed() {
+async function collectionsOwed(fields) {
+  const mode = normalizeFields(fields);
   const rows = await supabaseGet('order_items', [
-    'select=id,description,sidemark,item_name,category,sell_price,quantity,work_completed_at,',
+    'select=id,description,sidemark,item_name,status,category,sell_price,quantity,on_hold,production_department,work_completed_at,target_completion_date,',
     'pos(po_number,projects(name,clients(name,company)))',
     '&status=eq.collected',
     '&paid_at=is.null',
@@ -664,12 +895,27 @@ async function collectionsOwed() {
     '&order=work_completed_at.asc',
     '&limit=100'
   ].join(''));
-  return formatItems(rows);
+  const formatter = getFormatter(mode);
+  const results = rows.map(row => {
+    if (mode === 'full') return formatter(row);
+
+    const base = formatter(row);
+    base.line_total = lineTotalForRow(row);
+    base.work_completed = formatDateForLean(row.work_completed_at);
+    return base;
+  });
+
+  return makeQueryResult(results, {
+    count: results.length,
+    total: results.length,
+    truncated: hasReachedLimit(rows, 100)
+  });
 }
 
-async function clientItems(search) {
+async function clientItems(search, fields) {
   if (!search) throw new Error('search param required');
   const term = encodeURIComponent(`*${search}*`);
+  const mode = normalizeFields(fields);
 
   const rows = await supabaseGet('order_items', [
     'select=id,description,sidemark,item_name,status,category,sell_price,quantity,on_hold,',
@@ -681,6 +927,15 @@ async function clientItems(search) {
     '&limit=100'
   ].join(''));
 
+  const formatter = getFormatter(mode);
+  const formatClientRows = (selectedRows) => selectedRows.map(row => {
+    if (mode === 'full') return formatter(row);
+
+    const base = formatter(row);
+    base.line_total = lineTotalForRow(row);
+    return base;
+  });
+
   if (rows.length === 0) {
     const rows2 = await supabaseGet('order_items', [
       'select=id,description,sidemark,item_name,status,category,sell_price,quantity,on_hold,',
@@ -691,15 +946,26 @@ async function clientItems(search) {
       '&order=status.asc,sidemark.asc',
       '&limit=100'
     ].join(''));
-    return formatItems(rows2);
+    const results = formatClientRows(rows2);
+    return makeQueryResult(results, {
+      count: results.length,
+      total: results.length,
+      truncated: hasReachedLimit(rows2, 100)
+    });
   }
 
-  return formatItems(rows);
+  const results = formatClientRows(rows);
+  return makeQueryResult(results, {
+    count: results.length,
+    total: results.length,
+    truncated: hasReachedLimit(rows, 100)
+  });
 }
 
-async function projectContacts(search) {
+async function projectContacts(search, fields) {
   if (!search) throw new Error('search param required');
   const term = encodeURIComponent(`*${search}*`);
+  const mode = normalizeFields(fields);
 
   // Find matching projects (same pattern as projectOverview)
   let summaries = await supabaseGet('project_summary', [
@@ -716,7 +982,9 @@ async function projectContacts(search) {
     ].join(''));
   }
 
-  if (summaries.length === 0) return [];
+  if (summaries.length === 0) {
+    return makeQueryResult([], { count: 0, total: 0, truncated: false });
+  }
 
   const results = [];
 
@@ -771,15 +1039,42 @@ async function projectContacts(search) {
       }
     } catch (_) { /* best effort */ }
 
-    results.push({
-      project_id: proj.project_id,
+    const designers = Array.from(designerMap.values()).map(designer => {
+      if (mode === 'full') return designer;
+      return {
+        name: designer.name,
+        email: designer.email
+      };
+    });
+
+    if (mode === 'full') {
+      results.push({
+        project_id: proj.project_id,
+        project_name: proj.project_name,
+        client_name: proj.client_name,
+        designers
+      });
+      continue;
+    }
+
+    const leanResult = {
       project_name: proj.project_name,
       client_name: proj.client_name,
-      designers: Array.from(designerMap.values())
-    });
+      designers
+    };
+
+    if (mode === 'write') {
+      leanResult.project_id = proj.project_id;
+    }
+
+    results.push(leanResult);
   }
 
-  return results;
+  return makeQueryResult(results, {
+    count: results.length,
+    total: results.length,
+    truncated: hasReachedLimit(summaries, 10)
+  });
 }
 
 async function departmentLoad() {
@@ -800,29 +1095,222 @@ async function departmentLoad() {
 
 // --- Helpers ---
 
-function formatItems(rows) {
-  return rows.map(r => {
-    const client = r.pos?.projects?.clients;
+function makeQueryResult(data, meta = {}) {
+  return {
+    __queryResult: true,
+    data,
+    meta
+  };
+}
+
+function unwrapQueryResult(result) {
+  if (result && result.__queryResult === true) {
+    return result;
+  }
+  return makeQueryResult(result);
+}
+
+function resolveProjectName(row) {
+  return row._project
+    || row.project
+    || row.project_name
+    || row.pos?.projects?.name
+    || row.quotes?.projects?.name
+    || row.projects?.name
+    || null;
+}
+
+function resolveClientName(row) {
+  const client = row.pos?.projects?.clients
+    || row.quotes?.projects?.clients
+    || row.clients;
+  return row._client
+    || row.client
+    || row.client_name
+    || client?.name
+    || client?.company
+    || null;
+}
+
+function resolvePoNumber(row) {
+  return row.pos?.po_number || row.po_number || null;
+}
+
+function resolveDepartment(row) {
+  return row.production_department || row.department || null;
+}
+
+function resolveTargetCompletion(row) {
+  return row.target_completion_date || row.target_completion || null;
+}
+
+function lineTotalForRow(row) {
+  return roundCurrency((row.sell_price || 0) * (row.quantity || 1));
+}
+
+function formatDateForLean(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleDateString('en-US');
+}
+
+function formatItem(row) {
+  return {
+    id: row.id,
+    description: row.description || null,
+    sidemark: row.sidemark || row.item_name,
+    item_name: row.item_name || null,
+    status: row.status,
+    category: row.category,
+    project: resolveProjectName(row),
+    client: resolveClientName(row),
+    po_number: resolvePoNumber(row),
+    sell_price: row.sell_price,
+    quantity: row.quantity,
+    line_total: lineTotalForRow(row),
+    department: resolveDepartment(row),
+    in_production: row.in_production != null ? !!row.in_production : !!row.production_started_at,
+    on_hold: row.on_hold || false,
+    target_completion: resolveTargetCompletion(row),
+    work_completed: row.work_completed_at || row.work_completed || null
+  };
+}
+
+function formatItemLean(row) {
+  return {
+    sidemark: row.sidemark || row.item_name,
+    status: row.status ?? null,
+    category: row.category ?? null,
+    project: resolveProjectName(row),
+    client: resolveClientName(row),
+    po_number: resolvePoNumber(row),
+    on_hold: row.on_hold || false,
+    department: resolveDepartment(row),
+    target_completion: resolveTargetCompletion(row)
+  };
+}
+
+function formatItemWrite(row) {
+  return { id: row.id, ...formatItemLean(row) };
+}
+
+function getFormatter(fields) {
+  if (fields === 'full') return formatItem;
+  if (fields === 'write') return formatItemWrite;
+  return formatItemLean;
+}
+
+function formatItems(rows, fields = 'full') {
+  const formatter = getFormatter(fields);
+  return rows.map(row => formatter(row));
+}
+
+function hasReachedLimit(rows, limit) {
+  return Array.isArray(rows) && rows.length >= limit;
+}
+
+function buildSuccessResponse(type, params, result) {
+  const normalized = normalizeQueryResponse(type, result);
+  const payload = {
+    success: true,
+    query_type: type,
+    request_echo: params?.search || params?.department || null,
+    results: normalized.results,
+    timestamp: new Date().toISOString()
+  };
+
+  if (typeof normalized.count === 'number') {
+    payload.count = normalized.count;
+    payload.total = typeof normalized.total === 'number' ? normalized.total : normalized.count;
+    payload.truncated = Boolean(normalized.truncated);
+  }
+
+  return payload;
+}
+
+function formatQuoteLineItem(item, fields) {
+  const mode = normalizeFields(fields);
+  const leanItem = {
+    item_name: item.item_name || item.sidemark || null,
+    description: item.description || null,
+    quantity: item.quantity,
+    sell_price: item.sell_price,
+    has_skirt: item.has_skirt,
+    skirt_style: item.skirt_style,
+    contrast_welt: item.contrast_welt,
+    welting_type: item.welting_type,
+    estimated_fabric_yardage: item.estimated_fabric_yardage
+  };
+
+  if (mode === 'write') {
+    return { id: item.id, ...leanItem };
+  }
+
+  if (mode !== 'full') {
+    return leanItem;
+  }
+
+  return {
+    id: item.id,
+    item_name: item.item_name || null,
+    description: item.description || null,
+    item_type: item.item_type || null,
+    quantity: item.quantity,
+    sell_price: item.sell_price,
+    has_skirt: item.has_skirt,
+    skirt_style: item.skirt_style,
+    contrast_welt: item.contrast_welt,
+    welting_type: item.welting_type,
+    estimated_fabric_yardage: item.estimated_fabric_yardage,
+    form_data: item.form_data,
+    quote_item_status: item.quote_item_status || null
+  };
+}
+
+function formatQuoteRecord(quote, lineItems, fields) {
+  const mode = normalizeFields(fields);
+  const leanRecord = {
+    quote_number: quote.quote_number,
+    sidemark: quote.sidemark || null,
+    reference: quote.reference || null,
+    status: quote.status || null,
+    grand_total: quote.grand_total,
+    deposit_amount: quote.deposit_amount,
+    client_name: quote.clients?.name || quote.clients?.company || null,
+    project_name: quote.projects?.name || null,
+    line_items: lineItems
+  };
+
+  if (mode === 'write') {
     return {
-      id: r.id,
-      description: r.description || null,
-      sidemark: r.sidemark || r.item_name,
-      item_name: r.item_name,
-      status: r.status,
-      category: r.category,
-      project: r._project || r.pos?.projects?.name || null,
-      client: r._client || client?.name || client?.company || null,
-      po_number: r.pos?.po_number || null,
-      sell_price: r.sell_price,
-      quantity: r.quantity,
-      line_total: (r.sell_price || 0) * (r.quantity || 1),
-      department: r.production_department || null,
-      in_production: !!r.production_started_at,
-      on_hold: r.on_hold || false,
-      target_completion: r.target_completion_date || null,
-      work_completed: r.work_completed_at || null
+      id: quote.id,
+      xero_quote_id: quote.xero_quote_id || null,
+      xero_quote_number: quote.xero_quote_number || null,
+      ...leanRecord
     };
-  });
+  }
+
+  if (mode !== 'full') {
+    return leanRecord;
+  }
+
+  return {
+    id: quote.id,
+    quote_number: quote.quote_number,
+    sidemark: quote.sidemark,
+    reference: quote.reference,
+    status: quote.status,
+    grand_total: quote.grand_total,
+    deposit_amount: quote.deposit_amount,
+    xero_quote_id: quote.xero_quote_id || null,
+    xero_quote_number: quote.xero_quote_number || null,
+    client_name: quote.clients?.name || quote.clients?.company || null,
+    project_name: quote.projects?.name || null,
+    created_at: quote.created_at,
+    updated_at: quote.updated_at,
+    line_items: lineItems
+  };
 }
 
 async function getClientMap(ids) {
@@ -942,73 +1430,100 @@ function deriveBlockers(r, category) {
   return blockers;
 }
 
-function getBlockerList(r, category) {
-  const capabilities = getCategoryCapabilities(category);
-  const blockers = [];
-  if (capabilities.drawingAndFrame && !r.drawing_approved) blockers.push('drawing');
-  if (capabilities.fabricFlow && !r.all_fabric_received) blockers.push('fabric');
-  if (capabilities.drawingAndFrame && !r.frame_ready && r.frame_ready !== null) blockers.push('frame');
-  return blockers;
-}
-
 function roundCurrency(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 }
 
 // --- Query router ---
 
-async function handleQuery(type, params) {
+async function handleQuery(type, params = {}, fields = 'lean') {
+  const mode = normalizeFields(params?.fields || fields);
+
   switch (type) {
-    case 'item_lookup': return { results: await itemLookup(params.search) };
-    case 'quote_lookup': return { results: await quoteLookup(params.search) };
-    case 'invoiced_items': return { results: await invoicedItems(params.search) };
-    case 'ready_for_production': return { results: await readyForProduction() };
-    case 'waiting_on_fabric': return { results: await waitingOnFabric() };
-    case 'in_production': return { results: await inProduction(params.department) };
-    case 'drawings_needing_review': return { results: await drawingsNeedingReview() };
-    case 'ready_for_pickup': return { results: await readyForPickup() };
-    case 'overdue_items': return { results: await overdueItems() };
-    case 'project_overview': return { results: await projectOverview(params.search) };
-    case 'pipeline_summary': return { results: await pipelineSummary() };
-    case 'collections_owed': return { results: await collectionsOwed() };
-    case 'client_items': return { results: await clientItems(params.search) };
-    case 'department_load': return { results: await departmentLoad() };
-    case 'project_contacts': return { results: await projectContacts(params.search) };
+    case 'item_lookup': return itemLookup(params.search, mode);
+    case 'quote_lookup': return quoteLookup(params.search, mode);
+    case 'invoiced_items': return invoicedItems(params.search, mode);
+    case 'ready_for_production': return readyForProduction(mode);
+    case 'waiting_on_fabric': return waitingOnFabric(mode);
+    case 'in_production': return inProduction(params.department, mode);
+    case 'drawings_needing_review': return drawingsNeedingReview(mode);
+    case 'ready_for_pickup': return readyForPickup(mode);
+    case 'overdue_items': return overdueItems(mode);
+    case 'project_overview': return projectOverview(params.search, mode);
+    case 'pipeline_summary': return pipelineSummary();
+    case 'collections_owed': return collectionsOwed(mode);
+    case 'client_items': return clientItems(params.search, mode);
+    case 'department_load': return departmentLoad();
+    case 'project_contacts': return projectContacts(params.search, mode);
     default: throw new Error(`Unknown query type: ${type}`);
   }
 }
 
-function countQueryResults(results) {
-  if (Array.isArray(results)) return results.length;
-  if (results && typeof results === 'object') return Object.keys(results).length;
-  if (results == null) return 0;
-  return 1;
-}
+function normalizeQueryResponse(type, result) {
+  const queryResult = unwrapQueryResult(result);
+  const data = queryResult.data;
+  const meta = queryResult.meta || {};
+  const withMeta = (payload) => ({
+    ...payload,
+    total: typeof meta.total === 'number'
+      ? meta.total
+      : typeof payload.count === 'number'
+        ? payload.count
+        : undefined,
+    truncated: Boolean(meta.truncated)
+  });
 
-function normalizeQueryResponse(result) {
-  const data = result?.results;
-  if (
-    data &&
-    typeof data === 'object' &&
-    Array.isArray(data.results) &&
-    typeof data.count === 'number' &&
-    typeof data.total === 'number'
-  ) {
-    return {
-      results: data.results,
-      count: data.count,
-      total: data.total,
-      truncated: Boolean(data.truncated)
-    };
+  if (['pipeline_summary', 'department_load'].includes(type)) {
+    return { results: data };
   }
 
-  const count = countQueryResults(data);
-  return {
-    results: data,
-    count,
-    total: count,
-    truncated: false
-  };
+  if (type === 'quote_lookup') {
+    const quotes = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.quotes)
+        ? data.quotes
+        : Array.isArray(data?.results)
+          ? data.results
+          : data
+            ? [data]
+            : [];
+    return withMeta({
+      results: data,
+      count: typeof meta.count === 'number' ? meta.count : quotes.length
+    });
+  }
+
+  if (type === 'project_overview') {
+    const items = Array.isArray(data?.items) ? data.items : [];
+    return withMeta({
+      results: data,
+      summary: data?.summary,
+      count: typeof meta.count === 'number' ? meta.count : items.length
+    });
+  }
+
+  if (Array.isArray(data)) {
+    return withMeta({
+      results: data,
+      count: typeof meta.count === 'number' ? meta.count : data.length
+    });
+  }
+
+  if (data && typeof data === 'object' && Array.isArray(data.items)) {
+    return withMeta({
+      results: data,
+      count: typeof meta.count === 'number' ? meta.count : data.items.length
+    });
+  }
+
+  if (typeof meta.count === 'number') {
+    return withMeta({
+      results: data,
+      count: meta.count
+    });
+  }
+
+  return { results: data };
 }
 
 // --- Write response atomically ---
@@ -1043,30 +1558,30 @@ function checkForRequest() {
       return;
     }
 
-    console.log(`[query] ${req.type} ${req.params?.search || req.params?.department || ''}`);
+    const params = { ...(req.params || {}) };
+    const fields = normalizeFields(params.fields || req.fields || 'lean');
+    params.fields = fields;
 
-    handleQuery(req.type, req.params || {})
+    console.log(`[query] ${req.type} ${params.search || params.department || ''} (${fields})`);
+
+    handleQuery(req.type, params, fields)
       .then(result => {
-        const normalized = normalizeQueryResponse(result);
-        const isArray = Array.isArray(normalized.results);
-        writeResponse({
-          success: true,
-          query_type: req.type,
-          request_echo: req.params?.search || req.params?.department || null,
-          count: normalized.count,
-          total: normalized.total,
-          truncated: normalized.truncated,
-          results: normalized.results,
-          timestamp: new Date().toISOString()
-        });
-        console.log(`[done] ${req.type}: ${isArray ? normalized.results.length : 'object'} results`);
+        const payload = buildSuccessResponse(req.type, params, result);
+        const isArray = Array.isArray(payload.results);
+        writeResponse(payload);
+        const resultLabel = typeof payload.count === 'number'
+          ? payload.count
+          : isArray
+            ? payload.results.length
+            : 'object';
+        console.log(`[done] ${req.type}: ${resultLabel} results`);
       })
       .catch(err => {
         console.error(`[error] ${req.type}: ${err.message}`);
         writeResponse({
           success: false,
           query_type: req.type,
-          error: err.message,
+          error: parseError(err),
           timestamp: new Date().toISOString()
         });
       });
@@ -1089,7 +1604,7 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ status: 'ok', supabase_connected: true }));
     } catch (err) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'degraded', supabase_connected: false, error: err.message }));
+      res.end(JSON.stringify({ status: 'degraded', supabase_connected: false, error: parseError(err) }));
     }
     return;
   }
@@ -1098,18 +1613,20 @@ const server = http.createServer(async (req, res) => {
     const type = url.searchParams.get('type');
     const search = url.searchParams.get('search');
     const department = url.searchParams.get('department');
+    const fields = normalizeFields(url.searchParams.get('fields') || 'lean');
     if (!type) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'type param required' }));
       return;
     }
     try {
-      const result = await handleQuery(type, { search, department });
+      const params = { search, department, fields };
+      const result = await handleQuery(type, params, fields);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(result, null, 2));
+      res.end(JSON.stringify(buildSuccessResponse(type, params, result), null, 2));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
+      res.end(JSON.stringify({ error: parseError(err) }));
     }
     return;
   }
