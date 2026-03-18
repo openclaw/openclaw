@@ -1352,7 +1352,7 @@
 {"recordType":"path","path":"channels.discord.voice.tts.provider","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.discord.voice.tts.summaryModel","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.discord.voice.tts.timeoutMs","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Feishu","help":"飞书/Lark enterprise messaging.","hasChildren":true}
+{"recordType":"path","path":"channels.feishu","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Feishu","help":"飞书/Lark enterprise messaging with doc/wiki/drive tools.","hasChildren":true}
 {"recordType":"path","path":"channels.feishu.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.accounts.*.actions","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -1532,7 +1532,7 @@
 {"recordType":"path","path":"channels.feishu.webhookHost","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.webhookPath","kind":"channel","type":"string","required":true,"defaultValue":"/feishu/events","deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.webhookPort","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.googlechat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Google Chat","help":"Google Workspace Chat app with HTTP webhook.","hasChildren":true}
+{"recordType":"path","path":"channels.googlechat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Google Chat","help":"Google Workspace Chat app via HTTP webhooks.","hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.accounts.*.actions","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -1980,7 +1980,7 @@
 {"recordType":"path","path":"channels.line.secretFile","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.line.tokenFile","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.line.webhookPath","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.matrix","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Matrix","help":"open protocol; configure a homeserver + access token.","hasChildren":true}
+{"recordType":"path","path":"channels.matrix","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Matrix","help":"open protocol; install the plugin to enable.","hasChildren":true}
 {"recordType":"path","path":"channels.matrix.accessToken","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.matrix.accounts.*","kind":"channel","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2362,7 +2362,7 @@
 {"recordType":"path","path":"channels.nextcloud-talk.webhookPath","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.nextcloud-talk.webhookPort","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.nextcloud-talk.webhookPublicUrl","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.nostr","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Nostr","help":"Decentralized DMs via Nostr relays (NIP-04)","hasChildren":true}
+{"recordType":"path","path":"channels.nostr","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Nostr","help":"Decentralized protocol; encrypted DMs via NIP-04.","hasChildren":true}
 {"recordType":"path","path":"channels.nostr.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.nostr.allowFrom.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.nostr.defaultAccount","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2779,7 +2779,7 @@
 {"recordType":"path","path":"channels.slack.userToken.source","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.slack.userTokenReadOnly","kind":"channel","type":"boolean","required":true,"defaultValue":true,"deprecated":false,"sensitive":false,"tags":["auth","channels","network","security"],"label":"Slack User Token Read Only","help":"When true, treat configured Slack user token usage as read-only helper behavior where possible. Keep enabled if you only need supplemental reads without user-context writes.","hasChildren":false}
 {"recordType":"path","path":"channels.slack.webhookPath","kind":"channel","type":"string","required":true,"defaultValue":"/slack/events","deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.synology-chat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Synology Chat","help":"Connect your Synology NAS Chat to OpenClaw","hasChildren":true}
+{"recordType":"path","path":"channels.synology-chat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Synology Chat","help":"Connect your Synology NAS Chat to OpenClaw with full agent capabilities.","hasChildren":true}
 {"recordType":"path","path":"channels.synology-chat.*","kind":"channel","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.telegram","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Telegram","help":"simplest way to get started — register a bot with @BotFather and get going.","hasChildren":true}
 {"recordType":"path","path":"channels.telegram.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -3139,7 +3139,7 @@
 {"recordType":"path","path":"channels.telegram.webhookSecret.provider","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.telegram.webhookSecret.source","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.telegram.webhookUrl","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.tlon","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Tlon","help":"Decentralized messaging on Urbit","hasChildren":true}
+{"recordType":"path","path":"channels.tlon","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Tlon","help":"decentralized messaging on Urbit; install the plugin to enable.","hasChildren":true}
 {"recordType":"path","path":"channels.tlon.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.tlon.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.tlon.accounts.*.allowPrivateNetwork","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}

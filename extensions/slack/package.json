@@ -8,6 +8,16 @@
     "extensions": [
       "./index.ts"
     ],
-    "setupEntry": "./setup-entry.ts"
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "slack",
+      "label": "Slack",
+      "selectionLabel": "Slack (Socket Mode)",
+      "detailLabel": "Slack Bot",
+      "docsPath": "/channels/slack",
+      "docsLabel": "slack",
+      "blurb": "supported (Socket Mode).",
+      "systemImage": "number"
+    }
   }
 }
