@@ -56,7 +56,7 @@ export {
 export {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
-} from "../channels/plugins/group-mentions.js";
+} from "../../extensions/discord/src/group-policy.js";
 export { DiscordConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export {

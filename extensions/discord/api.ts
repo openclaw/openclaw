@@ -3,6 +3,7 @@ export * from "./src/accounts.js";
 export * from "./src/actions/handle-action.guild-admin.js";
 export * from "./src/actions/handle-action.js";
 export * from "./src/components.js";
+export * from "./src/group-policy.js";
 export * from "./src/normalize.js";
 export * from "./src/pluralkit.js";
 export * from "./src/session-key-normalization.js";
