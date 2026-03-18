@@ -1,5 +1,5 @@
-import type { RuntimeEnv, ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk/tlon";
-import { createLoggerBackedRuntime, createReplyPrefixOptions } from "openclaw/plugin-sdk/tlon";
+import type { RuntimeEnv, ReplyPayload, OpenClawConfig } from "../../api.js";
+import { createLoggerBackedRuntime, createReplyPrefixOptions } from "../../api.js";
 import { getTlonRuntime } from "../runtime.js";
 import { createSettingsManager, type TlonSettingsStore } from "../settings.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";
@@ -36,6 +36,7 @@ import {
   stripBotMention,
   isDmAllowed,
   isSummarizationRequest,
+  resolveAuthorizedMessageText,
   type ParsedCite,
 } from "./utils.js";
 
@@ -1245,9 +1246,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         }
       }
 
-      // Resolve quoted content only after the sender passed channel authorization.
-      const citedContent = await resolveAllCites(content.content);
-      const messageText = citedContent + rawText;
+      const messageText = await resolveAuthorizedMessageText({
+        rawText,
+        content: content.content,
+        authorizedForCites: true,
+        resolveAllCites,
+      });
 
       const parsed = parseChannelNest(nest);
       await processMessage({
@@ -1370,8 +1374,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       if (!rawText.trim()) {
         return;
       }
-      const citedContent = await resolveAllCites(essay.content);
-      const resolvedMessageText = citedContent + rawText;
 
       // Check if this is the owner sending an approval response
       const messageText = rawText;
@@ -1394,6 +1396,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
       // Owner is always allowed to DM (bypass allowlist)
       if (isOwner(senderShip)) {
+        const resolvedMessageText = await resolveAuthorizedMessageText({
+          rawText,
+          content: essay.content,
+          authorizedForCites: true,
+          resolveAllCites,
+        });
         runtime.log?.(`[tlon] Processing DM from owner ${senderShip}`);
         await processMessage({
           messageId: messageId ?? "",
@@ -1429,9 +1437,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
 
       await processMessage({
+        messageText: await resolveAuthorizedMessageText({
+          rawText,
+          content: essay.content,
+          authorizedForCites: true,
+          resolveAllCites,
+        }),
         messageId: messageId ?? "",
         senderShip,
-        messageText: resolvedMessageText,
         messageContent: essay.content, // Pass raw content for media extraction
         isGroup: false,
         timestamp: essay.sent || Date.now(),

@@ -2,18 +2,25 @@ import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildStructuredCard,
+  editMessageFeishu,
   getMessageFeishu,
   listFeishuThreadMessages,
   resolveFeishuCardTemplate,
 } from "./send.js";
 
-const { mockClientGet, mockClientList, mockCreateFeishuClient, mockResolveFeishuAccount } =
-  vi.hoisted(() => ({
-    mockClientGet: vi.fn(),
-    mockClientList: vi.fn(),
-    mockCreateFeishuClient: vi.fn(),
-    mockResolveFeishuAccount: vi.fn(),
-  }));
+const {
+  mockClientGet,
+  mockClientList,
+  mockClientPatch,
+  mockCreateFeishuClient,
+  mockResolveFeishuAccount,
+} = vi.hoisted(() => ({
+  mockClientGet: vi.fn(),
+  mockClientList: vi.fn(),
+  mockClientPatch: vi.fn(),
+  mockCreateFeishuClient: vi.fn(),
+  mockResolveFeishuAccount: vi.fn(),
+}));
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
@@ -21,6 +28,17 @@ vi.mock("./client.js", () => ({
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: mockResolveFeishuAccount,
+}));
+
+vi.mock("./runtime.js", () => ({
+  getFeishuRuntime: () => ({
+    channel: {
+      text: {
+        resolveMarkdownTableMode: () => "preserve",
+        convertMarkdownTables: (text: string) => text,
+      },
+    },
+  }),
 }));
 
 describe("getMessageFeishu", () => {
@@ -35,6 +53,7 @@ describe("getMessageFeishu", () => {
         message: {
           get: mockClientGet,
           list: mockClientList,
+          patch: mockClientPatch,
         },
       },
     });
@@ -236,6 +255,70 @@ describe("getMessageFeishu", () => {
         content: "hello from card 2.0",
       }),
     ]);
+  });
+});
+
+describe("editMessageFeishu", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveFeishuAccount.mockReturnValue({
+      accountId: "default",
+      configured: true,
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          patch: mockClientPatch,
+        },
+      },
+    });
+  });
+
+  it("patches post content for text edits", async () => {
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+
+    const result = await editMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_edit",
+      text: "updated body",
+    });
+
+    expect(mockClientPatch).toHaveBeenCalledWith({
+      path: { message_id: "om_edit" },
+      data: {
+        content: JSON.stringify({
+          zh_cn: {
+            content: [
+              [
+                {
+                  tag: "md",
+                  text: "updated body",
+                },
+              ],
+            ],
+          },
+        }),
+      },
+    });
+    expect(result).toEqual({ messageId: "om_edit", contentType: "post" });
+  });
+
+  it("patches interactive content for card edits", async () => {
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+
+    const result = await editMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_card",
+      card: { schema: "2.0" },
+    });
+
+    expect(mockClientPatch).toHaveBeenCalledWith({
+      path: { message_id: "om_card" },
+      data: {
+        content: JSON.stringify({ schema: "2.0" }),
+      },
+    });
+    expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
   });
 });
 

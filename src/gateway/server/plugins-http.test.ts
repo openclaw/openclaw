@@ -1,5 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerPluginHttpRoute } from "../../plugins/http-registry.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginHttpRouteRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
@@ -129,6 +136,11 @@ async function invokeSecureGatewayRoute(params: { gatewayAuthSatisfied: boolean 
 }
 
 describe("createGatewayPluginRequestHandler", () => {
+  afterEach(() => {
+    releasePinnedPluginHttpRouteRegistry();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
   it("caps unauthenticated plugin routes to non-admin subagent scopes", async () => {
     loadOpenClawPlugins.mockReset();
     handleGatewayRequest.mockReset();
@@ -281,6 +293,100 @@ describe("createGatewayPluginRequestHandler", () => {
     const handled = await handler({ url: "/API//demo" } as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(routeHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the provided registry when the pinned route registry is empty", async () => {
+    const explicitRouteHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 200;
+      return true;
+    });
+    const startupRegistry = createTestRegistry();
+    const explicitRegistry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/demo", auth: "plugin", handler: explicitRouteHandler })],
+    });
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+
+    const handler = createGatewayPluginRequestHandler({
+      registry: explicitRegistry,
+      log: createPluginLog(),
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/demo" } as IncomingMessage, res);
+    expect(handled).toBe(true);
+    expect(explicitRouteHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles routes registered into the pinned startup registry after the active registry changes", async () => {
+    const startupRegistry = createTestRegistry();
+    const laterActiveRegistry = createTestRegistry();
+    const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 202;
+      return true;
+    });
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+    setActivePluginRegistry(laterActiveRegistry);
+
+    const unregister = registerPluginHttpRoute({
+      path: "/bluebubbles-webhook",
+      auth: "plugin",
+      handler: routeHandler,
+    });
+
+    try {
+      const handler = createGatewayPluginRequestHandler({
+        registry: startupRegistry,
+        log: createPluginLog(),
+      });
+
+      const { res } = makeMockHttpResponse();
+      const handled = await handler({ url: "/bluebubbles-webhook" } as IncomingMessage, res);
+      expect(handled).toBe(true);
+      expect(routeHandler).toHaveBeenCalledTimes(1);
+      expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("prefers the pinned route registry over a stale explicit registry", async () => {
+    const startupRegistry = createTestRegistry();
+    const staleExplicitRegistry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/plugins/diffs", auth: "plugin" })],
+    });
+    const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 204;
+      return true;
+    });
+
+    setActivePluginRegistry(createTestRegistry());
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+
+    const unregister = registerPluginHttpRoute({
+      path: "/bluebubbles-webhook",
+      auth: "plugin",
+      handler: routeHandler,
+    });
+
+    try {
+      const handler = createGatewayPluginRequestHandler({
+        registry: staleExplicitRegistry,
+        log: createPluginLog(),
+      });
+
+      const { res } = makeMockHttpResponse();
+      const handled = await handler({ url: "/bluebubbles-webhook" } as IncomingMessage, res);
+      expect(handled).toBe(true);
+      expect(routeHandler).toHaveBeenCalledTimes(1);
+      expect(staleExplicitRegistry.httpRoutes).toHaveLength(1);
+      expect(startupRegistry.httpRoutes).toHaveLength(1);
+    } finally {
+      unregister();
+    }
   });
 
   it("logs and responds with 500 when a route throws", async () => {

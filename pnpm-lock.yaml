@@ -50,6 +50,9 @@ importers:
       '@homebridge/ciao':
         specifier: ^1.3.5
         version: 1.3.5
+      '@lancedb/lancedb':
+        specifier: ^0.26.2
+        version: 0.26.2(apache-arrow@18.1.0)
       '@larksuiteoapi/node-sdk':
         specifier: ^1.59.0
         version: 1.59.0
@@ -122,6 +125,9 @@ importers:
       file-type:
         specifier: 21.3.2
         version: 21.3.2
+      gaxios:
+        specifier: 7.1.3
+        version: 7.1.3
       grammy:
         specifier: ^1.41.1
         version: 1.41.1
@@ -268,11 +274,23 @@ importers:
         specifier: 0.3.0
         version: 0.3.0(zod@4.3.6)
 
+  extensions/amazon-bedrock: {}
+
+  extensions/anthropic: {}
+
   extensions/bluebubbles:
     dependencies:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/brave: {}
+
+  extensions/byteplus: {}
+
+  extensions/chutes: {}
+
+  extensions/cloudflare-ai-gateway: {}
 
   extensions/copilot-proxy: {}
 
@@ -326,6 +344,8 @@ importers:
 
   extensions/discord: {}
 
+  extensions/elevenlabs: {}
+
   extensions/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':
@@ -341,7 +361,11 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
-  extensions/google-gemini-cli-auth: {}
+  extensions/firecrawl: {}
+
+  extensions/github-copilot: {}
+
+  extensions/google: {}
 
   extensions/googlechat:
     dependencies:
@@ -352,6 +376,8 @@ importers:
         specifier: '>=2026.3.11'
         version: 2026.3.13(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
+  extensions/huggingface: {}
+
   extensions/imessage: {}
 
   extensions/irc:
@@ -359,6 +385,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/kilocode: {}
+
+  extensions/kimi-coding: {}
 
   extensions/line: {}
 
@@ -425,7 +455,15 @@ importers:
         specifier: ^6.29.0
         version: 6.29.0(ws@8.19.0)(zod@4.3.6)
 
-  extensions/minimax-portal-auth: {}
+  extensions/microsoft: {}
+
+  extensions/minimax: {}
+
+  extensions/mistral: {}
+
+  extensions/modelstudio: {}
+
+  extensions/moonshot: {}
 
   extensions/msteams:
     dependencies:
@@ -451,9 +489,25 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  extensions/nvidia: {}
+
   extensions/ollama: {}
 
   extensions/open-prose: {}
+
+  extensions/openai: {}
+
+  extensions/opencode: {}
+
+  extensions/opencode-go: {}
+
+  extensions/openrouter: {}
+
+  extensions/openshell: {}
+
+  extensions/perplexity: {}
+
+  extensions/qianfan: {}
 
   extensions/sglang: {}
 
@@ -466,6 +520,8 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/synthetic: {}
 
   extensions/telegram: {}
 
@@ -484,6 +540,8 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  extensions/together: {}
+
   extensions/twitch:
     dependencies:
       '@twurple/api':
@@ -498,6 +556,10 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/venice: {}
+
+  extensions/vercel-ai-gateway: {}
 
   extensions/vllm: {}
 
@@ -516,7 +578,15 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  extensions/volcengine: {}
+
   extensions/whatsapp: {}
+
+  extensions/xai: {}
+
+  extensions/xiaomi: {}
+
+  extensions/zai: {}
 
   extensions/zalo:
     dependencies:
@@ -533,8 +603,8 @@ importers:
         specifier: 0.34.48
         version: 0.34.48
       zca-js:
-        specifier: 2.1.1
-        version: 2.1.1
+        specifier: 2.1.2
+        version: 2.1.2
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -6811,8 +6881,8 @@ packages:
     resolution: {integrity: sha512-CzhO+pFNo8ajLM2d2IW/R93ipy99LWjtwblvC1RsoSUMZgyLbYFr221TnSNT7GjGdYui6P459mw9JH/g/zW2ug==}
     engines: {node: '>=18'}
 
-  zca-js@2.1.1:
-    resolution: {integrity: sha512-6zCmaIIWg/1eYlvCvO4rVsFt6SQ8MRodro3dCzMkk+LNgB3MyaEMBywBJfsw44WhODmOh8iMlPv4xDTNTMWDWA==}
+  zca-js@2.1.2:
+    resolution: {integrity: sha512-82+zCqoIXnXEF6C9YuN3Kf7WKlyyujY/6Ejl2n8PkwazYkBK0k7kiPd8S7nHvC5Wl7vjwGRhDYeAM8zTHyoRxQ==}
     engines: {node: '>=18.0.0'}
 
   zod-to-json-schema@3.25.1:
@@ -14281,7 +14351,7 @@ snapshots:
 
   yoctocolors@2.1.2: {}
 
-  zca-js@2.1.1:
+  zca-js@2.1.2:
     dependencies:
       crypto-js: 4.2.0
       form-data: 2.5.4
