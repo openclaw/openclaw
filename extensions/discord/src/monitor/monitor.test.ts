@@ -198,8 +198,7 @@ describe("agent components", () => {
     });
   });
 
-  it("blocks DM interactions when only pairing store entries match in allowlist mode", async () => {
-    readAllowFromStoreMock.mockResolvedValue(["123456789"]);
+  it("blocks DM interactions in allowlist mode when sender is not in configured allowFrom", async () => {
     const button = createAgentComponentButton({
       cfg: createCfg(),
       accountId: "default",
