@@ -15,5 +15,6 @@ export {
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../line/accounts.js";
+export { resolveExactLineGroupConfigKey } from "../line/group-keys.js";
 export type { ResolvedLineAccount } from "../line/types.js";
 export { LineConfigSchema } from "../line/config-schema.js";
