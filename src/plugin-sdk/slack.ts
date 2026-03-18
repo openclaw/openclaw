@@ -43,7 +43,7 @@ export {
 export {
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
-} from "../channels/plugins/group-mentions.js";
+} from "../../extensions/slack/src/group-policy.js";
 export { SlackConfigSchema } from "../config/zod-schema.providers-core.js";
 export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 
