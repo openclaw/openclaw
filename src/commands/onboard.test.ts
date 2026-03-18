@@ -175,7 +175,7 @@ describe("onboardCommand", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       [
         'Auth choice "codex-cli" is deprecated.',
-        'Run "openclaw onboard" and choose OpenAI device code (Codex CLI) or OpenAI Codex (ChatGPT OAuth).',
+        'Run "openclaw onboard" and choose OpenAI Codex CLI login or OpenAI Codex (ChatGPT OAuth).',
       ].join("\n"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);

@@ -26,8 +26,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "openai",
     label: "OpenAI",
-    hint: "Codex OAuth + device code + API key",
-    choices: ["openai-codex", "openai-device-code", "openai-api-key"],
+    hint: "Codex OAuth + CLI login + API key",
+    choices: ["openai-codex", "openai-codex-cli", "openai-api-key"],
   },
   {
     value: "anthropic",
@@ -239,9 +239,9 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     label: "OpenAI Codex (ChatGPT OAuth)",
   },
   {
-    value: "openai-device-code",
-    label: "OpenAI device code (Codex CLI)",
-    hint: "Headless-friendly login via `codex login`",
+    value: "openai-codex-cli",
+    label: "OpenAI Codex CLI login",
+    hint: "Runs `codex login` and imports the resulting credentials",
   },
   { value: "chutes", label: "Chutes (OAuth)" },
   {

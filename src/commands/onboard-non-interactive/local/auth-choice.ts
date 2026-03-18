@@ -157,7 +157,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     runtime.error(
       [
         'Auth choice "codex-cli" is deprecated.',
-        'Run "openclaw onboard" and choose OpenAI device code (Codex CLI) or OpenAI Codex (ChatGPT OAuth).',
+        'Run "openclaw onboard" and choose OpenAI Codex CLI login or OpenAI Codex (ChatGPT OAuth).',
       ].join("\n"),
     );
     runtime.exit(1);
@@ -190,11 +190,11 @@ export async function applyNonInteractiveAuthChoice(params: {
     return configureOllamaNonInteractive({ nextConfig, opts, runtime });
   }
 
-  if (authChoice === "openai-device-code") {
+  if (authChoice === "openai-codex-cli" || authChoice === "openai-device-code") {
     runtime.error(
       [
-        'Auth choice "openai-device-code" requires interactive mode.',
-        'Run "openclaw onboard" and select OpenAI device code (Codex CLI).',
+        `Auth choice "${authChoice}" requires interactive mode.`,
+        'Run "openclaw onboard" and select OpenAI Codex CLI login.',
       ].join("\n"),
     );
     runtime.exit(1);

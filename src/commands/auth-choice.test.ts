@@ -258,7 +258,7 @@ describe("applyAuthChoice", () => {
     });
   });
 
-  it("stores openai-device-code credentials into the openai-codex auth store", async () => {
+  it("stores openai-codex-cli credentials into the openai-codex auth store", async () => {
     await setupTempState();
 
     loginOpenAICodexDeviceCode.mockResolvedValueOnce({
@@ -272,7 +272,7 @@ describe("applyAuthChoice", () => {
     const runtime = createExitThrowingRuntime();
 
     const result = await applyAuthChoice({
-      authChoice: "openai-device-code",
+      authChoice: "openai-codex-cli",
       config: {},
       prompter,
       runtime,
@@ -291,6 +291,26 @@ describe("applyAuthChoice", () => {
       access: "access-token",
       email: "device@example.com",
     });
+  });
+
+  it("rethrows openai-codex CLI login failures", async () => {
+    await setupTempState();
+
+    loginOpenAICodexDeviceCode.mockRejectedValueOnce(new Error("cli failed"));
+
+    const prompter = createPrompter({});
+    const runtime = createExitThrowingRuntime();
+
+    await expect(
+      applyAuthChoice({
+        authChoice: "openai-codex-cli",
+        config: {},
+        prompter,
+        runtime,
+        setDefaultModel: false,
+      }),
+    ).rejects.toThrow("cli failed");
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("prompts and writes provider API key for common providers", async () => {

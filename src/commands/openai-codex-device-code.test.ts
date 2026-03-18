@@ -78,7 +78,7 @@ describe("loginOpenAICodexDeviceCode", () => {
 
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(["codex", "login"], {
       timeoutMs: 600_000,
-      env: { NODE_OPTIONS: "" },
+      env: { NODE_OPTIONS: "", OPENAI_API_KEY: undefined },
       mirrorStdout: true,
       mirrorStderr: true,
     });

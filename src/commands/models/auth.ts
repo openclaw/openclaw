@@ -266,7 +266,7 @@ type LoginOptions = {
   setDefault?: boolean;
 };
 
-type BuiltInOpenAICodexMethod = "oauth" | "device-code";
+type BuiltInOpenAICodexMethod = "oauth" | "cli";
 
 function resolveBuiltInOpenAICodexMethodOrThrow(rawMethod?: string): BuiltInOpenAICodexMethod {
   const normalized = String(rawMethod ?? "")
@@ -275,12 +275,16 @@ function resolveBuiltInOpenAICodexMethodOrThrow(rawMethod?: string): BuiltInOpen
   if (!normalized || normalized === "oauth") {
     return "oauth";
   }
-  if (normalized === "device-code" || normalized === "device_code" || normalized === "device") {
-    return "device-code";
+  if (
+    normalized === "cli" ||
+    normalized === "codex-cli" ||
+    normalized === "device-code" ||
+    normalized === "device_code" ||
+    normalized === "device"
+  ) {
+    return "cli";
   }
-  throw new Error(
-    "Unknown auth method for openai-codex. Use --method oauth or --method device-code.",
-  );
+  throw new Error("Unknown auth method for openai-codex. Use --method oauth or --method cli.");
 }
 
 export function resolveRequestedLoginProviderOrThrow(
@@ -323,14 +327,14 @@ async function runBuiltInOpenAICodexLogin(params: {
 }) {
   const method = resolveBuiltInOpenAICodexMethodOrThrow(params.opts.method);
   const creds =
-    method === "device-code"
+    method === "cli"
       ? await (async () => {
           await params.prompter.note(
             [
               "Starting Codex CLI login.",
-              "Follow the device-code instructions printed in this terminal.",
+              "Complete the Codex CLI sign-in flow shown in this terminal.",
             ].join("\n"),
-            "OpenAI device code",
+            "OpenAI Codex CLI",
           );
           return await loginOpenAICodexDeviceCode();
         })()
@@ -345,8 +349,8 @@ async function runBuiltInOpenAICodexLogin(params: {
         });
   if (!creds) {
     throw new Error(
-      method === "device-code"
-        ? "Codex CLI device-code login did not return credentials."
+      method === "cli"
+        ? "Codex CLI login did not return credentials."
         : "OpenAI Codex OAuth did not return credentials.",
     );
   }

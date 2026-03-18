@@ -137,8 +137,8 @@ What you set:
     Run `claude setup-token` on any machine, then paste the token.
     You can name it; blank uses default.
   </Accordion>
-  <Accordion title="OpenAI Code subscription (Codex CLI device code)">
-    Runs `codex login`, shows the device-code instructions in the terminal, then imports the resulting credentials into OpenClaw.
+  <Accordion title="OpenAI Code subscription (Codex CLI login)">
+    Runs `codex login`, then imports the resulting credentials into OpenClaw.
   </Accordion>
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.

@@ -70,6 +70,7 @@ describe("buildAuthChoiceOptions", () => {
     expect(cliChoices).toContain("oauth");
     expect(cliChoices).toContain("claude-cli");
     expect(cliChoices).toContain("codex-cli");
+    expect(cliChoices).toContain("openai-device-code");
   });
 
   it("shows Chutes in grouped provider selection", () => {
@@ -83,14 +84,14 @@ describe("buildAuthChoiceOptions", () => {
     expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
   });
 
-  it("shows OpenAI device code in the OpenAI group", () => {
+  it("shows OpenAI Codex CLI login in the OpenAI group", () => {
     const { groups } = buildAuthChoiceGroups({
       store: EMPTY_STORE,
       includeSkip: false,
     });
     const openAiGroup = groups.find((group) => group.value === "openai");
 
-    expect(openAiGroup?.options.some((opt) => opt.value === "openai-device-code")).toBe(true);
+    expect(openAiGroup?.options.some((opt) => opt.value === "openai-codex-cli")).toBe(true);
   });
 
   it("groups OpenCode Zen and Go under one OpenCode entry", () => {

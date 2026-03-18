@@ -30,7 +30,7 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
     runtime.error(
       [
         'Auth choice "codex-cli" is deprecated.',
-        'Run "openclaw onboard" and choose OpenAI device code (Codex CLI) or OpenAI Codex (ChatGPT OAuth).',
+        'Run "openclaw onboard" and choose OpenAI Codex CLI login or OpenAI Codex (ChatGPT OAuth).',
       ].join("\n"),
     );
     runtime.exit(1);
@@ -40,7 +40,7 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
     runtime.log('Auth choice "claude-cli" is deprecated; using setup-token flow instead.');
   }
   if (originalAuthChoice === "codex-cli") {
-    runtime.log('Auth choice "codex-cli" is deprecated; using OpenAI device code instead.');
+    runtime.log('Auth choice "codex-cli" is deprecated; using OpenAI Codex CLI login instead.');
   }
   const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
   const normalizedOpts =

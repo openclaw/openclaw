@@ -43,7 +43,8 @@ export async function loginOpenAICodexDeviceCode(): Promise<OAuthCredentials> {
 
   const result = await runCommandWithTimeout(["codex", "login"], {
     timeoutMs: CODEX_LOGIN_TIMEOUT_MS,
-    env: { NODE_OPTIONS: "" },
+    // Prevent ambient API-key auth from short-circuiting the Codex CLI login flow.
+    env: { NODE_OPTIONS: "", OPENAI_API_KEY: undefined },
     mirrorStdout: true,
     mirrorStderr: true,
   });

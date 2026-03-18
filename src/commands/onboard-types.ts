@@ -12,6 +12,8 @@ export type AuthChoice =
   | "vllm"
   | "ollama"
   | "openai-codex"
+  | "openai-codex-cli"
+  // Deprecated alias kept for backwards CLI compatibility.
   | "openai-device-code"
   | "openai-api-key"
   | "openrouter-api-key"

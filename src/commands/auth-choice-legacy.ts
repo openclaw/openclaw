@@ -5,6 +5,7 @@ export const AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI: ReadonlyArray<AuthChoice> = [
   "oauth",
   "claude-cli",
   "codex-cli",
+  "openai-device-code",
   "minimax-cloud",
   "minimax",
 ];
@@ -15,8 +16,8 @@ export function normalizeLegacyOnboardAuthChoice(
   if (authChoice === "oauth" || authChoice === "claude-cli") {
     return "setup-token";
   }
-  if (authChoice === "codex-cli") {
-    return "openai-device-code";
+  if (authChoice === "codex-cli" || authChoice === "openai-device-code") {
+    return "openai-codex-cli";
   }
   return authChoice;
 }

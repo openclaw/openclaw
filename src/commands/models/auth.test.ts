@@ -211,11 +211,11 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.4");
   });
 
-  it("supports built-in openai-codex device-code login", async () => {
+  it("supports built-in openai-codex CLI login", async () => {
     const runtime = createRuntime();
     mocks.writeOAuthCredentials.mockResolvedValueOnce("openai-codex:device@example.com");
 
-    await modelsAuthLoginCommand({ provider: "openai-codex", method: "device-code" }, runtime);
+    await modelsAuthLoginCommand({ provider: "openai-codex", method: "cli" }, runtime);
 
     expect(mocks.loginOpenAICodexDeviceCode).toHaveBeenCalledOnce();
     expect(mocks.loginOpenAICodexOAuth).not.toHaveBeenCalled();
@@ -230,13 +230,13 @@ describe("modelsAuthLoginCommand", () => {
     );
   });
 
-  it("uses a device-code-specific missing credentials error", async () => {
+  it("uses a CLI-specific missing credentials error", async () => {
     const runtime = createRuntime();
     mocks.loginOpenAICodexDeviceCode.mockResolvedValueOnce(null);
 
     await expect(
-      modelsAuthLoginCommand({ provider: "openai-codex", method: "device-code" }, runtime),
-    ).rejects.toThrow("Codex CLI device-code login did not return credentials.");
+      modelsAuthLoginCommand({ provider: "openai-codex", method: "cli" }, runtime),
+    ).rejects.toThrow("Codex CLI login did not return credentials.");
   });
 
   it("rejects unknown built-in openai-codex auth methods", async () => {
@@ -244,9 +244,7 @@ describe("modelsAuthLoginCommand", () => {
 
     await expect(
       modelsAuthLoginCommand({ provider: "openai-codex", method: "sso" }, runtime),
-    ).rejects.toThrow(
-      "Unknown auth method for openai-codex. Use --method oauth or --method device-code.",
-    );
+    ).rejects.toThrow("Unknown auth method for openai-codex. Use --method oauth or --method cli.");
   });
 
   it("keeps existing plugin error behavior for non built-in providers", async () => {

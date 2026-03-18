@@ -485,16 +485,16 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("rejects OpenAI device code auth choice in non-interactive mode", async () => {
+  it("rejects OpenAI Codex CLI auth choice in non-interactive mode", async () => {
     await withOnboardEnv(
-      "openclaw-onboard-openai-device-code-non-interactive-",
+      "openclaw-onboard-openai-codex-cli-non-interactive-",
       async ({ runtime }) => {
         await expect(
           runNonInteractiveOnboardingWithDefaults(runtime, {
-            authChoice: "openai-device-code",
+            authChoice: "openai-codex-cli",
             skipSkills: true,
           }),
-        ).rejects.toThrow('Run "openclaw onboard" and select OpenAI device code (Codex CLI).');
+        ).rejects.toThrow('Run "openclaw onboard" and select OpenAI Codex CLI login.');
       },
     );
   });

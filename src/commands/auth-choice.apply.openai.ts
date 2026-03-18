@@ -75,7 +75,10 @@ export async function applyAuthChoiceOpenAI(
     return await applyOpenAiDefaultModelChoice();
   }
 
-  if (params.authChoice === "openai-codex" || params.authChoice === "openai-device-code") {
+  const isOpenAICodexCliChoice =
+    params.authChoice === "openai-codex-cli" || params.authChoice === "openai-device-code";
+
+  if (params.authChoice === "openai-codex" || isOpenAICodexCliChoice) {
     let nextConfig = params.config;
     let agentModelOverride: string | undefined;
     let creds: OAuthCredentials | null = null;
@@ -108,17 +111,20 @@ export async function applyAuthChoiceOpenAI(
       }
     };
 
-    try {
-      if (params.authChoice === "openai-device-code") {
-        await params.prompter.note(
-          [
-            "Starting Codex CLI login.",
-            "Follow the device-code instructions printed in this terminal.",
-          ].join("\n"),
-          "OpenAI device code",
-        );
-        creds = await loginOpenAICodexDeviceCode();
-      } else {
+    if (isOpenAICodexCliChoice) {
+      await params.prompter.note(
+        [
+          "Starting Codex CLI login.",
+          "Complete the Codex CLI sign-in flow shown in this terminal.",
+        ].join("\n"),
+        "OpenAI Codex CLI",
+      );
+      creds = await loginOpenAICodexDeviceCode();
+      if (!creds) {
+        throw new Error("Codex CLI login did not return credentials.");
+      }
+    } else {
+      try {
         creds = await loginOpenAICodexOAuth({
           prompter: params.prompter,
           runtime: params.runtime,
@@ -128,12 +134,9 @@ export async function applyAuthChoiceOpenAI(
           },
           localBrowserMessage: "Complete sign-in in browser…",
         });
+      } catch {
+        return { config: nextConfig, agentModelOverride };
       }
-    } catch (error) {
-      if (params.authChoice === "openai-device-code") {
-        params.runtime.error(error instanceof Error ? error.message : String(error));
-      }
-      return { config: nextConfig, agentModelOverride };
     }
     await persistCodexCredentials(creds);
     return { config: nextConfig, agentModelOverride };
