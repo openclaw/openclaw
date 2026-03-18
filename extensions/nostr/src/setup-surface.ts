@@ -1,12 +1,12 @@
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
+  createTopLevelChannelAllowFromSetter,
+  createTopLevelChannelDmPolicy,
   mergeAllowFromEntries,
   parseSetupEntriesWithParser,
-  setTopLevelChannelAllowFrom,
-  setTopLevelChannelDmPolicyWithAllowFrom,
+  patchTopLevelChannelConfigSection,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
@@ -18,6 +18,9 @@ import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-bus.js";
 import { resolveNostrAccount } from "./types.js";
 
 const channel = "nostr" as const;
+const setNostrAllowFrom = createTopLevelChannelAllowFromSetter({
+  channel,
+});
 
 const NOSTR_SETUP_HELP_LINES = [
   "Use a Nostr private key in nsec or 64-character hex format.",
@@ -35,46 +38,6 @@ const NOSTR_ALLOW_FROM_HELP_LINES = [
   "Multiple entries: comma-separated.",
   `Docs: ${formatDocsLink("/channels/nostr", "channels/nostr")}`,
 ];
-
-function patchNostrConfig(params: {
-  cfg: OpenClawConfig;
-  patch: Record<string, unknown>;
-  clearFields?: string[];
-  enabled?: boolean;
-}): OpenClawConfig {
-  const existing = (params.cfg.channels?.nostr ?? {}) as Record<string, unknown>;
-  const nextNostr = { ...existing };
-  for (const field of params.clearFields ?? []) {
-    delete nextNostr[field];
-  }
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      nostr: {
-        ...nextNostr,
-        ...(params.enabled ? { enabled: true } : {}),
-        ...params.patch,
-      },
-    },
-  };
-}
-
-function setNostrDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
-  return setTopLevelChannelDmPolicyWithAllowFrom({
-    cfg,
-    channel,
-    dmPolicy,
-  });
-}
-
-function setNostrAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {
-  return setTopLevelChannelAllowFrom({
-    cfg,
-    channel,
-    allowFrom,
-  });
-}
 
 function parseRelayUrls(raw: string): { relays: string[]; error?: string } {
   const entries = splitSetupEntries(raw);
@@ -126,21 +89,21 @@ async function promptNostrAllowFrom(params: {
   return setNostrAllowFrom(params.cfg, mergeAllowFromEntries(existing, parsed.entries));
 }
 
-const nostrDmPolicy: ChannelSetupDmPolicy = {
+const nostrDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   label: "Nostr",
   channel,
   policyKey: "channels.nostr.dmPolicy",
   allowFromKey: "channels.nostr.allowFrom",
   getCurrent: (cfg) => cfg.channels?.nostr?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) => setNostrDmPolicy(cfg, policy),
   promptAllowFrom: promptNostrAllowFrom,
-};
+});
 
 export const nostrSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: () => DEFAULT_ACCOUNT_ID,
   applyAccountName: ({ cfg, name }) =>
-    patchNostrConfig({
+    patchTopLevelChannelConfigSection({
       cfg,
+      channel,
       patch: name?.trim() ? { name: name.trim() } : {},
     }),
   validateInput: ({ input }) => {
@@ -174,8 +137,9 @@ export const nostrSetupAdapter: ChannelSetupAdapter = {
     const relayResult = typedInput.relayUrls?.trim()
       ? parseRelayUrls(typedInput.relayUrls)
       : { relays: [] };
-    return patchNostrConfig({
+    return patchTopLevelChannelConfigSection({
       cfg,
+      channel,
       enabled: true,
       clearFields: typedInput.useEnv ? ["privateKey"] : undefined,
       patch: {
@@ -218,8 +182,9 @@ export const nostrSetupWizard: ChannelSetupWizard = {
       Boolean(process.env.NOSTR_PRIVATE_KEY?.trim()) &&
       !resolveNostrAccount({ cfg, accountId }).config.privateKey?.trim(),
     apply: async ({ cfg }) =>
-      patchNostrConfig({
+      patchTopLevelChannelConfigSection({
         cfg,
+        channel,
         enabled: true,
         clearFields: ["privateKey"],
         patch: {},
@@ -247,15 +212,17 @@ export const nostrSetupWizard: ChannelSetupWizard = {
         };
       },
       applyUseEnv: async ({ cfg }) =>
-        patchNostrConfig({
+        patchTopLevelChannelConfigSection({
           cfg,
+          channel,
           enabled: true,
           clearFields: ["privateKey"],
           patch: {},
         }),
       applySet: async ({ cfg, resolvedValue }) =>
-        patchNostrConfig({
+        patchTopLevelChannelConfigSection({
           cfg,
+          channel,
           enabled: true,
           patch: { privateKey: resolvedValue },
         }),
@@ -280,8 +247,9 @@ export const nostrSetupWizard: ChannelSetupWizard = {
       validate: ({ value }) => parseRelayUrls(value).error,
       applySet: async ({ cfg, value }) => {
         const relayResult = parseRelayUrls(value);
-        return patchNostrConfig({
+        return patchTopLevelChannelConfigSection({
           cfg,
+          channel,
           enabled: true,
           clearFields: relayResult.relays.length > 0 ? undefined : ["relays"],
           patch: relayResult.relays.length > 0 ? { relays: relayResult.relays } : {},
@@ -291,8 +259,9 @@ export const nostrSetupWizard: ChannelSetupWizard = {
   ],
   dmPolicy: nostrDmPolicy,
   disable: (cfg) =>
-    patchNostrConfig({
+    patchTopLevelChannelConfigSection({
       cfg,
+      channel,
       patch: { enabled: false },
     }),
 };

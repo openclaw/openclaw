@@ -1,5 +1,8 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  createHybridChannelConfigBase,
+  createScopedAccountConfigAccessors,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
 import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
 import type {
@@ -125,6 +128,21 @@ function setFeishuNamedAccountEnabled(
     },
   };
 }
+
+const feishuConfigBase = createHybridChannelConfigBase<ResolvedFeishuAccount, ClawdbotConfig>({
+  sectionKey: "feishu",
+  listAccountIds: listFeishuAccountIds,
+  resolveAccount: (cfg, accountId) => resolveFeishuAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultFeishuAccountId,
+  clearBaseFields: [],
+});
+
+const feishuConfigAccessors = createScopedAccountConfigAccessors<ResolvedFeishuAccount>({
+  resolveAccount: ({ cfg, accountId }) =>
+    resolveFeishuAccount({ cfg: cfg as ClawdbotConfig, accountId }),
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+});
 
 function isFeishuReactionsActionEnabled(params: {
   cfg: ClawdbotConfig;
@@ -377,15 +395,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   reload: { configPrefixes: ["channels.feishu"] },
   configSchema: buildChannelConfigSchema(FeishuConfigSchema),
   config: {
-    listAccountIds: (cfg) => listFeishuAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveFeishuAccount({ cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultFeishuAccountId(cfg),
+    ...feishuConfigBase,
     setAccountEnabled: ({ cfg, accountId, enabled }) => {
-      const account = resolveFeishuAccount({ cfg, accountId });
       const isDefault = accountId === DEFAULT_ACCOUNT_ID;
-
       if (isDefault) {
-        // For default account, set top-level enabled
         return {
           ...cfg,
           channels: {
@@ -397,8 +410,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           },
         };
       }
-
-      // For named accounts, set enabled in accounts[accountId]
       return setFeishuNamedAccountEnabled(cfg, accountId, enabled);
     },
     deleteAccount: ({ cfg, accountId }) => {
@@ -442,11 +453,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       appId: account.appId,
       domain: account.domain,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) => {
-      const account = resolveFeishuAccount({ cfg, accountId });
-      return mapAllowFromEntries(account.config?.allowFrom);
-    },
-    formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }),
+    ...feishuConfigAccessors,
   },
   actions: {
     describeMessageTool: describeFeishuMessageTool,
