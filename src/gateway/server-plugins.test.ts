@@ -298,6 +298,27 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
+  test("includes docs guidance when a plugin fallback override is not trusted", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-untrusted-plugin"));
+    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
+
+    await expect(
+      gatewayScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+        runtime.run({
+          sessionKey: "s-untrusted-override",
+          message: "use untrusted override",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          deliver: false,
+        }),
+      ),
+    ).rejects.toThrow(
+      'plugin "voice-call" is not trusted for fallback provider/model override requests. See https://docs.openclaw.ai/tools/plugin#runtime-helpers and search for: plugins.entries.<id>.subagent.allowModelOverride',
+    );
+  });
+
   test("allows trusted fallback model-only overrides when the model ref is canonical", async () => {
     const serverPlugins = await importServerPluginsModule();
     const runtime = await createSubagentRuntime(serverPlugins, {
