@@ -22,6 +22,7 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -567,7 +568,8 @@ export const dispatchTelegramMessage = async ({
           )?.buttons;
           const split = splitTextIntoLaneSegments(payload.text);
           const segments = split.segments;
-          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+          const reply = resolveSendableOutboundReplyParts(payload);
+          const hasMedia = reply.hasMedia;
 
           const flushBufferedFinalAnswer = async () => {
             const buffered = reasoningStepState.takeBufferedFinalAnswer();
@@ -631,7 +633,7 @@ export const dispatchTelegramMessage = async ({
             return;
           }
           if (split.suppressedReasoningOnly) {
-            if (hasMedia) {
+            if (reply.hasMedia) {
               const payloadWithoutSuppressedReasoning =
                 typeof payload.text === "string" ? { ...payload, text: "" } : payload;
               await sendPayload(payloadWithoutSuppressedReasoning);
@@ -647,8 +649,7 @@ export const dispatchTelegramMessage = async ({
             await reasoningLane.stream?.stop();
             reasoningStepState.resetForNextStep();
           }
-          const canSendAsIs =
-            hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
+          const canSendAsIs = reply.hasMedia || reply.text.length > 0;
           if (!canSendAsIs) {
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
