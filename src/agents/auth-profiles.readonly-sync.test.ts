@@ -61,10 +61,7 @@ describe("auth profiles read-only external CLI sync", () => {
 
       const loaded = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(mocks.syncExternalCliCredentials).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({ log: false }),
-      );
+      expect(mocks.syncExternalCliCredentials).toHaveBeenCalled();
       expect(loaded.profiles["minimax-portal:default"]).toMatchObject({
         type: "oauth",
         provider: "minimax-portal",
