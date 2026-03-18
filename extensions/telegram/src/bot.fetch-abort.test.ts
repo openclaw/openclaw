@@ -1,7 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { botCtorSpy } from "./bot.create-telegram-bot.test-harness.js";
-import { createTelegramBot } from "./bot.js";
 import { getTelegramNetworkErrorOrigin } from "./network-errors.js";
+
+const { botCtorSpy, telegramBotRuntimeForTest } =
+  await import("./bot.create-telegram-bot.test-harness.js");
+const { createTelegramBot, setTelegramBotRuntimeForTest } = await import("./bot.js");
+const { setBotHandlersRuntimeForTest } = await import("./bot-handlers.runtime.js");
+const { setBotMessageDispatchRuntimeForTest } = await import("./bot-message-dispatch.js");
+const { setBotNativeCommandsRuntimeForTest } = await import("./bot-native-commands.js");
+
+setTelegramBotRuntimeForTest(telegramBotRuntimeForTest);
+setBotHandlersRuntimeForTest();
+setBotMessageDispatchRuntimeForTest();
+setBotNativeCommandsRuntimeForTest();
 
 function createWrappedTelegramClientFetch(proxyFetch: typeof fetch) {
   const shutdown = new AbortController();
