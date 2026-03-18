@@ -565,7 +565,7 @@ export async function* parseNdjsonStream(
       // Reset buffer if we're done
       if (done && accumulatedBuffer.trim()) {
         try {
-          yield parseJsonPreservingUnsafeIntegers(accumBuffer.trim()) as OllamaChatResponse;
+          yield parseJsonPreservingUnsafeIntegers(accumulatedBuffer.trim()) as OllamaChatResponse;
         } catch {
           log.warn(`Skipping malformed trailing data: ${accumulatedBuffer.trim().slice(0, 120)}`);
         }
@@ -748,17 +748,6 @@ export function createOllamaStreamFn(
           try {
             for await (const chunk of parseNdjsonStream(reader, config.bufferSize)) {
               const currentTime = Date.now();
-              
-              // Check connection health periodically
-              if (currentTime - lastConnectionCheck > connectionCheckInterval) {
-                if (!navigator.onLine) {
-                  connectionHealthy = false;
-                  log.warn("[manusilized] Connection lost, attempting to recover...");
-                } else {
-                  connectionHealthy = true;
-                }
-                lastConnectionCheck = currentTime;
-              }
               
               // Throttle streaming to reduce UI updates
               if (currentTime - lastStreamTime < config.throttleDelay) {
