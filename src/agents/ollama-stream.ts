@@ -13,9 +13,13 @@ import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { OLLAMA_DEFAULT_BASE_URL } from "./ollama-defaults.js";
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
+  buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
   buildUsageWithNoCost,
 } from "./stream-message-shared.js";
+
+// Import config utilities
+import { loadManusilizedConfig, applyStreamingMode, type ManusilizedConfig } from "./config-utils.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
@@ -374,13 +378,162 @@ export function buildAssistantMessage(
   });
 }
 
-// ── NDJSON streaming parser ─────────────────────────────────────────────────
+// ── Markdown tool-call fallback extractor ──────────────────────────────────
+//
+// Some open-source models (e.g. older Llama3, GLM variants) do not emit
+// structured `tool_calls` in the Ollama response.  Instead they embed a JSON
+// object inside a fenced code block in the `content` field, e.g.:
+//
+//   ```json
+//   {"name": "bash", "arguments": {"command": "ls"}}
+//   ```
+//
+// `extractMarkdownToolCalls` scans the accumulated content string for these
+// patterns and converts them into proper `OllamaToolCall` objects so the rest
+// of the pipeline can treat them identically to native tool calls.
+
+const MARKDOWN_TOOL_CALL_RE =
+  /```(?:json)?\s*\n?\s*\{[\s\S]*?"name"\s*:\s*"([^"]+)"[\s\S]*?\}\s*\n?```/g;
+
+// Additional patterns for better tool call detection
+// Additional patterns for better tool call detection
+const ADDITIONAL_TOOL_CALL_PATTERNS = [
+  /```(?:json)?\s*\n?\s*\{[\s\S]*?"name"\s*:\s*"([^"]+)"[\s\S]*?\}\s*\n?```/g,
+  /```(?:json)?\s*\n?\s*\{[\s\S]*?"function"\s*:\s*\{[\s\S]*?"name"\s*:\s*"([^"]+)"[\s\S]*?\}\s*\n?```/g,
+  /\{[\s\S]*?"name"\s*:\s*"([^"]+)"[\s\S]*?"arguments"\s*:\s*(\{[\s\S]*?\})[\s\S]*?\}/g,
+  /<tool_call>([\s\S]*?)<\/tool_call>/g,
+  /```(?:ya?ml)\s*\n([\s\S]*?name:\s*[^\n]+[\s\S]*?arguments:\s*\{[\s\S]*?\})\s*\n```/g,
+  /(?:^|\n)(name:\s*[^\n]+\narguments:\s*\{[\s\S]*?\})(?=\n|$)/gm,
+];
+
+/**
+ * Parse YAML-style tool call content
+ * @param yamlContent YAML formatted tool call string
+ * @returns Parsed tool call object
+ */
+function parseYamlToolCall(yamlContent: string): Record<string, unknown> {
+  const lines = yamlContent.trim().split('\n');
+  const result: Record<string, unknown> = {};
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('name:')) {
+      result.name = trimmed.substring(5).trim().replace(/^["']|["']$/g, '');
+    } else if (trimmed.startsWith('arguments:')) {
+      // Extract JSON portion after arguments:
+      const argsMatch = trimmed.match(/arguments:\s*(\{.*\})/);
+      if (argsMatch && argsMatch[1]) {
+        try {
+          result.arguments = JSON.parse(argsMatch[1]);
+        } catch {
+          // If JSON parsing fails, try to extract key-value pairs
+          const argsObj: Record<string, unknown> = {};
+          const argsLines = trimmed.substring(10).trim();
+          if (argsLines.startsWith('{') && argsLines.endsWith('}')) {
+            // Simplified JSON parsing for common cases
+            const keyValuePairs = argsLines.substring(1, argsLines.length - 1).split(',');
+            for (const pair of keyValuePairs) {
+              const [key, value] = pair.split(':').map(s => s.trim());
+              if (key && value) {
+                // Try to parse value as JSON or keep as string
+                try {
+                  argsObj[key.replace(/^["']|["']$/g, '')] = JSON.parse(value);
+                } catch {
+                  argsObj[key.replace(/^["']|["']$/g, '')] = value.replace(/^["']|["']$/g, '');
+                }
+              }
+            }
+            result.arguments = argsObj;
+          }
+        }
+      }
+    }
+  }
+  
+  return result;
+}
+
+export function extractMarkdownToolCalls(content: string): OllamaToolCall[] {
+  const results: OllamaToolCall[] = [];
+  
+  // Original pattern
+  let match: RegExpExecArray | null;
+  MARKDOWN_TOOL_CALL_RE.lastIndex = 0;
+  while ((match = MARKDOWN_TOOL_CALL_RE.exec(content)) !== null) {
+    const raw = match[0]
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/, "")
+      .trim();
+    try {
+      const parsed = parseJsonPreservingUnsafeIntegers(raw) as Record<string, unknown>;
+      const name = typeof parsed.name === "string" ? parsed.name : undefined;
+      if (!name) {
+        continue;
+      }
+      const args =
+        parsed.arguments != null && typeof parsed.arguments === "object"
+          ? (parsed.arguments as Record<string, unknown>)
+          : parsed.parameters != null && typeof parsed.parameters === "object"
+            ? (parsed.parameters as Record<string, unknown>)
+            : {};
+      results.push({ function: { name, arguments: args } });
+    } catch {
+      log.warn(`[manusilized] Failed to parse Markdown tool call: ${raw.slice(0, 120)}`);
+    }
+  }
+  
+  // Additional patterns
+  for (const pattern of ADDITIONAL_TOOL_CALL_PATTERNS) {
+    pattern.lastIndex = 0;
+    while ((match = pattern.exec(content)) !== null) {
+      try {
+        let parsed: Record<string, unknown>;
+        if (match.length >= 3) {
+          // For patterns with separate name and arguments captures
+          const name = match[1];
+          const argsRaw = match[2];
+          parsed = { name, arguments: JSON.parse(argsRaw) };
+        } else if (pattern.source.includes("ya?ml")) {
+          // Handle YAML format
+          const yamlContent = match[1] || match[0];
+          parsed = parseYamlToolCall(yamlContent);
+        } else {
+          // For patterns with single capture containing full JSON
+          const raw = match[1] || match[0];
+          parsed = parseJsonPreservingUnsafeIntegers(raw) as Record<string, unknown>;
+        }
+        
+        const name = typeof parsed.name === "string" ? parsed.name : undefined;
+        if (!name) {
+          continue;
+        }
+        
+        const args =
+          parsed.arguments != null && typeof parsed.arguments === "object"
+            ? (parsed.arguments as Record<string, unknown>)
+            : parsed.parameters != null && typeof parsed.parameters === "object"
+              ? (parsed.parameters as Record<string, unknown>)
+              : {};
+              
+        results.push({ function: { name, arguments: args } });
+      } catch (err) {
+        log.warn(`[manusilized] Failed to parse additional tool call pattern: ${match[0].slice(0, 120)}`);
+      }
+    }
+  }
+  
+  return results;
+}
+
+// ── NDJSON streaming parser with enhanced buffering ─────────────────────────
 
 export async function* parseNdjsonStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
+  bufferSize: number = 1024, // Configurable buffer size for smoother streaming
 ): AsyncGenerator<OllamaChatResponse> {
   const decoder = new TextDecoder();
   let buffer = "";
+  let accumulatedBuffer = "";
 
   while (true) {
     const { done, value } = await reader.read();
@@ -388,32 +541,60 @@ export async function* parseNdjsonStream(
       break;
     }
     buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
+    
+    // Accumulate buffer for smoother processing
+    accumulatedBuffer += buffer;
+    
+    // Only process when we have enough data or stream is ending
+    if (accumulatedBuffer.length >= bufferSize || done) {
+      const lines = accumulatedBuffer.split("\n");
+      accumulatedBuffer = lines.pop() ?? "";
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          continue;
+        }
+        try {
+          yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
+        } catch {
+          log.warn(`Skipping malformed NDJSON line: ${trimmed.slice(0, 120)}`);
+        }
       }
-      try {
-        yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
-      } catch {
-        log.warn(`Skipping malformed NDJSON line: ${trimmed.slice(0, 120)}`);
+      
+      // Reset buffer if we're done
+      if (done && accumulatedBuffer.trim()) {
+        try {
+          yield parseJsonPreservingUnsafeIntegers(accumBuffer.trim()) as OllamaChatResponse;
+        } catch {
+          log.warn(`Skipping malformed trailing data: ${accumulatedBuffer.trim().slice(0, 120)}`);
+        }
       }
     }
+    
+    buffer = ""; // Reset buffer for next iteration
   }
 
-  if (buffer.trim()) {
+  // Handle any remaining data
+  if (accumulatedBuffer.trim()) {
     try {
-      yield parseJsonPreservingUnsafeIntegers(buffer.trim()) as OllamaChatResponse;
+      yield parseJsonPreservingUnsafeIntegers(accumulatedBuffer.trim()) as OllamaChatResponse;
     } catch {
-      log.warn(`Skipping malformed trailing data: ${buffer.trim().slice(0, 120)}`);
+      log.warn(`Skipping malformed trailing data: ${accumulatedBuffer.trim().slice(0, 120)}`);
     }
   }
 }
 
-// ── Main StreamFn factory ───────────────────────────────────────────────────
+// ── Enhanced Stream Configuration ───────────────────────────────────────────
+
+interface StreamConfig {
+  bufferSize?: number;
+  throttleDelay?: number;
+  enableThinkingOutput?: boolean;
+  streamInterval?: number;
+}
+
+// ── Main StreamFn factory with enhanced streaming ───────────────────────────
 
 function resolveOllamaChatUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
@@ -434,8 +615,48 @@ function resolveOllamaModelHeaders(model: {
 export function createOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
+  streamConfig?: StreamConfig,
+  configPath?: string,
 ): StreamFn {
+  // Load configuration from file if available
+  let baseConfig: ManusilizedConfig = {
+    streaming: {
+      mode: "standard",
+      bufferSize: 1024,
+      throttleDelay: 10,
+      enableThinkingOutput: false,
+      streamInterval: 50,
+    },
+    context: {
+      enableMegaContext: false,
+      maxContextWindow: 262144,
+      autoDetectContext: true,
+    },
+  };
+  
+  // Try to load config from file
+  try {
+    if (loadManusilizedConfig) {
+      const fileConfig = loadManusilizedConfig(configPath);
+      baseConfig = { ...baseConfig, ...fileConfig };
+    }
+  } catch (err) {
+    console.warn("[manusilized] Failed to load config file, using defaults:", err);
+  }
+  
+  // Apply streaming mode presets
+  if (applyStreamingMode) {
+    baseConfig = applyStreamingMode(baseConfig);
+  }
+  
   const chatUrl = resolveOllamaChatUrl(baseUrl);
+  const config = {
+    bufferSize: baseConfig.streaming?.bufferSize || 1024,
+    throttleDelay: baseConfig.streaming?.throttleDelay || 10,
+    enableThinkingOutput: baseConfig.streaming?.enableThinkingOutput || false,
+    streamInterval: baseConfig.streaming?.streamInterval || 50,
+    ...streamConfig,
+  };
 
   return (model, context, options) => {
     const stream = createAssistantMessageEventStream();
@@ -451,7 +672,11 @@ export function createOllamaStreamFn(
 
         // Ollama defaults to num_ctx=4096 which is too small for large
         // system prompts + many tool definitions. Use model's contextWindow.
-        const ollamaOptions: Record<string, unknown> = { num_ctx: model.contextWindow ?? 65536 };
+        const ollamaOptions: Record<string, unknown> = { 
+          num_ctx: model.contextWindow ?? 65536,
+          // Enable thinking output for reasoning models
+          ...(config.enableThinkingOutput ? { thinking: true } : {})
+        };
         if (typeof options?.temperature === "number") {
           ollamaOptions.temperature = options.temperature;
         }
@@ -499,21 +724,102 @@ export function createOllamaStreamFn(
         let accumulatedContent = "";
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
+        let contentIndex = 0;
+        let lastStreamTime = Date.now();
 
-        for await (const chunk of parseNdjsonStream(reader)) {
-          if (chunk.message?.content) {
-            accumulatedContent += chunk.message.content;
-          }
+        // Emit a "start" event so consumers know the assistant has begun.
+        stream.push({
+          type: "start",
+          partial: buildAssistantMessageWithZeroUsage({
+            model,
+            content: [],
+            stopReason: "stop",
+          }),
+        });
 
-          // Ollama sends tool_calls in intermediate (done:false) chunks,
-          // NOT in the final done:true chunk. Collect from all chunks.
-          if (chunk.message?.tool_calls) {
-            accumulatedToolCalls.push(...chunk.message.tool_calls);
-          }
+// Retry mechanism for stream parsing
+        let retryCount = 0;
+        const maxRetries = 3;
+        let connectionHealthy = true;
+        const connectionCheckInterval = 30000; // 30 seconds
+        let lastConnectionCheck = Date.now();
+        
+        while (retryCount <= maxRetries) {
+          try {
+            for await (const chunk of parseNdjsonStream(reader, config.bufferSize)) {
+              const currentTime = Date.now();
+              
+              // Check connection health periodically
+              if (currentTime - lastConnectionCheck > connectionCheckInterval) {
+                if (!navigator.onLine) {
+                  connectionHealthy = false;
+                  log.warn("[manusilized] Connection lost, attempting to recover...");
+                } else {
+                  connectionHealthy = true;
+                }
+                lastConnectionCheck = currentTime;
+              }
+              
+              // Throttle streaming to reduce UI updates
+              if (currentTime - lastStreamTime < config.throttleDelay) {
+                continue;
+              }
+              
+              // ── Real-time text_delta events (manusilized: incremental streaming) ──
+              // Emit each content fragment immediately so the UI can render a
+              // live typewriter effect instead of waiting for the full response.
+              if (chunk.message?.content) {
+                const delta = chunk.message.content;
+                accumulatedContent += delta;
+                stream.push({
+                  type: "text_delta",
+                  contentIndex,
+                  delta,
+                  partial: buildAssistantMessageWithZeroUsage({
+                    model,
+                    content: [{ type: "text", text: accumulatedContent }],
+                    stopReason: "stop",
+                  }),
+                });
+                
+                lastStreamTime = currentTime;
+              }
 
-          if (chunk.done) {
-            finalResponse = chunk;
-            break;
+              // Include thinking/reasoning output for enhanced experience
+              if (config.enableThinkingOutput && chunk.message?.thinking) {
+                stream.push({
+                  type: "thinking_delta",
+                  content: chunk.message.thinking,
+                });
+              }
+
+              // Ollama sends tool_calls in intermediate (done:false) chunks,
+              // NOT in the final done:true chunk. Collect from all chunks.
+              if (chunk.message?.tool_calls) {
+                accumulatedToolCalls.push(...chunk.message.tool_calls);
+              }
+
+              if (chunk.done) {
+                finalResponse = chunk;
+                break;
+              }
+            }
+            break; // Success, exit retry loop
+          } catch (err) {
+            retryCount++;
+            if (retryCount > maxRetries) {
+              throw err; // Re-throw if max retries exceeded
+            }
+            
+            log.warn(`[manusilized] Stream parsing failed, retry ${retryCount}/${maxRetries}:`, err);
+            
+            // Wait before retry with exponential backoff
+            await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+            
+            // Re-initialize the stream if possible
+            if (options?.signal?.aborted) {
+              throw new Error("Stream aborted by user");
+            }
           }
         }
 
@@ -522,9 +828,46 @@ export function createOllamaStreamFn(
         }
 
         finalResponse.message.content = accumulatedContent;
+
+        // Emit text_end event to indicate completion of text streaming
+        stream.push({
+          type: "text_end",
+          contentIndex,
+          partial: buildAssistantMessageWithZeroUsage({
+            model,
+            content: [{ type: "text", text: accumulatedContent }],
+            stopReason: "stop",
+          }),
+        });
+
+        // ── Markdown tool-call fallback (manusilized: fault-tolerant adapter) ──
+        // If the model produced no native tool_calls but embedded a JSON tool
+        // call inside a fenced code block, extract it as a fallback so that
+        // open-source models that don't support structured output still work.
+        if (accumulatedToolCalls.length === 0 && accumulatedContent) {
+          const markdownCalls = extractMarkdownToolCalls(accumulatedContent);
+          if (markdownCalls.length > 0) {
+            log.debug(
+              `[manusilized] Extracted ${markdownCalls.length} tool call(s) from Markdown fallback`,
+            );
+            accumulatedToolCalls.push(...markdownCalls);
+            // Strip the tool-call JSON blocks from the visible content so the
+            // user doesn't see raw JSON in the chat bubble.
+            finalResponse.message.content = accumulatedContent
+              .replace(MARKDOWN_TOOL_CALL_RE, "")
+              .replace(/```(?:json)?\s*\{[\s\S]*?\}\s*```/g, "")
+              .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+              .replace(/```(?:ya?ml)\s*\n[\s\S]*?\s*\n```/g, "")
+              .trim();
+          }
+        }
+
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }
+
+        // Increment contentIndex after text is done (mirrors OpenAI WS pattern).
+        contentIndex += 1;
 
         const assistantMessage = buildAssistantMessage(finalResponse, {
           api: model.api,
@@ -563,6 +906,7 @@ export function createOllamaStreamFn(
 export function createConfiguredOllamaStreamFn(params: {
   model: { baseUrl?: string; headers?: unknown };
   providerBaseUrl?: string;
+  streamConfig?: StreamConfig;
 }): StreamFn {
   const modelBaseUrl = typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
   return createOllamaStreamFn(
@@ -571,5 +915,6 @@ export function createConfiguredOllamaStreamFn(params: {
       providerBaseUrl: params.providerBaseUrl,
     }),
     resolveOllamaModelHeaders(params.model),
+    params.streamConfig,
   );
 }
