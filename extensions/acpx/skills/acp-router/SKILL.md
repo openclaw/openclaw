@@ -147,7 +147,7 @@ Use this path to drive harness sessions without `/acp` or subagent runtime.
 2. Reuse a stable session name per conversation so follow-up prompts stay in the same harness context.
 3. Prefer `--format quiet` for clean assistant text to relay back to user.
 4. Use `exec` (one-shot) only when the user wants one-shot behavior.
-5. Keep working directory explicit (`--cwd`) when task scope depends on repo context.
+5. Keep working directory explicit (`--cd`) when task scope depends on repo context.
 
 ### Session naming
 
@@ -165,13 +165,13 @@ Persistent session (create if missing, then prompt):
 ${ACPX_CMD} codex sessions show oc-codex-<conversationId> \
   || ${ACPX_CMD} codex sessions new --name oc-codex-<conversationId>
 
-${ACPX_CMD} codex -s oc-codex-<conversationId> --cwd <workspacePath> --format quiet "<prompt>"
+${ACPX_CMD} codex -s oc-codex-<conversationId> --cd <workspacePath> --format quiet "<prompt>"
 ```
 
 One-shot:
 
 ```bash
-${ACPX_CMD} codex exec --cwd <workspacePath> --format quiet "<prompt>"
+${ACPX_CMD} codex exec --cd <workspacePath> --format quiet "<prompt>"
 ```
 
 Cancel in-flight turn:
