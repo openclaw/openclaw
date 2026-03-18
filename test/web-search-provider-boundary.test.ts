@@ -1,24 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  collectWebSearchProviderBoundaryInventory,
-  diffInventory,
-} from "../scripts/check-web-search-provider-boundaries.mjs";
+import { collectWebSearchProviderBoundaryInventory } from "../scripts/check-web-search-provider-boundaries.mjs";
 
 const repoRoot = process.cwd();
 const scriptPath = path.join(repoRoot, "scripts", "check-web-search-provider-boundaries.mjs");
-const baselinePath = path.join(
-  repoRoot,
-  "test",
-  "fixtures",
-  "web-search-provider-boundary-inventory.json",
-);
-
-function readBaseline() {
-  return JSON.parse(readFileSync(baselinePath, "utf8"));
-}
 
 describe("web search provider boundary inventory", () => {
   it("has no remaining production inventory in core", async () => {
@@ -49,20 +35,12 @@ describe("web search provider boundary inventory", () => {
     ).toEqual(first);
   });
 
-  it("matches the checked-in baseline", async () => {
-    const expected = readBaseline();
-    const actual = await collectWebSearchProviderBoundaryInventory();
-
-    expect(diffInventory(expected, actual)).toEqual({ missing: [], unexpected: [] });
-    expect(actual).toEqual([]);
-  });
-
-  it("script json output matches the baseline exactly", () => {
+  it("script json output is empty", () => {
     const stdout = execFileSync(process.execPath, [scriptPath, "--json"], {
       cwd: repoRoot,
       encoding: "utf8",
     });
 
-    expect(JSON.parse(stdout)).toEqual(readBaseline());
+    expect(JSON.parse(stdout)).toEqual([]);
   });
 });
