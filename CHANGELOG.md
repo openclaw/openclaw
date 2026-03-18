@@ -43,6 +43,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/appearance: unify theme border radii across Claw, Knot, and Dash, and add a Roundness slider to the Appearance settings so users can adjust corner radius from sharp to fully rounded. Thanks @BunsDev.
 - Control UI/chat: add an expand-to-canvas button on assistant chat bubbles and in-app session navigation from Sessions and Cron views. Thanks @BunsDev.
 - Plugins/context engines: expose `delegateCompactionToRuntime(...)` on the public plugin SDK, refactor the legacy engine to use the shared helper, and clarify `ownsCompaction` delegation semantics for non-owning engines. (#49061) Thanks @jalehman.
+- Gateway: optional Nacos config source so config can be loaded from Nacos into memory with push-based hot reload (env: OPENCLAW_CONFIG_SOURCE=nacos, NACOS_SERVER_ADDR, NACOS_DATA_ID, NACOS_GROUP).
 - Plugins/MiniMax: add MiniMax-M2.7 and MiniMax-M2.7-highspeed models and update the default model from M2.5 to M2.7. (#49691) Thanks @liyuan97.
 - Plugins/Xiaomi: switch the bundled Xiaomi provider to the `/v1` OpenAI-compatible endpoint and add MiMo V2 Pro plus MiMo V2 Omni to the built-in catalog. (#49214) thanks @DJjjjhao.
 - Android/Talk: move Talk speech synthesis behind gateway `talk.speak`, keep Talk secrets on the gateway, and switch Android playback to final-response audio instead of device-local ElevenLabs streaming. (#50849)

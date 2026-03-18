@@ -79,8 +79,14 @@ export function startGatewayConfigReloader(opts: {
     warn: (msg: string) => void;
     error: (msg: string) => void;
   };
-  watchPath: string;
+  /** File-based reload: path to watch. Omit when using subscribe. */
+  watchPath?: string;
+  /** Subscribe-based reload (e.g. Nacos): call onChange when config may have changed; return teardown. */
+  subscribe?: (onChange: () => void) => () => void;
 }): GatewayConfigReloader {
+  if (opts.subscribe == null && opts.watchPath == null) {
+    throw new Error("startGatewayConfigReloader: provide watchPath or subscribe");
+  }
   let currentConfig = opts.initialConfig;
   let settings = resolveGatewayReloadSettings(currentConfig);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -89,6 +95,7 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
+  let teardownSubscribe: (() => void) | null = null;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -214,34 +221,46 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
-  const watcher = chokidar.watch(opts.watchPath, {
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-    usePolling: Boolean(process.env.VITEST),
-  });
-
-  watcher.on("add", schedule);
-  watcher.on("change", schedule);
-  watcher.on("unlink", schedule);
+  let watcher: ReturnType<typeof chokidar.watch> | null = null;
   let watcherClosed = false;
-  watcher.on("error", (err) => {
-    if (watcherClosed) {
-      return;
-    }
-    watcherClosed = true;
-    opts.log.warn(`config watcher error: ${String(err)}`);
-    void watcher.close().catch(() => {});
-  });
+
+  if (opts.subscribe != null) {
+    teardownSubscribe = opts.subscribe(schedule);
+  } else {
+    const watchPath = opts.watchPath as string;
+    watcher = chokidar.watch(watchPath, {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+      usePolling: Boolean(process.env.VITEST),
+    });
+    watcher.on("add", schedule);
+    watcher.on("change", schedule);
+    watcher.on("unlink", schedule);
+    watcher.on("error", (err) => {
+      if (watcherClosed) {
+        return;
+      }
+      watcherClosed = true;
+      opts.log.warn(`config watcher error: ${String(err)}`);
+      void watcher!.close().catch(() => {});
+    });
+  }
 
   return {
     stop: async () => {
       stopped = true;
+      if (teardownSubscribe != null) {
+        teardownSubscribe();
+        teardownSubscribe = null;
+      }
       if (debounceTimer) {
         clearTimeout(debounceTimer);
       }
       debounceTimer = null;
-      watcherClosed = true;
-      await watcher.close().catch(() => {});
+      if (watcher != null) {
+        watcherClosed = true;
+        await watcher.close().catch(() => {});
+      }
     },
   };
 }

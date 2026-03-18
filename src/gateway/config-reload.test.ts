@@ -415,4 +415,48 @@ describe("startGatewayConfigReloader", () => {
       await reloader.stop();
     }
   });
+
+  it("uses subscribe when provided (no chokidar), runs reload on onChange, teardown stops subscription", async () => {
+    const chokidarWatch = vi.spyOn(chokidar, "watch");
+    const nextConfig = { gateway: { reload: { debounceMs: 0 } }, hooks: { enabled: true } };
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValue(makeSnapshot({ config: nextConfig }));
+    let savedOnChange: (() => void) | null = null;
+    const teardown = vi.fn();
+    const subscribe = vi.fn((onChange: () => void) => {
+      savedOnChange = onChange;
+      return teardown;
+    });
+    const onHotReload = vi.fn(async () => {});
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const reloader = startGatewayConfigReloader({
+      initialConfig: {},
+      readSnapshot,
+      onHotReload,
+      onRestart: vi.fn(),
+      log,
+      subscribe,
+    });
+
+    expect(chokidarWatch).not.toHaveBeenCalled();
+    expect(savedOnChange).not.toBeNull();
+    savedOnChange!();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(onHotReload).toHaveBeenCalledWith(
+      expect.objectContaining({ restartGateway: false }),
+      nextConfig,
+    );
+
+    await reloader.stop();
+    expect(teardown).toHaveBeenCalledTimes(1);
+    const readCountBefore = readSnapshot.mock.calls.length;
+    savedOnChange!();
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot.mock.calls.length).toBe(readCountBefore);
+  });
 });

@@ -47,6 +47,7 @@ import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
+import { getConfigSource } from "./sources/current.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
@@ -1497,10 +1498,22 @@ export async function readBestEffortConfig(): Promise<OpenClawConfig> {
 }
 
 export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
+  const source = getConfigSource();
+  if (source !== null) {
+    return source.readSnapshot();
+  }
   return await createConfigIO().readConfigFileSnapshot();
 }
 
 export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
+  const source = getConfigSource();
+  if (source?.kind === "nacos") {
+    const snapshot = await source.readSnapshot();
+    return {
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    };
+  }
   return await createConfigIO().readConfigFileSnapshotForWrite();
 }
 
@@ -1508,6 +1521,18 @@ export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
 ): Promise<void> {
+  const source = getConfigSource();
+  if (source?.kind === "nacos") {
+    const validated = validateConfigObjectRawWithPlugins(cfg);
+    if (!validated.ok) {
+      const issue = validated.issues[0];
+      const pathLabel = issue?.path ? issue.path : "<root>";
+      const issueMessage = issue?.message ?? "invalid";
+      throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
+    }
+    setRuntimeConfigSnapshot(cfg);
+    return;
+  }
   const io = createConfigIO();
   let nextCfg = cfg;
   const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
