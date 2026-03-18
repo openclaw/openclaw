@@ -44,6 +44,46 @@ function extractCompactInstructions(params: {
   return rest.length ? rest : undefined;
 }
 
+/**
+ * Returns true when the compaction result reason indicates a safeguard
+ * cancellation (i.e. the compaction was deliberately skipped, not actually
+ * failed). Used to distinguish user-facing label: "skipped" vs "failed".
+ */
+function isCompactionCancellation(reason: string | undefined): boolean {
+  if (!reason) {
+    return false;
+  }
+  const lower = reason.trim().toLowerCase();
+  return lower.includes("cancelled") || lower.includes("canceled");
+}
+
+/**
+ * Returns the reason string to show to the user, or undefined when the reason
+ * is a generic cancellation notice already implied by the label.
+ *
+ * Specifically, when the label is "Compaction skipped" and the reason is the
+ * bare "Compaction cancelled" / "Compaction canceled" string from the SDK, we
+ * suppress it — the context-usage summary that follows already tells the user
+ * enough, and repeating "cancelled" after "skipped" is confusing.
+ */
+function resolveDisplayReason(reason: string | undefined, label: string): string | undefined {
+  if (!reason) {
+    return undefined;
+  }
+  const trimmed = reason.trim();
+  const lower = trimmed.toLowerCase();
+  // Strip the generic SDK-level cancellation notice when the label already
+  // conveys "skipped", to avoid the redundant "Compaction skipped: Compaction
+  // cancelled" phrasing that prompted issue #49664.
+  if (
+    label === "Compaction skipped" &&
+    (lower === "compaction cancelled" || lower === "compaction canceled")
+  ) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 export const handleCompactCommand: CommandHandler = async (params) => {
   const compactRequested =
     params.command.commandBodyNormalized === "/compact" ||
@@ -118,7 +158,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
           ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
           : "Compacted"
       : "Compaction skipped"
-    : "Compaction failed";
+    : isCompactionCancellation(result.reason)
+      ? "Compaction skipped"
+      : "Compaction failed";
   if (result.ok && result.compacted) {
     await incrementCompactionCount({
       sessionEntry: params.sessionEntry,
@@ -136,9 +178,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
     params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
   );
-  const reason = result.reason?.trim();
-  const line = reason
-    ? `${compactLabel}: ${reason} • ${contextSummary}`
+  const displayReason = resolveDisplayReason(result.reason?.trim(), compactLabel);
+  const line = displayReason
+    ? `${compactLabel}: ${displayReason} • ${contextSummary}`
     : `${compactLabel} • ${contextSummary}`;
   enqueueSystemEvent(line, { sessionKey: params.sessionKey });
   return { shouldContinue: false, reply: { text: `⚙️ ${line}` } };
