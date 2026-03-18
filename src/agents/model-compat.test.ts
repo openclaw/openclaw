@@ -46,11 +46,11 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): 
   expect(supportsDeveloperRole(normalized)).toBe(false);
 }
 
-function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
+function expectSupportsUsageInStreamingForcedOn(overrides?: Partial<Model<Api>>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
   const normalized = normalizeModelCompat(model as Model<Api>);
-  expect(supportsUsageInStreaming(normalized)).toBe(false);
+  expect(supportsUsageInStreaming(normalized)).toBe(true);
 }
 
 function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): void {
@@ -181,8 +181,8 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("forces supportsUsageInStreaming off for generic custom openai-completions provider", () => {
-    expectSupportsUsageInStreamingForcedOff({
+  it("forces supportsUsageInStreaming on for generic custom openai-completions provider", () => {
+    expectSupportsUsageInStreamingForcedOn({
       provider: "custom-cpa",
       baseUrl: "https://cpa.example.com/v1",
     });
@@ -257,7 +257,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
-  it("still forces flags off when not explicitly set by user", () => {
+  it("forces supportsUsageInStreaming on when not explicitly set by user", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
@@ -266,7 +266,7 @@ describe("normalizeModelCompat", () => {
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
     expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
     expect(supportsStrictMode(normalized)).toBe(false);
   });
 
@@ -294,7 +294,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(model)).toBeUndefined();
     expect(supportsStrictMode(model)).toBeUndefined();
     expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
     expect(supportsStrictMode(normalized)).toBe(false);
   });
 
