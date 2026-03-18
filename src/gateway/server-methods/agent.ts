@@ -739,7 +739,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
     const request = params as { runId: string; sessionKey?: string };
-    const runId = request.runId.trim();
+    const runId = request.runId;
     const activeSessionKey = context.agentAbortControllers.get(runId)?.sessionKey;
     const sessionKey = canonicalizeAbortSessionKey({
       cfg: loadConfig(),
