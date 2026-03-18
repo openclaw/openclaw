@@ -14,8 +14,8 @@ LOGFILE="$DATADIR/skill-usage.jsonl"
 umask 077
 mkdir -p "$DATADIR"
 
-ARG="${1:-}"
-case "${ARG:---help}" in
+ARG="${1:-help}"
+case "$ARG" in
   --report)
     if ! command -v jq >/dev/null 2>&1; then
       printf 'skill-usage-log: jq is required but not found\n' >&2
@@ -33,7 +33,7 @@ case "${ARG:---help}" in
     echo ""
     echo "=== Total entries: $(wc -l < "$LOGFILE") ==="
     ;;
-  --help)
+  help|--help|-h)
     echo "Usage: skill-usage-log.sh <name> <context> [duration_sec]"
     echo "       skill-usage-log.sh --report"
     ;;
