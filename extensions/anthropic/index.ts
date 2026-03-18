@@ -27,6 +27,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
+import { createAnthropicWebSearchProvider } from "./anthropic-web-search-provider.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 const PROVIDER_ID = "anthropic";
@@ -396,5 +397,6 @@ export default definePluginEntry({
         }),
     });
     api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
+    api.registerWebSearchProvider(createAnthropicWebSearchProvider());
   },
 });

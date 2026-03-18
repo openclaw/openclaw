@@ -29,9 +29,22 @@
       "cliDescription": "Anthropic API key"
     }
   ],
+
+  "webSearchProviders": ["anthropic"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "description": "Anthropic native web search configuration",
+        "properties": {
+          "apiKey": {
+            "type": "string",
+            "description": "Anthropic API key (defaults to ANTHROPIC_API_KEY env var)"
+          }
+        }
+      }
+    }
   }
 }

@@ -2,6 +2,7 @@ import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
 export const BUNDLED_WEB_SEARCH_PLUGIN_IDS = [
+  "anthropic",
   "brave",
   "firecrawl",
   "google",
