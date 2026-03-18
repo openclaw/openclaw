@@ -42,7 +42,9 @@ describe("live integration: NC Talk attachment parsing pipeline", () => {
     const h = await startWebhookServer({
       path: "/live-1",
       secret: SECRET,
-      onMessage: async (m) => msgs.push(m),
+      onMessage: async (m) => {
+        msgs.push(m);
+      },
     });
     const content = JSON.stringify({
       message: "{file}",
@@ -68,7 +70,9 @@ describe("live integration: NC Talk attachment parsing pipeline", () => {
     const h = await startWebhookServer({
       path: "/live-2",
       secret: SECRET,
-      onMessage: async (m) => msgs.push(m),
+      onMessage: async (m) => {
+        msgs.push(m);
+      },
     });
     const content = JSON.stringify({
       message: "{mention} sent a message",
@@ -85,7 +89,9 @@ describe("live integration: NC Talk attachment parsing pipeline", () => {
     const h = await startWebhookServer({
       path: "/live-3",
       secret: SECRET,
-      onMessage: async (m) => msgs.push(m),
+      onMessage: async (m) => {
+        msgs.push(m);
+      },
     });
     const { body, headers } = signed({ content: "Hello from Alice", name: "Hello from Alice" });
     await fetch(h.webhookUrl, { method: "POST", headers, body });
@@ -98,7 +104,9 @@ describe("live integration: NC Talk attachment parsing pipeline", () => {
     const h = await startWebhookServer({
       path: "/live-4",
       secret: SECRET,
-      onMessage: async (m) => msgs.push(m),
+      onMessage: async (m) => {
+        msgs.push(m);
+      },
     });
     const content = JSON.stringify({
       message: "{file}",
@@ -124,7 +132,9 @@ describe("live integration: NC Talk attachment parsing pipeline", () => {
     const h = await startWebhookServer({
       path: "/live-5",
       secret: SECRET,
-      onMessage: async (m) => msgs.push(m),
+      onMessage: async (m) => {
+        msgs.push(m);
+      },
     });
     const content = JSON.stringify({
       message: "{f1} and {f2}",
