@@ -5,6 +5,15 @@ export type {
 } from "../config/types.tools.js";
 export {
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
+  composeWarningCollectors,
+  createAllowlistProviderGroupPolicyWarningCollector,
+  createConditionalWarningCollector,
+  createAllowlistProviderOpenWarningCollector,
+  createAllowlistProviderRestrictSendersWarningCollector,
+  createAllowlistProviderRouteAllowlistWarningCollector,
+  createOpenGroupPolicyRestrictSendersWarningCollector,
+  createOpenProviderGroupPolicyWarningCollector,
+  createOpenProviderConfiguredRouteWarningCollector,
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
   collectAllowlistProviderGroupPolicyWarnings,
@@ -12,6 +21,7 @@ export {
   collectOpenGroupPolicyRestrictSendersWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   collectOpenProviderGroupPolicyWarnings,
+  projectWarningCollector,
 } from "../channels/plugins/group-policy-warnings.js";
 export { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 export {

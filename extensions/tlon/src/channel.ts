@@ -1,5 +1,9 @@
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  createRuntimeOutboundDelegates,
+  type ChannelAccountSnapshot,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { tlonChannelConfigSchema } from "./config-schema.js";
@@ -107,14 +111,11 @@ export const tlonPlugin: ChannelPlugin = {
     deliveryMode: "direct",
     textChunkLimit: 10000,
     resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
-    sendText: async (params) =>
-      await (
-        await loadTlonChannelRuntime()
-      ).tlonRuntimeOutbound.sendText!(params),
-    sendMedia: async (params) =>
-      await (
-        await loadTlonChannelRuntime()
-      ).tlonRuntimeOutbound.sendMedia!(params),
+    ...createRuntimeOutboundDelegates({
+      getRuntime: loadTlonChannelRuntime,
+      sendText: { resolve: (runtime) => runtime.tlonRuntimeOutbound.sendText },
+      sendMedia: { resolve: (runtime) => runtime.tlonRuntimeOutbound.sendMedia },
+    }),
   },
   status: {
     defaultRuntime: {

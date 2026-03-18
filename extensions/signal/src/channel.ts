@@ -1,5 +1,9 @@
-import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+import {
+  createPairingPrefixStripper,
+  createTextPairingAdapter,
+  resolveOutboundSendDep,
+} from "openclaw/plugin-sdk/channel-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
@@ -268,35 +272,25 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     setupWizard: signalSetupWizard,
     setup: signalSetupAdapter,
   }),
-  pairing: {
+  pairing: createTextPairingAdapter({
     idLabel: "signalNumber",
-    normalizeAllowEntry: (entry) => entry.replace(/^signal:/i, ""),
-    notifyApproval: async ({ id }) => {
-      await getSignalRuntime().channel.signal.sendMessageSignal(id, PAIRING_APPROVED_MESSAGE);
+    message: PAIRING_APPROVED_MESSAGE,
+    normalizeAllowEntry: createPairingPrefixStripper(/^signal:/i),
+    notify: async ({ id, message }) => {
+      await getSignalRuntime().channel.signal.sendMessageSignal(id, message);
     },
-  },
+  }),
   actions: signalMessageActions,
-  allowlist: {
-    supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
-    readConfig: ({ cfg, accountId }) => {
-      const account = resolveSignalAccount({ cfg, accountId });
-      return {
-        dmAllowFrom: (account.config.allowFrom ?? []).map(String),
-        groupAllowFrom: (account.config.groupAllowFrom ?? []).map(String),
-        dmPolicy: account.config.dmPolicy,
-        groupPolicy: account.config.groupPolicy,
-      };
-    },
-    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
-      channelId: "signal",
-      normalize: ({ cfg, accountId, values }) =>
-        signalConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
-      resolvePaths: (scope) => ({
-        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
-        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
-      }),
-    }),
-  },
+  allowlist: buildDmGroupAccountAllowlistAdapter({
+    channelId: "signal",
+    resolveAccount: ({ cfg, accountId }) => resolveSignalAccount({ cfg, accountId }),
+    normalize: ({ cfg, accountId, values }) =>
+      signalConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+    resolveDmAllowFrom: (account) => account.config.allowFrom,
+    resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,
+    resolveDmPolicy: (account) => account.config.dmPolicy,
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
+  }),
   security: {
     resolveDmPolicy: signalResolveDmPolicy,
     collectWarnings: collectSignalSecurityWarnings,
