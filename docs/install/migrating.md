@@ -67,7 +67,7 @@ Those live under `$OPENCLAW_STATE_DIR`.
 
 ## Migration steps (recommended)
 
-### Step 0 — Make a backup (old machine)
+### Step 0 - Make a backup (old machine)
 
 On the **old** machine, stop the gateway first so files aren’t changing mid-copy:
 
@@ -87,7 +87,7 @@ tar -czf openclaw-workspace.tgz .openclaw/workspace
 
 If you have multiple profiles/state dirs (e.g. `~/.openclaw-main`, `~/.openclaw-work`), archive each.
 
-### Step 1 — Install OpenClaw on the new machine
+### Step 1 - Install OpenClaw on the new machine
 
 On the **new** machine, install the CLI (and Node if needed):
 
@@ -95,7 +95,7 @@ On the **new** machine, install the CLI (and Node if needed):
 
 At this stage, it’s OK if onboarding creates a fresh `~/.openclaw/` — you will overwrite it in the next step.
 
-### Step 2 — Copy the state dir + workspace to the new machine
+### Step 2 - Copy the state dir + workspace to the new machine
 
 Copy **both**:
 
@@ -113,7 +113,7 @@ After copying, ensure:
 - Hidden directories were included (e.g. `.openclaw/`)
 - File ownership is correct for the user running the gateway
 
-### Step 3 — Run Doctor (migrations + service repair)
+### Step 3 - Run Doctor (migrations + service repair)
 
 On the **new** machine:
 

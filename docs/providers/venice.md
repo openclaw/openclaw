@@ -124,7 +124,7 @@ openclaw models list | grep venice
 
 ## Available Models (41 Total)
 
-### Private Models (26) — Fully Private, No Logging
+### Private Models (26) - Fully Private, No Logging
 
 | Model ID                               | Name                                | Context | Features                   |
 | -------------------------------------- | ----------------------------------- | ------- | -------------------------- |
@@ -155,7 +155,7 @@ openclaw models list | grep venice
 | `minimax-m21`                          | MiniMax M2.1                        | 198k    | Reasoning                  |
 | `minimax-m25`                          | MiniMax M2.5                        | 198k    | Reasoning                  |
 
-### Anonymized Models (15) — Via Venice Proxy
+### Anonymized Models (15) - Via Venice Proxy
 
 | Model ID                        | Name                           | Context | Features                  |
 | ------------------------------- | ------------------------------ | ------- | ------------------------- |
