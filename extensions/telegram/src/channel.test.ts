@@ -154,6 +154,42 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("telegramPlugin groups", () => {
+  it("uses plugin-owned group policy resolvers", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "telegram-test",
+          groups: {
+            "-1001": {
+              requireMention: true,
+              tools: { allow: ["message.send"] },
+              topics: {
+                "77": {
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      telegramPlugin.groups?.resolveRequireMention?.({
+        cfg,
+        groupId: "-1001:topic:77",
+      }),
+    ).toBe(false);
+    expect(
+      telegramPlugin.groups?.resolveToolPolicy?.({
+        cfg,
+        groupId: "-1001:topic:77",
+      }),
+    ).toEqual({ allow: ["message.send"] });
+  });
+});
+
 describe("telegramPlugin duplicate token guard", () => {
   it("marks secondary account as not configured when token is shared", async () => {
     const cfg = createCfg();

@@ -14,7 +14,11 @@ export {
   collectOpenProviderGroupPolicyWarnings,
 } from "../channels/plugins/group-policy-warnings.js";
 export { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
-export { resolveChannelGroupRequireMention, resolveToolsBySender } from "../config/group-policy.js";
+export {
+  resolveChannelGroupRequireMention,
+  resolveChannelGroupToolsPolicy,
+  resolveToolsBySender,
+} from "../config/group-policy.js";
 export {
   DM_GROUP_ACCESS_REASON,
   readStoreAllowFromForDmPolicy,

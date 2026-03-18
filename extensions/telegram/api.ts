@@ -3,6 +3,7 @@ export * from "./src/accounts.js";
 export * from "./src/allow-from.js";
 export * from "./src/api-fetch.js";
 export * from "./src/exec-approvals.js";
+export * from "./src/group-policy.js";
 export * from "./src/inline-buttons.js";
 export * from "./src/model-buttons.js";
 export * from "./src/normalize.js";
