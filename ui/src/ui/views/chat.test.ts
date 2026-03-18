@@ -6,9 +6,11 @@ import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderChatSessionSelect } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
+import { renderMessageGroup } from "../chat/grouped-render.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
+import type { MessageGroup } from "../types/chat-types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
 
@@ -1128,5 +1130,103 @@ describe("chat view", () => {
     expect(labels.filter((label) => label === "Deep Chat (alpha) / main")).toHaveLength(1);
     expect(labels).toContain("Deep Chat (alpha) / main · named-main");
     expect(labels).toContain("Coding (beta) / main");
+  });
+
+  describe("tool card expansion with verboseDefault=full (#49944)", () => {
+    function createToolCallGroup(): MessageGroup {
+      return {
+        kind: "group",
+        key: "grp-tool-1",
+        role: "assistant",
+        timestamp: Date.now(),
+        isStreaming: false,
+        messages: [
+          {
+            key: "msg-tc-1",
+            message: {
+              role: "assistant",
+              content: [
+                { type: "tool_call", name: "bash", args: { command: "echo TOOL_CARD_TEST_OK" } },
+              ],
+            },
+          },
+          {
+            key: "msg-tr-1",
+            message: {
+              role: "tool",
+              tool_call_id: "call-1",
+              content: "TOOL_CARD_TEST_OK\n",
+            },
+          },
+        ],
+      };
+    }
+
+    it("renders tool cards collapsed by default", () => {
+      const container = document.createElement("div");
+      render(
+        renderMessageGroup(createToolCallGroup(), {
+          showReasoning: false,
+          showToolCalls: true,
+        }),
+        container,
+      );
+
+      const details = container.querySelector<HTMLDetailsElement>("details.chat-tools-collapse");
+      expect(details).not.toBeNull();
+      expect(details!.hasAttribute("open")).toBe(false);
+    });
+
+    it("expands tool cards when toolsExpanded is true", () => {
+      const container = document.createElement("div");
+      render(
+        renderMessageGroup(createToolCallGroup(), {
+          showReasoning: false,
+          showToolCalls: true,
+          toolsExpanded: true,
+        }),
+        container,
+      );
+
+      const details = container.querySelector<HTMLDetailsElement>("details.chat-tools-collapse");
+      expect(details).not.toBeNull();
+      expect(details!.hasAttribute("open")).toBe(true);
+    });
+
+    it("expands tool result collapse when toolsExpanded is true", () => {
+      const container = document.createElement("div");
+      const group: MessageGroup = {
+        kind: "group",
+        key: "grp-tool-2",
+        role: "tool",
+        timestamp: Date.now(),
+        isStreaming: false,
+        messages: [
+          {
+            key: "msg-tr-2",
+            message: {
+              role: "tool",
+              tool_call_id: "call-2",
+              content: "some result text",
+            },
+          },
+        ],
+      };
+
+      render(
+        renderMessageGroup(group, {
+          showReasoning: false,
+          showToolCalls: true,
+          toolsExpanded: true,
+        }),
+        container,
+      );
+
+      const toolMsgCollapse = container.querySelector<HTMLDetailsElement>(
+        "details.chat-tool-msg-collapse",
+      );
+      expect(toolMsgCollapse).not.toBeNull();
+      expect(toolMsgCollapse!.hasAttribute("open")).toBe(true);
+    });
   });
 });

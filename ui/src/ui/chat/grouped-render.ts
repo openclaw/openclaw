@@ -116,6 +116,8 @@ export function renderMessageGroup(
     onOpenSidebar?: (content: string) => void;
     showReasoning: boolean;
     showToolCalls?: boolean;
+    /** When true, tool `<details>` elements render with the `open` attribute (verbose=full). */
+    toolsExpanded?: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
     basePath?: string;
@@ -168,6 +170,7 @@ export function renderMessageGroup(
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
               showToolCalls: opts.showToolCalls ?? true,
+              toolsExpanded: opts.toolsExpanded,
             },
             opts.onOpenSidebar,
           ),
@@ -547,10 +550,11 @@ function renderMessageImages(images: ImageBlock[]) {
   `;
 }
 
-/** Render tool cards inside a collapsed `<details>` element. */
+/** Render tool cards inside a `<details>` element, optionally expanded. */
 function renderCollapsedToolCards(
   toolCards: ToolCard[],
   onOpenSidebar?: (content: string) => void,
+  expanded?: boolean,
 ) {
   const calls = toolCards.filter((c) => c.kind === "call");
   const results = toolCards.filter((c) => c.kind === "result");
@@ -562,7 +566,7 @@ function renderCollapsedToolCards(
       : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
 
   return html`
-    <details class="chat-tools-collapse">
+    <details class="chat-tools-collapse" ?open=${expanded}>
       <summary class="chat-tools-summary">
         <span class="chat-tools-summary__icon">${icons.zap}</span>
         <span class="chat-tools-summary__count">${totalTools} tool${totalTools === 1 ? "" : "s"}</span>
@@ -636,7 +640,12 @@ function renderExpandButton(markdown: string, onOpenSidebar: (content: string) =
 
 function renderGroupedMessage(
   message: unknown,
-  opts: { isStreaming: boolean; showReasoning: boolean; showToolCalls?: boolean },
+  opts: {
+    isStreaming: boolean;
+    showReasoning: boolean;
+    showToolCalls?: boolean;
+    toolsExpanded?: boolean;
+  },
   onOpenSidebar?: (content: string) => void,
 ) {
   const m = message as Record<string, unknown>;
@@ -671,7 +680,7 @@ function renderGroupedMessage(
     .join(" ");
 
   if (!markdown && hasToolCards && isToolResult) {
-    return renderCollapsedToolCards(toolCards, onOpenSidebar);
+    return renderCollapsedToolCards(toolCards, onOpenSidebar, opts.toolsExpanded);
   }
 
   // Suppress empty bubbles when tool cards are the only content and toggle is off
@@ -704,7 +713,7 @@ function renderGroupedMessage(
       ${
         isToolMessage
           ? html`
-            <details class="chat-tool-msg-collapse">
+            <details class="chat-tool-msg-collapse" ?open=${opts.toolsExpanded}>
               <summary class="chat-tool-msg-summary">
                 <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
                 <span class="chat-tool-msg-summary__label">Tool output</span>
@@ -738,7 +747,7 @@ function renderGroupedMessage(
                       ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
                       : nothing
                 }
-                ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
+                ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar, opts.toolsExpanded) : nothing}
               </div>
             </details>
           `
@@ -764,7 +773,7 @@ function renderGroupedMessage(
                   ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
                   : nothing
             }
-            ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
+            ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar, opts.toolsExpanded) : nothing}
           `
       }
     </div>
