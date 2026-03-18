@@ -343,6 +343,15 @@ export const ToolsWebFetchSchema = z
       })
       .strict()
       .optional(),
+    parallel: z
+      .object({
+        enabled: z.boolean().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

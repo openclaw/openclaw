@@ -690,6 +690,12 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  "tools.web.fetch.parallel.enabled":
+    "Enable Parallel extract fallback for web_fetch (default: false; opt-in).",
+  "tools.web.fetch.parallel.apiKey":
+    "Parallel API key for extract (fallback: PARALLEL_API_KEY env var).",
+  "tools.web.fetch.parallel.baseUrl": 'Parallel base URL (defaults to "https://api.parallel.ai").',
+  "tools.web.fetch.parallel.timeoutSeconds": "Timeout in seconds for Parallel extract requests.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
