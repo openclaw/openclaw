@@ -844,7 +844,8 @@ export function renderChat(props: ChatProps) {
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
-  const toolsExpanded = (activeSession?.verboseLevel ?? "off") === "full";
+  const toolsExpanded =
+    (activeSession?.verboseLevel || props.sessions?.defaults?.verboseDefault || "off") === "full";
   const assistantIdentity = {
     name: props.assistantName,
     avatar:

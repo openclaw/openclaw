@@ -319,6 +319,7 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  verboseDefault?: string | null;
 };
 
 export type ChatModelOverride = import("./chat-model-ref.ts").ChatModelOverride;

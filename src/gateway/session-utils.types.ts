@@ -11,6 +11,7 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  verboseDefault?: string | null;
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";

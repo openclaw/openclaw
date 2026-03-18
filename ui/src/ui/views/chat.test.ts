@@ -1193,6 +1193,47 @@ describe("chat view", () => {
       expect(details!.hasAttribute("open")).toBe(true);
     });
 
+    it("inherits verboseDefault=full from session defaults when per-session is unset", () => {
+      const container = document.createElement("div");
+      const props = createProps({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "tool_call", name: "bash", args: { command: "echo test" } }],
+          },
+          {
+            role: "tool",
+            tool_call_id: "call-1",
+            content: "test output",
+          },
+        ],
+        sessions: {
+          ts: 0,
+          path: "",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+            verboseDefault: "full",
+          },
+          sessions: [
+            {
+              key: "main",
+              kind: "direct" as const,
+              updatedAt: Date.now(),
+              // verboseLevel intentionally omitted — session inherits from defaults
+            },
+          ],
+        },
+      });
+      render(renderChat(props), container);
+
+      const details = container.querySelector<HTMLDetailsElement>("details.chat-tools-collapse");
+      expect(details).not.toBeNull();
+      expect(details!.hasAttribute("open")).toBe(true);
+    });
+
     it("expands tool result collapse when toolsExpanded is true", () => {
       const container = document.createElement("div");
       const group: MessageGroup = {
