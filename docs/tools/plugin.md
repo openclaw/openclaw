@@ -37,12 +37,8 @@ openclaw plugins list
 openclaw plugins install @openclaw/voice-call
 ```
 
-Npm specs are **registry-only** (package name + optional **exact version** or
-**dist-tag**). Git/URL/file specs and semver ranges are rejected.
-
-Bare specs and `@latest` stay on the stable track. If npm resolves either of
-those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
-prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
+Npm specs are registry-only. See [install rules](/cli/plugins#install) for
+details on pinning, prerelease gating, and supported spec formats.
 
 3. Restart the Gateway, then configure under `plugins.entries.<id>.config`.
 
@@ -107,8 +103,8 @@ conversation, and it runs after core approval handling finishes.
 
 ## Public capability model
 
-Capabilities are the public plugin model. Every native OpenClaw plugin
-registers against one or more capability types:
+Capabilities are the public **native plugin** model inside OpenClaw. Every
+native OpenClaw plugin registers against one or more capability types:
 
 | Capability          | Registration method                           | Example plugins           |
 | ------------------- | --------------------------------------------- | ------------------------- |
@@ -120,7 +116,31 @@ registers against one or more capability types:
 | Channel / messaging | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
 
 A plugin that registers zero capabilities but provides hooks, tools, or
-services is a **legacy hook-only** plugin. That shape is still fully supported.
+services is a **legacy hook-only** plugin. That pattern is still fully supported.
+
+### External compatibility stance
+
+The capability model is landed in core and used by bundled/native plugins
+today, but external plugin compatibility still needs a tighter bar than "it is
+exported, therefore it is frozen."
+
+Current guidance:
+
+- **existing external plugins:** keep hook-based integrations working; treat
+  this as the compatibility baseline
+- **new bundled/native plugins:** prefer explicit capability registration over
+  vendor-specific reach-ins or new hook-only designs
+- **external plugins adopting capability registration:** allowed, but treat the
+  capability-specific helper surfaces as evolving unless docs explicitly mark a
+  contract as stable
+
+Practical rule:
+
+- capability registration APIs are the intended direction
+- legacy hooks remain the safest no-breakage path for external plugins during
+  the transition
+- exported helper subpaths are not all equal; prefer the narrow documented
+  contract, not incidental helper exports
 
 ### Plugin shapes
 
@@ -139,13 +159,6 @@ registration behavior (not just static metadata):
 
 Use `openclaw plugins inspect <id>` to see a plugin's shape and capability
 breakdown. See [CLI reference](/cli/plugins#inspect) for details.
-
-### Capability labels
-
-Plugin capabilities use two stability labels:
-
-- `public` — stable, documented, and safe to depend on
-- `experimental` — may change between releases
 
 ### Legacy hooks
 
@@ -245,6 +258,8 @@ For polls specifically, there are two execution paths:
 Core now defers shared poll parsing until after plugin poll dispatch declines
 the action, so plugin-owned poll handlers can accept channel-specific poll
 fields without being blocked by the generic poll parser first.
+
+See [Load pipeline](#load-pipeline) for the full startup sequence.
 
 ## Capability ownership model
 
@@ -425,7 +440,7 @@ native OpenClaw plugin sources. OpenClaw resolves the marketplace entry first,
 then runs the normal install path for the resolved source.
 
 They are shown in the plugin list as `format=bundle`, with a subtype of
-`codex` or `claude` in verbose/info output.
+`codex`, `claude`, or `cursor` in verbose/inspect output.
 
 See [Plugin bundles](/plugins/bundles) for the exact detection rules, mapping
 behavior, and current support matrix.
@@ -680,112 +695,35 @@ one-flag auth wiring without loading provider runtime. Keep provider runtime
 `envVars` for operator-facing hints such as onboarding labels or OAuth
 client-id/client-secret setup vars.
 
-### Hook order
+### Hook order and usage
 
-For model/provider plugins, OpenClaw uses hooks in this rough order:
+For model/provider plugins, OpenClaw calls hooks in this rough order.
+The "When to use" column is the quick decision guide.
 
-1. `catalog`
-   Publish provider config into `models.providers` during `models.json`
-   generation.
-2. built-in/discovered model lookup
-   OpenClaw tries the normal registry/catalog path first.
-3. `resolveDynamicModel`
-   Sync fallback for provider-owned model ids that are not in the local
-   registry yet.
-4. `prepareDynamicModel`
-   Async warm-up only on async model resolution paths, then
-   `resolveDynamicModel` runs again.
-5. `normalizeResolvedModel`
-   Final rewrite before the embedded runner uses the resolved model.
-6. `capabilities`
-   Provider-owned transcript/tooling metadata used by shared core logic.
-7. `prepareExtraParams`
-   Provider-owned request-param normalization before generic stream option wrappers.
-8. `wrapStreamFn`
-   Provider-owned stream wrapper after generic wrappers are applied.
-9. `formatApiKey`
-   Provider-owned auth-profile formatter used when a stored auth profile needs
-   to become the runtime `apiKey` string.
-10. `refreshOAuth`
-    Provider-owned OAuth refresh override for custom refresh endpoints or
-    refresh-failure policy.
-11. `buildAuthDoctorHint`
-    Provider-owned repair hint appended when OAuth refresh fails.
-12. `isCacheTtlEligible`
-    Provider-owned prompt-cache policy for proxy/backhaul providers.
-13. `buildMissingAuthMessage`
-    Provider-owned replacement for the generic missing-auth recovery message.
-14. `suppressBuiltInModel`
-    Provider-owned stale upstream model suppression plus optional user-facing
-    error hint.
-15. `augmentModelCatalog`
-    Provider-owned synthetic/final catalog rows appended after discovery.
-16. `isBinaryThinking`
-    Provider-owned on/off reasoning toggle for binary-thinking providers.
-17. `supportsXHighThinking`
-    Provider-owned `xhigh` reasoning support for selected models.
-18. `resolveDefaultThinkingLevel`
-    Provider-owned default `/think` level for a specific model family.
-19. `isModernModelRef`
-    Provider-owned modern-model matcher used by live profile filters and smoke
-    selection.
-20. `prepareRuntimeAuth`
-    Exchanges a configured credential into the actual runtime token/key just
-    before inference.
-21. `resolveUsageAuth`
-    Resolves usage/billing credentials for `/usage` and related status
-    surfaces.
-22. `fetchUsageSnapshot`
-    Fetches and normalizes provider-specific usage/quota snapshots after auth
-    is resolved.
-
-### Which hook to use
-
-- `catalog`: publish provider config and model catalogs into `models.providers`
-- `resolveDynamicModel`: handle pass-through or forward-compat model ids that are not in the local registry yet
-- `prepareDynamicModel`: async warm-up before retrying dynamic resolution (for example refresh provider metadata cache)
-- `normalizeResolvedModel`: rewrite a resolved model's transport/base URL/compat before inference
-- `capabilities`: publish provider-family and transcript/tooling quirks without hardcoding provider ids in core
-- `prepareExtraParams`: set provider defaults or normalize provider-specific per-model params before generic stream wrapping
-- `wrapStreamFn`: add provider-specific headers/payload/model compat patches while still using the normal `pi-ai` execution path
-- `formatApiKey`: turn a stored auth profile into the runtime `apiKey` string without hardcoding provider token blobs in core
-- `refreshOAuth`: own OAuth refresh for providers that do not fit the shared `pi-ai` refreshers
-- `buildAuthDoctorHint`: append provider-owned auth repair guidance when refresh fails
-- `isCacheTtlEligible`: decide whether provider/model pairs should use cache TTL metadata
-- `buildMissingAuthMessage`: replace the generic auth-store error with a provider-specific recovery hint
-- `suppressBuiltInModel`: hide stale upstream rows and optionally return a provider-owned error for direct resolution failures
-- `augmentModelCatalog`: append synthetic/final catalog rows after discovery and config merging
-- `isBinaryThinking`: expose binary on/off reasoning UX without hardcoding provider ids in `/think`
-- `supportsXHighThinking`: opt specific models into the `xhigh` reasoning level
-- `resolveDefaultThinkingLevel`: keep provider/model default reasoning policy out of core
-- `isModernModelRef`: keep live/smoke model family inclusion rules with the provider
-- `prepareRuntimeAuth`: exchange a configured credential into the actual short-lived runtime token/key used for requests
-- `resolveUsageAuth`: resolve provider-owned credentials for usage/billing endpoints without hardcoding token parsing in core
-- `fetchUsageSnapshot`: own provider-specific usage endpoint fetch/parsing while core keeps summary fan-out and formatting
-
-Rule of thumb:
-
-- provider owns a catalog or base URL defaults: use `catalog`
-- provider accepts arbitrary upstream model ids: use `resolveDynamicModel`
-- provider needs network metadata before resolving unknown ids: add `prepareDynamicModel`
-- provider needs transport rewrites but still uses a core transport: use `normalizeResolvedModel`
-- provider needs transcript/provider-family quirks: use `capabilities`
-- provider needs default request params or per-provider param cleanup: use `prepareExtraParams`
-- provider needs request headers/body/model compat wrappers without a custom transport: use `wrapStreamFn`
-- provider stores extra metadata in auth profiles and needs a custom runtime token shape: use `formatApiKey`
-- provider needs a custom OAuth refresh endpoint or refresh failure policy: use `refreshOAuth`
-- provider needs provider-owned auth repair guidance after refresh failure: use `buildAuthDoctorHint`
-- provider needs proxy-specific cache TTL gating: use `isCacheTtlEligible`
-- provider needs a provider-specific missing-auth recovery hint: use `buildMissingAuthMessage`
-- provider needs to hide stale upstream rows or replace them with a vendor hint: use `suppressBuiltInModel`
-- provider needs synthetic forward-compat rows in `models list` and pickers: use `augmentModelCatalog`
-- provider exposes only binary thinking on/off: use `isBinaryThinking`
-- provider wants `xhigh` on only a subset of models: use `supportsXHighThinking`
-- provider owns default `/think` policy for a model family: use `resolveDefaultThinkingLevel`
-- provider owns live/smoke preferred-model matching: use `isModernModelRef`
-- provider needs a token exchange or short-lived request credential: use `prepareRuntimeAuth`
-- provider needs custom usage/quota token parsing or a different usage credential: use `resolveUsageAuth`
-- provider needs a provider-specific usage endpoint or payload parser: use `fetchUsageSnapshot`
+| #   | Hook                          | What it does                                                                             | When to use                                                                          |
+| --- | ----------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| 1   | `catalog`                     | Publish provider config into `models.providers` during `models.json` generation          | Provider owns a catalog or base URL defaults                                         |
+| —   | _(built-in model lookup)_     | OpenClaw tries the normal registry/catalog path first                                    | _(not a plugin hook)_                                                                |
+| 2   | `resolveDynamicModel`         | Sync fallback for provider-owned model ids not in the local registry yet                 | Provider accepts arbitrary upstream model ids                                        |
+| 3   | `prepareDynamicModel`         | Async warm-up, then `resolveDynamicModel` runs again                                     | Provider needs network metadata before resolving unknown ids                         |
+| 4   | `normalizeResolvedModel`      | Final rewrite before the embedded runner uses the resolved model                         | Provider needs transport rewrites but still uses a core transport                    |
+| 5   | `capabilities`                | Provider-owned transcript/tooling metadata used by shared core logic                     | Provider needs transcript/provider-family quirks                                     |
+| 6   | `prepareExtraParams`          | Request-param normalization before generic stream option wrappers                        | Provider needs default request params or per-provider param cleanup                  |
+| 7   | `wrapStreamFn`                | Stream wrapper after generic wrappers are applied                                        | Provider needs request headers/body/model compat wrappers without a custom transport |
+| 8   | `formatApiKey`                | Auth-profile formatter: stored profile becomes the runtime `apiKey` string               | Provider stores extra auth metadata and needs a custom runtime token shape           |
+| 9   | `refreshOAuth`                | OAuth refresh override for custom refresh endpoints or refresh-failure policy            | Provider does not fit the shared `pi-ai` refreshers                                  |
+| 10  | `buildAuthDoctorHint`         | Repair hint appended when OAuth refresh fails                                            | Provider needs provider-owned auth repair guidance after refresh failure             |
+| 11  | `isCacheTtlEligible`          | Prompt-cache policy for proxy/backhaul providers                                         | Provider needs proxy-specific cache TTL gating                                       |
+| 12  | `buildMissingAuthMessage`     | Replacement for the generic missing-auth recovery message                                | Provider needs a provider-specific missing-auth recovery hint                        |
+| 13  | `suppressBuiltInModel`        | Stale upstream model suppression plus optional user-facing error hint                    | Provider needs to hide stale upstream rows or replace them with a vendor hint        |
+| 14  | `augmentModelCatalog`         | Synthetic/final catalog rows appended after discovery                                    | Provider needs synthetic forward-compat rows in `models list` and pickers            |
+| 15  | `isBinaryThinking`            | On/off reasoning toggle for binary-thinking providers                                    | Provider exposes only binary thinking on/off                                         |
+| 16  | `supportsXHighThinking`       | `xhigh` reasoning support for selected models                                            | Provider wants `xhigh` on only a subset of models                                    |
+| 17  | `resolveDefaultThinkingLevel` | Default `/think` level for a specific model family                                       | Provider owns default `/think` policy for a model family                             |
+| 18  | `isModernModelRef`            | Modern-model matcher for live profile filters and smoke selection                        | Provider owns live/smoke preferred-model matching                                    |
+| 19  | `prepareRuntimeAuth`          | Exchange a configured credential into the actual runtime token/key just before inference | Provider needs a token exchange or short-lived request credential                    |
+| 20  | `resolveUsageAuth`            | Resolve usage/billing credentials for `/usage` and related status surfaces               | Provider needs custom usage/quota token parsing or a different usage credential      |
+| 21  | `fetchUsageSnapshot`          | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved       | Provider needs a provider-specific usage endpoint or payload parser                  |
 
 If the provider needs a fully custom wire protocol or custom request executor,
 that is a different class of extension. These hooks are for provider behavior
@@ -1237,6 +1175,10 @@ Compatibility note:
 - New and migrated bundled plugins should use channel or extension-specific
   subpaths; use `core` plus explicit domain subpaths for generic surfaces, and
   treat `compat` as migration-only.
+- Capability-specific subpaths such as `image-generation`,
+  `media-understanding`, and `speech` exist because bundled/native plugins use
+  them today. Their presence does not by itself mean every exported helper is a
+  long-term frozen external contract.
 
 ## Read-only channel inspection
 
@@ -1360,6 +1302,7 @@ Compatible bundles may instead provide one of:
 
 - `.codex-plugin/plugin.json`
 - `.claude-plugin/plugin.json`
+- `.cursor-plugin/plugin.json`
 
 Bundle directories are discovered from the same roots as native plugins.
 
@@ -1564,7 +1507,8 @@ Fields:
 - `slots`: exclusive slot selectors such as `memory` and `contextEngine`
 - `entries.<id>`: per‑plugin toggles + config
 
-Config changes **require a gateway restart**.
+Config changes **require a gateway restart**. See
+[Configuration reference](/configuration) for the full config schema.
 
 Validation rules (strict):
 
@@ -1610,6 +1554,7 @@ Supported exclusive slots:
 
 If multiple plugins declare `kind: "memory"` or `kind: "context-engine"`, only
 the selected plugin loads for that slot. Others are disabled with diagnostics.
+Declare `kind` in your [plugin manifest](/plugins/manifest).
 
 ### Context engine plugins
 
@@ -1674,8 +1619,8 @@ openclaw plugins doctor
 ```
 
 `openclaw plugins list` shows the top-level format as `openclaw` or `bundle`.
-Verbose list/info output also shows bundle subtype (`codex` or `claude`) plus
-detected bundle capabilities.
+Verbose list/inspect output also shows bundle subtype (`codex`, `claude`, or
+`cursor`) plus detected bundle capabilities.
 
 `plugins update` only works for npm installs tracked under `plugins.installs`.
 If stored integrity metadata changes between updates, OpenClaw warns and asks for confirmation (use global `--yes` to bypass prompts).
@@ -1738,7 +1683,8 @@ Recommended sequence:
    Add tests so ownership and registration shape stay explicit over time.
 
 This is how OpenClaw stays opinionated without becoming hardcoded to one
-provider's worldview.
+provider's worldview. See the [Capability Cookbook](/tools/capability-cookbook)
+for a concrete file checklist and worked example.
 
 ### Capability checklist
 
