@@ -305,6 +305,9 @@ describe("applyExtraParamsToAgent", () => {
       params.applyProvider,
       params.applyModelId,
       params.extraParamsOverride,
+      undefined,
+      undefined,
+      params.model.api,
     );
     const context: Context = { messages: [] };
     void agent.streamFn?.(params.model, context, params.options ?? {});
@@ -620,6 +623,20 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(payload.parallel_tool_calls).toBe(true);
+  });
+
+  it("does not default parallel_tool_calls on for openai-codex openai-completions", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.4",
+      model: {
+        api: "openai-completions",
+        provider: "openai-codex",
+        id: "gpt-5.4",
+      } as unknown as Model<"openai-completions">,
+    });
+
+    expect(payload).not.toHaveProperty("parallel_tool_calls");
   });
 
   it("does not inject parallel_tool_calls for unsupported APIs", () => {
