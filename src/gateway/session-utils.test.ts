@@ -1525,3 +1525,60 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
     });
   });
 });
+
+describe("listSessionsFromStore modelOverride passthrough", () => {
+  const baseCfg = {
+    session: { mainKey: "main" },
+    agents: { list: [{ id: "main", default: true }] },
+  } as OpenClawConfig;
+
+  test("includes modelOverride and providerOverride in session row", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-1",
+        updatedAt: Date.now(),
+        // Runtime model from last turn (e.g. heartbeat ran on flash-lite)
+        model: "gemini-2.5-flash-lite",
+        modelProvider: "google",
+        // User's explicit override (set via /model or session_status tool)
+        modelOverride: "gpt-5.4",
+        providerOverride: "openai-codex",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    const row = result.sessions[0];
+    expect(row.modelOverride).toBe("gpt-5.4");
+    expect(row.providerOverride).toBe("openai-codex");
+  });
+
+  test("modelOverride and providerOverride are undefined when not set", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-2",
+        updatedAt: Date.now(),
+        model: "claude-sonnet-4-6",
+        modelProvider: "anthropic",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    const row = result.sessions[0];
+    expect(row.modelOverride).toBeUndefined();
+    expect(row.providerOverride).toBeUndefined();
+  });
+});

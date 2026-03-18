@@ -1164,6 +1164,8 @@ export function buildGatewaySessionRow(params: {
     responseUsage: entry?.responseUsage,
     modelProvider,
     model,
+    modelOverride: entry?.modelOverride,
+    providerOverride: entry?.providerOverride,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
