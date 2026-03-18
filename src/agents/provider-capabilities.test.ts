@@ -156,4 +156,22 @@ describe("resolveProviderCapabilities", () => {
       }),
     ).toBe(true);
   });
+
+  it("forwards config and workspace context to plugin capability lookup", () => {
+    const config = { plugins: { enabled: true } };
+    const env = { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
+
+    resolveProviderCapabilities("anthropic", {
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+
+    expect(resolveProviderCapabilitiesWithPluginMock).toHaveBeenLastCalledWith({
+      provider: "anthropic",
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+  });
 });
