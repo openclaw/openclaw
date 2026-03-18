@@ -347,6 +347,39 @@ describe("ensurePrivateSessionsDir", () => {
     }
   });
 
+  it("allows a symlink alias for configured managed roots when materializing missing directories", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-custom-managed-alias-"));
+    const realRoot = path.join(tempDir, "real-root");
+    const aliasRoot = path.join(tempDir, "alias-root");
+    const sessionsDir = path.join(aliasRoot, "feeds", "main");
+    const configPath = path.join(tempDir, "openclaw.json");
+
+    fs.mkdirSync(realRoot, { recursive: true });
+    fs.symlinkSync(realRoot, aliasRoot, "dir");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        session: {
+          store: path.join(aliasRoot, "feeds", "{agentId}", "sessions.json"),
+        },
+      }),
+    );
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+
+    try {
+      const { ensurePrivateSessionsDir } = await import("./paths.js");
+
+      await expect(ensurePrivateSessionsDir(sessionsDir)).resolves.toBe(path.resolve(sessionsDir));
+      expect(fs.existsSync(path.join(realRoot, "feeds", "main"))).toBe(true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces chmod permission failures for managed session dirs on POSIX", async () => {
     if (process.platform === "win32") {
       return;

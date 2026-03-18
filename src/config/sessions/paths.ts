@@ -61,19 +61,40 @@ function resolveManagedSessionsSafetyChain(sessionsDir: string): string[] {
   return [path.dirname(resolved), resolved];
 }
 
-async function ensureStrictDirectoryChain(targetDir: string): Promise<PinnedStateRootIdentity> {
+async function capturePinnedDirectoryIdentity(
+  dirPath: string,
+  opts?: { allowSymlinkAlias?: boolean },
+): Promise<PinnedStateRootIdentity> {
+  if (opts?.allowSymlinkAlias) {
+    const stat = await fsPromises.lstat(dirPath);
+    if (stat.isSymbolicLink()) {
+      const pinnedIdentity = await capturePinnedStateRootIdentity(dirPath);
+      if (pinnedIdentity) {
+        return pinnedIdentity;
+      }
+    }
+  }
+
+  return {
+    path: dirPath,
+    stat: await verifyDirectoryIdentity(dirPath),
+    strictDirectoryIdentity: true,
+  };
+}
+
+async function ensureStrictDirectoryChain(
+  targetDir: string,
+  opts?: { allowAnchorSymlinkAlias?: boolean },
+): Promise<PinnedStateRootIdentity> {
   const resolved = path.resolve(targetDir);
   const pendingDirs: string[] = [];
   let anchorDir = resolved;
 
   while (true) {
     try {
-      const stat = await verifyDirectoryIdentity(anchorDir);
-      const pinnedIdentity: PinnedStateRootIdentity = {
-        path: anchorDir,
-        stat,
-        strictDirectoryIdentity: true,
-      };
+      const pinnedIdentity = await capturePinnedDirectoryIdentity(anchorDir, {
+        allowSymlinkAlias: opts?.allowAnchorSymlinkAlias,
+      });
 
       for (const dirPath of pendingDirs.toReversed()) {
         await assertPinnedStateRootIdentity(pinnedIdentity);
@@ -189,7 +210,9 @@ async function ensureManagedSessionsParentChain(
     configuredManagedSessionsDir &&
     matchesManagedSessionsDirCandidate(resolved, configuredManagedSessionsDir)
   ) {
-    return await ensureStrictDirectoryChain(path.dirname(resolved));
+    return await ensureStrictDirectoryChain(path.dirname(resolved), {
+      allowAnchorSymlinkAlias: true,
+    });
   }
 
   return undefined;
