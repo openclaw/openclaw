@@ -29,6 +29,7 @@ import {
   sendExecApprovalFollowupResult,
 } from "./bash-tools.exec-host-shared.js";
 import {
+  DEFAULT_APPROVAL_TIMEOUT_MS,
   DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
   normalizeNotifyOutput,
@@ -144,6 +145,7 @@ export async function processGatewayAllowlist(
   if (requiresAsk) {
     const requestArgs = buildDefaultExecApprovalRequestArgs({
       warnings: params.warnings,
+      timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
       approvalRunningNoticeMs: params.approvalRunningNoticeMs,
       createApprovalSlug,
       turnSourceChannel: params.turnSourceChannel,
@@ -158,6 +160,7 @@ export async function processGatewayAllowlist(
         host: "gateway",
         security: hostSecurity,
         ask: hostAsk,
+        timeoutMs: requestArgs.timeoutMs,
         ...buildExecApprovalRequesterContext({
           agentId: params.agentId,
           sessionKey: params.sessionKey,

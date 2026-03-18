@@ -136,6 +136,8 @@ export type DiscordExecApprovalConfig = {
   enabled?: boolean;
   /** Discord user IDs to receive approval prompts. Required if enabled. */
   approvers?: string[];
+  /** Approval timeout in milliseconds before requests expire. Default: 120000 (2 minutes). */
+  timeoutMs?: number;
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
   /** Only forward approvals matching these session key patterns (substring or regex). */

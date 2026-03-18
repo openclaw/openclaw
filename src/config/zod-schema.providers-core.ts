@@ -522,6 +522,7 @@ export const DiscordAccountSchema = z
       .object({
         enabled: z.boolean().optional(),
         approvers: DiscordIdListSchema.optional(),
+        timeoutMs: z.number().int().positive().optional(),
         agentFilter: z.array(z.string()).optional(),
         sessionFilter: z.array(z.string()).optional(),
         cleanupAfterResolve: z.boolean().optional(),

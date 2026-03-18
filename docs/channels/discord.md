@@ -944,10 +944,13 @@ Default slash command settings:
 
     - `channels.discord.execApprovals.enabled`
     - `channels.discord.execApprovals.approvers`
+    - `channels.discord.execApprovals.timeoutMs` (default: `120000`)
     - `channels.discord.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`, `cleanupAfterResolve`
 
     When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only configured approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
+
+    Increase `timeoutMs` when approvers commonly respond from mobile push notifications or other slower workflows. For example, `600000` gives Discord approvers 10 minutes instead of the default 2 minutes.
 
     Gateway auth for this handler uses the same shared credential resolution contract as other Gateway clients:
 

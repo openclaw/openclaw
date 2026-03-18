@@ -36,6 +36,7 @@ import {
 import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
 import {
   isDiscordExecApprovalClientEnabled,
+  resolveDiscordExecApprovalTimeoutMs,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./exec-approvals.js";
 import { monitorDiscordProvider } from "./monitor.js";
@@ -375,6 +376,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       isDiscordExecApprovalClientEnabled({ cfg, accountId })
         ? { kind: "enabled" }
         : { kind: "disabled" },
+    resolveApprovalTimeoutMs: ({ cfg, accountId, defaultTimeoutMs }) =>
+      resolveDiscordExecApprovalTimeoutMs({ cfg, accountId, defaultTimeoutMs }),
     shouldSuppressLocalPrompt: ({ cfg, accountId, payload }) =>
       shouldSuppressLocalDiscordExecApprovalPrompt({
         cfg,

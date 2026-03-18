@@ -23,6 +23,7 @@ export type RequestExecApprovalDecisionParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  timeoutMs?: number;
 };
 
 type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
@@ -33,6 +34,10 @@ type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
 function buildExecApprovalRequestToolParams(
   params: RequestExecApprovalDecisionParams,
 ): ExecApprovalRequestToolParams {
+  const timeoutMs =
+    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+      ? Math.max(1, Math.floor(params.timeoutMs))
+      : DEFAULT_APPROVAL_TIMEOUT_MS;
   return {
     id: params.id,
     ...(params.command ? { command: params.command } : {}),
@@ -51,7 +56,7 @@ function buildExecApprovalRequestToolParams(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
-    timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+    timeoutMs,
     twoPhase: true,
   };
 }
@@ -88,22 +93,20 @@ export type ExecApprovalRegistration = {
 export async function registerExecApprovalRequest(
   params: RequestExecApprovalDecisionParams,
 ): Promise<ExecApprovalRegistration> {
+  const requestParams = buildExecApprovalRequestToolParams(params);
   // Two-phase registration is critical: the ID must be registered server-side
   // before exec returns `approval-pending`, otherwise `/approve` can race and orphan.
   const registrationResult = await callGatewayTool<{
     id?: string;
     expiresAtMs?: number;
     decision?: string;
-  }>(
-    "exec.approval.request",
-    { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-    buildExecApprovalRequestToolParams(params),
-    { expectFinal: false },
-  );
+  }>("exec.approval.request", { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS }, requestParams, {
+    expectFinal: false,
+  });
   const decision = parseDecision(registrationResult);
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
-    parseExpiresAtMs(registrationResult?.expiresAtMs) ?? Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+    parseExpiresAtMs(registrationResult?.expiresAtMs) ?? Date.now() + requestParams.timeoutMs;
   if (decision.present) {
     return { id, expiresAtMs, finalDecision: decision.value };
   }
@@ -166,6 +169,7 @@ type HostExecApprovalParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  timeoutMs?: number;
 };
 
 type ExecApprovalRequesterContext = {
@@ -221,6 +225,7 @@ function buildHostApprovalDecisionParams(
     }),
     resolvedPath: params.resolvedPath,
     ...buildExecApprovalTurnSourceContext(params),
+    timeoutMs: params.timeoutMs,
   };
 }
 

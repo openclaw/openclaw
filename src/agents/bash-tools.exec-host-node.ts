@@ -19,6 +19,7 @@ import {
 } from "./bash-tools.exec-approval-request.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
 import {
+  DEFAULT_APPROVAL_TIMEOUT_MS,
   DEFAULT_NOTIFY_TAIL_CHARS,
   createApprovalSlug,
   normalizeNotifyOutput,
@@ -210,6 +211,7 @@ export async function executeNodeHostCommand(
   if (requiresAsk) {
     const requestArgs = execHostShared.buildDefaultExecApprovalRequestArgs({
       warnings: params.warnings,
+      timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
       approvalRunningNoticeMs: params.approvalRunningNoticeMs,
       createApprovalSlug,
       turnSourceChannel: params.turnSourceChannel,
@@ -225,6 +227,7 @@ export async function executeNodeHostCommand(
         nodeId,
         security: hostSecurity,
         ask: hostAsk,
+        timeoutMs: requestArgs.timeoutMs,
         ...buildExecApprovalRequesterContext({
           agentId: runAgentId,
           sessionKey: runSessionKey,

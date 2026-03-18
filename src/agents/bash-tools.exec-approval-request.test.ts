@@ -9,12 +9,14 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
+let registerExecApprovalRequest: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequest;
 let requestExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").requestExecApprovalDecision;
 
 describe("requestExecApprovalDecision", () => {
   beforeAll(async () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ requestExecApprovalDecision } = await import("./bash-tools.exec-approval-request.js"));
+    ({ registerExecApprovalRequest, requestExecApprovalDecision } =
+      await import("./bash-tools.exec-approval-request.js"));
   });
 
   beforeEach(() => {
@@ -173,5 +175,53 @@ describe("requestExecApprovalDecision", () => {
 
     expect(result).toBe("deny");
     expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(1);
+  });
+
+  it("passes through caller-provided timeoutMs and uses it for fallback expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-17T12:00:00Z"));
+    vi.mocked(callGatewayTool).mockResolvedValueOnce({ status: "accepted", id: "approval-id" });
+
+    try {
+      const result = await registerExecApprovalRequest({
+        id: "approval-id",
+        command: "echo hi",
+        cwd: "/tmp",
+        host: "gateway",
+        security: "allowlist",
+        ask: "always",
+        timeoutMs: 600_000,
+      });
+
+      expect(result).toEqual({
+        id: "approval-id",
+        expiresAtMs: Date.now() + 600_000,
+      });
+      expect(callGatewayTool).toHaveBeenCalledWith(
+        "exec.approval.request",
+        { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
+        {
+          id: "approval-id",
+          command: "echo hi",
+          cwd: "/tmp",
+          nodeId: undefined,
+          host: "gateway",
+          security: "allowlist",
+          ask: "always",
+          agentId: undefined,
+          resolvedPath: undefined,
+          sessionKey: undefined,
+          turnSourceChannel: undefined,
+          turnSourceTo: undefined,
+          turnSourceAccountId: undefined,
+          turnSourceThreadId: undefined,
+          timeoutMs: 600_000,
+          twoPhase: true,
+        },
+        { expectFinal: false },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

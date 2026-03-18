@@ -86,4 +86,20 @@ describe("config discord", () => {
       ).toBe(true);
     }
   });
+
+  it("accepts positive discord exec approval timeoutMs values", () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["555"],
+            timeoutMs: 600000,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

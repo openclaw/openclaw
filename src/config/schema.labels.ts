@@ -772,6 +772,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.dm.policy": "Discord DM Policy",
   "channels.discord.configWrites": "Discord Config Writes",
   "channels.discord.proxy": "Discord Proxy URL",
+  "channels.discord.execApprovals.timeoutMs": "Discord Exec Approval Timeout (ms)",
   "channels.discord.commands.native": "Discord Native Commands",
   "channels.discord.commands.nativeSkills": "Discord Native Skill Commands",
   "channels.discord.streaming": "Discord Streaming Mode",

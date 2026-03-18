@@ -6,6 +6,7 @@ import {
   hasConfiguredExecApprovalDmRoute,
   type ExecApprovalInitiatingSurfaceState,
   resolveExecApprovalInitiatingSurfaceState,
+  resolveExecApprovalTimeoutMs,
 } from "../infra/exec-approval-surface.js";
 import {
   maxAsk,
@@ -69,6 +70,7 @@ export type ExecApprovalFollowupTarget = {
 
 export type DefaultExecApprovalRequestArgs = {
   warnings: string[];
+  timeoutMs: number;
   approvalRunningNoticeMs: number;
   createApprovalSlug: (approvalId: string) => string;
   turnSourceChannel?: string;
@@ -127,12 +129,13 @@ export function createExecApprovalRequestContext(params: {
 
 export function createDefaultExecApprovalRequestContext(params: {
   warnings: string[];
+  timeoutMs?: number;
   approvalRunningNoticeMs: number;
   createApprovalSlug: (approvalId: string) => string;
 }) {
   return createExecApprovalRequestContext({
     warnings: params.warnings,
-    timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS,
     approvalRunningNoticeMs: params.approvalRunningNoticeMs,
     createApprovalSlug: params.createApprovalSlug,
   });
@@ -239,6 +242,7 @@ export function resolveExecApprovalUnavailableState(params: {
 
 export async function createAndRegisterDefaultExecApprovalRequest(params: {
   warnings: string[];
+  timeoutMs: number;
   approvalRunningNoticeMs: number;
   createApprovalSlug: (approvalId: string) => string;
   turnSourceChannel?: string;
@@ -253,6 +257,7 @@ export async function createAndRegisterDefaultExecApprovalRequest(params: {
     preResolvedDecision: defaultPreResolvedDecision,
   } = createDefaultExecApprovalRequestContext({
     warnings: params.warnings,
+    timeoutMs: params.timeoutMs,
     approvalRunningNoticeMs: params.approvalRunningNoticeMs,
     createApprovalSlug: params.createApprovalSlug,
   });
@@ -283,8 +288,15 @@ export async function createAndRegisterDefaultExecApprovalRequest(params: {
 export function buildDefaultExecApprovalRequestArgs(
   params: DefaultExecApprovalRequestArgs,
 ): DefaultExecApprovalRequestArgs {
+  const timeoutMs = resolveExecApprovalTimeoutMs({
+    cfg: loadConfig(),
+    channel: params.turnSourceChannel,
+    accountId: params.turnSourceAccountId,
+    defaultTimeoutMs: params.timeoutMs,
+  });
   return {
     warnings: params.warnings,
+    timeoutMs,
     approvalRunningNoticeMs: params.approvalRunningNoticeMs,
     createApprovalSlug: params.createApprovalSlug,
     turnSourceChannel: params.turnSourceChannel,

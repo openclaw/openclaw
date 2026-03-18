@@ -1478,6 +1478,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
   "channels.discord.proxy":
     "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
+  "channels.discord.execApprovals.timeoutMs":
+    "Timeout in milliseconds before Discord exec approval requests expire. Default: 120000 (2 minutes); increase this for approvers who respond from mobile notifications or slower workflows.",
   "channels.whatsapp.configWrites":
     "Allow WhatsApp to write config in response to channel events/commands (default: true).",
   "channels.signal.configWrites":
