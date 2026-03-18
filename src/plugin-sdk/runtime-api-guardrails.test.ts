@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -87,10 +88,40 @@ function collectRuntimeApiFiles(): string[] {
 }
 
 function readExportStatements(path: string): string[] {
-  return readFileSync(resolve(ROOT_DIR, "..", path), "utf8")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("export "));
+  const sourceText = readFileSync(resolve(ROOT_DIR, "..", path), "utf8");
+  const sourceFile = ts.createSourceFile(path, sourceText, ts.ScriptTarget.Latest, true);
+
+  return sourceFile.statements.flatMap((statement) => {
+    if (!ts.isExportDeclaration(statement)) {
+      if (!statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+        return [];
+      }
+      return [statement.getText(sourceFile).replaceAll(/\s+/g, " ").trim()];
+    }
+
+    const moduleSpecifier = statement.moduleSpecifier;
+    if (!moduleSpecifier || !ts.isStringLiteral(moduleSpecifier)) {
+      return [statement.getText(sourceFile).replaceAll(/\s+/g, " ").trim()];
+    }
+
+    if (!statement.exportClause) {
+      const prefix = statement.isTypeOnly ? "export type *" : "export *";
+      return [`${prefix} from ${moduleSpecifier.getText(sourceFile)};`];
+    }
+
+    if (!ts.isNamedExports(statement.exportClause)) {
+      return [statement.getText(sourceFile).replaceAll(/\s+/g, " ").trim()];
+    }
+
+    const specifiers = statement.exportClause.elements.map((element) => {
+      const imported = element.propertyName?.text;
+      const exported = element.name.text;
+      const alias = imported ? `${imported} as ${exported}` : exported;
+      return element.isTypeOnly ? `type ${alias}` : alias;
+    });
+    const exportPrefix = statement.isTypeOnly ? "export type" : "export";
+    return [`${exportPrefix} { ${specifiers.join(", ")} } from ${moduleSpecifier.getText(sourceFile)};`];
+  });
 }
 
 describe("runtime api guardrails", () => {
