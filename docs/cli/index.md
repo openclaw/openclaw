@@ -278,7 +278,7 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 - `openclaw secrets reload` — re-resolve refs and atomically swap the runtime snapshot.
 - `openclaw secrets audit` — scan for plaintext residues, unresolved refs, and precedence drift (`--allow-exec` to execute exec providers during audit).
 - `openclaw secrets configure` — interactive helper for provider setup + SecretRef mapping + preflight/apply (`--allow-exec` to execute exec providers during preflight checks).
-- `openclaw secrets apply --from <plan.json>` — apply a previously generated plan (`--dry-run` supported; add `--allow-exec` to execute exec providers during dry-run).
+- `openclaw secrets apply --from <plan.json>` — apply a previously generated plan (`--dry-run` supported; use `--allow-exec` to permit exec providers in dry-run and exec-containing write plans).
 
 ## Plugins
 

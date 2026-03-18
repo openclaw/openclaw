@@ -225,6 +225,7 @@ export function registerSecretsCli(program: Command) {
           const result = await runSecretsApply({
             plan: configured.plan,
             write: true,
+            allowExec: Boolean(opts.allowExec),
           });
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -247,22 +248,15 @@ export function registerSecretsCli(program: Command) {
     .description("Apply a previously generated secrets plan")
     .requiredOption("--from <path>", "Path to plan JSON")
     .option("--dry-run", "Validate/preflight only", false)
-    .option(
-      "--allow-exec",
-      "Dry-run only: allow exec SecretRef preflight checks (may execute provider commands)",
-      false,
-    )
+    .option("--allow-exec", "Allow exec SecretRef checks (may execute provider commands)", false)
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsApplyOptions) => {
       try {
-        if (opts.allowExec && !opts.dryRun) {
-          throw new Error("--allow-exec requires --dry-run.");
-        }
         const plan = readPlanFile(opts.from);
         const result = await runSecretsApply({
           plan,
           write: !opts.dryRun,
-          allowExecInDryRun: Boolean(opts.allowExec),
+          allowExec: Boolean(opts.allowExec),
         });
         if (opts.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));

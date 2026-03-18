@@ -284,12 +284,56 @@ describe("secrets apply", () => {
       plan,
       env: fixture.env,
       write: false,
-      allowExecInDryRun: true,
+      allowExec: true,
     });
     expect(dryRunAllowed.mode).toBe("dry-run");
     expect(dryRunAllowed.skippedExecRefs).toBe(0);
     const callLog = await fs.readFile(execLogPath, "utf8");
     expect(callLog.split("\n").filter((line) => line.trim().length > 0).length).toBeGreaterThan(0);
+  });
+
+  it("rejects write mode for exec plans unless allowExec is set", async () => {
+    const plan = createPlan({
+      targets: [
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.openai.apiKey",
+          providerId: "openai",
+          ref: { source: "exec", provider: "execmain", id: "providers/openai/apiKey" },
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    await expect(runSecretsApply({ plan, env: fixture.env, write: true })).rejects.toThrow(
+      "Plan contains exec SecretRefs/providers. Re-run with --allow-exec.",
+    );
+  });
+
+  it("rejects write mode for plans with exec provider upserts unless allowExec is set", async () => {
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      providerUpserts: {
+        execmain: {
+          source: "exec",
+          command: "/bin/echo",
+          args: ["ok"],
+        },
+      },
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    await expect(runSecretsApply({ plan, env: fixture.env, write: true })).rejects.toThrow(
+      "Plan contains exec SecretRefs/providers. Re-run with --allow-exec.",
+    );
   });
 
   it("applies auth-profiles sibling ref targets to the scoped agent store", async () => {

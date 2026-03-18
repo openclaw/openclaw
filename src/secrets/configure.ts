@@ -998,7 +998,7 @@ export async function runSecretsConfigureInteractive(
     plan,
     env,
     write: false,
-    allowExecInDryRun: allowExecInPreflight,
+    allowExec: allowExecInPreflight,
   });
 
   return { plan, preflight };

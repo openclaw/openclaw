@@ -456,9 +456,15 @@ Apply a saved plan:
 
 ```bash
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --allow-exec
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run --allow-exec
 ```
+
+Exec note:
+
+- dry-run skips exec checks unless `--allow-exec` is set.
+- write mode rejects plans containing exec SecretRefs/providers unless `--allow-exec` is set.
 
 For strict target/path contract details and exact rejection rules, see:
 

@@ -127,6 +127,7 @@ Notes:
 - `configure` supports creating new `auth-profiles.json` mappings directly in the picker flow.
 - Canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
 - It performs preflight resolution before apply.
+- If preflight/apply includes exec refs, keep `--allow-exec` set for both steps.
 - Generated plans default to scrub options (`scrubEnv`, `scrubAuthProfilesForProviderTargets`, `scrubLegacyAuthJson` all enabled).
 - Apply path is one-way for scrubbed plaintext values.
 - Without `--apply`, CLI still prompts `Apply this plan now?` after preflight.
@@ -144,17 +145,18 @@ Apply or preflight a plan generated previously:
 
 ```bash
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --allow-exec
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run --allow-exec
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 ```
 
-Dry-run behavior:
+Exec behavior:
 
 - `--dry-run` validates preflight without writing files.
 - exec SecretRef checks are skipped by default in dry-run.
-- use `--allow-exec` with `--dry-run` to opt in to exec provider checks.
-- `--allow-exec` requires `--dry-run`.
+- write mode rejects plans that contain exec SecretRefs/providers unless `--allow-exec` is set.
+- use `--allow-exec` to opt in to exec provider checks/execution in either mode.
 
 Plan contract details (allowed target paths, validation rules, and failure semantics):
 

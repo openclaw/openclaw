@@ -91,6 +91,13 @@ export type SecretsApplyResult = {
   warnings: string[];
 };
 
+function planContainsExecReferences(plan: SecretsApplyPlan): boolean {
+  if (plan.targets.some((target) => target.ref.source === "exec")) {
+    return true;
+  }
+  return Object.values(plan.providerUpserts ?? {}).some((provider) => provider.source === "exec");
+}
+
 function resolveTarget(
   target: SecretsPlanTarget,
 ): NonNullable<ReturnType<typeof resolveValidatedPlanTarget>> {
@@ -742,11 +749,15 @@ export async function runSecretsApply(params: {
   plan: SecretsApplyPlan;
   env?: NodeJS.ProcessEnv;
   write?: boolean;
-  allowExecInDryRun?: boolean;
+  allowExec?: boolean;
 }): Promise<SecretsApplyResult> {
   const env = params.env ?? process.env;
   const write = params.write === true;
-  const allowExecInDryRun = write ? true : Boolean(params.allowExecInDryRun);
+  const allowExec = Boolean(params.allowExec);
+  if (write && planContainsExecReferences(params.plan) && !allowExec) {
+    throw new Error("Plan contains exec SecretRefs/providers. Re-run with --allow-exec.");
+  }
+  const allowExecInDryRun = write ? true : allowExec;
   const projected = await projectPlanState({
     plan: params.plan,
     env,
