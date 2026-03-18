@@ -1148,12 +1148,14 @@ authoring plugins:
   intentionally exposes extension-facing helpers:
   `openclaw/plugin-sdk/acpx`, `openclaw/plugin-sdk/bluebubbles`,
   `openclaw/plugin-sdk/feishu`, `openclaw/plugin-sdk/googlechat`,
-  `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/matrix`,
+  `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/lobster`,
+  `openclaw/plugin-sdk/matrix`,
   `openclaw/plugin-sdk/mattermost`, `openclaw/plugin-sdk/memory-core`,
   `openclaw/plugin-sdk/minimax-portal-auth`,
   `openclaw/plugin-sdk/nextcloud-talk`, `openclaw/plugin-sdk/nostr`,
   `openclaw/plugin-sdk/synology-chat`, `openclaw/plugin-sdk/test-utils`,
   `openclaw/plugin-sdk/tlon`, `openclaw/plugin-sdk/twitch`,
+  `openclaw/plugin-sdk/voice-call`,
   `openclaw/plugin-sdk/zalo`, and `openclaw/plugin-sdk/zalouser`.
 
 ## Channel target resolution
