@@ -107,6 +107,67 @@ describe("ollama-models", () => {
 
     expect(enriched[0].supportsVision).toBe(false);
   });
+
+  it("propagates parameterSize, quantizationLevel, modelFamily from /api/show", async () => {
+    const models: OllamaTagModel[] = [{ name: "qwen2.5-coder:14b" }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          model_info: { "qwen2.context_length": 32768 },
+          details: { family: "qwen2", parameter_size: "14.8B", quantization_level: "Q4_K_M" },
+        }),
+      ),
+    );
+
+    const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+
+    expect(enriched[0].parameterSize).toBe("14.8B");
+    expect(enriched[0].quantizationLevel).toBe("Q4_K_M");
+    expect(enriched[0].modelFamily).toBe("qwen2");
+  });
+
+  it("uses tag-level details as fallback when /api/show returns empty", async () => {
+    const models: OllamaTagModel[] = [
+      {
+        name: "llama3:8b",
+        details: { family: "llama", parameter_size: "8B", quantization_level: "Q4_0" },
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({})),
+    );
+
+    const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+
+    expect(enriched[0].parameterSize).toBe("8B");
+    expect(enriched[0].quantizationLevel).toBe("Q4_0");
+    expect(enriched[0].modelFamily).toBe("llama");
+  });
+
+  it("prefers /api/show metadata over tag-level details", async () => {
+    const models: OllamaTagModel[] = [
+      {
+        name: "qwen2.5:14b",
+        details: { family: "qwen2", parameter_size: "14B" },
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          details: { family: "qwen2.5", parameter_size: "14.8B", quantization_level: "Q5_K_M" },
+        }),
+      ),
+    );
+
+    const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
+
+    expect(enriched[0].parameterSize).toBe("14.8B");
+    expect(enriched[0].quantizationLevel).toBe("Q5_K_M");
+    expect(enriched[0].modelFamily).toBe("qwen2.5");
+  });
 });
 
 describe("queryOllamaModelMetadata", () => {

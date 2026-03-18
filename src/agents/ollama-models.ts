@@ -18,7 +18,9 @@ export type OllamaTagModel = {
   remote_host?: string;
   details?: {
     family?: string;
+    families?: string[];
     parameter_size?: string;
+    quantization_level?: string;
   };
 };
 
@@ -36,7 +38,7 @@ export type OllamaModelMetadata = {
 
 export type OllamaModelWithContext = OllamaTagModel & OllamaModelMetadata;
 
-const OLLAMA_SHOW_CONCURRENCY = 8;
+export const OLLAMA_SHOW_CONCURRENCY = 8;
 
 /**
  * Derive the Ollama native API base URL from a configured base URL.
@@ -171,6 +173,9 @@ export async function enrichOllamaModelsWithContext(
           ...model,
           contextWindow: metadata.contextWindow,
           supportsVision: metadata.supportsVision,
+          parameterSize: metadata.parameterSize ?? model.details?.parameter_size,
+          quantizationLevel: metadata.quantizationLevel ?? model.details?.quantization_level,
+          modelFamily: metadata.modelFamily ?? model.details?.family,
         };
       }),
     );

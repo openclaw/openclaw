@@ -509,11 +509,13 @@ export function createOllamaStreamFn(
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
+        const signal = options?.signal ?? AbortSignal.timeout(5 * 60 * 1000);
+
         const response = await fetch(chatUrl, {
           method: "POST",
           headers,
           body: JSON.stringify(body),
-          signal: options?.signal,
+          signal,
         });
 
         if (!response.ok) {
