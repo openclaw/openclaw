@@ -5,7 +5,7 @@ vi.mock("../send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
 }));
 
-import { deliverReplies } from "./replies.js";
+import { createSlackReplyDeliveryPlan, deliverReplies } from "./replies.js";
 
 function baseParams(overrides?: Record<string, unknown>) {
   return {
@@ -93,5 +93,57 @@ describe("deliverReplies identity passthrough", () => {
         blocks,
       }),
     );
+  });
+});
+
+describe("createSlackReplyDeliveryPlan", () => {
+  it("returns thread ts on every call in 'all' mode", () => {
+    const hasRepliedRef = { value: false };
+    const plan = createSlackReplyDeliveryPlan({
+      replyToMode: "all",
+      incomingThreadTs: undefined,
+      messageTs: "msg.1",
+      hasRepliedRef,
+      isThreadReply: false,
+    });
+
+    expect(plan.nextThreadTs()).toBe("msg.1");
+    plan.markSent();
+    expect(plan.nextThreadTs()).toBe("msg.1");
+    plan.markSent();
+    expect(plan.nextThreadTs()).toBe("msg.1");
+  });
+
+  it("returns thread ts only on first call in 'first' mode", () => {
+    const hasRepliedRef = { value: false };
+    const plan = createSlackReplyDeliveryPlan({
+      replyToMode: "first",
+      incomingThreadTs: undefined,
+      messageTs: "msg.1",
+      hasRepliedRef,
+      isThreadReply: false,
+    });
+
+    expect(plan.nextThreadTs()).toBe("msg.1");
+    plan.markSent();
+    // Subsequent calls return undefined — this is the expected "first" behavior
+    // across separate user messages. The block-streaming fix lives in dispatch.ts
+    // where usedReplyThreadTs carries the thread ts across blocks within a single
+    // agent turn.
+    expect(plan.nextThreadTs()).toBeUndefined();
+    expect(hasRepliedRef.value).toBe(true);
+  });
+
+  it("returns undefined in 'off' mode", () => {
+    const hasRepliedRef = { value: false };
+    const plan = createSlackReplyDeliveryPlan({
+      replyToMode: "off",
+      incomingThreadTs: undefined,
+      messageTs: "msg.1",
+      hasRepliedRef,
+      isThreadReply: false,
+    });
+
+    expect(plan.nextThreadTs()).toBeUndefined();
   });
 });

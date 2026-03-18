@@ -230,7 +230,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let usedReplyThreadTs: string | undefined;
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
-    const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
+    // Reuse the thread ts from a prior block delivery so all blocks within the
+    // same agent turn stay in the same thread (fixes #49341).
+    const replyThreadTs = forcedThreadTs ?? usedReplyThreadTs ?? replyPlan.nextThreadTs();
     await deliverReplies({
       replies: [payload],
       target: prepared.replyTarget,
@@ -380,7 +382,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     accountId: account.accountId,
     maxChars: Math.min(ctx.textLimit, 4000),
     resolveThreadTs: () => {
-      const ts = replyPlan.nextThreadTs();
+      // Reuse thread ts from a prior block so draft streams stay threaded (#49341).
+      const ts = usedReplyThreadTs ?? replyPlan.nextThreadTs();
       if (ts) {
         usedReplyThreadTs ??= ts;
       }
