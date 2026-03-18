@@ -7,7 +7,9 @@ import type {
 } from "openclaw/plugin-sdk/core";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
+import * as lazyRuntimeSdk from "openclaw/plugin-sdk/lazy-runtime";
 import * as lineSdk from "openclaw/plugin-sdk/line";
+import * as lineCoreSdk from "openclaw/plugin-sdk/line-core";
 import * as msteamsSdk from "openclaw/plugin-sdk/msteams";
 import * as nostrSdk from "openclaw/plugin-sdk/nostr";
 import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
@@ -21,6 +23,7 @@ import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as testingSdk from "openclaw/plugin-sdk/testing";
+import * as voiceCallSdk from "openclaw/plugin-sdk/voice-call";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
@@ -40,12 +43,44 @@ const bundledExtensionSubpathLoaders = pluginSdkSubpaths.map((id: string) => ({
   load: () => importPluginSdkSubpath(`openclaw/plugin-sdk/${id}`),
 }));
 
+const trimmedLegacyExtensionSubpaths = [
+  "copilot-proxy",
+  "device-pair",
+  "diagnostics-otel",
+  "diffs",
+  "llm-task",
+  "memory-lancedb",
+  "open-prose",
+  "phone-control",
+  "qwen-portal-auth",
+  "talk-voice",
+  "thread-ownership",
+] as const;
+
 const asExports = (mod: object) => mod as Record<string, unknown>;
+const ircSdk = await import("openclaw/plugin-sdk/irc");
+const feishuSdk = await import("openclaw/plugin-sdk/feishu");
+const googlechatSdk = await import("openclaw/plugin-sdk/googlechat");
+const zaloSdk = await import("openclaw/plugin-sdk/zalo");
+const synologyChatSdk = await import("openclaw/plugin-sdk/synology-chat");
+const zalouserSdk = await import("openclaw/plugin-sdk/zalouser");
+const tlonSdk = await import("openclaw/plugin-sdk/tlon");
+const acpxSdk = await import("openclaw/plugin-sdk/acpx");
+const bluebubblesSdk = await import("openclaw/plugin-sdk/bluebubbles");
+const matrixSdk = await import("openclaw/plugin-sdk/matrix");
+const mattermostSdk = await import("openclaw/plugin-sdk/mattermost");
+const nextcloudTalkSdk = await import("openclaw/plugin-sdk/nextcloud-talk");
+const twitchSdk = await import("openclaw/plugin-sdk/twitch");
+const accountHelpersSdk = await import("openclaw/plugin-sdk/account-helpers");
+const lobsterSdk = await import("openclaw/plugin-sdk/lobster");
 
 describe("plugin-sdk subpath exports", () => {
   it("exports compat helpers", () => {
     expect(typeof compatSdk.emptyPluginConfigSchema).toBe("function");
     expect(typeof compatSdk.resolveControlCommandGate).toBe("function");
+    expect(typeof compatSdk.createScopedChannelConfigAdapter).toBe("function");
+    expect(typeof compatSdk.createTopLevelChannelConfigAdapter).toBe("function");
+    expect(typeof compatSdk.createHybridChannelConfigAdapter).toBe("function");
   });
 
   it("keeps core focused on generic shared exports", () => {
@@ -53,6 +88,9 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof coreSdk.definePluginEntry).toBe("function");
     expect(typeof coreSdk.defineChannelPluginEntry).toBe("function");
     expect(typeof coreSdk.defineSetupPluginEntry).toBe("function");
+    expect(typeof coreSdk.createChannelPluginBase).toBe("function");
+    expect(typeof coreSdk.isSecretRef).toBe("function");
+    expect(typeof coreSdk.optionalStringEnum).toBe("function");
     expect("runPassiveAccountLifecycle" in asExports(coreSdk)).toBe(false);
     expect("createLoggerBackedRuntime" in asExports(coreSdk)).toBe(false);
     expect("registerSandboxBackend" in asExports(coreSdk)).toBe(false);
@@ -64,6 +102,10 @@ describe("plugin-sdk subpath exports", () => {
   it("exports routing helpers from the dedicated subpath", () => {
     expect(typeof routingSdk.buildAgentSessionKey).toBe("function");
     expect(typeof routingSdk.resolveThreadSessionKeys).toBe("function");
+  });
+
+  it("exports account helper builders from the dedicated subpath", () => {
+    expect(typeof accountHelpersSdk.createAccountListHelpers).toBe("function");
   });
 
   it("exports runtime helpers from the dedicated subpath", () => {
@@ -80,10 +122,38 @@ describe("plugin-sdk subpath exports", () => {
 
   it("exports shared setup helpers from the dedicated subpath", () => {
     expect(typeof setupSdk.DEFAULT_ACCOUNT_ID).toBe("string");
+    expect(typeof setupSdk.createAccountScopedAllowFromSection).toBe("function");
+    expect(typeof setupSdk.createAccountScopedGroupAccessSection).toBe("function");
+    expect(typeof setupSdk.createAllowFromSection).toBe("function");
+    expect(typeof setupSdk.createCliPathTextInput).toBe("function");
+    expect(typeof setupSdk.createDelegatedFinalize).toBe("function");
+    expect(typeof setupSdk.createDelegatedPrepare).toBe("function");
+    expect(typeof setupSdk.createDelegatedResolveConfigured).toBe("function");
+    expect(typeof setupSdk.createDelegatedSetupWizardProxy).toBe("function");
+    expect(typeof setupSdk.createDelegatedSetupWizardStatusResolvers).toBe("function");
+    expect(typeof setupSdk.createDelegatedTextInputShouldPrompt).toBe("function");
+    expect(typeof setupSdk.createDetectedBinaryStatus).toBe("function");
+    expect(typeof setupSdk.createLegacyCompatChannelDmPolicy).toBe("function");
+    expect(typeof setupSdk.createNestedChannelDmPolicy).toBe("function");
+    expect(typeof setupSdk.createTopLevelChannelDmPolicy).toBe("function");
+    expect(typeof setupSdk.createTopLevelChannelDmPolicySetter).toBe("function");
     expect(typeof setupSdk.formatDocsLink).toBe("function");
     expect(typeof setupSdk.mergeAllowFromEntries).toBe("function");
+    expect(typeof setupSdk.patchNestedChannelConfigSection).toBe("function");
+    expect(typeof setupSdk.patchTopLevelChannelConfigSection).toBe("function");
+    expect(typeof setupSdk.promptParsedAllowFromForAccount).toBe("function");
+    expect(typeof setupSdk.resolveParsedAllowFromEntries).toBe("function");
+    expect(typeof setupSdk.resolveGroupAllowlistWithLookupNotes).toBe("function");
+    expect(typeof setupSdk.setAccountAllowFromForChannel).toBe("function");
+    expect(typeof setupSdk.setAccountDmAllowFromForChannel).toBe("function");
     expect(typeof setupSdk.setTopLevelChannelDmPolicyWithAllowFrom).toBe("function");
     expect(typeof setupSdk.formatResolvedUnresolvedNote).toBe("function");
+  });
+
+  it("exports shared lazy runtime helpers from the dedicated subpath", () => {
+    expect(typeof lazyRuntimeSdk.createLazyRuntimeSurface).toBe("function");
+    expect(typeof lazyRuntimeSdk.createLazyRuntimeModule).toBe("function");
+    expect(typeof lazyRuntimeSdk.createLazyRuntimeNamedExport).toBe("function");
   });
 
   it("exports narrow self-hosted provider setup helpers", () => {
@@ -115,7 +185,7 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
   });
 
-  it("exports the public testing seam", () => {
+  it("exports the public testing surface", () => {
     expect(typeof testingSdk.removeAckReactionAfterReply).toBe("function");
     expect(typeof testingSdk.shouldAckReaction).toBe("function");
   });
@@ -162,7 +232,6 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports IRC helpers", async () => {
-    const ircSdk = await import("openclaw/plugin-sdk/irc");
     expect(typeof ircSdk.resolveIrcAccount).toBe("function");
     expect(typeof ircSdk.ircSetupWizard).toBe("object");
     expect(typeof ircSdk.ircSetupAdapter).toBe("object");
@@ -177,7 +246,6 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports Feishu helpers", async () => {
-    const feishuSdk = await import("openclaw/plugin-sdk/feishu");
     expect(typeof feishuSdk.feishuSetupWizard).toBe("object");
     expect(typeof feishuSdk.feishuSetupAdapter).toBe("object");
   });
@@ -187,6 +255,12 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof lineSdk.createInfoCard).toBe("function");
     expect(typeof lineSdk.lineSetupWizard).toBe("object");
     expect(typeof lineSdk.lineSetupAdapter).toBe("object");
+  });
+
+  it("exports narrow LINE core helpers", () => {
+    expect(typeof lineCoreSdk.resolveLineAccount).toBe("function");
+    expect(typeof lineCoreSdk.listLineAccountIds).toBe("function");
+    expect(typeof lineCoreSdk.LineConfigSchema).toBe("object");
   });
 
   it("exports Microsoft Teams helpers", () => {
@@ -202,40 +276,58 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports Google Chat helpers", async () => {
-    const googlechatSdk = await import("openclaw/plugin-sdk/googlechat");
+    expect(typeof googlechatSdk.buildChannelConfigSchema).toBe("function");
+    expect(typeof googlechatSdk.createWebhookInFlightLimiter).toBe("function");
+    expect(typeof googlechatSdk.fetchWithSsrFGuard).toBe("function");
     expect(typeof googlechatSdk.googlechatSetupWizard).toBe("object");
     expect(typeof googlechatSdk.googlechatSetupAdapter).toBe("object");
+    expect(typeof googlechatSdk.resolveGoogleChatGroupRequireMention).toBe("function");
+  });
+
+  it("keeps the Google Chat runtime surface aligned with the public SDK subpath", async () => {
+    const googlechatRuntimeApi = await import("../../extensions/googlechat/runtime-api.js");
+
+    expect(typeof googlechatRuntimeApi.buildChannelConfigSchema).toBe("function");
+    expect(typeof googlechatRuntimeApi.createWebhookInFlightLimiter).toBe("function");
+    expect(typeof googlechatRuntimeApi.fetchWithSsrFGuard).toBe("function");
+    expect(typeof googlechatRuntimeApi.createActionGate).toBe("function");
+    expect(typeof googlechatRuntimeApi.resolveWebhookTargetWithAuthOrReject).toBe("function");
   });
 
   it("exports Zalo helpers", async () => {
-    const zaloSdk = await import("openclaw/plugin-sdk/zalo");
     expect(typeof zaloSdk.zaloSetupWizard).toBe("object");
     expect(typeof zaloSdk.zaloSetupAdapter).toBe("object");
   });
 
   it("exports Synology Chat helpers", async () => {
-    const synologyChatSdk = await import("openclaw/plugin-sdk/synology-chat");
     expect(typeof synologyChatSdk.synologyChatSetupWizard).toBe("object");
     expect(typeof synologyChatSdk.synologyChatSetupAdapter).toBe("object");
   });
 
   it("exports Zalouser helpers", async () => {
-    const zalouserSdk = await import("openclaw/plugin-sdk/zalouser");
     expect(typeof zalouserSdk.zalouserSetupWizard).toBe("object");
     expect(typeof zalouserSdk.zalouserSetupAdapter).toBe("object");
   });
 
   it("exports Tlon helpers", async () => {
-    const tlonSdk = await import("openclaw/plugin-sdk/tlon");
     expect(typeof tlonSdk.fetchWithSsrFGuard).toBe("function");
     expect(typeof tlonSdk.tlonSetupWizard).toBe("object");
     expect(typeof tlonSdk.tlonSetupAdapter).toBe("object");
   });
 
-  it("exports acpx helpers", async () => {
-    const acpxSdk = await import("openclaw/plugin-sdk/acpx");
+  it("exports ACPX runtime backend helpers", async () => {
     expect(typeof acpxSdk.listKnownProviderAuthEnvVarNames).toBe("function");
     expect(typeof acpxSdk.omitEnvKeysCaseInsensitive).toBe("function");
+  });
+
+  it("exports Lobster helpers", async () => {
+    expect(typeof lobsterSdk.definePluginEntry).toBe("function");
+    expect(typeof lobsterSdk.materializeWindowsSpawnProgram).toBe("function");
+  });
+
+  it("exports Voice Call helpers", () => {
+    expect(typeof voiceCallSdk.definePluginEntry).toBe("function");
+    expect(typeof voiceCallSdk.resolveOpenAITtsInstructions).toBe("function");
   });
 
   it("resolves bundled extension subpaths", async () => {
@@ -246,27 +338,22 @@ describe("plugin-sdk subpath exports", () => {
     }
   });
 
+  it("does not advertise trimmed legacy extension helper surfaces", () => {
+    for (const id of trimmedLegacyExtensionSubpaths) {
+      expect(pluginSdkSubpaths).not.toContain(id);
+    }
+  });
+
   it("keeps the newly added bundled plugin-sdk contracts available", async () => {
-    const bluebubbles = await import("openclaw/plugin-sdk/bluebubbles");
-    expect(typeof bluebubbles.parseFiniteNumber).toBe("function");
-
-    const matrix = await import("openclaw/plugin-sdk/matrix");
-    expect(typeof matrix.matrixSetupWizard).toBe("object");
-    expect(typeof matrix.matrixSetupAdapter).toBe("object");
-
-    const mattermost = await import("openclaw/plugin-sdk/mattermost");
-    expect(typeof mattermost.parseStrictPositiveInteger).toBe("function");
-
-    const nextcloudTalk = await import("openclaw/plugin-sdk/nextcloud-talk");
-    expect(typeof nextcloudTalk.waitForAbortSignal).toBe("function");
-
-    const twitch = await import("openclaw/plugin-sdk/twitch");
-    expect(typeof twitch.DEFAULT_ACCOUNT_ID).toBe("string");
-    expect(typeof twitch.normalizeAccountId).toBe("function");
-    expect(typeof twitch.twitchSetupWizard).toBe("object");
-    expect(typeof twitch.twitchSetupAdapter).toBe("object");
-
-    const zalo = await import("openclaw/plugin-sdk/zalo");
-    expect(typeof zalo.resolveClientIp).toBe("function");
+    expect(typeof bluebubblesSdk.parseFiniteNumber).toBe("function");
+    expect(typeof matrixSdk.matrixSetupWizard).toBe("object");
+    expect(typeof matrixSdk.matrixSetupAdapter).toBe("object");
+    expect(typeof mattermostSdk.parseStrictPositiveInteger).toBe("function");
+    expect(typeof nextcloudTalkSdk.waitForAbortSignal).toBe("function");
+    expect(typeof twitchSdk.DEFAULT_ACCOUNT_ID).toBe("string");
+    expect(typeof twitchSdk.normalizeAccountId).toBe("function");
+    expect(typeof twitchSdk.twitchSetupWizard).toBe("object");
+    expect(typeof twitchSdk.twitchSetupAdapter).toBe("object");
+    expect(typeof zaloSdk.resolveClientIp).toBe("function");
   });
 });

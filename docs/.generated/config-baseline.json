@@ -23253,6 +23253,56 @@
       "hasChildren": false
     },
     {
+      "path": "channels.mattermost.accounts.*.dmChannelRetry",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.mattermost.accounts.*.dmChannelRetry.initialDelayMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.accounts.*.dmChannelRetry.maxDelayMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.accounts.*.dmChannelRetry.maxRetries",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.accounts.*.dmChannelRetry.timeoutMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.mattermost.accounts.*.dmPolicy",
       "kind": "channel",
       "type": "string",
@@ -23755,6 +23805,56 @@
       "path": "channels.mattermost.defaultAccount",
       "kind": "channel",
       "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.dmChannelRetry",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.mattermost.dmChannelRetry.initialDelayMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.dmChannelRetry.maxDelayMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.dmChannelRetry.maxRetries",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.dmChannelRetry.timeoutMs",
+      "kind": "channel",
+      "type": "integer",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -37653,12 +37753,13 @@
       "path": "channels.zalouser.accounts.*.groupPolicy",
       "kind": "channel",
       "type": "string",
-      "required": false,
+      "required": true,
       "enumValues": [
         "open",
         "disabled",
         "allowlist"
       ],
+      "defaultValue": "allowlist",
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -37955,12 +38056,13 @@
       "path": "channels.zalouser.groupPolicy",
       "kind": "channel",
       "type": "string",
-      "required": false,
+      "required": true,
       "enumValues": [
         "open",
         "disabled",
         "allowlist"
       ],
+      "defaultValue": "allowlist",
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -39751,7 +39853,7 @@
         "network"
       ],
       "label": "Control UI Allowed Origins",
-      "help": "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled.",
+      "help": "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting [\"*\"] means allow any browser origin and should be avoided outside tightly controlled local testing.",
       "hasChildren": true
     },
     {
@@ -41090,7 +41192,7 @@
         "access"
       ],
       "label": "Hooks Allowed Agent IDs",
-      "help": "Allowlist of agent IDs that hook mappings are allowed to target when selecting execution agents. Use this to constrain automation events to dedicated service agents.",
+      "help": "Allowlist of agent IDs that hook mappings are allowed to target when selecting execution agents. Use this to constrain automation events to dedicated service agents and reduce blast radius if a hook token is exposed.",
       "hasChildren": true
     },
     {
@@ -42208,7 +42310,7 @@
         "security"
       ],
       "label": "Hooks Auth Token",
-      "help": "Shared bearer token checked by hooks ingress for request authentication before mappings run. Use environment substitution and rotate regularly when webhook endpoints are internet-accessible.",
+      "help": "Shared bearer token checked by hooks ingress for request authentication before mappings run. Treat holders as full-trust callers for the hook ingress surface, not as a separate non-owner role. Use environment substitution and rotate regularly when webhook endpoints are internet-accessible.",
       "hasChildren": false
     },
     {
@@ -45347,6 +45449,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.*.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.*.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.*.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.*.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.acpx",
       "kind": "plugin",
       "type": "object",
@@ -45613,6 +45767,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.acpx.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.acpx.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.acpx.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.acpx.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.amazon-bedrock",
       "kind": "plugin",
       "type": "object",
@@ -45679,6 +45885,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -45751,6 +46009,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.anthropic.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.bluebubbles",
       "kind": "plugin",
       "type": "object",
@@ -45817,6 +46127,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.bluebubbles.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.bluebubbles.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.bluebubbles.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.bluebubbles.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -45889,6 +46251,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.brave.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.brave.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.brave.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.brave.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.byteplus",
       "kind": "plugin",
       "type": "object",
@@ -45955,6 +46369,179 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.byteplus.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.byteplus.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.byteplus.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.byteplus.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.chutes",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/chutes-provider",
+      "help": "OpenClaw Chutes.ai provider plugin (plugin: chutes)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.chutes.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/chutes-provider Config",
+      "help": "Plugin-defined config payload for chutes.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.chutes.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/chutes-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.chutes.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.chutes.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.chutes.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.chutes.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.chutes.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.chutes.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -46027,6 +46614,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.cloudflare-ai-gateway.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.cloudflare-ai-gateway.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.cloudflare-ai-gateway.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.cloudflare-ai-gateway.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.copilot-proxy",
       "kind": "plugin",
       "type": "object",
@@ -46093,6 +46732,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.copilot-proxy.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.copilot-proxy.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.copilot-proxy.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.copilot-proxy.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -46179,6 +46870,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.device-pair.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.device-pair.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.device-pair.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.device-pair.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.diagnostics-otel",
       "kind": "plugin",
       "type": "object",
@@ -46245,6 +46988,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.diagnostics-otel.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.diagnostics-otel.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.diagnostics-otel.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.diagnostics-otel.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -46654,6 +47449,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.diffs.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.diffs.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.diffs.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.diffs.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.discord",
       "kind": "plugin",
       "type": "object",
@@ -46720,6 +47567,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.discord.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.discord.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.discord.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.discord.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -46792,6 +47691,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.elevenlabs.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.elevenlabs.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.elevenlabs.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.elevenlabs.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.feishu",
       "kind": "plugin",
       "type": "object",
@@ -46858,6 +47809,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.feishu.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.feishu.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.feishu.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.feishu.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -46930,6 +47933,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.firecrawl.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.firecrawl.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.firecrawl.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.firecrawl.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.github-copilot",
       "kind": "plugin",
       "type": "object",
@@ -46996,6 +48051,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.github-copilot.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.github-copilot.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.github-copilot.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.github-copilot.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -47068,6 +48175,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.google.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.google.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.google.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.google.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.googlechat",
       "kind": "plugin",
       "type": "object",
@@ -47134,6 +48293,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.googlechat.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.googlechat.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.googlechat.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.googlechat.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -47206,6 +48417,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.huggingface.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.huggingface.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.huggingface.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.huggingface.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.imessage",
       "kind": "plugin",
       "type": "object",
@@ -47272,6 +48535,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.imessage.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.imessage.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.imessage.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.imessage.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -47344,6 +48659,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.irc.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.irc.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.irc.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.irc.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.kilocode",
       "kind": "plugin",
       "type": "object",
@@ -47410,6 +48777,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.kilocode.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.kilocode.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.kilocode.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.kilocode.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -47482,6 +48901,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.kimi.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.kimi.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.kimi.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.kimi.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.line",
       "kind": "plugin",
       "type": "object",
@@ -47548,6 +49019,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.line.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.line.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.line.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.line.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -47690,6 +49213,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.llm-task.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.llm-task.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.llm-task.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.llm-task.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.lobster",
       "kind": "plugin",
       "type": "object",
@@ -47756,6 +49331,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.lobster.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.lobster.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.lobster.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.lobster.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -47828,6 +49455,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.matrix.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.matrix.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.matrix.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.matrix.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.mattermost",
       "kind": "plugin",
       "type": "object",
@@ -47897,6 +49576,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.mattermost.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.mattermost.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.mattermost.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.mattermost.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.memory-core",
       "kind": "plugin",
       "type": "object",
@@ -47963,6 +49694,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.memory-core.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.memory-core.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.memory-core.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.memory-core.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -48164,6 +49947,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.memory-lancedb.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.memory-lancedb.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.memory-lancedb.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.memory-lancedb.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.microsoft",
       "kind": "plugin",
       "type": "object",
@@ -48230,6 +50065,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -48302,6 +50189,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.minimax.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.minimax.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.minimax.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.minimax.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.mistral",
       "kind": "plugin",
       "type": "object",
@@ -48368,6 +50307,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.mistral.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.mistral.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.mistral.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.mistral.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -48440,6 +50431,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.modelstudio.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.modelstudio.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.modelstudio.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.modelstudio.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.moonshot",
       "kind": "plugin",
       "type": "object",
@@ -48506,6 +50549,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.moonshot.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.moonshot.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.moonshot.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.moonshot.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -48578,6 +50673,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.msteams.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.msteams.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.msteams.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.msteams.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.nextcloud-talk",
       "kind": "plugin",
       "type": "object",
@@ -48644,6 +50791,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.nextcloud-talk.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.nextcloud-talk.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.nextcloud-talk.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.nextcloud-talk.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -48716,6 +50915,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.nostr.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.nostr.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.nostr.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.nostr.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.nvidia",
       "kind": "plugin",
       "type": "object",
@@ -48782,6 +51033,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.nvidia.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.nvidia.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.nvidia.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.nvidia.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -48854,6 +51157,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.ollama.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.ollama.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.ollama.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.ollama.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.open-prose",
       "kind": "plugin",
       "type": "object",
@@ -48923,6 +51278,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.open-prose.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.open-prose.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.open-prose.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.open-prose.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.openai",
       "kind": "plugin",
       "type": "object",
@@ -48989,6 +51396,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openai.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openai.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openai.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openai.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -49075,6 +51534,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.opencode-go.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.opencode-go.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.opencode-go.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.opencode-go.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.opencode.config",
       "kind": "plugin",
       "type": "object",
@@ -49127,6 +51638,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.opencode.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.opencode.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.opencode.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.opencode.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -49196,6 +51759,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openrouter.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openrouter.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openrouter.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openrouter.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -49435,6 +52050,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.openshell.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openshell.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openshell.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.perplexity",
       "kind": "plugin",
       "type": "object",
@@ -49501,6 +52168,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.perplexity.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.perplexity.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.perplexity.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.perplexity.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -49573,6 +52292,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.phone-control.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.phone-control.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.phone-control.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.phone-control.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.qianfan",
       "kind": "plugin",
       "type": "object",
@@ -49639,6 +52410,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qianfan.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qianfan.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qianfan.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qianfan.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -49711,6 +52534,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.qwen-portal-auth.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qwen-portal-auth.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qwen-portal-auth.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qwen-portal-auth.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.sglang",
       "kind": "plugin",
       "type": "object",
@@ -49777,6 +52652,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.sglang.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.sglang.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.sglang.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.sglang.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -49849,6 +52776,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.signal.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.signal.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.signal.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.signal.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.slack",
       "kind": "plugin",
       "type": "object",
@@ -49915,6 +52894,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.slack.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.slack.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.slack.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.slack.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -49987,6 +53018,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.synology-chat.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.synology-chat.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.synology-chat.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.synology-chat.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.synthetic",
       "kind": "plugin",
       "type": "object",
@@ -50053,6 +53136,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.synthetic.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.synthetic.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.synthetic.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.synthetic.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -50125,6 +53260,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.talk-voice.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.talk-voice.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.talk-voice.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.talk-voice.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.telegram",
       "kind": "plugin",
       "type": "object",
@@ -50191,6 +53378,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.telegram.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.telegram.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.telegram.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.telegram.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -50301,6 +53540,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.thread-ownership.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.thread-ownership.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.thread-ownership.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.thread-ownership.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.tlon",
       "kind": "plugin",
       "type": "object",
@@ -50367,6 +53658,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.tlon.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.tlon.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.tlon.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.tlon.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -50439,6 +53782,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.together.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.together.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.together.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.together.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.twitch",
       "kind": "plugin",
       "type": "object",
@@ -50505,6 +53900,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.twitch.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.twitch.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.twitch.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.twitch.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -50577,6 +54024,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.venice.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.venice.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.venice.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.venice.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.vercel-ai-gateway",
       "kind": "plugin",
       "type": "object",
@@ -50646,6 +54145,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.vercel-ai-gateway.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.vercel-ai-gateway.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.vercel-ai-gateway.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.vercel-ai-gateway.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.vllm",
       "kind": "plugin",
       "type": "object",
@@ -50712,6 +54263,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.vllm.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.vllm.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.vllm.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.vllm.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -52140,6 +55743,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.voice-call.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.volcengine",
       "kind": "plugin",
       "type": "object",
@@ -52206,6 +55861,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.volcengine.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.volcengine.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.volcengine.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.volcengine.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -52278,6 +55985,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.whatsapp.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.whatsapp.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.whatsapp.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.whatsapp.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.xai",
       "kind": "plugin",
       "type": "object",
@@ -52344,6 +56103,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -52416,6 +56227,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.xiaomi.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xiaomi.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xiaomi.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xiaomi.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.zai",
       "kind": "plugin",
       "type": "object",
@@ -52482,6 +56345,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.zai.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.zai.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.zai.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.zai.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
@@ -52554,6 +56469,58 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.zalo.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.zalo.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.zalo.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.zalo.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.zalouser",
       "kind": "plugin",
       "type": "object",
@@ -52620,6 +56587,58 @@
       ],
       "label": "Allow Prompt Injection Hooks",
       "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.zalouser.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.zalouser.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.zalouser.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.zalouser.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
       "hasChildren": false
     },
     {
