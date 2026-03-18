@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { BrowserProfileUnavailableError } from "../errors.js";
 import { registerBrowserTabRoutes } from "./tabs.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
@@ -53,5 +54,40 @@ describe("tabs routes existing-session", () => {
     });
     expect(listTabs).toHaveBeenCalledTimes(1);
     expect(isReachable).not.toHaveBeenCalled();
+  });
+
+  it("maps existing-session tab listing failures to browser errors", async () => {
+    const { app, getHandlers } = createBrowserRouteApp();
+
+    registerBrowserTabRoutes(app, {
+      forProfile: () =>
+        ({
+          profile: {
+            name: "chrome-live",
+            driver: "existing-session",
+            cdpPort: 0,
+            cdpUrl: "",
+            userDataDir: "/tmp/brave-profile",
+            color: "#00AA00",
+            attachOnly: true,
+          },
+          listTabs: async () => {
+            throw new BrowserProfileUnavailableError("attach failed");
+          },
+        }) as never,
+      mapTabError: (err) =>
+        err instanceof BrowserProfileUnavailableError
+          ? { status: err.status, message: err.message }
+          : null,
+    } as never);
+
+    const handler = getHandlers.get("/tabs");
+    expect(handler).toBeTypeOf("function");
+
+    const response = createBrowserRouteResponse();
+    await handler?.({ params: {}, query: { profile: "chrome-live" } }, response.res);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toMatchObject({ error: "attach failed" });
   });
 });

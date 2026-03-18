@@ -8,7 +8,13 @@ import {
   browserPdfSave,
   browserScreenshotAction,
 } from "./client-actions.js";
-import { browserOpenTab, browserSnapshot, browserStatus, browserTabs } from "./client.js";
+import {
+  browserOpenTab,
+  browserProfiles,
+  browserSnapshot,
+  browserStatus,
+  browserTabs,
+} from "./client.js";
 
 describe("browser client", () => {
   function stubSnapshotFetch(calls: string[]) {
@@ -50,6 +56,58 @@ describe("browser client", () => {
   it("adds useful timeout messaging for abort-like failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/timed out/i);
+  });
+
+  it("keeps fast-fail client defaults unless the caller overrides timeoutMs", async () => {
+    const calls: Array<{ url: string; timeoutMs?: number }> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, timeoutMs: init?.timeoutMs });
+        if (url.endsWith("/profiles")) {
+          return {
+            ok: true,
+            json: async () => ({ profiles: [] }),
+          } as unknown as Response;
+        }
+        if (url.endsWith("/tabs")) {
+          return {
+            ok: true,
+            json: async () => ({ running: true, tabs: [] }),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            enabled: true,
+            running: true,
+            pid: 1,
+            cdpPort: 18792,
+            cdpUrl: "http://127.0.0.1:18792",
+            chosenBrowser: "chrome",
+            userDataDir: "/tmp",
+            color: "#FF4500",
+            headless: false,
+            noSandbox: false,
+            executablePath: null,
+            attachOnly: false,
+          }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserStatus("http://127.0.0.1:18791");
+    await browserProfiles("http://127.0.0.1:18791");
+    await browserTabs("http://127.0.0.1:18791");
+    await browserStatus("http://127.0.0.1:18791", { timeoutMs: 8_000 });
+
+    expect(calls).toEqual([
+      { url: "http://127.0.0.1:18791/", timeoutMs: 1_500 },
+      { url: "http://127.0.0.1:18791/profiles", timeoutMs: 3_000 },
+      { url: "http://127.0.0.1:18791/tabs", timeoutMs: 3_000 },
+      { url: "http://127.0.0.1:18791/", timeoutMs: 8_000 },
+    ]);
   });
 
   it("surfaces non-2xx responses with body text", async () => {

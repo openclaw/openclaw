@@ -109,6 +109,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       req,
       res,
       ctx,
+      mapTabError: true,
       run: async (profileCtx) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           const tabs = await profileCtx.listTabs();

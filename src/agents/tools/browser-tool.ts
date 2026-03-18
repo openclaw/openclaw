@@ -293,6 +293,38 @@ function shouldPreferHostForProfile(profileName: string | undefined) {
   return capabilities.usesChromeMcp;
 }
 
+const DEFAULT_HOST_EXISTING_SESSION_MANAGE_TIMEOUT_MS = 45_000;
+const HOST_EXISTING_SESSION_MANAGE_ACTIONS = new Set([
+  "status",
+  "start",
+  "stop",
+  "tabs",
+  "open",
+  "focus",
+  "close",
+]);
+
+function resolveBrowserToolManageTimeoutMs(params: {
+  action: string;
+  requestedTimeoutMs?: number;
+  baseUrl?: string;
+  hasProxyRequest: boolean;
+  usesHostOnlyProfile: boolean;
+}) {
+  if (typeof params.requestedTimeoutMs === "number") {
+    return params.requestedTimeoutMs;
+  }
+  if (params.hasProxyRequest || params.baseUrl) {
+    return undefined;
+  }
+  if (!params.usesHostOnlyProfile) {
+    return undefined;
+  }
+  return HOST_EXISTING_SESSION_MANAGE_ACTIONS.has(params.action)
+    ? DEFAULT_HOST_EXISTING_SESSION_MANAGE_TIMEOUT_MS
+    : undefined;
+}
+
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
@@ -321,7 +353,7 @@ export function createBrowserTool(opts?: {
       const action = readStringParam(params, "action", { required: true });
       const profile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
-      const toolTimeoutMs =
+      const requestedTimeoutMs =
         typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
           ? Math.max(1, Math.floor(params.timeoutMs))
           : undefined;
@@ -330,9 +362,9 @@ export function createBrowserTool(opts?: {
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
       }
-      // User-browser profiles (existing-session) are host-only.
-      const isUserBrowserProfile = shouldPreferHostForProfile(profile);
-      if (isUserBrowserProfile) {
+      // Existing-session profiles are host-only.
+      const usesHostOnlyProfile = shouldPreferHostForProfile(profile);
+      if (usesHostOnlyProfile) {
         if (requestedNode || target === "node") {
           throw new Error(`profile="${profile}" only supports the local host browser.`);
         }
@@ -384,6 +416,13 @@ export function createBrowserTool(opts?: {
             return proxy.result;
           }
         : null;
+      const toolTimeoutMs = resolveBrowserToolManageTimeoutMs({
+        action,
+        requestedTimeoutMs,
+        baseUrl,
+        hasProxyRequest: Boolean(proxyRequest),
+        usesHostOnlyProfile,
+      });
 
       switch (action) {
         case "status":
@@ -511,6 +550,7 @@ export function createBrowserTool(opts?: {
                   path: "/act",
                   profile,
                   body: { kind: "close" },
+                  timeoutMs: toolTimeoutMs,
                 });
             return jsonResult(result);
           }
@@ -526,7 +566,7 @@ export function createBrowserTool(opts?: {
               profile,
             });
           } else {
-            await browserAct(baseUrl, { kind: "close" }, { profile });
+            await browserAct(baseUrl, { kind: "close" }, { profile, timeoutMs: toolTimeoutMs });
           }
           return jsonResult({ ok: true });
         }

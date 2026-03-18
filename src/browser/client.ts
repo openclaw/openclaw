@@ -106,7 +106,9 @@ function withBaseUrl(baseUrl: string | undefined, path: string): string {
   return `${trimmed.replace(/\/$/, "")}${path}`;
 }
 
-export const DEFAULT_BROWSER_MANAGE_REQUEST_TIMEOUT_MS = 45_000;
+const DEFAULT_BROWSER_STATUS_REQUEST_TIMEOUT_MS = 1_500;
+const DEFAULT_BROWSER_PROFILES_REQUEST_TIMEOUT_MS = 3_000;
+const DEFAULT_BROWSER_TABS_REQUEST_TIMEOUT_MS = 3_000;
 
 type BrowserManageRequestOpts = {
   profile?: string;
@@ -127,7 +129,7 @@ export async function browserStatus(
   return await fetchBrowserJson<BrowserStatus>(withBaseUrl(baseUrl, `/${q}`), {
     timeoutMs: resolveBrowserManageTimeoutMs(
       opts?.timeoutMs,
-      DEFAULT_BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
+      DEFAULT_BROWSER_STATUS_REQUEST_TIMEOUT_MS,
     ),
   });
 }
@@ -141,7 +143,7 @@ export async function browserProfiles(
     {
       timeoutMs: resolveBrowserManageTimeoutMs(
         opts?.timeoutMs,
-        DEFAULT_BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
+        DEFAULT_BROWSER_PROFILES_REQUEST_TIMEOUT_MS,
       ),
     },
   );
@@ -251,7 +253,7 @@ export async function browserTabs(
     {
       timeoutMs: resolveBrowserManageTimeoutMs(
         opts?.timeoutMs,
-        DEFAULT_BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
+        DEFAULT_BROWSER_TABS_REQUEST_TIMEOUT_MS,
       ),
     },
   );
