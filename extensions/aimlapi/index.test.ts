@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
+import { createCapturedPluginRegistration } from "../../src/plugins/captured-registration.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/extensions/plugin-registration.js";
 import aimlapiPlugin from "./index.js";
 
@@ -314,8 +315,9 @@ describe("AIMLAPI provider plugin", () => {
   });
 
   it("registers the AIMLAPI web search provider with plugin-owned config paths", () => {
-    const provider = registerSingleProviderPlugin(aimlapiPlugin);
-    const webSearchProvider = provider.webSearchProviders?.[0];
+    const captured = createCapturedPluginRegistration();
+    aimlapiPlugin.register(captured.api);
+    const webSearchProvider = captured.webSearchProviders[0];
 
     expect(webSearchProvider).toMatchObject({
       id: "aimlapi",

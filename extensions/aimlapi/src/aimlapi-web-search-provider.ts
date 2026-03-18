@@ -74,8 +74,7 @@ function resolveAimlapiApiKey(aimlapi?: AimlapiConfig): string | undefined {
     readConfiguredSecretString(
       aimlapi?.apiKey,
       "plugins.entries.aimlapi.config.webSearch.apiKey",
-    ) ??
-    readProviderEnvValue(["AIMLAPI_API_KEY"])
+    ) ?? readProviderEnvValue(["AIMLAPI_API_KEY"])
   );
 }
 

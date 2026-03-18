@@ -45,11 +45,12 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 The table above is alphabetical. If no `provider` is explicitly set, runtime auto-detection checks providers in this order:
 
 1. **Brave** — `BRAVE_API_KEY` env var or `plugins.entries.brave.config.webSearch.apiKey`
-2. **Gemini** — `GEMINI_API_KEY` env var or `plugins.entries.google.config.webSearch.apiKey`
-3. **Grok** — `XAI_API_KEY` env var or `plugins.entries.xai.config.webSearch.apiKey`
-4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `plugins.entries.moonshot.config.webSearch.apiKey`
-5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
-6. **Firecrawl** — `FIRECRAWL_API_KEY` env var or `plugins.entries.firecrawl.config.webSearch.apiKey`
+2. **AI/ML API** — `AIMLAPI_API_KEY` env var or `plugins.entries.aimlapi.config.webSearch.apiKey`
+3. **Gemini** — `GEMINI_API_KEY` env var or `plugins.entries.google.config.webSearch.apiKey`
+4. **Grok** — `XAI_API_KEY` env var or `plugins.entries.xai.config.webSearch.apiKey`
+5. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `plugins.entries.moonshot.config.webSearch.apiKey`
+6. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
+7. **Firecrawl** — `FIRECRAWL_API_KEY` env var or `plugins.entries.firecrawl.config.webSearch.apiKey`
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 

@@ -536,8 +536,6 @@ export async function runAgentTurnWithFallback(params: {
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
-      const channel = resolveMessageChannel(params.sessionCtx.Surface, params.sessionCtx.Provider);
-      const isTelegram = channel === "telegram";
       const failoverInfo = describeFailoverError(err);
       const isAuthFailure =
         failoverInfo.reason === "auth" ||

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ModelCatalogEntry, ModelInputType } from "../../src/agents/model-catalog.js";
-import { createSubsystemLogger } from "../../src/logging/subsystem.js";
-import type { ProviderAugmentModelCatalogContext } from "../../src/plugins/types.js";
+import type { ModelCatalogEntry, ModelInputType } from "openclaw/plugin-sdk/agent-runtime";
+import type { ProviderAugmentModelCatalogContext } from "openclaw/plugin-sdk/core";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 
 const log = createSubsystemLogger("aimlapi/catalog");
 

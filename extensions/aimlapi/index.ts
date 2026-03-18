@@ -2,10 +2,10 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
-import { createAimlapiWebSearchProvider } from "./src/aimlapi-web-search-provider.js";
 import { augmentAimlapiModelCatalog } from "./model-catalog.js";
 import { AIMLAPI_DEFAULT_MODEL_REF, applyAimlapiConfig } from "./onboard.js";
 import { buildAimlapiProvider } from "./provider-catalog.js";
+import { createAimlapiWebSearchProvider } from "./src/aimlapi-web-search-provider.js";
 import {
   normalizeAimlapiPayloadMessages,
   normalizeAimlapiPayloadTools,
