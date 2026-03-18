@@ -19,4 +19,27 @@ describe("amazon-bedrock provider plugin", () => {
       } as never),
     ).toBeUndefined();
   });
+
+  it("disables prompt caching for non-Anthropic Bedrock models", () => {
+    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "amazon.nova-micro-v1:0",
+      streamFn: (_model, _context, options) => options,
+    } as never);
+
+    expect(
+      wrapped?.(
+        {
+          api: "openai-completions",
+          provider: "amazon-bedrock",
+          id: "amazon.nova-micro-v1:0",
+        } as never,
+        { messages: [] } as never,
+        {},
+      ),
+    ).toMatchObject({
+      cacheRetention: "none",
+    });
+  });
 });

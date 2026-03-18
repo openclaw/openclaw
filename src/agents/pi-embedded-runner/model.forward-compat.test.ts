@@ -133,6 +133,29 @@ describe("pi embedded model e2e smoke", () => {
     });
   });
 
+  it("builds an xai forward-compat fallback for Grok 4.1 fast reasoning", () => {
+    const result = resolveModel("xai", "grok-4-1-fast-reasoning", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "xai",
+      api: "openai-completions",
+      baseUrl: "https://api.x.ai/v1",
+      id: "grok-4-1-fast-reasoning",
+      reasoning: true,
+      contextWindow: 2_000_000,
+    });
+  });
+
+  it("keeps unknown-model errors for xai multi-agent-only ids", () => {
+    const result = resolveModel(
+      "xai",
+      "grok-4.20-multi-agent-experimental-beta-0304",
+      "/tmp/agent",
+    );
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: xai/grok-4.20-multi-agent-experimental-beta-0304");
+  });
+
   it("keeps unknown-model errors for unrecognized google-gemini-cli model IDs", () => {
     const result = resolveModel("google-gemini-cli", "gemini-4-unknown", "/tmp/agent");
     expect(result.model).toBeUndefined();
