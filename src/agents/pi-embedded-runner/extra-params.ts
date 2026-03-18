@@ -24,6 +24,7 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createOpenAICompatMaxTokensFieldWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
@@ -286,6 +287,10 @@ export function applyExtraParamsToAgent(
     log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
     agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
   }
+
+  // Respect model compat maxTokensField for OpenAI-compatible chat payloads
+  // (e.g. Mistral expects max_tokens instead of max_completion_tokens).
+  agent.streamFn = createOpenAICompatMaxTokensFieldWrapper(agent.streamFn);
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI Responses models and auto-enable
