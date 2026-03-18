@@ -41,11 +41,11 @@ export function resolveOptionalConfigString(
 }
 
 /** Build the shared allowlist/default target adapter surface for account-scoped channel configs. */
-export function createScopedAccountConfigAccessors<
-  ResolvedAccount,
-  Config extends OpenClawConfig = OpenClawConfig,
->(params: {
-  resolveAccount: (params: { cfg: Config; accountId?: string | null }) => ResolvedAccount;
+export function createScopedAccountConfigAccessors<ResolvedAccount>(params: {
+  resolveAccount: <Config extends OpenClawConfig>(params: {
+    cfg: Config;
+    accountId?: string | null;
+  }) => ResolvedAccount;
   resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: ResolvedAccount) => string | number | null | undefined;
@@ -55,9 +55,7 @@ export function createScopedAccountConfigAccessors<
 > {
   const base = {
     resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
-      mapAllowFromEntries(
-        params.resolveAllowFrom(params.resolveAccount({ cfg: cfg as Config, accountId })),
-      ),
+      mapAllowFromEntries(params.resolveAllowFrom(params.resolveAccount({ cfg, accountId }))),
     formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
       params.formatAllowFrom(allowFrom),
   };
@@ -69,9 +67,7 @@ export function createScopedAccountConfigAccessors<
   return {
     ...base,
     resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveOptionalConfigString(
-        params.resolveDefaultTo?.(params.resolveAccount({ cfg: cfg as Config, accountId })),
-      ),
+      resolveOptionalConfigString(params.resolveDefaultTo?.(params.resolveAccount({ cfg, accountId }))),
   };
 }
 
@@ -155,6 +151,15 @@ export function createScopedChannelConfigAdapter<
     (({ cfg, accountId }: { cfg: Config; accountId?: string | null }) =>
       params.resolveAccount(cfg, accountId) as unknown as AccessorAccount);
 
+  const resolveAccessorAccountWithConfig = <TConfig extends OpenClawConfig>(params: {
+    cfg: TConfig;
+    accountId?: string | null;
+  }): AccessorAccount =>
+    resolveAccessorAccount({
+      cfg: params.cfg as unknown as Config,
+      accountId: params.accountId,
+    });
+
   return {
     ...createScopedChannelConfigBase<ResolvedAccount, Config>({
       sectionKey: params.sectionKey,
@@ -165,8 +170,8 @@ export function createScopedChannelConfigAdapter<
       clearBaseFields: params.clearBaseFields,
       allowTopLevel: params.allowTopLevel,
     }),
-    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
-      resolveAccount: resolveAccessorAccount,
+    ...createScopedAccountConfigAccessors<AccessorAccount>({
+      resolveAccount: resolveAccessorAccountWithConfig,
       resolveAllowFrom: params.resolveAllowFrom,
       formatAllowFrom: params.formatAllowFrom,
       resolveDefaultTo: params.resolveDefaultTo,
@@ -311,6 +316,15 @@ export function createTopLevelChannelConfigAdapter<
     (({ cfg }: { cfg: Config; accountId?: string | null }) =>
       params.resolveAccount(cfg) as unknown as AccessorAccount);
 
+  const resolveAccessorAccountWithConfig = <TConfig extends OpenClawConfig>(params: {
+    cfg: TConfig;
+    accountId?: string | null;
+  }): AccessorAccount =>
+    resolveAccessorAccount({
+      cfg: params.cfg as unknown as Config,
+      accountId: params.accountId,
+    });
+
   return {
     ...createTopLevelChannelConfigBase<ResolvedAccount, Config>({
       sectionKey: params.sectionKey,
@@ -321,8 +335,8 @@ export function createTopLevelChannelConfigAdapter<
       deleteMode: params.deleteMode,
       clearBaseFields: params.clearBaseFields,
     }),
-    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
-      resolveAccount: resolveAccessorAccount,
+    ...createScopedAccountConfigAccessors<AccessorAccount>({
+      resolveAccount: resolveAccessorAccountWithConfig,
       resolveAllowFrom: params.resolveAllowFrom,
       formatAllowFrom: params.formatAllowFrom,
       resolveDefaultTo: params.resolveDefaultTo,
@@ -433,6 +447,15 @@ export function createHybridChannelConfigAdapter<
     (({ cfg, accountId }: { cfg: Config; accountId?: string | null }) =>
       params.resolveAccount(cfg, accountId) as unknown as AccessorAccount);
 
+  const resolveAccessorAccountWithConfig = <TConfig extends OpenClawConfig>(params: {
+    cfg: TConfig;
+    accountId?: string | null;
+  }): AccessorAccount =>
+    resolveAccessorAccount({
+      cfg: params.cfg as unknown as Config,
+      accountId: params.accountId,
+    });
+
   return {
     ...createHybridChannelConfigBase<ResolvedAccount, Config>({
       sectionKey: params.sectionKey,
@@ -443,8 +466,8 @@ export function createHybridChannelConfigAdapter<
       clearBaseFields: params.clearBaseFields,
       preserveSectionOnDefaultDelete: params.preserveSectionOnDefaultDelete,
     }),
-    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
-      resolveAccount: resolveAccessorAccount,
+    ...createScopedAccountConfigAccessors<AccessorAccount>({
+      resolveAccount: resolveAccessorAccountWithConfig,
       resolveAllowFrom: params.resolveAllowFrom,
       formatAllowFrom: params.formatAllowFrom,
       resolveDefaultTo: params.resolveDefaultTo,
