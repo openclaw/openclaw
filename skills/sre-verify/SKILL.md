@@ -92,11 +92,11 @@ Confirm the full CI/CD pipeline completed successfully after merge.
 2. **ArgoCD sync shows new image**:
 
    ```bash
-   argocd-sync-status.sh <app-name>
+   /home/node/.openclaw/skills/morpho-sre/scripts/argocd-sync-status.sh
    ```
 
-   Verify the sync status is "Synced" and the deployed image matches the
-   merged PR's build artifact.
+   The script emits a scoped TSV report. Verify sync status is "Synced" and
+   the deployed image matches the merged PR's build artifact.
 
 3. **No new alerts in 15 minutes post-deploy**:
    - Check BetterStack for new incidents in the affected service
@@ -112,10 +112,10 @@ Compare current state against pre-incident baseline to catch regressions.
 1. **Prometheus metrics comparison**:
 
    ```bash
-   # Compare error rate now vs pre-incident baseline
-   prometheus-trends.sh --service <service> --metric error_rate \
-     --baseline "2h before incident" --current "now"
+   /home/node/.openclaw/skills/morpho-sre/scripts/prometheus-trends.sh
    ```
+
+   Review the output for error rate, latency, and throughput changes.
 
    Key metrics to compare:
    - Error rate (5xx, panics, exceptions)

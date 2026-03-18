@@ -77,11 +77,11 @@ Token is cached at `/tmp/wiz-api-token.json` (chmod 600) and auto-refreshed. Pre
 
 **DuneSQL references (loaded on demand):**
 
-- `references/dune/dunesql-cheatsheet.md` -- types, functions, common patterns
-- `references/dune/dataset-discovery.md` -- dataset search and contract lookup
-- `references/dune/query-execution.md` -- run, run-sql, execution results
-- `references/dune/query-management.md` -- create, get, update, archive
-- `references/dune/docs-and-usage.md` -- docs search and credit usage
+- `dune/dunesql-cheatsheet.md` -- types, functions, common patterns
+- `dune/dataset-discovery.md` -- dataset search and contract lookup
+- `dune/query-execution.md` -- run, run-sql, execution results
+- `dune/query-management.md` -- create, get, update, archive
+- `dune/docs-and-usage.md` -- docs search and credit usage
 
 ## BetterStack Incident API
 

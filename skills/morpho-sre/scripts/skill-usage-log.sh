@@ -14,7 +14,8 @@ LOGFILE="$DATADIR/skill-usage.jsonl"
 umask 077
 mkdir -p "$DATADIR"
 
-case "${1:---help}" in
+ARG="${1:-}"
+case "${ARG:---help}" in
   --report)
     if ! command -v jq >/dev/null 2>&1; then
       printf 'skill-usage-log: jq is required but not found\n' >&2
