@@ -14,6 +14,8 @@ import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw
 import {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
+  type ChannelMessageActionAdapter,
+  type ChannelPlugin,
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
   listDiscordDirectoryGroupsFromConfig,
@@ -21,10 +23,8 @@ import {
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
-  type ChannelMessageActionAdapter,
-  type ChannelPlugin,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/discord";
+} from "./runtime-api.js";
 import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   listDiscordAccountIds,
