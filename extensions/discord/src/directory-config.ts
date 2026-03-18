@@ -4,15 +4,20 @@ import {
   toDirectoryEntries,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import type { InspectedDiscordAccount } from "../../../src/channels/read-only-account-inspect.discord.runtime.js";
-import { inspectReadOnlyChannelAccount } from "../../../src/channels/read-only-account-inspect.js";
+import { inspectDiscordAccount } from "../api.js";
+import type { InspectedDiscordAccount } from "../api.js";
 
-export async function listDiscordDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  const account = (await inspectReadOnlyChannelAccount({
-    channelId: "discord",
+function inspectDiscordDirectoryAccount(
+  params: DirectoryConfigParams,
+): InspectedDiscordAccount | null {
+  return inspectDiscordAccount({
     cfg: params.cfg,
     accountId: params.accountId,
-  })) as InspectedDiscordAccount | null;
+  });
+}
+
+export async function listDiscordDirectoryPeersFromConfig(params: DirectoryConfigParams) {
+  const account = inspectDiscordDirectoryAccount(params);
   if (!account || !("config" in account)) {
     return [];
   }
@@ -34,11 +39,7 @@ export async function listDiscordDirectoryPeersFromConfig(params: DirectoryConfi
 }
 
 export async function listDiscordDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  const account = (await inspectReadOnlyChannelAccount({
-    channelId: "discord",
-    cfg: params.cfg,
-    accountId: params.accountId,
-  })) as InspectedDiscordAccount | null;
+  const account = inspectDiscordDirectoryAccount(params);
   if (!account || !("config" in account)) {
     return [];
   }
