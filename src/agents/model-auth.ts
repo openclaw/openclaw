@@ -3,6 +3,7 @@ import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
+import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
   normalizeOptionalSecretInput,
@@ -54,7 +55,26 @@ export function getCustomProviderApiKey(
   provider: string,
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
-  return normalizeOptionalSecretInput(entry?.apiKey);
+  if (!entry?.apiKey) {
+    return undefined;
+  }
+
+  // Handle SecretRef (e.g., { source: "env", provider: "default", id: "API_KEY" })
+  const { ref } = resolveSecretInputRef({ value: entry.apiKey });
+  if (ref) {
+    if (ref.source === "env") {
+      const envValue = process.env[ref.id];
+      if (envValue) {
+        return normalizeOptionalSecretInput(envValue);
+      }
+    }
+    // For file/exec sources, we can't resolve the key here without additional context
+    // Return undefined and let the caller handle the unresolved secret
+    return undefined;
+  }
+
+  // Handle plain string apiKey
+  return normalizeOptionalSecretInput(entry.apiKey);
 }
 
 function resolveProviderAuthOverride(
