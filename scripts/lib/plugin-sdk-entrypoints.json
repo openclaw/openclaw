@@ -92,6 +92,7 @@
   "directory-runtime",
   "json-store",
   "keyed-async-queue",
+  "windows-spawn",
   "provider-auth",
   "provider-auth-api-key",
   "provider-auth-login",
@@ -111,6 +112,7 @@
   "web-media",
   "speech",
   "state-paths",
+  "temp-path",
   "tool-send",
   "secret-input-schema"
 ]
