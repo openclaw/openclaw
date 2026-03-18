@@ -1,4 +1,4 @@
-import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
+import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "./runtime-api.js";
 
 type BlueBubblesConfigPatch = {
   serverUrl?: string;

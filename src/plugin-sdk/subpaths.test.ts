@@ -9,6 +9,7 @@ import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
 import * as lazyRuntimeSdk from "openclaw/plugin-sdk/lazy-runtime";
 import * as lineSdk from "openclaw/plugin-sdk/line";
+import * as lineCoreSdk from "openclaw/plugin-sdk/line-core";
 import * as msteamsSdk from "openclaw/plugin-sdk/msteams";
 import * as nostrSdk from "openclaw/plugin-sdk/nostr";
 import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
@@ -67,6 +68,8 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof coreSdk.definePluginEntry).toBe("function");
     expect(typeof coreSdk.defineChannelPluginEntry).toBe("function");
     expect(typeof coreSdk.defineSetupPluginEntry).toBe("function");
+    expect(typeof coreSdk.createChannelPluginBase).toBe("function");
+    expect(typeof coreSdk.optionalStringEnum).toBe("function");
     expect("runPassiveAccountLifecycle" in asExports(coreSdk)).toBe(false);
     expect("createLoggerBackedRuntime" in asExports(coreSdk)).toBe(false);
     expect("registerSandboxBackend" in asExports(coreSdk)).toBe(false);
@@ -94,8 +97,18 @@ describe("plugin-sdk subpath exports", () => {
 
   it("exports shared setup helpers from the dedicated subpath", () => {
     expect(typeof setupSdk.DEFAULT_ACCOUNT_ID).toBe("string");
+    expect(typeof setupSdk.createAccountScopedAllowFromSection).toBe("function");
+    expect(typeof setupSdk.createAccountScopedGroupAccessSection).toBe("function");
+    expect(typeof setupSdk.createLegacyCompatChannelDmPolicy).toBe("function");
+    expect(typeof setupSdk.createNestedChannelDmPolicy).toBe("function");
+    expect(typeof setupSdk.createTopLevelChannelDmPolicy).toBe("function");
+    expect(typeof setupSdk.createTopLevelChannelDmPolicySetter).toBe("function");
     expect(typeof setupSdk.formatDocsLink).toBe("function");
     expect(typeof setupSdk.mergeAllowFromEntries).toBe("function");
+    expect(typeof setupSdk.patchNestedChannelConfigSection).toBe("function");
+    expect(typeof setupSdk.patchTopLevelChannelConfigSection).toBe("function");
+    expect(typeof setupSdk.resolveGroupAllowlistWithLookupNotes).toBe("function");
+    expect(typeof setupSdk.setAccountDmAllowFromForChannel).toBe("function");
     expect(typeof setupSdk.setTopLevelChannelDmPolicyWithAllowFrom).toBe("function");
     expect(typeof setupSdk.formatResolvedUnresolvedNote).toBe("function");
   });
@@ -205,6 +218,12 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof lineSdk.createInfoCard).toBe("function");
     expect(typeof lineSdk.lineSetupWizard).toBe("object");
     expect(typeof lineSdk.lineSetupAdapter).toBe("object");
+  });
+
+  it("exports narrow LINE core helpers", () => {
+    expect(typeof lineCoreSdk.resolveLineAccount).toBe("function");
+    expect(typeof lineCoreSdk.listLineAccountIds).toBe("function");
+    expect(typeof lineCoreSdk.LineConfigSchema).toBe("object");
   });
 
   it("exports Microsoft Teams helpers", () => {

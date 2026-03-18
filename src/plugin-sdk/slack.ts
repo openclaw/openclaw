@@ -43,7 +43,7 @@ export {
 export {
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
-} from "../channels/plugins/group-mentions.js";
+} from "../../extensions/slack/src/group-policy.js";
 export { SlackConfigSchema } from "../config/zod-schema.providers-core.js";
 export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 
@@ -78,6 +78,4 @@ export {
   unpinSlackMessage,
 } from "../../extensions/slack/api.js";
 export { recordSlackThreadParticipation } from "../../extensions/slack/api.js";
-export { handleSlackMessageAction } from "./slack-message-actions.js";
-export { createSlackActions } from "../channels/plugins/slack.actions.js";
-export type { SlackActionContext } from "../agents/tools/slack-actions.js";
+export type { SlackActionContext } from "../../extensions/slack/runtime-api.js";

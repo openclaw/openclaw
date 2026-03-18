@@ -55,7 +55,7 @@ describe("createSynologyChatPlugin", () => {
 
     it("defaultAccountId returns 'default'", () => {
       const plugin = createSynologyChatPlugin();
-      expect(plugin.config.defaultAccountId({})).toBe("default");
+      expect(plugin.config.defaultAccountId?.({})).toBe("default");
     });
   });
 
@@ -79,7 +79,7 @@ describe("createSynologyChatPlugin", () => {
       expect(result.policy).toBe("allowlist");
       expect(result.allowFrom).toEqual(["user1"]);
       expect(typeof result.normalizeEntry).toBe("function");
-      expect(result.normalizeEntry("  USER1  ")).toBe("user1");
+      expect(result.normalizeEntry?.("  USER1  ")).toBe("user1");
     });
   });
 

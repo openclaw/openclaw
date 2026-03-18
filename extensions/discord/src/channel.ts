@@ -3,8 +3,8 @@ import {
   buildAccountScopedAllowlistConfigEditor,
   resolveLegacyDmAllowlistConfigPaths,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
-  buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyConfiguredRouteWarnings,
   collectOpenProviderGroupPolicyWarnings,
 } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -14,6 +14,8 @@ import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw
 import {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
+  type ChannelMessageActionAdapter,
+  type ChannelPlugin,
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
   listDiscordDirectoryGroupsFromConfig,
@@ -21,12 +23,8 @@ import {
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
-  resolveDiscordGroupRequireMention,
-  resolveDiscordGroupToolPolicy,
-  type ChannelMessageActionAdapter,
-  type ChannelPlugin,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/discord";
+} from "./runtime-api.js";
 import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   listDiscordAccountIds,
@@ -38,6 +36,10 @@ import {
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./exec-approvals.js";
+import {
+  resolveDiscordGroupRequireMention,
+  resolveDiscordGroupToolPolicy,
+} from "./group-policy.js";
 import { monitorDiscordProvider } from "./monitor.js";
 import {
   looksLikeDiscordTargetId,
@@ -61,6 +63,14 @@ type DiscordSendFn = ReturnType<
 const meta = getChatChannelMeta("discord");
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 
+const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAccount>({
+  channelKey: "discord",
+  resolvePolicy: (account) => account.config.dm?.policy,
+  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
+  allowFromPathSuffix: "dm.",
+  normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
+});
+
 function formatDiscordIntents(intents?: {
   messageContent?: string;
   guildMembers?: string;
@@ -79,12 +89,6 @@ function formatDiscordIntents(intents?: {
 const discordMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: (ctx) =>
     getDiscordRuntime().channel.discord.messageActions?.describeMessageTool?.(ctx) ?? null,
-  listActions: (ctx) =>
-    getDiscordRuntime().channel.discord.messageActions?.listActions?.(ctx) ?? [],
-  getCapabilities: (ctx) =>
-    getDiscordRuntime().channel.discord.messageActions?.getCapabilities?.(ctx) ?? [],
-  getToolSchema: (ctx) =>
-    getDiscordRuntime().channel.discord.messageActions?.getToolSchema?.(ctx) ?? null,
   extractToolSend: (ctx) =>
     getDiscordRuntime().channel.discord.messageActions?.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
@@ -306,18 +310,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     }),
   },
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "discord",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dm?.policy,
-        allowFrom: account.config.dm?.allowFrom ?? [],
-        allowFromPathSuffix: "dm.",
-        normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
-      });
-    },
+    resolveDmPolicy: resolveDiscordDmPolicy,
     collectWarnings: ({ account, cfg }) => {
       const guildEntries = account.config.guilds ?? {};
       const guildsConfigured = Object.keys(guildEntries).length > 0;
@@ -366,6 +359,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeDiscordMessagingTarget,
+    resolveSessionTarget: ({ id }) => normalizeDiscordMessagingTarget(`channel:${id}`),
     parseExplicitTarget: ({ raw }) => parseDiscordExplicitTarget(raw),
     inferTargetChatType: ({ to }) => parseDiscordExplicitTarget(to)?.chatType,
     buildCrossContextComponents: buildDiscordCrossContextComponents,

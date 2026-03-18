@@ -42,7 +42,9 @@ export * from "../channels/plugins/outbound/interactive.js";
 export * from "../channels/plugins/status-issues/shared.js";
 export * from "../channels/plugins/whatsapp-heartbeat.js";
 export * from "../infra/outbound/send-deps.js";
+export * from "../polls.js";
 export * from "../utils/message-channel.js";
+export { createActionGate, jsonResult, readStringParam } from "../agents/tools/common.js";
 export * from "./channel-lifecycle.js";
 export type {
   InteractiveButtonStyle,

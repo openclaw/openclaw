@@ -3,6 +3,7 @@ import {
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
@@ -12,8 +13,6 @@ import {
   resolveWhatsAppConfigAllowFrom,
   resolveWhatsAppConfigDefaultTo,
   resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppGroupRequireMention,
-  resolveWhatsAppGroupToolPolicy,
   WhatsAppConfigSchema,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/whatsapp-core";
@@ -23,6 +22,10 @@ import {
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
+import {
+  resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
+} from "./group-policy.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
 
@@ -96,7 +99,7 @@ export function createWhatsAppPluginBase(params: {
   | "setup"
   | "groups"
 > {
-  return {
+  return createChannelPluginBase({
     id: WHATSAPP_CHANNEL,
     meta: {
       ...getChatChannelMeta(WHATSAPP_CHANNEL),
@@ -218,5 +221,18 @@ export function createWhatsAppPluginBase(params: {
       resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
       resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
     },
-  };
+  }) as Pick<
+    ChannelPlugin<ResolvedWhatsAppAccount>,
+    | "id"
+    | "meta"
+    | "setupWizard"
+    | "capabilities"
+    | "reload"
+    | "gatewayMethods"
+    | "configSchema"
+    | "config"
+    | "security"
+    | "setup"
+    | "groups"
+  >;
 }

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { ChannelMessageActionAdapter } from "../types.js";
 
 const handleDiscordAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 const handleTelegramAction = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
@@ -7,11 +8,11 @@ const sendReactionSignal = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const removeReactionSignal = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const handleSlackAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 
-vi.mock("../../../agents/tools/discord-actions.js", () => ({
+vi.mock("../../../../extensions/discord/src/actions/runtime.js", () => ({
   handleDiscordAction,
 }));
 
-vi.mock("../../../agents/tools/telegram-actions.js", () => ({
+vi.mock("../../../../extensions/telegram/src/action-runtime.js", () => ({
   handleTelegramAction,
 }));
 
@@ -20,15 +21,22 @@ vi.mock("../../../../extensions/signal/src/send-reactions.js", () => ({
   removeReactionSignal,
 }));
 
-vi.mock("../../../agents/tools/slack-actions.js", () => ({
+vi.mock("../../../../extensions/slack/src/action-runtime.js", () => ({
   handleSlackAction,
 }));
 
 let discordMessageActions: typeof import("./discord.js").discordMessageActions;
 let handleDiscordMessageAction: typeof import("./discord/handle-action.js").handleDiscordMessageAction;
 let telegramMessageActions: typeof import("./telegram.js").telegramMessageActions;
-let signalMessageActions: typeof import("./signal.js").signalMessageActions;
-let createSlackActions: typeof import("../slack.actions.js").createSlackActions;
+let signalMessageActions: typeof import("../../../../extensions/signal/src/message-actions.js").signalMessageActions;
+let createSlackActions: typeof import("../../../../extensions/slack/src/channel-actions.js").createSlackActions;
+
+function getDescribedActions(params: {
+  describeMessageTool?: ChannelMessageActionAdapter["describeMessageTool"];
+  cfg: OpenClawConfig;
+}) {
+  return [...(params.describeMessageTool?.({ cfg: params.cfg })?.actions ?? [])];
+}
 
 function telegramCfg(): OpenClawConfig {
   return { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
@@ -196,8 +204,8 @@ beforeEach(async () => {
   ({ discordMessageActions } = await import("./discord.js"));
   ({ handleDiscordMessageAction } = await import("./discord/handle-action.js"));
   ({ telegramMessageActions } = await import("./telegram.js"));
-  ({ signalMessageActions } = await import("./signal.js"));
-  ({ createSlackActions } = await import("../slack.actions.js"));
+  ({ signalMessageActions } = await import("../../../../extensions/signal/src/message-actions.js"));
+  ({ createSlackActions } = await import("../../../../extensions/slack/src/channel-actions.js"));
   vi.clearAllMocks();
 });
 
@@ -284,7 +292,10 @@ describe("discord message actions", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const actions = discordMessageActions.listActions?.({ cfg: testCase.cfg }) ?? [];
+      const actions = getDescribedActions({
+        describeMessageTool: discordMessageActions.describeMessageTool,
+        cfg: testCase.cfg,
+      });
       if (testCase.expectUploads) {
         expect(actions, testCase.name).toContain("emoji-upload");
         expect(actions, testCase.name).toContain("sticker-upload");
@@ -629,7 +640,10 @@ describe("telegramMessageActions", () => {
         expectTopicEdit: true,
       },
     ]) {
-      const actions = telegramMessageActions.listActions?.({ cfg: testCase.cfg }) ?? [];
+      const actions = getDescribedActions({
+        describeMessageTool: telegramMessageActions.describeMessageTool,
+        cfg: testCase.cfg,
+      });
       if (testCase.expectPoll) {
         expect(actions, testCase.name).toContain("poll");
       } else {
@@ -680,7 +694,10 @@ describe("telegramMessageActions", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const actions = telegramMessageActions.listActions?.({ cfg: testCase.cfg }) ?? [];
+      const actions = getDescribedActions({
+        describeMessageTool: telegramMessageActions.describeMessageTool,
+        cfg: testCase.cfg,
+      });
       if (testCase.expectSticker) {
         expect(actions, testCase.name).toContain("sticker");
         expect(actions, testCase.name).toContain("sticker-search");
@@ -903,7 +920,10 @@ describe("telegramMessageActions", () => {
         },
       },
     } as OpenClawConfig;
-    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
+    const actions = getDescribedActions({
+      describeMessageTool: telegramMessageActions.describeMessageTool,
+      cfg,
+    });
 
     expect(actions).toContain("sticker");
     expect(actions).toContain("sticker-search");
@@ -1069,7 +1089,7 @@ describe("signalMessageActions", () => {
 
     for (const testCase of cases) {
       expect(
-        signalMessageActions.listActions?.({ cfg: testCase.cfg }) ?? [],
+        signalMessageActions.describeMessageTool?.({ cfg: testCase.cfg })?.actions ?? [],
         testCase.name,
       ).toEqual(testCase.expected);
     }

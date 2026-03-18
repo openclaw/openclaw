@@ -1,5 +1,5 @@
+import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import { buildAccountScopedDmSecurityPolicy } from "openclaw/plugin-sdk/channel-policy";
 import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
@@ -217,15 +217,23 @@ function resolveZalouserRequireMention(params: ChannelGroupContext): boolean {
   return true;
 }
 
+const resolveZalouserDmPolicy = createScopedDmSecurityResolver<ResolvedZalouserAccount>({
+  channelKey: "zalouser",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+  normalizeEntry: (raw) => raw.replace(/^(zalouser|zlu):/i, ""),
+});
+
 const zalouserMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
+  describeMessageTool: ({ cfg }) => {
     const accounts = listZalouserAccountIds(cfg)
       .map((accountId) => resolveZalouserAccountSync({ cfg, accountId }))
       .filter((account) => account.enabled);
     if (accounts.length === 0) {
-      return [];
+      return null;
     }
-    return ["react"];
+    return { actions: ["react"] };
   },
   supportsAction: ({ action }) => action === "react",
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
@@ -292,18 +300,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     setup: zalouserSetupAdapter,
   }),
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "zalouser",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dmPolicy,
-        allowFrom: account.config.allowFrom ?? [],
-        policyPathSuffix: "dmPolicy",
-        normalizeEntry: (raw) => raw.replace(/^(zalouser|zlu):/i, ""),
-      });
-    },
+    resolveDmPolicy: resolveZalouserDmPolicy,
   },
   groups: {
     resolveRequireMention: resolveZalouserRequireMention,

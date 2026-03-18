@@ -1,6 +1,6 @@
 import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
-  buildAccountScopedDmSecurityPolicy,
+  createScopedDmSecurityResolver,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
@@ -11,20 +11,29 @@ import {
   formatTrimmedAllowFromEntries,
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
-  resolveIMessageGroupRequireMention,
-  resolveIMessageGroupToolPolicy,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/imessage";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
+import {
+  resolveIMessageGroupRequireMention,
+  resolveIMessageGroupToolPolicy,
+} from "./group-policy.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { imessageSetupAdapter } from "./setup-core.js";
 import { createIMessagePluginBase, imessageSetupWizard } from "./shared.js";
 import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
 
 const loadIMessageChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+
+const resolveIMessageDmPolicy = createScopedDmSecurityResolver<ResolvedIMessageAccount>({
+  channelKey: "imessage",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+});
 
 function buildIMessageBaseSessionKey(params: {
   cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
@@ -127,17 +136,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     }),
   },
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "imessage",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dmPolicy,
-        allowFrom: account.config.allowFrom ?? [],
-        policyPathSuffix: "dmPolicy",
-      });
-    },
+    resolveDmPolicy: resolveIMessageDmPolicy,
     collectWarnings: ({ account, cfg }) => {
       return collectAllowlistProviderRestrictSendersWarnings({
         cfg,

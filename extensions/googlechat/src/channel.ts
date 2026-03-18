@@ -19,7 +19,6 @@ import {
   missingTargetError,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
-  resolveGoogleChatGroupRequireMention,
   runPassiveAccountLifecycle,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
@@ -36,6 +35,7 @@ import {
   type ResolvedGoogleChatAccount,
 } from "./accounts.js";
 import { googlechatMessageActions } from "./actions.js";
+import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
@@ -98,7 +98,7 @@ const resolveGoogleChatDmPolicy = createScopedDmSecurityResolver<ResolvedGoogleC
 });
 
 const googlechatActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => googlechatMessageActions.listActions?.(ctx) ?? [],
+  describeMessageTool: (ctx) => googlechatMessageActions.describeMessageTool?.(ctx) ?? null,
   extractToolSend: (ctx) => googlechatMessageActions.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
     if (!googlechatMessageActions.handleAction) {

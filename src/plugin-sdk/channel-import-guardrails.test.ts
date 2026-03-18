@@ -5,10 +5,12 @@ import { describe, expect, it } from "vitest";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ALLOWED_EXTENSION_PUBLIC_SEAMS = new Set([
+  "action-runtime.runtime.js",
   "api.js",
   "index.js",
   "login-qr-api.js",
   "runtime-api.js",
+  "setup-api.js",
   "setup-entry.js",
 ]);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
@@ -24,7 +26,6 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "msteams",
   "nostr",
   "nextcloud-talk",
-  "nostr",
   "signal",
   "slack",
   "synology-chat",
@@ -117,16 +118,22 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
 ];
 
 const LOCAL_EXTENSION_API_BARREL_GUARDS = [
+  "bluebubbles",
   "device-pair",
   "diagnostics-otel",
   "diffs",
+  "feishu",
   "llm-task",
   "line",
+  "matrix",
+  "mattermost",
   "memory-lancedb",
+  "msteams",
   "nextcloud-talk",
   "synology-chat",
   "talk-voice",
   "thread-ownership",
+  "tlon",
   "voice-call",
 ] as const;
 
@@ -322,6 +329,15 @@ describe("channel import guardrails", () => {
       );
       expect(text, `${file} should not import openclaw/plugin-sdk/compat`).not.toMatch(
         /["']openclaw\/plugin-sdk\/compat["']/,
+      );
+    }
+  });
+
+  it("keeps extension production files off direct core src imports", () => {
+    for (const file of collectExtensionSourceFiles()) {
+      const text = readFileSync(file, "utf8");
+      expect(text, `${file} should not import ../../src/* core internals directly`).not.toMatch(
+        /["'][^"']*(?:\.\.\/){2,}src\//,
       );
     }
   });
