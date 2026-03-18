@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isSlackStreamingEnabled,
+  resolveSlackDeliveryThreadTs,
   resolveSlackStreamingThreadHint,
   shouldEnableSlackPreviewStreaming,
   shouldInitializeSlackDraftStream,
@@ -125,5 +126,33 @@ describe("slack draft stream initialization", () => {
         useStreaming: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe("slack block delivery thread reuse", () => {
+  it("reuses the established thread when first-mode planning is exhausted", () => {
+    expect(
+      resolveSlackDeliveryThreadTs({
+        plannedThreadTs: undefined,
+        usedReplyThreadTs: "3000.1",
+      }),
+    ).toBe("3000.1");
+  });
+
+  it("still prefers an explicit or newly planned thread over the reused thread", () => {
+    expect(
+      resolveSlackDeliveryThreadTs({
+        forcedThreadTs: "3000.2",
+        plannedThreadTs: "3000.3",
+        usedReplyThreadTs: "3000.1",
+      }),
+    ).toBe("3000.2");
+
+    expect(
+      resolveSlackDeliveryThreadTs({
+        plannedThreadTs: "3000.3",
+        usedReplyThreadTs: "3000.1",
+      }),
+    ).toBe("3000.3");
   });
 });
