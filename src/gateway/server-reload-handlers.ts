@@ -154,6 +154,8 @@ export function createGatewayReloadHandlers(params: {
         const result = await ensureOpenClawModelsJson(nextConfig);
         if (result.wrote) {
           params.logReload.info("models.json regenerated from updated config");
+        } else {
+          params.logReload.info("models.json already up-to-date, no write needed");
         }
       } catch (err) {
         params.logReload.warn(`models.json regeneration failed: ${String(err)}`);
