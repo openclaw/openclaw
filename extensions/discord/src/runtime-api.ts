@@ -23,8 +23,11 @@ export {
   listDiscordDirectoryPeersFromConfig,
 } from "./directory-config.js";
 export {
+  createHybridChannelConfigAdapter,
+  createScopedChannelConfigAdapter,
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
+  createTopLevelChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 export {
   createAccountActionGate,
