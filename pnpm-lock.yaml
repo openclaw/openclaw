@@ -196,6 +196,9 @@ importers:
       undici:
         specifier: ^7.24.4
         version: 7.24.4
+      uuid:
+        specifier: ^11.1.0
+        version: 11.1.0
       ws:
         specifier: ^8.19.0
         version: 8.19.0
@@ -477,6 +480,9 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      uuid:
+        specifier: ^11.1.0
+        version: 11.1.0
 
   extensions/nextcloud-talk:
     dependencies:
