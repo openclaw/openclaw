@@ -369,25 +369,6 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, thinkingType);
   }
 
-  if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
-    log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
-    agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
-  }
-
-  // Enable Z.AI tool_stream for real-time tool call streaming.
-  // Enabled by default for Z.AI provider, can be disabled via params.tool_stream: false
-  if (provider === "zai" || provider === "z-ai") {
-    const toolStreamEnabled = effectiveExtraParams?.tool_stream !== false;
-    if (toolStreamEnabled) {
-      log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
-      agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
-    }
-  }
-
-  // Guard Google payloads against invalid negative thinking budgets emitted by
-  // upstream model-ID heuristics for Gemini 3.1 variants.
-  agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
-
   const anthropicFastMode = resolveAnthropicFastMode(effectiveExtraParams);
   if (anthropicFastMode !== undefined) {
     log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);
