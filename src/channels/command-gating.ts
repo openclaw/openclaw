@@ -25,6 +25,12 @@ export function resolveCommandAuthorizedFromAuthorizers(params: {
     }
     return authorizers.some((entry) => entry.configured && entry.allowed);
   }
+  // When access groups are enabled but no authorizer is actually configured,
+  // treat as unrestricted — "not configured" means no restrictions were set,
+  // not "deny everyone". This aligns with the !useAccessGroups path above.
+  if (!authorizers.some((entry) => entry.configured)) {
+    return true;
+  }
   return authorizers.some((entry) => entry.configured && entry.allowed);
 }
 

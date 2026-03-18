@@ -6,11 +6,38 @@ import {
 } from "./command-gating.js";
 
 describe("resolveCommandAuthorizedFromAuthorizers", () => {
-  it("denies when useAccessGroups is enabled and no authorizer is configured", () => {
+  it("allows when useAccessGroups is enabled but no authorizer is configured (#49915)", () => {
+    // When no allowFrom list is configured (configured=false), treat as unrestricted.
+    // Previously this returned false, silently denying all commands in groups
+    // that had not explicitly set up an allowFrom list.
     expect(
       resolveCommandAuthorizedFromAuthorizers({
         useAccessGroups: true,
         authorizers: [{ configured: false, allowed: true }],
+      }),
+    ).toBe(true);
+    expect(
+      resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups: true,
+        authorizers: [{ configured: false, allowed: false }],
+      }),
+    ).toBe(true);
+  });
+
+  it("allows when useAccessGroups is enabled and a configured authorizer allows", () => {
+    expect(
+      resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups: true,
+        authorizers: [{ configured: true, allowed: true }],
+      }),
+    ).toBe(true);
+  });
+
+  it("denies when useAccessGroups is enabled and a configured authorizer rejects", () => {
+    expect(
+      resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups: true,
+        authorizers: [{ configured: true, allowed: false }],
       }),
     ).toBe(false);
   });
@@ -25,6 +52,19 @@ describe("resolveCommandAuthorizedFromAuthorizers", () => {
         ],
       }),
     ).toBe(true);
+  });
+
+  it("denies when useAccessGroups is enabled with mixed configured/unconfigured and no allow", () => {
+    // An unconfigured authorizer should not grant access when a configured one denies.
+    expect(
+      resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups: true,
+        authorizers: [
+          { configured: true, allowed: false },
+          { configured: false, allowed: true },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("allows when useAccessGroups is disabled (default)", () => {
