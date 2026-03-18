@@ -1026,7 +1026,7 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
     severity: "warn",
     title: "Some gateway.nodes.denyCommands entries are ineffective",
     detail:
-      "gateway.nodes.denyCommands uses exact node command-name matching only (for example `system.run`), not shell-text filtering inside a command payload.\n" +
+      "gateway.nodes.denyCommands uses exact node command-name matching only (for example `system.run`), not shell-text filtering inside a command payload. Typos and pattern-like entries silently fail open, so commands you expected to block may still run.\n" +
       detailParts.map((entry) => `- ${entry}`).join("\n"),
     remediation:
       `Use exact command names (for example: ${examples.join(", ")}). ` +
@@ -1304,7 +1304,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
       title: "Open groupPolicy with elevated tools enabled",
       detail:
         `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
-        "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident.",
+        "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident. Mention gates reduce noise, but they are not a trust boundary.",
       remediation: `Set groupPolicy="allowlist" and keep elevated allowlists extremely tight.`,
     });
   }
