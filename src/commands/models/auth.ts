@@ -382,7 +382,12 @@ async function runBuiltInOpenAICodexLogin(params: {
 }
 
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
-  if (!process.stdin.isTTY) {
+  const requestedProviderId = normalizeProviderId(String(opts.provider ?? ""));
+  const allowsNonInteractiveTty =
+    requestedProviderId === "openai-codex" &&
+    resolveBuiltInOpenAICodexMethodOrThrow(opts.method) === "cli";
+
+  if (!process.stdin.isTTY && !allowsNonInteractiveTty) {
     throw new Error("models auth login requires an interactive TTY.");
   }
 
@@ -391,7 +396,6 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const agentDir = resolveAgentDir(config, defaultAgentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(config, defaultAgentId) ?? resolveDefaultAgentWorkspaceDir();
-  const requestedProviderId = normalizeProviderId(String(opts.provider ?? ""));
   const prompter = createClackPrompter();
 
   if (requestedProviderId === "openai-codex") {

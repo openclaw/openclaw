@@ -115,6 +115,24 @@ function withInteractiveStdin() {
   };
 }
 
+function withNonInteractiveStdin() {
+  const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
+  const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdin, "isTTY");
+  const previousIsTTYDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
+  Object.defineProperty(stdin, "isTTY", {
+    configurable: true,
+    enumerable: true,
+    get: () => false,
+  });
+  return () => {
+    if (previousIsTTYDescriptor) {
+      Object.defineProperty(stdin, "isTTY", previousIsTTYDescriptor);
+    } else if (!hadOwnIsTTY) {
+      delete (stdin as { isTTY?: boolean }).isTTY;
+    }
+  };
+}
+
 describe("modelsAuthLoginCommand", () => {
   let restoreStdin: (() => void) | null = null;
   let currentConfig: OpenClawConfig;
@@ -227,6 +245,28 @@ describe("modelsAuthLoginCommand", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Auth profile: openai-codex:device@example.com (openai-codex/oauth)",
+    );
+  });
+
+  it("allows built-in openai-codex CLI login without an interactive TTY", async () => {
+    restoreStdin?.();
+    restoreStdin = withNonInteractiveStdin();
+    const runtime = createRuntime();
+    mocks.writeOAuthCredentials.mockResolvedValueOnce("openai-codex:device@example.com");
+
+    await modelsAuthLoginCommand({ provider: "openai-codex", method: "device-code" }, runtime);
+
+    expect(mocks.loginOpenAICodexDeviceCode).toHaveBeenCalledOnce();
+    expect(mocks.loginOpenAICodexOAuth).not.toHaveBeenCalled();
+  });
+
+  it("still requires an interactive TTY for built-in openai-codex OAuth login", async () => {
+    restoreStdin?.();
+    restoreStdin = withNonInteractiveStdin();
+    const runtime = createRuntime();
+
+    await expect(modelsAuthLoginCommand({ provider: "openai-codex" }, runtime)).rejects.toThrow(
+      "models auth login requires an interactive TTY.",
     );
   });
 
