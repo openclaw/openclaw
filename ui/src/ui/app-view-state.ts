@@ -357,7 +357,6 @@ export type AppViewState = {
     handleDebugCall: () => Promise<void>;
     handleRunUpdate: () => Promise<void>;
     setPassword: (next: string) => void;
-    setSessionKey: (next: string) => void;
     setChatMessage: (next: string) => void;
     handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
     handleAbortChat: () => Promise<void>;
