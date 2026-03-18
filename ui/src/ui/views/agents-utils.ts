@@ -195,9 +195,17 @@ export function normalizeAgentLabel(agent: {
 }
 
 const AVATAR_URL_RE = /^(https?:\/\/|data:image\/|\/)/i;
+const AVATAR_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|ico)$/i;
+
+function looksLikeAvatarPath(value: string): boolean {
+  if (/[\\/]/.test(value)) {
+    return true;
+  }
+  return AVATAR_FILE_EXT_RE.test(value);
+}
 
 export function resolveAgentAvatarUrl(
-  agent: { identity?: { avatar?: string; avatarUrl?: string } },
+  agent: { id?: string; identity?: { avatar?: string; avatarUrl?: string } },
   agentIdentity?: AgentIdentityResult | null,
 ): string | null {
   const candidates = [
@@ -211,6 +219,10 @@ export function resolveAgentAvatarUrl(
     }
     if (AVATAR_URL_RE.test(candidate)) {
       return candidate;
+    }
+    // Support workspace-relative avatar paths by routing through the avatar endpoint
+    if (looksLikeAvatarPath(candidate) && agent.id) {
+      return `/avatar/${encodeURIComponent(agent.id)}`;
     }
   }
   return null;

@@ -234,6 +234,14 @@ function dismissUpdateBanner(updateAvailable: unknown) {
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
+const AVATAR_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|ico)$/i;
+
+function looksLikeAvatarPath(value: string): boolean {
+  if (/[\\/]/.test(value)) {
+    return true;
+  }
+  return AVATAR_FILE_EXT_RE.test(value);
+}
 const COMMUNICATION_SECTION_KEYS = ["channels", "messages", "broadcast", "talk", "audio"] as const;
 const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
 const AUTOMATION_SECTION_KEYS = [
@@ -279,6 +287,10 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   }
   if (AVATAR_DATA_RE.test(candidate) || AVATAR_HTTP_RE.test(candidate)) {
     return candidate;
+  }
+  // Support workspace-relative avatar paths by routing through the avatar endpoint
+  if (looksLikeAvatarPath(candidate) && agentId) {
+    return `/avatar/${encodeURIComponent(agentId)}`;
   }
   return identity?.avatarUrl;
 }

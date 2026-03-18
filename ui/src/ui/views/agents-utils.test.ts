@@ -116,7 +116,7 @@ describe("resolveAgentAvatarUrl", () => {
   it("prefers a runtime avatar URL over non-URL identity avatars", () => {
     expect(
       resolveAgentAvatarUrl(
-        { identity: { avatar: "A", avatarUrl: "/avatar/main" } },
+        { id: "main", identity: { avatar: "A", avatarUrl: "/avatar/main" } },
         {
           agentId: "main",
           avatar: "A",
@@ -127,7 +127,43 @@ describe("resolveAgentAvatarUrl", () => {
   });
 
   it("returns null for initials or emoji avatar values without a URL", () => {
-    expect(resolveAgentAvatarUrl({ identity: { avatar: "A" } })).toBeNull();
-    expect(resolveAgentAvatarUrl({ identity: { avatar: "🦞" } })).toBeNull();
+    expect(resolveAgentAvatarUrl({ id: "main", identity: { avatar: "A" } })).toBeNull();
+    expect(resolveAgentAvatarUrl({ id: "main", identity: { avatar: "🦞" } })).toBeNull();
+  });
+
+  it("resolves workspace-relative avatar paths to the avatar endpoint", () => {
+    expect(
+      resolveAgentAvatarUrl({ id: "main", identity: { avatar: "avatars/openclaw.png" } }),
+    ).toBe("/avatar/main");
+    expect(
+      resolveAgentAvatarUrl({ id: "my-agent", identity: { avatar: "images/avatar.jpg" } }),
+    ).toBe("/avatar/my-agent");
+  });
+
+  it("resolves avatar filenames with extensions to the avatar endpoint", () => {
+    expect(resolveAgentAvatarUrl({ id: "test", identity: { avatar: "avatar.png" } })).toBe(
+      "/avatar/test",
+    );
+    expect(resolveAgentAvatarUrl({ id: "test", identity: { avatar: "photo.jpeg" } })).toBe(
+      "/avatar/test",
+    );
+    expect(resolveAgentAvatarUrl({ id: "test", identity: { avatar: "icon.svg" } })).toBe(
+      "/avatar/test",
+    );
+  });
+
+  it("returns null for workspace-relative paths when agent id is missing", () => {
+    expect(resolveAgentAvatarUrl({ identity: { avatar: "avatars/openclaw.png" } })).toBeNull();
+  });
+
+  it("prefers HTTP/HTTPS URLs over workspace-relative paths", () => {
+    expect(
+      resolveAgentAvatarUrl({ id: "main", identity: { avatar: "https://example.com/avatar.png" } }),
+    ).toBe("https://example.com/avatar.png");
+  });
+
+  it("prefers data URIs over workspace-relative paths", () => {
+    const dataUri = "data:image/png;base64,iVBORw0KGgo=";
+    expect(resolveAgentAvatarUrl({ id: "main", identity: { avatar: dataUri } })).toBe(dataUri);
   });
 });
