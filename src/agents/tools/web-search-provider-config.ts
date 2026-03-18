@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolvePluginWebSearchConfig } from "../../config/legacy-web-search.js";
 
 type ConfiguredWebSearchProvider = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]
@@ -76,6 +77,40 @@ export function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
     return undefined;
   }
   return search as WebSearchConfig;
+}
+
+export function resolveProviderWebSearchPluginConfig(
+  config: OpenClawConfig | undefined,
+  pluginId: string,
+): Record<string, unknown> | undefined {
+  return resolvePluginWebSearchConfig(config, pluginId);
+}
+
+function ensureObject(target: Record<string, unknown>, key: string): Record<string, unknown> {
+  const current = target[key];
+  if (current && typeof current === "object" && !Array.isArray(current)) {
+    return current as Record<string, unknown>;
+  }
+  const next: Record<string, unknown> = {};
+  target[key] = next;
+  return next;
+}
+
+export function setProviderWebSearchPluginConfigValue(
+  configTarget: OpenClawConfig,
+  pluginId: string,
+  key: string,
+  value: unknown,
+): void {
+  const plugins = ensureObject(configTarget as Record<string, unknown>, "plugins");
+  const entries = ensureObject(plugins, "entries");
+  const entry = ensureObject(entries, pluginId);
+  if (entry.enabled === undefined) {
+    entry.enabled = true;
+  }
+  const config = ensureObject(entry, "config");
+  const webSearch = ensureObject(config, "webSearch");
+  webSearch[key] = value;
 }
 
 export function resolveSearchEnabled(params: {
