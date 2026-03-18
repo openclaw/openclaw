@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type LoggerModule = typeof import("./logger.js");
@@ -39,6 +40,9 @@ async function importBrowserSafeLogger(params?: {
 }
 
 describe("logging/logger browser-safe import", () => {
+  const expectedLogDir = path.join(path.sep, "tmp", "openclaw");
+  const expectedLogFile = path.join(expectedLogDir, "openclaw.log");
+
   afterEach(() => {
     vi.resetModules();
     vi.doUnmock("../infra/tmp-openclaw-dir.js");
@@ -52,8 +56,8 @@ describe("logging/logger browser-safe import", () => {
     const { module, resolvePreferredOpenClawTmpDir } = await importBrowserSafeLogger();
 
     expect(resolvePreferredOpenClawTmpDir).not.toHaveBeenCalled();
-    expect(module.DEFAULT_LOG_DIR).toBe("/tmp/openclaw");
-    expect(module.DEFAULT_LOG_FILE).toBe("/tmp/openclaw/openclaw.log");
+    expect(module.DEFAULT_LOG_DIR).toBe(expectedLogDir);
+    expect(module.DEFAULT_LOG_FILE).toBe(expectedLogFile);
   });
 
   it("disables file logging when imported in a browser-like environment", async () => {
@@ -61,7 +65,7 @@ describe("logging/logger browser-safe import", () => {
 
     expect(module.getResolvedLoggerSettings()).toMatchObject({
       level: "silent",
-      file: "/tmp/openclaw/openclaw.log",
+      file: expectedLogFile,
     });
     expect(module.isFileLogLevelEnabled("info")).toBe(false);
     expect(() => module.getLogger().info("browser-safe")).not.toThrow();
