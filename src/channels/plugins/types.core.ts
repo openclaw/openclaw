@@ -521,6 +521,10 @@ export type ChannelMessageActionAdapter = {
     toolContext?: ChannelThreadingToolContext;
   }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
+  /**
+   * Prefer this for channel-specific poll semantics or extra poll parameters.
+   * Core only parses the shared poll model when falling back to `outbound.sendPoll`.
+   */
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };
 
