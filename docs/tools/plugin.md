@@ -1147,11 +1147,18 @@ authoring plugins:
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/channel-policy`,
+  `openclaw/plugin-sdk/channel-runtime`,
+  `openclaw/plugin-sdk/config-runtime`,
+  `openclaw/plugin-sdk/agent-runtime`,
   `openclaw/plugin-sdk/lazy-runtime`,
   `openclaw/plugin-sdk/reply-history`,
   `openclaw/plugin-sdk/routing`,
   `openclaw/plugin-sdk/runtime-store`, and
   `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
+- Narrow channel-core subpaths such as `openclaw/plugin-sdk/discord-core`,
+  `openclaw/plugin-sdk/telegram-core`, `openclaw/plugin-sdk/whatsapp-core`,
+  and `openclaw/plugin-sdk/line-core` for channel-specific primitives that
+  should stay smaller than the full channel helper barrels.
 - `openclaw/plugin-sdk/compat` remains as a legacy migration surface for older
   external plugins. Bundled plugins should not use it, and non-test imports emit
   a one-time deprecation warning outside test environments.
