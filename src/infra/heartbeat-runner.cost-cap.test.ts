@@ -119,10 +119,7 @@ afterEach(() => {
 });
 
 describe("runHeartbeatOnce – maxCostPerRun", () => {
-  async function runWithCostCap(params: {
-    maxCostPerRun?: number;
-    model?: string;
-  }) {
+  async function runWithCostCap(params: { maxCostPerRun?: number; model?: string }) {
     return withTempHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
         const cfg: OpenClawConfig = {
