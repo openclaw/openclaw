@@ -67,19 +67,7 @@ export type CronPreCheck = {
 
 export type CronPayload =
   | { kind: "systemEvent"; text: string }
-  | {
-      kind: "agentTurn";
-      message: string;
-      /** Optional model override (provider/model or alias). */
-      model?: string;
-      thinking?: string;
-      timeoutSeconds?: number;
-      allowUnsafeExternalContent?: boolean;
-      deliver?: boolean;
-      channel?: CronMessageChannel;
-      to?: string;
-      bestEffortDeliver?: boolean;
-    };
+  | ({ kind: "agentTurn" } & CronAgentTurnPayloadFields);
 
 export type CronUsageSummary = {
   input_tokens?: number;
@@ -175,6 +163,7 @@ export type CronJob = {
   updatedAtMs: number;
   schedule: CronSchedule;
   sessionTarget: CronSessionTarget;
+  sessionKey?: string;
   wakeMode: CronWakeMode;
   payload: CronPayload;
   /** Optional pre-check gate. Runs a shell command before the agent turn;
