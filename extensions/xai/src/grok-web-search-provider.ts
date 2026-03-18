@@ -8,10 +8,10 @@ import {
   readNumberParam,
   readProviderEnvValue,
   readStringParam,
+  resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
-  resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
@@ -296,19 +296,23 @@ export function createGrokWebSearchProvider(): WebSearchProviderPlugin {
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "xai", "apiKey", value);
     },
-    createTool: (ctx) => {
-      const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "xai");
-      const searchConfig = {
-        ...(ctx.searchConfig as SearchConfigRecord | undefined),
-        grok: {
-          ...((ctx.searchConfig as SearchConfigRecord | undefined)?.grok as
-            | Record<string, unknown>
-            | undefined),
-          ...(pluginConfig as Record<string, unknown> | undefined),
-        },
-      } as SearchConfigRecord;
-      return createGrokToolDefinition(searchConfig);
-    },
+    createTool: (ctx) =>
+      createGrokToolDefinition(
+        (() => {
+          const searchConfig = ctx.searchConfig as SearchConfigRecord | undefined;
+          const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "xai");
+          if (!pluginConfig) {
+            return searchConfig;
+          }
+          return {
+            ...(searchConfig ?? {}),
+            grok: {
+              ...resolveGrokConfig(searchConfig),
+              ...pluginConfig,
+            },
+          } as SearchConfigRecord;
+        })(),
+      ),
   };
 }
 

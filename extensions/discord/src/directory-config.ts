@@ -7,11 +7,11 @@ import {
 import { inspectDiscordAccount, type InspectedDiscordAccount } from "../api.js";
 
 export async function listDiscordDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  const account = inspectDiscordAccount({
+  const account: InspectedDiscordAccount = inspectDiscordAccount({
     cfg: params.cfg,
     accountId: params.accountId,
-  }) as InspectedDiscordAccount | null;
-  if (!account || !("config" in account)) {
+  });
+  if (!account.config) {
     return [];
   }
 
@@ -32,11 +32,11 @@ export async function listDiscordDirectoryPeersFromConfig(params: DirectoryConfi
 }
 
 export async function listDiscordDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  const account = inspectDiscordAccount({
+  const account: InspectedDiscordAccount = inspectDiscordAccount({
     cfg: params.cfg,
     accountId: params.accountId,
-  }) as InspectedDiscordAccount | null;
-  if (!account || !("config" in account)) {
+  });
+  if (!account.config) {
     return [];
   }
 

@@ -218,7 +218,7 @@ function setResolvedWebSearchApiKey(params: {
   const search = ensureObject(web, "search");
   const provider = resolvePluginWebSearchProviders({
     config: params.sourceConfig,
-    env: params.env,
+    env: { ...process.env, ...params.env },
     bundledAllowlistCompat: true,
   }).find((entry) => entry.id === params.provider);
   if (provider?.setConfiguredCredentialValue) {
@@ -271,7 +271,7 @@ export async function resolveRuntimeWebTools(params: {
   const providers = search
     ? resolvePluginWebSearchProviders({
         config: params.sourceConfig,
-        env: params.context.env,
+        env: { ...process.env, ...params.context.env },
         bundledAllowlistCompat: true,
       })
     : [];

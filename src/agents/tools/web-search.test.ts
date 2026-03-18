@@ -238,7 +238,7 @@ describe("web_search kimi config resolution", () => {
 
 describe("web_search brave mode resolution", () => {
   it("defaults to web mode", () => {
-    expect(resolveBraveMode(undefined)).toBe("web");
+    expect(resolveBraveMode({})).toBe("web");
   });
 
   it("honors explicit llm-context mode", () => {
