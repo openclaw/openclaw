@@ -502,6 +502,46 @@ describe("resolveSessionModelRef", () => {
       model: "anthropic/claude-opus-4.6",
     });
   });
+
+  test("normalizes provider aliases in providerOverride", () => {
+    // Provider aliases like "kimi-coding" should be normalized to "kimi"
+    // when returning from the early-return path.
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "kimi-session",
+      updatedAt: Date.now(),
+      modelOverride: "kimi-k2-0711-preview",
+      providerOverride: "kimi-coding",
+    });
+
+    expect(resolved).toEqual({
+      provider: "kimi",
+      model: "kimi-k2-0711-preview",
+    });
+  });
+
+  test("normalizes provider aliases in runtime modelProvider", () => {
+    // Provider aliases like "aws-bedrock" should be normalized to "amazon-bedrock"
+    // when returning from the early-return path for runtime fields.
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "bedrock-session",
+      updatedAt: Date.now(),
+      model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      modelProvider: "aws-bedrock",
+    });
+
+    expect(resolved).toEqual({
+      provider: "amazon-bedrock",
+      model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    });
+  });
 });
 
 describe("resolveSessionModelIdentityRef", () => {
