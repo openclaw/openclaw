@@ -156,6 +156,44 @@ describe("ensurePrivateSessionsDir", () => {
     }
   });
 
+  it("rejects when a symlinked state-root alias target changes before child mkdirs", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-root-alias-swap-"));
+    const realStateDir = path.join(tempDir, "real-state");
+    const movedStateDir = path.join(tempDir, "moved-state");
+    const aliasStateDir = path.join(tempDir, "alias-state");
+    const sessionsDir = path.join(aliasStateDir, "agents", "main", "sessions");
+    const aliasAgentsDir = path.join(aliasStateDir, "agents");
+    const realMkdir = fsPromises.mkdir.bind(fsPromises);
+
+    fs.mkdirSync(realStateDir, { recursive: true });
+    fs.symlinkSync(realStateDir, aliasStateDir, "dir");
+
+    vi.spyOn(fsPromises, "mkdir").mockImplementation(async (filePath, options) => {
+      const resolved = path.resolve(String(filePath));
+      if (resolved === aliasAgentsDir && !fs.existsSync(movedStateDir)) {
+        fs.renameSync(realStateDir, movedStateDir);
+        fs.mkdirSync(realStateDir, { recursive: true });
+      }
+      return await realMkdir(filePath, options);
+    });
+
+    try {
+      const { ensurePrivateSessionsDir } = await import("./paths.js");
+
+      await expect(ensurePrivateSessionsDir(sessionsDir)).rejects.toThrow(
+        /changed during permission update/i,
+      );
+      expect(fs.existsSync(path.join(realStateDir, "agents", "main"))).toBe(false);
+      expect(fs.existsSync(path.join(movedStateDir, "agents"))).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects when the directory identity changes before chmod", async () => {
     if (process.platform === "win32") {
       return;
@@ -218,6 +256,43 @@ describe("ensurePrivateSessionsDir", () => {
       expect(open).toHaveBeenCalled();
       expect(handleChmod).not.toHaveBeenCalled();
       expect(handleClose).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces chmod permission failures for managed session dirs on POSIX", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chmod-eacces-"));
+    const sessionsDir = path.join(tempDir, "sessions");
+    const realOpen = fsPromises.open.bind(fsPromises);
+    const chmodError = Object.assign(new Error("chmod denied"), { code: "EACCES" });
+
+    fs.mkdirSync(sessionsDir, { recursive: true });
+
+    vi.spyOn(fsPromises, "open").mockImplementation(async (filePath, flags) => {
+      const resolved = path.resolve(String(filePath));
+      if (resolved !== sessionsDir) {
+        return await realOpen(filePath, flags);
+      }
+      return {
+        stat: async () => fs.lstatSync(sessionsDir),
+        chmod: async () => {
+          throw chmodError;
+        },
+        close: async () => undefined,
+      } as unknown as fsPromises.FileHandle;
+    });
+
+    try {
+      const { ensurePrivateSessionsDir } = await import("./paths.js");
+
+      await expect(ensurePrivateSessionsDir(sessionsDir)).rejects.toMatchObject({
+        code: "EACCES",
+      });
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

@@ -22,6 +22,8 @@ type PinnedStateRootIdentity = {
   path: string;
   stat: fs.Stats;
   strictDirectoryIdentity: boolean;
+  targetPath?: string;
+  targetStat?: fs.Stats;
 };
 
 function resolveAgentSessionsDir(
@@ -141,10 +143,13 @@ async function capturePinnedStateRootIdentity(
   const stat = await fsPromises.lstat(stateDir);
   if (stat.isSymbolicLink()) {
     // The configured state root may intentionally be a symlink alias.
+    const targetPath = await fsPromises.realpath(stateDir);
     return {
       path: stateDir,
       stat,
       strictDirectoryIdentity: false,
+      targetPath,
+      targetStat: await verifyDirectoryIdentity(targetPath),
     };
   }
   if (!stat.isDirectory()) {
@@ -170,6 +175,13 @@ async function assertPinnedStateRootIdentity(
 
   if (!sameFileIdentity(pinned.stat, current)) {
     throw new Error(`Session transcripts dir changed during permission update: ${pinned.path}`);
+  }
+
+  if (pinned.targetPath && pinned.targetStat) {
+    const currentTarget = await verifyDirectoryIdentity(pinned.targetPath);
+    if (!sameFileIdentity(pinned.targetStat, currentTarget)) {
+      throw new Error(`Session transcripts dir changed during permission update: ${pinned.path}`);
+    }
   }
 }
 
@@ -204,6 +216,33 @@ function assertStablePathIdentities(
     if (!current || !sameFileIdentity(entry.stat, current)) {
       throw new Error(`Session transcripts dir changed during permission update: ${entry.path}`);
     }
+  }
+}
+
+function shouldIgnorePrivateSessionsChmodError(err: unknown): boolean {
+  if (process.platform === "win32") {
+    return true;
+  }
+
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOSYS" || code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EINVAL";
+}
+
+async function applyPrivateSessionsMode(
+  resolved: string,
+  handle?: fsPromises.FileHandle,
+): Promise<void> {
+  try {
+    if (handle) {
+      await handle.chmod(0o700);
+    } else {
+      await fsPromises.chmod(resolved, 0o700);
+    }
+  } catch (err) {
+    if (shouldIgnorePrivateSessionsChmodError(err)) {
+      return;
+    }
+    throw err;
   }
 }
 
@@ -252,22 +291,14 @@ export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<str
       if (!sameFileIdentity(stat, openedStat) || !sameFileIdentity(currentStat, openedStat)) {
         throw new Error(`Session transcripts dir changed during permission update: ${resolved}`);
       }
-      try {
-        await handle.chmod(0o700);
-      } catch {
-        // Best-effort on platforms/filesystems without chmod semantics.
-      }
+      await applyPrivateSessionsMode(resolved, handle);
     } finally {
       await handle.close().catch(() => undefined);
     }
     return resolved;
   }
 
-  try {
-    await fsPromises.chmod(resolved, 0o700);
-  } catch {
-    // Best-effort on platforms/filesystems without chmod semantics.
-  }
+  await applyPrivateSessionsMode(resolved);
   return resolved;
 }
 
