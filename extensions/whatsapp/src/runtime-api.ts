@@ -1,8 +1,8 @@
 export {
+  buildChannelConfigSchema,
   createActionGate,
   DEFAULT_ACCOUNT_ID,
   formatWhatsAppConfigAllowFromEntries,
-  buildChannelConfigSchema,
   getChatChannelMeta,
   jsonResult,
   normalizeE164,
@@ -14,7 +14,7 @@ export {
   WhatsAppConfigSchema,
   type ChannelPlugin,
   type OpenClawConfig,
-} from "../../../src/plugin-sdk/whatsapp-core.js";
+} from "openclaw/plugin-sdk/whatsapp-core";
 
 export {
   createWhatsAppOutboundBase,
