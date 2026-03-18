@@ -91,8 +91,8 @@ request. After the first failed connection, approve the latest request and
 retry:
 
 ```bash
-openclaw devices approve --latest
-openclaw devices approve --latest --url ws://gateway-host:18789 --token <gateway-token>
+openclaw devices approve --latest                                                         # local gateway
+openclaw devices approve --latest --url ws://gateway-host:18789 --token <gateway-token>  # remote gateway
 ```
 
 ### Node pairing state storage

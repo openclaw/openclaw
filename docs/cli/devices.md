@@ -55,8 +55,8 @@ Common first-run recovery for headless or third-party Gateway WS clients (for
 example Paperclip's `openclaw_gateway` adapter):
 
 ```
-openclaw devices approve --latest
-openclaw devices approve --latest --url ws://gateway-host:18789 --token <gateway-token>
+openclaw devices approve --latest                                                         # local gateway
+openclaw devices approve --latest --url ws://gateway-host:18789 --token <gateway-token>  # remote gateway
 ```
 
 If a client does not persist its device identity, it may create a new pending
