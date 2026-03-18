@@ -49,12 +49,7 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.realpathSync(path.join(runtimePluginDir, "node_modules"))).toBe(
       fs.realpathSync(sourcePluginNodeModulesDir),
     );
-
-    // dist/ also gets a node_modules symlink so bare-specifier resolution works
-    // from the actual code location that the runtime wrapper re-exports into
-    const distNodeModules = path.join(distPluginDir, "node_modules");
-    expect(fs.lstatSync(distNodeModules).isSymbolicLink()).toBe(true);
-    expect(fs.realpathSync(distNodeModules)).toBe(fs.realpathSync(sourcePluginNodeModulesDir));
+    expect(fs.existsSync(path.join(distPluginDir, "node_modules"))).toBe(false);
   });
 
   it("writes wrappers that forward plugin entry imports into canonical dist files", async () => {
