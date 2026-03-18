@@ -376,6 +376,7 @@ export function applyExtraParamsToAgent(
   thinkingLevel?: ThinkLevel,
   agentId?: string,
   allowedToolNames?: Set<string>,
+  workspaceDir?: string,
 ): void {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -437,7 +438,10 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
 
-  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);
+  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn, {
+    config: cfg,
+    workspaceDir,
+  });
   const providerStreamBase = agent.streamFn;
   const pluginWrappedStreamFn = wrapProviderStreamFn({
     provider,

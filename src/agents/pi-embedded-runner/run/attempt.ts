@@ -1990,6 +1990,7 @@ export async function runEmbeddedAttempt(
         params.thinkLevel,
         sessionAgentId,
         allowedToolNames,
+        effectiveWorkspace,
       );
 
       if (cacheTrace) {
