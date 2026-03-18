@@ -1,7 +1,12 @@
 import { nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
 import type { UsageState } from "./controllers/usage.ts";
-import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
+import {
+  loadUsage,
+  loadSessionLogs,
+  loadSessionTimeSeries,
+  resetSessionUsageDetails,
+} from "./controllers/usage.ts";
 import { renderUsage } from "./views/usage.ts";
 
 // Module-scope debounce for usage date changes (avoids type-unsafe hacks on state object)
@@ -12,6 +17,18 @@ const debouncedLoadUsage = (state: UsageState) => {
   }
   usageDateDebounceTimeout = window.setTimeout(() => void loadUsage(state), 400);
 };
+
+function refreshSelectedSessionUsage(state: UsageState, reloadUsage: boolean) {
+  if (reloadUsage) {
+    void loadUsage(state);
+  }
+  if (state.usageSelectedSessions.length !== 1) {
+    return;
+  }
+  const selectedSessionKey = state.usageSelectedSessions[0];
+  void loadSessionTimeSeries(state, selectedSessionKey);
+  void loadSessionLogs(state, selectedSessionKey);
+}
 
 export function renderUsageTab(state: AppViewState) {
   if (state.tab !== "usage") {
@@ -61,6 +78,7 @@ export function renderUsageTab(state: AppViewState) {
       state.usageSelectedDays = [];
       state.usageSelectedHours = [];
       state.usageSelectedSessions = [];
+      resetSessionUsageDetails(state);
       debouncedLoadUsage(state);
     },
     onEndDateChange: (date) => {
@@ -68,15 +86,19 @@ export function renderUsageTab(state: AppViewState) {
       state.usageSelectedDays = [];
       state.usageSelectedHours = [];
       state.usageSelectedSessions = [];
+      resetSessionUsageDetails(state);
       debouncedLoadUsage(state);
     },
-    onRefresh: () => loadUsage(state),
+    onRefresh: () => {
+      refreshSelectedSessionUsage(state, true);
+    },
     onTimeZoneChange: (zone) => {
       state.usageTimeZone = zone;
       state.usageSelectedDays = [];
       state.usageSelectedHours = [];
       state.usageSelectedSessions = [];
-      void loadUsage(state);
+      resetSessionUsageDetails(state);
+      refreshSelectedSessionUsage(state, true);
     },
     onToggleContextExpanded: () => {
       state.usageContextExpanded = !state.usageContextExpanded;
@@ -166,8 +188,6 @@ export function renderUsageTab(state: AppViewState) {
       }
     },
     onSelectSession: (key, shiftKey) => {
-      state.usageTimeSeries = null;
-      state.usageSessionLogs = null;
       state.usageRecentSessions = [
         key,
         ...state.usageRecentSessions.filter((entry) => entry !== key),
@@ -193,23 +213,19 @@ export function renderUsageTab(state: AppViewState) {
           state.usageSelectedSessions = newSelection;
         }
       } else {
-        // Regular click: focus a single session (so details always open).
-        // Click the focused session again to clear selection.
-        if (state.usageSelectedSessions.length === 1 && state.usageSelectedSessions[0] === key) {
-          state.usageSelectedSessions = [];
-        } else {
-          state.usageSelectedSessions = [key];
-        }
+        // Regular click always focuses the session and refreshes its details.
+        // Use the explicit close button to clear the detail panel.
+        state.usageSelectedSessions = [key];
       }
 
       // Reset range selection when switching sessions
       state.usageTimeSeriesCursorStart = null;
       state.usageTimeSeriesCursorEnd = null;
+      resetSessionUsageDetails(state);
 
       // Load timeseries/logs only if exactly one session selected
       if (state.usageSelectedSessions.length === 1) {
-        void loadSessionTimeSeries(state, state.usageSelectedSessions[0]);
-        void loadSessionLogs(state, state.usageSelectedSessions[0]);
+        refreshSelectedSessionUsage(state, true);
       }
     },
     onSelectDay: (day, shiftKey) => {
@@ -259,15 +275,13 @@ export function renderUsageTab(state: AppViewState) {
     },
     onClearSessions: () => {
       state.usageSelectedSessions = [];
-      state.usageTimeSeries = null;
-      state.usageSessionLogs = null;
+      resetSessionUsageDetails(state);
     },
     onClearFilters: () => {
       state.usageSelectedDays = [];
       state.usageSelectedHours = [];
       state.usageSelectedSessions = [];
-      state.usageTimeSeries = null;
-      state.usageSessionLogs = null;
+      resetSessionUsageDetails(state);
     },
   });
 }

@@ -20,6 +20,8 @@ export type UsageState = {
   usageTimeSeriesCursorEnd: number | null;
   usageSessionLogs: SessionLogEntry[] | null;
   usageSessionLogsLoading: boolean;
+  usageTimeSeriesRequestVersion: number;
+  usageSessionLogsRequestVersion: number;
   usageTimeZone: "local" | "utc";
   settings?: { gatewayUrl?: string };
 };
@@ -261,49 +263,72 @@ export const __test = {
   },
 };
 
+export function resetSessionUsageDetails(state: UsageState) {
+  state.usageTimeSeriesRequestVersion += 1;
+  state.usageSessionLogsRequestVersion += 1;
+  state.usageTimeSeriesLoading = false;
+  state.usageSessionLogsLoading = false;
+  state.usageTimeSeries = null;
+  state.usageSessionLogs = null;
+}
+
 export async function loadSessionTimeSeries(state: UsageState, sessionKey: string) {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
-  if (state.usageTimeSeriesLoading) {
-    return;
-  }
+  const requestVersion = state.usageTimeSeriesRequestVersion + 1;
+  state.usageTimeSeriesRequestVersion = requestVersion;
   state.usageTimeSeriesLoading = true;
   state.usageTimeSeries = null;
   try {
-    const res = await state.client.request("sessions.usage.timeseries", { key: sessionKey });
+    const res = await client.request("sessions.usage.timeseries", { key: sessionKey });
+    if (state.usageTimeSeriesRequestVersion !== requestVersion) {
+      return;
+    }
     if (res) {
       state.usageTimeSeries = res as SessionUsageTimeSeries;
     }
   } catch {
     // Silently fail - time series is optional
-    state.usageTimeSeries = null;
+    if (state.usageTimeSeriesRequestVersion === requestVersion) {
+      state.usageTimeSeries = null;
+    }
   } finally {
-    state.usageTimeSeriesLoading = false;
+    if (state.usageTimeSeriesRequestVersion === requestVersion) {
+      state.usageTimeSeriesLoading = false;
+    }
   }
 }
 
 export async function loadSessionLogs(state: UsageState, sessionKey: string) {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
-  if (state.usageSessionLogsLoading) {
-    return;
-  }
+  const requestVersion = state.usageSessionLogsRequestVersion + 1;
+  state.usageSessionLogsRequestVersion = requestVersion;
   state.usageSessionLogsLoading = true;
   state.usageSessionLogs = null;
   try {
-    const res = await state.client.request("sessions.usage.logs", {
+    const res = await client.request("sessions.usage.logs", {
       key: sessionKey,
       limit: 1000,
     });
+    if (state.usageSessionLogsRequestVersion !== requestVersion) {
+      return;
+    }
     if (res && Array.isArray((res as { logs: SessionLogEntry[] }).logs)) {
       state.usageSessionLogs = (res as { logs: SessionLogEntry[] }).logs;
     }
   } catch {
     // Silently fail - logs are optional
-    state.usageSessionLogs = null;
+    if (state.usageSessionLogsRequestVersion === requestVersion) {
+      state.usageSessionLogs = null;
+    }
   } finally {
-    state.usageSessionLogsLoading = false;
+    if (state.usageSessionLogsRequestVersion === requestVersion) {
+      state.usageSessionLogsLoading = false;
+    }
   }
 }
