@@ -1300,6 +1300,7 @@
                   "cli/status",
                   "cli/system",
                   "cli/tui",
+                  "cli/tunnel",
                   "cli/uninstall",
                   "cli/update",
                   "cli/voicecall",
