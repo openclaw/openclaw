@@ -203,10 +203,11 @@ async function runAnthropicWebSearch(params: {
       const citations: Array<{ url: string; title?: string }> = [];
 
       for (const block of data.content ?? []) {
-        if (block.type === "text") {
-          textParts.push(block.text);
-        } else if (block.type === "web_search_tool_result") {
-          for (const result of block.content ?? []) {
+        if (block.type === "text" && "text" in block) {
+          textParts.push(String((block as { text: string }).text));
+        } else if (block.type === "web_search_tool_result" && "content" in block) {
+          const results = (block as { content: Array<{ type: string; url?: string; title?: string }> }).content;
+          for (const result of results ?? []) {
             if (result.type === "web_search_result" && result.url) {
               citations.push({
                 url: result.url,
