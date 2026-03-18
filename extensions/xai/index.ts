@@ -1,5 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/core";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import { applyXaiModelCompat } from "openclaw/plugin-sdk/provider-models";
 import { createToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
