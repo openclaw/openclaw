@@ -22,7 +22,6 @@ import {
   resolveConfiguredFromRequiredCredentialStatuses,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
-  createSlackActions,
   type ChannelPlugin,
   type OpenClawConfig,
   type SlackActionContext,
@@ -35,6 +34,7 @@ import {
   type ResolvedSlackAccount,
 } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import { createSlackActions } from "./channel-actions.js";
 import { createSlackWebClient } from "./client.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";

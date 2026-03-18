@@ -21,7 +21,7 @@ vi.mock("../../../../extensions/signal/src/send-reactions.js", () => ({
   removeReactionSignal,
 }));
 
-vi.mock("../../../../extensions/slack/runtime-api.js", () => ({
+vi.mock("../../../../extensions/slack/src/action-runtime.js", () => ({
   handleSlackAction,
 }));
 
@@ -29,7 +29,7 @@ let discordMessageActions: typeof import("./discord.js").discordMessageActions;
 let handleDiscordMessageAction: typeof import("./discord/handle-action.js").handleDiscordMessageAction;
 let telegramMessageActions: typeof import("./telegram.js").telegramMessageActions;
 let signalMessageActions: typeof import("./signal.js").signalMessageActions;
-let createSlackActions: typeof import("../slack.actions.js").createSlackActions;
+let createSlackActions: typeof import("../../../../extensions/slack/src/channel-actions.js").createSlackActions;
 
 function getDescribedActions(params: {
   describeMessageTool?: ChannelMessageActionAdapter["describeMessageTool"];
@@ -205,7 +205,7 @@ beforeEach(async () => {
   ({ handleDiscordMessageAction } = await import("./discord/handle-action.js"));
   ({ telegramMessageActions } = await import("./telegram.js"));
   ({ signalMessageActions } = await import("./signal.js"));
-  ({ createSlackActions } = await import("../slack.actions.js"));
+  ({ createSlackActions } = await import("../../../../extensions/slack/src/channel-actions.js"));
   vi.clearAllMocks();
 });
 
