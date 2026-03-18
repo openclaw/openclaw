@@ -642,6 +642,7 @@
     "test:parallels:windows": "bash scripts/e2e/parallels-windows-smoke.sh",
     "test:perf:budget": "node scripts/test-perf-budget.mjs",
     "test:perf:hotspots": "node scripts/test-hotspots.mjs",
+    "test:perf:update-timings": "node scripts/test-update-timings.mjs",
     "test:sectriage": "pnpm exec vitest run --config vitest.gateway.config.ts && vitest run --config vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
