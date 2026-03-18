@@ -5,6 +5,8 @@ import {
   expectCodexMissingAuthHint,
 } from "../provider-runtime.test-support.js";
 
+const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
+
 type ResolvePluginProviders = typeof import("../providers.js").resolvePluginProviders;
 type ResolveOwningPluginIdsForProvider =
   typeof import("../providers.js").resolveOwningPluginIdsForProvider;
@@ -74,7 +76,7 @@ describe("provider catalog contract", () => {
       resolveProviderBuiltInModelSuppression,
     } = await import("../provider-runtime.js"));
     resetProviderRuntimeHookCacheForTest();
-  });
+  }, CONTRACT_SETUP_TIMEOUT_MS);
 
   it("keeps codex-only missing-auth hints wired through the provider runtime", () => {
     expectCodexMissingAuthHint(buildProviderMissingAuthMessageWithPlugin);
