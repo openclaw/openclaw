@@ -99,6 +99,15 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof setupSdk.DEFAULT_ACCOUNT_ID).toBe("string");
     expect(typeof setupSdk.createAccountScopedAllowFromSection).toBe("function");
     expect(typeof setupSdk.createAccountScopedGroupAccessSection).toBe("function");
+    expect(typeof setupSdk.createAllowFromSection).toBe("function");
+    expect(typeof setupSdk.createCliPathTextInput).toBe("function");
+    expect(typeof setupSdk.createDelegatedFinalize).toBe("function");
+    expect(typeof setupSdk.createDelegatedPrepare).toBe("function");
+    expect(typeof setupSdk.createDelegatedResolveConfigured).toBe("function");
+    expect(typeof setupSdk.createDelegatedSetupWizardProxy).toBe("function");
+    expect(typeof setupSdk.createDelegatedSetupWizardStatusResolvers).toBe("function");
+    expect(typeof setupSdk.createDelegatedTextInputShouldPrompt).toBe("function");
+    expect(typeof setupSdk.createDetectedBinaryStatus).toBe("function");
     expect(typeof setupSdk.createLegacyCompatChannelDmPolicy).toBe("function");
     expect(typeof setupSdk.createNestedChannelDmPolicy).toBe("function");
     expect(typeof setupSdk.createTopLevelChannelDmPolicy).toBe("function");
@@ -107,7 +116,10 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof setupSdk.mergeAllowFromEntries).toBe("function");
     expect(typeof setupSdk.patchNestedChannelConfigSection).toBe("function");
     expect(typeof setupSdk.patchTopLevelChannelConfigSection).toBe("function");
+    expect(typeof setupSdk.promptParsedAllowFromForAccount).toBe("function");
+    expect(typeof setupSdk.resolveParsedAllowFromEntries).toBe("function");
     expect(typeof setupSdk.resolveGroupAllowlistWithLookupNotes).toBe("function");
+    expect(typeof setupSdk.setAccountAllowFromForChannel).toBe("function");
     expect(typeof setupSdk.setAccountDmAllowFromForChannel).toBe("function");
     expect(typeof setupSdk.setTopLevelChannelDmPolicyWithAllowFrom).toBe("function");
     expect(typeof setupSdk.formatResolvedUnresolvedNote).toBe("function");
