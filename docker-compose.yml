@@ -5,17 +5,19 @@ services:
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
     ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "127.0.0.1:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f node || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     command:
       [
         "node",
@@ -34,9 +36,6 @@ services:
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       BROWSER: echo
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
@@ -44,3 +43,118 @@ services:
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+
+
+  stitch-mail-reader:
+    build: ./mail-reader
+    environment:
+      MS_TENANT_ID: ${MS_TENANT_ID}
+      MS_CLIENT_ID: ${MS_CLIENT_ID}
+      MS_CLIENT_SECRET: ${MS_CLIENT_SECRET}
+    volumes:
+      - ${OPENCLAW_WORKSPACE_DIR}/mail:/mail-output
+      - ./mail-reader/index.js:/app/index.js:ro
+    ports:
+      - "127.0.0.1:3001:3001"
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health',res=>process.exit(res.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+
+  stitch-mail-reader-chris:
+    build: ./mail-reader
+    environment:
+      MS_TENANT_ID: ${MS_TENANT_ID}
+      MS_CLIENT_ID: ${MS_CLIENT_ID}
+      MS_CLIENT_SECRET: ${MS_CLIENT_SECRET}
+      MS_MAILBOX: ${MS_MAILBOX_CHRIS}
+    volumes:
+      - ${OPENCLAW_WORKSPACE_DIR}/mail-chris:/mail-output
+      - ./mail-reader/index.js:/app/index.js:ro
+    ports:
+      - "127.0.0.1:3002:3001"
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health',res=>process.exit(res.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+
+  stitch-todoist:
+    build: ./todoist-service
+    environment:
+      TODOIST_API_KEY: ${TODOIST_API_KEY}
+    volumes:
+      - ${OPENCLAW_WORKSPACE_DIR}/todoist:/todoist-output
+    ports:
+      - "127.0.0.1:3004:3002"
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3002/health',res=>process.exit(res.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+
+  stitch-gmail-reader:
+    build: ./gmail-reader
+    environment:
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GMAIL_ADDRESS: chris91744@gmail.com
+      GOOGLE_REDIRECT_URI: http://localhost:3003/oauth/callback
+    volumes:
+      - ${OPENCLAW_WORKSPACE_DIR}/mail-gmail:/mail-output
+    ports:
+      - "127.0.0.1:3003:3001"
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health',res=>process.exit(res.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+
+  prestigio-write-service:
+    build: ./prestigio-write-service
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3006:3006"
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - MOUNT_PATH=/data
+    volumes:
+      - ${OPENCLAW_WORKSPACE_DIR}/prestigio:/data
+      - ./prestigio-write-service/index.js:/app/index.js:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3006/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  prestigio-service:
+    build: ./prestigio-service
+    container_name: openclaw-prestigio-service-1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3005:3005"
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+    volumes:
+      - ${OPENCLAW_WORKSPACE_DIR}/prestigio:/data
+      - ./prestigio-service/index.js:/app/index.js:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
