@@ -684,7 +684,8 @@ export function detectToolCallLoop(
       browserSearchStats.uniqueQueries >= 2 || browserSearchStats.uniqueHosts >= 2;
     // Anchor warning suppression to the streak boundary when possible so separate storms in one
     // session do not suppress each other and bounded-history eviction is less likely to re-emit
-    // warnings for the same ongoing storm.
+    // warnings for the same ongoing storm. With the default 4/8 browser-search thresholds this
+    // detector only emits one bucket-0 warning before the critical branch takes over.
     const browserSearchWarningKey = browserSearchStats.warningKey;
     if (
       hasVariedSearches &&
