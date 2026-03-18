@@ -231,9 +231,9 @@ surface for the current turn.
 For channel-owned execution helpers, bundled plugins should keep the execution
 runtime inside their own extension modules. Core no longer owns the Discord,
 Slack, Telegram, or WhatsApp message-action runtimes under `src/agents/tools`.
-`agent-runtime` still re-exports the Discord and Telegram helpers for backward
-compatibility, but we do not publish separate `plugin-sdk/*-action-runtime`
-subpaths and new plugins should import their own local runtime code directly.
+We do not publish separate `plugin-sdk/*-action-runtime` subpaths, and bundled
+plugins should import their own local runtime code directly from their
+extension-owned modules.
 
 ## Capability ownership model
 
