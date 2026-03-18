@@ -990,9 +990,8 @@
                 "pages": [
                   "tools/apply-patch",
                   "brave-search",
-                  "perplexity",
+                  "tools/btw",
                   "tools/diffs",
-                  "tools/pdf",
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
@@ -1000,10 +999,11 @@
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/loop-detection",
+                  "tools/pdf",
+                  "perplexity",
                   "tools/reactions",
                   "tools/thinking",
-                  "tools/web",
-                  "tools/btw"
+                  "tools/web"
                 ]
               },
               {
@@ -1038,6 +1038,7 @@
                 "group": "Extensions",
                 "pages": [
                   "plugins/building-extensions",
+                  "plugins/architecture",
                   "plugins/community",
                   "plugins/bundles",
                   "plugins/voice-call",
@@ -1208,6 +1209,7 @@
                     "pages": [
                       "gateway/security/index",
                       "gateway/sandboxing",
+                      "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated"
                     ]
                   },
@@ -1581,13 +1583,13 @@
                 "pages": [
                   "zh-CN/tools/apply-patch",
                   "zh-CN/brave-search",
-                  "zh-CN/perplexity",
                   "zh-CN/tools/elevated",
                   "zh-CN/tools/exec",
                   "zh-CN/tools/exec-approvals",
                   "zh-CN/tools/firecrawl",
                   "zh-CN/tools/llm-task",
                   "zh-CN/tools/lobster",
+                  "zh-CN/perplexity",
                   "zh-CN/tools/reactions",
                   "zh-CN/tools/thinking",
                   "zh-CN/tools/web"
@@ -1623,6 +1625,7 @@
               {
                 "group": "扩展",
                 "pages": [
+                  "zh-CN/plugins/architecture",
                   "zh-CN/plugins/voice-call",
                   "zh-CN/plugins/zalouser",
                   "zh-CN/plugins/manifest",
