@@ -32,6 +32,9 @@ import {
   edgeTTS,
   elevenLabsTTS,
   inferEdgeExtension,
+  INWORLD_TTS_MODELS,
+  INWORLD_TTS_VOICES,
+  inworldTTS,
   isValidOpenAIModel,
   isValidOpenAIVoice,
   isValidVoiceId,
@@ -43,7 +46,12 @@ import {
   scheduleCleanup,
   summarizeText,
 } from "./tts-core.js";
-export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
+export {
+  OPENAI_TTS_MODELS,
+  OPENAI_TTS_VOICES,
+  INWORLD_TTS_MODELS,
+  INWORLD_TTS_VOICES,
+} from "./tts-core.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
@@ -55,6 +63,9 @@ const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
 const DEFAULT_OPENAI_VOICE = "alloy";
+const DEFAULT_INWORLD_BASE_URL = "https://api.inworld.ai";
+const DEFAULT_INWORLD_VOICE_ID = "Dennis";
+const DEFAULT_INWORLD_MODEL_ID = "inworld-tts-1.5-max";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
@@ -81,6 +92,15 @@ const DEFAULT_OUTPUT = {
   elevenlabs: "mp3_44100_128",
   extension: ".mp3",
   voiceCompatible: false,
+};
+
+const INWORLD_DEFAULT_OUTPUT = {
+  audioEncoding: "MP3" as const,
+  outputFormat: "mp3",
+  extension: ".mp3",
+  voiceCompatible: false,
+  sampleRateHertz: 44100,
+  bitRate: 128000,
 };
 
 const TELEPHONY_OUTPUT = {
@@ -120,6 +140,12 @@ export type ResolvedTtsConfig = {
     voice: string;
     speed?: number;
     instructions?: string;
+  };
+  inworld: {
+    apiKey?: string;
+    baseUrl: string;
+    voiceId: string;
+    modelId: string;
   };
   edge: {
     enabled: boolean;
@@ -174,6 +200,10 @@ export type TtsDirectiveOverrides = {
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  inworld?: {
+    voiceId?: string;
+    modelId?: string;
   };
 };
 
@@ -309,6 +339,19 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
       speed: raw.openai?.speed,
       instructions: raw.openai?.instructions?.trim() || undefined,
+    },
+    inworld: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.inworld?.apiKey,
+        path: "messages.tts.inworld.apiKey",
+      }),
+      baseUrl: (
+        raw.inworld?.baseUrl?.trim() ||
+        process.env.INWORLD_API_BASE_URL?.trim() ||
+        DEFAULT_INWORLD_BASE_URL
+      ).replace(/\/+$/, ""),
+      voiceId: raw.inworld?.voiceId?.trim() || DEFAULT_INWORLD_VOICE_ID,
+      modelId: raw.inworld?.modelId?.trim() || DEFAULT_INWORLD_MODEL_ID,
     },
     edge: {
       enabled: raw.edge?.enabled ?? true,
@@ -461,6 +504,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "inworld")) {
+    return "inworld";
+  }
   return "edge";
 }
 
@@ -528,10 +574,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "inworld") {
+    return config.inworld.apiKey || process.env.INWORLD_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "inworld", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -541,6 +590,7 @@ export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: Tts
   if (provider === "edge") {
     return config.edge.enabled;
   }
+  // All other providers (openai, elevenlabs, inworld) require an API key.
   return Boolean(resolveTtsApiKey(config, provider));
 }
 
@@ -714,6 +764,40 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+      } else if (provider === "inworld") {
+        // Keep the HTTP integration on a single MP3 path until InWorld's
+        // non-streaming Opus encoding is both documented and verified.
+        const inworldOutput = INWORLD_DEFAULT_OUTPUT;
+        const voiceIdOverride = params.overrides?.inworld?.voiceId;
+        const modelIdOverride = params.overrides?.inworld?.modelId;
+        audioBuffer = await inworldTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.inworld.baseUrl,
+          voiceId: voiceIdOverride ?? config.inworld.voiceId,
+          modelId: modelIdOverride ?? config.inworld.modelId,
+          audioEncoding: inworldOutput.audioEncoding,
+          sampleRateHertz: inworldOutput.sampleRateHertz,
+          bitRate: inworldOutput.bitRate,
+          timeoutMs: config.timeoutMs,
+        });
+
+        const latencyMs = Date.now() - providerStart;
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}${inworldOutput.extension}`);
+        writeFileSync(audioPath, audioBuffer);
+        scheduleCleanup(tempDir);
+
+        return {
+          success: true,
+          audioPath,
+          latencyMs,
+          provider,
+          outputFormat: inworldOutput.outputFormat,
+          voiceCompatible: inworldOutput.voiceCompatible,
+        };
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -776,8 +860,8 @@ export async function textToSpeechTelephony(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
-      if (provider === "edge") {
-        errors.push("edge: unsupported for telephony");
+      if (provider === "edge" || provider === "inworld") {
+        errors.push(`${provider}: unsupported for telephony`);
         continue;
       }
 

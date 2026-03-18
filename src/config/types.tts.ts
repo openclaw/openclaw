@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "inworld";
 
 export type TtsMode = "final" | "all";
 
@@ -65,6 +65,13 @@ export type TtsConfig = {
     speed?: number;
     /** System-level instructions for the TTS model (gpt-4o-mini-tts only). */
     instructions?: string;
+  };
+  /** InWorld AI configuration. */
+  inworld?: {
+    apiKey?: SecretInput;
+    baseUrl?: string;
+    voiceId?: string;
+    modelId?: string;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {
