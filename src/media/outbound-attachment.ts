@@ -1,6 +1,6 @@
-import { loadWebMedia } from "../plugin-sdk/web-media.js";
 import { buildOutboundMediaLoadOptions } from "./load-options.js";
 import { saveMediaBuffer } from "./store.js";
+import { loadWebMedia } from "./web-media.js";
 
 export async function resolveOutboundAttachmentFromUrl(
   mediaUrl: string,
