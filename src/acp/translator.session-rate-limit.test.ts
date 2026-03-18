@@ -5,11 +5,10 @@ import type {
   SetSessionConfigOptionRequest,
   SetSessionModeRequest,
 } from "@agentclientprotocol/sdk";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { listThinkingLevels } from "../auto-reply/thinking.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
-import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
@@ -120,10 +119,6 @@ async function expectOversizedPromptRejected(params: { sessionId: string; text: 
 
   sessionStore.clearAllSessionsForTest();
 }
-
-beforeEach(() => {
-  resetProviderRuntimeHookCacheForTest();
-});
 
 describe("acp session creation rate limit", () => {
   it("rate limits excessive newSession bursts", async () => {

@@ -94,6 +94,10 @@
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-runtime.js"
     },
+    "./plugin-sdk/reply-payload": {
+      "types": "./dist/plugin-sdk/reply-payload.d.ts",
+      "default": "./dist/plugin-sdk/reply-payload.js"
+    },
     "./plugin-sdk/channel-runtime": {
       "types": "./dist/plugin-sdk/channel-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-runtime.js"
@@ -205,6 +209,14 @@
     "./plugin-sdk/whatsapp": {
       "types": "./dist/plugin-sdk/whatsapp.d.ts",
       "default": "./dist/plugin-sdk/whatsapp.js"
+    },
+    "./plugin-sdk/whatsapp-action-runtime": {
+      "types": "./dist/plugin-sdk/whatsapp-action-runtime.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-action-runtime.js"
+    },
+    "./plugin-sdk/whatsapp-login-qr": {
+      "types": "./dist/plugin-sdk/whatsapp-login-qr.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-login-qr.js"
     },
     "./plugin-sdk/whatsapp-core": {
       "types": "./dist/plugin-sdk/whatsapp-core.d.ts",
@@ -394,6 +406,10 @@
       "types": "./dist/plugin-sdk/channel-policy.d.ts",
       "default": "./dist/plugin-sdk/channel-policy.js"
     },
+    "./plugin-sdk/channel-send-result": {
+      "types": "./dist/plugin-sdk/channel-send-result.d.ts",
+      "default": "./dist/plugin-sdk/channel-send-result.js"
+    },
     "./plugin-sdk/group-access": {
       "types": "./dist/plugin-sdk/group-access.d.ts",
       "default": "./dist/plugin-sdk/group-access.js"
@@ -519,7 +535,8 @@
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && pnpm build:plugin-sdk:dts",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
-    "check": "pnpm check:host-env-policy:swift && pnpm format:check && pnpm tsgo && pnpm plugin-sdk:check-exports && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:plugins:no-extension-src-imports && pnpm lint:plugins:no-extension-test-core-imports && pnpm lint:plugins:no-extension-imports && pnpm lint:extensions:no-src-outside-plugin-sdk && pnpm lint:extensions:no-plugin-sdk-internal && pnpm lint:web-search-provider-boundaries && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
+    "check": "pnpm check:host-env-policy:swift && pnpm check:bundled-provider-auth-env-vars && pnpm format:check && pnpm tsgo && pnpm plugin-sdk:check-exports && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:plugins:no-extension-src-imports && pnpm lint:plugins:no-extension-test-core-imports && pnpm lint:plugins:no-extension-imports && pnpm lint:extensions:no-src-outside-plugin-sdk && pnpm lint:extensions:no-plugin-sdk-internal && pnpm lint:web-search-provider-boundaries && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
+    "check:bundled-provider-auth-env-vars": "node scripts/generate-bundled-provider-auth-env-vars.mjs --check",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
@@ -709,6 +726,7 @@
     "tar": "7.5.11",
     "tslog": "^4.10.2",
     "undici": "^7.24.4",
+    "uuid": "^11.1.0",
     "ws": "^8.19.0",
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
