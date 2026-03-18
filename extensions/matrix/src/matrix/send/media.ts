@@ -1,3 +1,9 @@
+import { execFile as execFileCallback } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import type {
   DimensionalFileInfo,
   EncryptedFile,
@@ -18,6 +24,7 @@ import {
 
 const getCore = () => getMatrixRuntime();
 type IFileInfo = import("music-metadata").IFileInfo;
+const execFile = promisify(execFileCallback);
 
 export function buildMatrixMediaInfo(params: {
   size: number;
@@ -200,9 +207,7 @@ let ffmpegAvailable: boolean | null = null;
 async function isFfmpegAvailable(): Promise<boolean> {
   if (ffmpegAvailable !== null) return ffmpegAvailable;
   try {
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    await promisify(execFile)("ffmpeg", ["-version"], { timeout: 5000 });
+    await execFile("ffmpeg", ["-version"], { timeout: 5000 });
     ffmpegAvailable = true;
   } catch {
     ffmpegAvailable = false;
@@ -229,20 +234,12 @@ export async function generateWaveform(buffer: Buffer): Promise<number[] | undef
   if (!(await isFfmpegAvailable())) return undefined;
 
   try {
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const execFileAsync = promisify(execFile);
-    const { writeFile, unlink } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { randomBytes } = await import("node:crypto");
-
     // Write buffer to temp file (ffmpeg pipe input unreliable with some formats)
     const tmpPath = join(tmpdir(), `oc-waveform-${randomBytes(6).toString("hex")}`);
     await writeFile(tmpPath, buffer);
 
     try {
-      const { stdout } = await execFileAsync(
+      const { stdout } = await execFile(
         "ffmpeg",
         ["-i", tmpPath, "-ac", "1", "-ar", "8000", "-f", "f32le", "pipe:1"],
         { encoding: "buffer", maxBuffer: 10 * 1024 * 1024 },
