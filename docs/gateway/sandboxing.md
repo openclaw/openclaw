@@ -67,15 +67,15 @@ OpenShell-specific config lives under `plugins.entries.openshell.config`.
 
 ### Choosing a backend
 
-| | Docker | SSH | OpenShell |
-|---|---|---|---|
-| **Where it runs** | Local container | Any SSH-accessible host | OpenShell managed sandbox |
-| **Setup** | `scripts/sandbox-setup.sh` | SSH key + target host | OpenShell plugin enabled |
-| **Workspace model** | Bind-mount or copy | Remote-canonical (seed once) | `mirror` or `remote` |
-| **Network control** | `docker.network` (default: none) | Depends on remote host | Depends on OpenShell |
-| **Browser sandbox** | Supported | Not supported | Not supported yet |
-| **Bind mounts** | `docker.binds` | N/A | N/A |
-| **Best for** | Local dev, full isolation | Offloading to a remote machine | Managed remote sandboxes with optional two-way sync |
+|                     | Docker                           | SSH                            | OpenShell                                           |
+| ------------------- | -------------------------------- | ------------------------------ | --------------------------------------------------- |
+| **Where it runs**   | Local container                  | Any SSH-accessible host        | OpenShell managed sandbox                           |
+| **Setup**           | `scripts/sandbox-setup.sh`       | SSH key + target host          | OpenShell plugin enabled                            |
+| **Workspace model** | Bind-mount or copy               | Remote-canonical (seed once)   | `mirror` or `remote`                                |
+| **Network control** | `docker.network` (default: none) | Depends on remote host         | Depends on OpenShell                                |
+| **Browser sandbox** | Supported                        | Not supported                  | Not supported yet                                   |
+| **Bind mounts**     | `docker.binds`                   | N/A                            | N/A                                                 |
+| **Best for**        | Local dev, full isolation        | Offloading to a remote machine | Managed remote sandboxes with optional two-way sync |
 
 ### SSH backend
 

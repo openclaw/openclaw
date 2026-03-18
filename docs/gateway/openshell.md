@@ -118,32 +118,32 @@ the remote sandbox does **not** see those changes. Use
 
 ### Choosing a mode
 
-| | `mirror` | `remote` |
-|---|---|---|
-| **Canonical workspace** | Local host | Remote OpenShell |
-| **Sync direction** | Bidirectional (each exec) | One-time seed |
-| **Per-turn overhead** | Higher (upload + download) | Lower (direct remote ops) |
-| **Local edits visible?** | Yes, on next exec | No, until recreate |
-| **Best for** | Development workflows | Long-running agents, CI |
+|                          | `mirror`                   | `remote`                  |
+| ------------------------ | -------------------------- | ------------------------- |
+| **Canonical workspace**  | Local host                 | Remote OpenShell          |
+| **Sync direction**       | Bidirectional (each exec)  | One-time seed             |
+| **Per-turn overhead**    | Higher (upload + download) | Lower (direct remote ops) |
+| **Local edits visible?** | Yes, on next exec          | No, until recreate        |
+| **Best for**             | Development workflows      | Long-running agents, CI   |
 
 ## Configuration reference
 
 All OpenShell config lives under `plugins.entries.openshell.config`:
 
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `mode` | `"mirror"` or `"remote"` | `"mirror"` | Workspace sync mode |
-| `command` | `string` | `"openshell"` | Path or name of the `openshell` CLI |
-| `from` | `string` | `"openclaw"` | Sandbox source for first-time create |
-| `gateway` | `string` | — | OpenShell gateway name (`--gateway`) |
-| `gatewayEndpoint` | `string` | — | OpenShell gateway endpoint URL (`--gateway-endpoint`) |
-| `policy` | `string` | — | OpenShell policy ID for sandbox creation |
-| `providers` | `string[]` | `[]` | Provider names to attach when sandbox is created |
-| `gpu` | `boolean` | `false` | Request GPU resources |
-| `autoProviders` | `boolean` | `true` | Pass `--auto-providers` during sandbox create |
-| `remoteWorkspaceDir` | `string` | `"/sandbox"` | Primary writable workspace inside the sandbox |
-| `remoteAgentWorkspaceDir` | `string` | `"/agent"` | Agent workspace mount path (for read-only access) |
-| `timeoutSeconds` | `number` | `120` | Timeout for `openshell` CLI operations |
+| Key                       | Type                     | Default       | Description                                           |
+| ------------------------- | ------------------------ | ------------- | ----------------------------------------------------- |
+| `mode`                    | `"mirror"` or `"remote"` | `"mirror"`    | Workspace sync mode                                   |
+| `command`                 | `string`                 | `"openshell"` | Path or name of the `openshell` CLI                   |
+| `from`                    | `string`                 | `"openclaw"`  | Sandbox source for first-time create                  |
+| `gateway`                 | `string`                 | —             | OpenShell gateway name (`--gateway`)                  |
+| `gatewayEndpoint`         | `string`                 | —             | OpenShell gateway endpoint URL (`--gateway-endpoint`) |
+| `policy`                  | `string`                 | —             | OpenShell policy ID for sandbox creation              |
+| `providers`               | `string[]`               | `[]`          | Provider names to attach when sandbox is created      |
+| `gpu`                     | `boolean`                | `false`       | Request GPU resources                                 |
+| `autoProviders`           | `boolean`                | `true`        | Pass `--auto-providers` during sandbox create         |
+| `remoteWorkspaceDir`      | `string`                 | `"/sandbox"`  | Primary writable workspace inside the sandbox         |
+| `remoteAgentWorkspaceDir` | `string`                 | `"/agent"`    | Agent workspace mount path (for read-only access)     |
+| `timeoutSeconds`          | `number`                 | `120`         | Timeout for `openshell` CLI operations                |
 
 Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) are configured under
 `agents.defaults.sandbox` as with any backend. See
