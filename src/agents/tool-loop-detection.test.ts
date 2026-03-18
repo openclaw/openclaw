@@ -595,6 +595,24 @@ describe("tool-loop-detection", () => {
       expect(loopResult.stuck).toBe(false);
     });
 
+    it("resets the browser search storm streak once searches settle on one query", () => {
+      const state = createState();
+      recordSuccessfulBrowserSearchCalls({
+        state,
+        queries: ["openclaw initial", "openclaw varied", "openclaw varied", "openclaw varied"],
+      });
+
+      const current = createBrowserSearchFixture("openclaw varied");
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
     it("blocks browser search storms at critical threshold", () => {
       const state = createState();
       recordSuccessfulBrowserSearchCalls({
@@ -649,6 +667,30 @@ describe("tool-loop-detection", () => {
         expect(loopResult.detector).toBe("browser_search_storm");
         expect(loopResult.count).toBe(BROWSER_SEARCH_WARNING_THRESHOLD);
       }
+    });
+
+    it("does not treat duckduckgo.com/html without a trailing slash as a search hop", () => {
+      const state = createState();
+      for (let i = 0; i < BROWSER_SEARCH_CRITICAL_THRESHOLD + 2; i += 1) {
+        const fixture = createBrowserSearchFixture(`duck issue ${i}`, "duckduckgo.com", {
+          path: "/html",
+          queryParam: "q",
+        });
+        recordSuccessfulCall(state, fixture.toolName, fixture.params, fixture.result, i);
+      }
+
+      const current = createBrowserSearchFixture("duck issue next", "duckduckgo.com", {
+        path: "/html",
+        queryParam: "q",
+      });
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
     });
 
     it("does not treat google.evil.com search pages as Google search hops", () => {

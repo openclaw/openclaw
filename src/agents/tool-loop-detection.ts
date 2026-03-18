@@ -179,6 +179,10 @@ type BrowserSearchLoopRecord = NonNullable<
   NonNullable<ToolCallRecord["loopHint"]>["browserSearch"]
 >;
 
+type BrowserSearchHistoryEntry = BrowserSearchLoopRecord & {
+  timestamp: number;
+};
+
 const GOOGLE_SEARCH_HOST_PATTERN = /(^|\.)google\.(?:com|[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/;
 const YANDEX_SEARCH_HOST_PATTERN = /(^|\.)yandex\.(?:com|ru|by|kz|ua|net)$/;
 
@@ -186,7 +190,7 @@ const BROWSER_SEARCH_MATCHERS: BrowserSearchMatcher[] = [
   { hostPattern: GOOGLE_SEARCH_HOST_PATTERN, pathPattern: /^\/search$/, queryParam: "q" },
   { hostPattern: /(^|\.)bing\.com$/, pathPattern: /^\/search$/, queryParam: "q" },
   { hostPattern: /(^|\.)search\.brave\.com$/, pathPattern: /^\/search$/, queryParam: "q" },
-  { hostPattern: /(^|\.)duckduckgo\.com$/, pathPattern: /^\/(?:html)?\/?$/, queryParam: "q" },
+  { hostPattern: /(^|\.)duckduckgo\.com$/, pathPattern: /^\/(?:html\/)?$/, queryParam: "q" },
   { hostPattern: /(^|\.)baidu\.com$/, pathPattern: /^\/s$/, queryParam: "wd" },
   { hostPattern: /(^|\.)yahoo\.com$/, pathPattern: /^\/search$/, queryParam: "p" },
   { hostPattern: YANDEX_SEARCH_HOST_PATTERN, pathPattern: /^\/search\/?$/, queryParam: "text" },
@@ -485,19 +489,55 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
   return [signatureA, signatureB].toSorted().join("|");
 }
 
-function getBrowserSearchStormStats(history: ToolCallRecord[]): {
+function browserSearchSignature(search: BrowserSearchLoopRecord): string {
+  return `${search.host}:${search.queryHash}`;
+}
+
+function getBrowserSearchStormStats(
+  history: ToolCallRecord[],
+  currentSearch: BrowserSearchLoopRecord,
+): {
   count: number;
-  uniqueHistoryHosts: number;
-  uniqueHistoryQueries: number;
+  uniqueHosts: number;
+  uniqueQueries: number;
+  warningKey: string;
 } {
   const recentSearches = history
-    .map((record) => record.loopHint?.browserSearch)
-    .filter((search): search is BrowserSearchLoopRecord => Boolean(search));
+    .flatMap((record) =>
+      record.loopHint?.browserSearch
+        ? [{ ...record.loopHint.browserSearch, timestamp: record.timestamp }]
+        : [],
+    )
+    .filter((search): search is BrowserSearchHistoryEntry => Boolean(search));
+
+  const activeStreak: BrowserSearchHistoryEntry[] = [];
+  let nextSignature = browserSearchSignature(currentSearch);
+  for (let i = recentSearches.length - 1; i >= 0; i -= 1) {
+    const search = recentSearches[i];
+    if (!search) {
+      continue;
+    }
+    const signature = browserSearchSignature(search);
+    if (signature === nextSignature) {
+      break;
+    }
+    activeStreak.unshift(search);
+    nextSignature = signature;
+  }
+
+  const oldestActiveSearch = activeStreak[0];
+  const uniqueHosts = new Set(activeStreak.map((search) => search.host));
+  uniqueHosts.add(currentSearch.host);
+  const uniqueQueries = new Set(activeStreak.map((search) => search.queryHash));
+  uniqueQueries.add(currentSearch.queryHash);
 
   return {
-    count: recentSearches.length,
-    uniqueHistoryHosts: new Set(recentSearches.map((search) => search.host)).size,
-    uniqueHistoryQueries: new Set(recentSearches.map((search) => search.queryHash)).size,
+    count: activeStreak.length,
+    uniqueHosts: uniqueHosts.size,
+    uniqueQueries: uniqueQueries.size,
+    warningKey: oldestActiveSearch
+      ? `browser-search:storm:${oldestActiveSearch.timestamp}:${oldestActiveSearch.host}:${oldestActiveSearch.queryHash}`
+      : `browser-search:storm:${currentSearch.host}:${currentSearch.queryHash}`,
   };
 }
 
@@ -610,13 +650,17 @@ export function detectToolCallLoop(
   }
 
   if (browserSearch) {
-    const browserSearchStats = getBrowserSearchStormStats(history);
+    const browserSearchStats = getBrowserSearchStormStats(history, browserSearch);
     // TODO: This detector only sees browser-search entries still present in the bounded history
     // window, so interspersed non-search calls can evict older search hops before thresholds trip.
-    // Require variety to already exist in history so the current search alone does not trip the
-    // storm signal on its first query or engine change.
+    // Restrict this detector to the active streak of changing searches. Once the agent settles
+    // into repeating the same search again, the storm streak resets to avoid blocking follow-up
+    // work solely because older variety is still present elsewhere in the bounded history.
     const hasVariedSearches =
-      browserSearchStats.uniqueHistoryQueries >= 2 || browserSearchStats.uniqueHistoryHosts >= 2;
+      browserSearchStats.uniqueQueries >= 2 || browserSearchStats.uniqueHosts >= 2;
+    // Anchor warning suppression to the first search in the active streak so separate storms in
+    // one session do not suppress each other while the same storm still warns only once per bucket.
+    const browserSearchWarningKey = browserSearchStats.warningKey;
     if (
       hasVariedSearches &&
       browserSearchStats.count >= resolvedConfig.browserSearchCriticalThreshold
@@ -630,7 +674,7 @@ export function detectToolCallLoop(
         detector: "browser_search_storm",
         count: browserSearchStats.count,
         message: `CRITICAL: Browser search pages have been opened ${browserSearchStats.count} times across changing queries or search engines. This appears to be a browser search storm. Session execution blocked to prevent runaway browsing and network amplification.`,
-        warningKey: "browser-search:storm",
+        warningKey: browserSearchWarningKey,
       };
     }
 
@@ -647,8 +691,17 @@ export function detectToolCallLoop(
         detector: "browser_search_storm",
         count: browserSearchStats.count,
         message: `WARNING: Browser search pages have been opened ${browserSearchStats.count} times across changing queries or search engines. Stop broad browser searching and either narrow the task, use web_search/web_fetch, or report failure.`,
-        warningKey: "browser-search:storm",
+        warningKey: browserSearchWarningKey,
       };
+    }
+
+    if (
+      !hasVariedSearches &&
+      browserSearchStats.count >= resolvedConfig.browserSearchWarningThreshold
+    ) {
+      log.debug(
+        `Browser search detector idle: active streak lacks query/engine variety count=${browserSearchStats.count} host=${browserSearch.host}`,
+      );
     }
   }
 

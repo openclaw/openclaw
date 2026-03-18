@@ -75,13 +75,13 @@ Per-agent override (optional):
 - `historySize`: number of recent tool calls kept for analysis.
 - `warningThreshold`: threshold before classifying a pattern as warning-only.
 - `criticalThreshold`: threshold for blocking repetitive loop patterns.
-- `browserSearchWarningThreshold`: warning threshold for browser search storms across changing queries.
-- `browserSearchCriticalThreshold`: critical threshold for browser search storms across changing queries.
+- `browserSearchWarningThreshold`: warning threshold for browser search storms across an active streak of changing queries or engines.
+- `browserSearchCriticalThreshold`: critical threshold for browser search storms across an active streak of changing queries or engines.
 - `globalCircuitBreakerThreshold`: global no-progress breaker threshold.
 - `detectors.genericRepeat`: detects repeated same-tool + same-params patterns.
 - `detectors.knownPollNoProgress`: detects known polling-like patterns with no state change.
 - `detectors.pingPong`: detects alternating ping-pong patterns.
-- `detectors.browserSearchStorm`: detects repeated browser opens/navigations to search-result pages across changing queries or engines.
+- `detectors.browserSearchStorm`: detects repeated browser opens/navigations to search-result pages across an active streak of changing queries or engines.
 
 ## Recommended setup
 

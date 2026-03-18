@@ -250,6 +250,40 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("emits warnings for separate browser search storms within the same session", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const { tool, paramsForQuery } = createBrowserSearchFixture();
+
+      for (let i = 0; i < BROWSER_SEARCH_WARNING_THRESHOLD; i += 1) {
+        await tool.execute(`browser-search-first-${i}`, paramsForQuery(`first issue ${i}`));
+      }
+      await tool.execute(
+        `browser-search-first-${BROWSER_SEARCH_WARNING_THRESHOLD}`,
+        paramsForQuery(`first issue ${BROWSER_SEARCH_WARNING_THRESHOLD}`),
+      );
+
+      await tool.execute("browser-search-reset-0", paramsForQuery("steady follow-up"));
+      await tool.execute("browser-search-reset-1", paramsForQuery("steady follow-up"));
+
+      for (let i = 0; i < BROWSER_SEARCH_WARNING_THRESHOLD; i += 1) {
+        await tool.execute(`browser-search-second-${i}`, paramsForQuery(`second issue ${i}`));
+      }
+      await tool.execute(
+        `browser-search-second-${BROWSER_SEARCH_WARNING_THRESHOLD}`,
+        paramsForQuery(`second issue ${BROWSER_SEARCH_WARNING_THRESHOLD}`),
+      );
+
+      const browserWarns = emitted.filter(
+        (evt) => evt.level === "warning" && evt.detector === "browser_search_storm",
+      );
+      expect(browserWarns).toHaveLength(2);
+      expect(browserWarns.map((evt) => evt.count)).toEqual([
+        BROWSER_SEARCH_WARNING_THRESHOLD,
+        BROWSER_SEARCH_WARNING_THRESHOLD,
+      ]);
+    });
+  });
+
   it("blocks browser search storms at critical threshold and emits critical diagnostic events", async () => {
     await withToolLoopEvents(async (emitted) => {
       const { tool, paramsForQuery } = createBrowserSearchFixture();
