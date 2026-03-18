@@ -8,6 +8,7 @@ plugin.register(
     controllerHost: "127.0.0.1",
     controllerPort: 7000,
     bridgeDllPath: "d:/OpenClaw/Develop/openclaw/extensions/abb-robot-control/src/ABBBridge.dll",
+    allowVirtualController: true,
   }
 );
 console.log("REGRESSION_REGISTERED", !!tool);
@@ -42,7 +43,7 @@ function printSummary() {
 
 async function run() {
   await step("01-scan", "scan_controllers", {}, (r) => (r?.details?.result?.total ?? 0) >= 1);
-  await step("02-connect", "connect", { host: "127.0.0.1", port: 7000 }, (r, t) => /connected/i.test(t));
+  await step("02-connect", "connect", { host: "127.0.0.1", port: 7000, allowVirtualController: true }, (r, t) => /connected/i.test(t));
   const status = await step("03-status", "get_status", {}, (r) => r?.details?.result?.success === true);
   await step("04-system", "get_system_info", {}, (r) => r?.details?.result?.success === true);
   await step("05-service", "get_service_info", {}, (r) => r?.details?.result?.success === true);

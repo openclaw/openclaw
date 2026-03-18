@@ -573,36 +573,14 @@ public class ABBBridge
             }
 
             string taskName = CoerceString(GetInputValue(input, "taskName"), "T_ROB1");
-            Task[] tasks = controller.Rapid.GetTasks();
-            var orderedTasks = tasks
-                .OrderBy(t => string.Equals(t.Name, taskName, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-                .ThenBy(t => t.Name)
-                .ToArray();
 
             EnsureRapidControlGrant();
             using (Mastership m = Mastership.Request(controller.Rapid))
             {
-                Exception last = null;
-                foreach (Task t in orderedTasks)
-                {
-                    try
-                    {
-                        t.ResetProgramPointer();
-                        return new { success = true, taskName = t.Name };
-                    }
-                    catch (Exception ex)
-                    {
-                        last = ex;
-                    }
-                }
-
-                if (last != null)
-                {
-                    throw last;
-                }
+                Task t = controller.Rapid.GetTask(taskName);
+                t.ResetProgramPointer();
+                return new { success = true, taskName = t.Name };
             }
-
-            return new { success = false, error = "No RAPID tasks available for ResetProgramPointer" };
         }
         catch (Exception ex)
         {
@@ -701,13 +679,57 @@ public class ABBBridge
             bool allowRealExecution = CoerceBool(GetInputValue(input, "allowRealExecution"), false);
             EnsureRapidControlAccess(allowRealExecution);
 
+            // Write module to controller HOME directory so it's accessible by the controller filesystem
+            string homeDir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                "RobotStudio", "Systems", controller.SystemName, "HOME");
+            string modFileName = moduleName + ".mod";
+            string modFilePath = System.IO.Path.Combine(homeDir, modFileName);
+            bool usedHomeDir = false;
+
             string tempFile = CreateTempRapidFile(rapidCode, moduleName);
             try
             {
                 using (Mastership m = Mastership.Request(controller.Rapid))
                 {
                     var task = controller.Rapid.GetTask("T_ROB1");
-                    bool loaded = task.LoadProgramFromFile(tempFile, RapidLoadMode.Replace);
+
+                    // Stop T_ROB1 first if running
+                    if (task.ExecutionStatus == TaskExecutionStatus.Running)
+                    {
+                        controller.Rapid.Stop(StopMode.Immediate);
+                        System.Threading.Thread.Sleep(300);
+                    }
+
+                    // Delete any leftover temporary modules (not system, not MainModule, not Communicate)
+                    foreach (Module mod in task.GetModules())
+                    {
+                        if (!mod.IsSystem && mod.Name != "MainModule" && mod.Name != "Communicate")
+                        {
+                            try { task.DeleteModule(mod.Name); } catch { }
+                        }
+                    }
+
+                    bool loaded = false;
+
+                    // Try writing to HOME directory first (works when com task is running)
+                    if (System.IO.Directory.Exists(homeDir))
+                    {
+                        try
+                        {
+                            System.IO.File.WriteAllText(modFilePath, rapidCode);
+                            loaded = task.LoadModuleFromFile(modFilePath, RapidLoadMode.Replace);
+                            usedHomeDir = loaded;
+                        }
+                        catch { }
+                    }
+
+                    // Fall back to LoadProgramFromFile with temp file
+                    if (!loaded)
+                    {
+                        loaded = task.LoadProgramFromFile(tempFile, RapidLoadMode.Replace);
+                    }
+
                     if (!loaded)
                     {
                         return new { success = false, error = "Failed to load RAPID program from temporary file" };
@@ -717,6 +739,10 @@ public class ABBBridge
             finally
             {
                 TryDeleteTempFile(tempFile);
+                if (!usedHomeDir && System.IO.File.Exists(modFilePath))
+                {
+                    try { System.IO.File.Delete(modFilePath); } catch { }
+                }
             }
 
             return new { success = true };
@@ -743,8 +769,17 @@ public class ABBBridge
             EnsureRapidControlAccess(allowRealExecution);
             using (Mastership m = Mastership.Request(controller.Rapid))
             {
-                var task = controller.Rapid.GetTask("T_ROB1");
-                task.Start();
+                // Use controller-level Rapid.Start() instead of task.Start().
+                // task.Start() returns StartResult.Error when other tasks (e.g. com) are running.
+                // controller.Rapid.Start() correctly starts all runnable tasks.
+                StartResult result = controller.Rapid.Start(
+                    RegainMode.Continue,
+                    ExecutionMode.Continuous,
+                    ExecutionCycle.Once);
+                if (result != StartResult.Ok)
+                {
+                    return new { success = false, error = $"RAPID start failed: {result}" };
+                }
             }
 
             return new { success = true };
