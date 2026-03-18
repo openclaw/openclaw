@@ -32,6 +32,28 @@ describe("slackPlugin actions", () => {
     expect(slackPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
   });
 
+  it("owns unified message tool discovery", () => {
+    const discovery = slackPlugin.actions?.describeMessageTool({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+            capabilities: { interactiveReplies: true },
+          },
+        },
+      },
+    });
+
+    expect(discovery?.actions).toContain("send");
+    expect(discovery?.capabilities).toEqual(expect.arrayContaining(["blocks", "interactive"]));
+    expect(discovery?.schema).toMatchObject({
+      properties: {
+        blocks: expect.any(Object),
+      },
+    });
+  });
+
   it("forwards read threadId to Slack action handler", async () => {
     handleSlackActionMock.mockResolvedValueOnce({ messages: [], hasMore: false });
     const handleAction = slackPlugin.actions?.handleAction;
