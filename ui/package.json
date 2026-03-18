@@ -11,7 +11,7 @@
   "dependencies": {
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
-    "@noble/ed25519": "3.0.0",
+    "@noble/ed25519": "3.0.1",
     "dompurify": "^3.3.3",
     "lit": "^3.3.2",
     "marked": "^17.0.4",
@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "@vitest/browser-playwright": "4.1.0",
-    "jsdom": "^28.1.0",
+    "jsdom": "^29.0.0",
     "playwright": "^1.58.2",
     "vitest": "4.1.0"
   }
