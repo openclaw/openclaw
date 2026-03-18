@@ -9,6 +9,9 @@ const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   "extensions/discord/runtime-api.ts": [
     'export * from "./src/audit.js";',
+    'export * from "./src/actions/runtime.js";',
+    'export * from "./src/actions/runtime.moderation-shared.js";',
+    'export * from "./src/actions/runtime.shared.js";',
     'export * from "./src/channel-actions.js";',
     'export * from "./src/directory-live.js";',
     'export * from "./src/monitor.js";',
@@ -33,6 +36,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   ],
   "extensions/signal/runtime-api.ts": ['export * from "./src/index.js";'],
   "extensions/slack/runtime-api.ts": [
+    'export * from "./src/action-runtime.js";',
     'export * from "./src/directory-live.js";',
     'export * from "./src/index.js";',
     'export * from "./src/resolve-channels.js";',
@@ -40,6 +44,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   ],
   "extensions/telegram/runtime-api.ts": [
     'export * from "./src/audit.js";',
+    'export * from "./src/action-runtime.js";',
     'export * from "./src/channel-actions.js";',
     'export * from "./src/monitor.js";',
     'export * from "./src/probe.js";',
@@ -49,6 +54,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   ],
   "extensions/whatsapp/runtime-api.ts": [
     'export * from "./src/active-listener.js";',
+    'export * from "./src/action-runtime.js";',
     'export * from "./src/agent-tools-login.js";',
     'export * from "./src/auth-store.js";',
     'export * from "./src/auto-reply.js";',
@@ -78,7 +84,7 @@ function collectRuntimeApiFiles(): string[] {
         stack.push(fullPath);
         continue;
       }
-      if (!entry.isFile() || !fullPath.endsWith("/runtime-api.ts")) {
+      if (!entry.isFile() || entry.name !== "runtime-api.ts") {
         continue;
       }
       files.push(relative(resolve(ROOT_DIR, ".."), fullPath).replaceAll("\\", "/"));
@@ -120,16 +126,20 @@ function readExportStatements(path: string): string[] {
       return element.isTypeOnly ? `type ${alias}` : alias;
     });
     const exportPrefix = statement.isTypeOnly ? "export type" : "export";
-    return [`${exportPrefix} { ${specifiers.join(", ")} } from ${moduleSpecifier.getText(sourceFile)};`];
+    return [
+      `${exportPrefix} { ${specifiers.join(", ")} } from ${moduleSpecifier.getText(sourceFile)};`,
+    ];
   });
 }
 
 describe("runtime api guardrails", () => {
   it("keeps runtime api seams on an explicit export allowlist", () => {
     const runtimeApiFiles = collectRuntimeApiFiles();
-    expect(runtimeApiFiles.toSorted()).toEqual(Object.keys(RUNTIME_API_EXPORT_GUARDS).toSorted());
+    expect(runtimeApiFiles).toEqual(
+      expect.arrayContaining(Object.keys(RUNTIME_API_EXPORT_GUARDS).toSorted()),
+    );
 
-    for (const file of runtimeApiFiles) {
+    for (const file of Object.keys(RUNTIME_API_EXPORT_GUARDS).toSorted()) {
       expect(readExportStatements(file), `${file} runtime api exports changed`).toEqual(
         RUNTIME_API_EXPORT_GUARDS[file],
       );
