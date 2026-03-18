@@ -1,0 +1,28 @@
+{
+  "id": "aisa",
+  "providers": ["aisa"],
+  "providerAuthEnvVars": {
+    "aisa": ["AISA_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "aisa",
+      "method": "api-key",
+      "choiceId": "aisa-api-key",
+      "choiceLabel": "AIsa API key",
+      "choiceHint": "China's top AI models — Qwen, Kimi, GLM, DeepSeek, MiniMax — one API key",
+      "groupId": "aisa",
+      "groupLabel": "AIsa",
+      "groupHint": "China's top AI models — Qwen, Kimi, GLM, DeepSeek, MiniMax — one API key",
+      "optionKey": "aisaApiKey",
+      "cliFlag": "--aisa-api-key",
+      "cliOption": "--aisa-api-key <key>",
+      "cliDescription": "AIsa API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
