@@ -371,4 +371,19 @@ describe("runUpdate", () => {
       sessionKey: "agent:main:whatsapp:dm:+15555550123",
     });
   });
+
+  it("surfaces update errors returned in response payload", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      result: { status: "error", reason: "network unavailable" },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.applySessionKey = "main";
+
+    await runUpdate(state);
+
+    expect(state.lastError).toBe("Update error: network unavailable");
+  });
 });

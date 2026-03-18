@@ -1,6 +1,5 @@
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
-import { renderThemeToggle } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { icons } from "../icons.ts";
 import { normalizeBasePath } from "../navigation.ts";
@@ -12,7 +11,6 @@ export function renderLoginGate(state: AppViewState) {
 
   return html`
     <div class="login-gate">
-      <div class="login-gate__theme">${renderThemeToggle(state)}</div>
       <div class="login-gate__card">
         <div class="login-gate__header">
           <img class="login-gate__logo" src=${faviconSrc} alt="OpenClaw" />

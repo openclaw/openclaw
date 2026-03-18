@@ -834,6 +834,26 @@
   border-color: rgba(16, 24, 40, 0.15);
 }
 
+@media (max-width: 768px) {
+  .chat-controls__session {
+    min-width: 120px;
+    max-width: none;
+  }
+
+  .chat-controls__model {
+    min-width: 140px;
+    max-width: none;
+  }
+
+  .chat-controls {
+    gap: 8px;
+  }
+
+  .chat-compose__field textarea {
+    min-height: 64px;
+  }
+}
+
 @media (max-width: 640px) {
   .chat-session {
     min-width: 140px;
@@ -843,20 +863,17 @@
     grid-template-columns: 1fr;
   }
 
-  /* Mobile: stack compose row vertically */
   .chat-compose__row {
     flex-direction: column;
     gap: 8px;
   }
 
-  /* Mobile: stack action buttons vertically */
   .chat-compose__actions {
     flex-direction: column;
     width: 100%;
     gap: 8px;
   }
 
-  /* Mobile: full-width buttons */
   .chat-compose .chat-compose__actions .btn {
     width: 100%;
   }
