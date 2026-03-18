@@ -27,6 +27,9 @@
       "localPath": "extensions/nostr",
       "defaultChoice": "npm"
     },
+    "release": {
+      "publishToNpm": true
+    },
     "releaseChecks": {
       "rootDependencyMirrorAllowlist": [
         "nostr-tools"

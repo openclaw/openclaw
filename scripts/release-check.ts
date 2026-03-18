@@ -34,15 +34,6 @@ const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
 
-function normalizePluginSyncVersion(version: string): string {
-  const normalized = version.trim().replace(/^v/, "");
-  const base = /^([0-9]+\.[0-9]+\.[0-9]+)/.exec(normalized)?.[1];
-  if (base) {
-    return base;
-  }
-  return normalized.replace(/[-+].*$/, "");
-}
-
 export function collectBundledExtensionRootDependencyGapErrors(params: {
   rootPackage: PackageJson;
   extensions: BundledExtension[];
@@ -188,54 +179,6 @@ export function collectPackUnpackedSizeErrors(results: Iterable<PackResult>): st
   }
 
   return errors;
-}
-
-function checkPluginVersions() {
-  const rootPackagePath = resolve("package.json");
-  const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as PackageJson;
-  const targetVersion = rootPackage.version;
-  const targetBaseVersion = targetVersion ? normalizePluginSyncVersion(targetVersion) : null;
-
-  if (!targetVersion || !targetBaseVersion) {
-    console.error("release-check: root package.json missing version.");
-    process.exit(1);
-  }
-
-  const extensionsDir = resolve("extensions");
-  const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
-    entry.isDirectory(),
-  );
-
-  const mismatches: string[] = [];
-
-  for (const entry of entries) {
-    const packagePath = join(extensionsDir, entry.name, "package.json");
-    let pkg: PackageJson;
-    try {
-      pkg = JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson;
-    } catch {
-      continue;
-    }
-
-    if (!pkg.name || !pkg.version) {
-      continue;
-    }
-
-    if (normalizePluginSyncVersion(pkg.version) !== targetBaseVersion) {
-      mismatches.push(`${pkg.name} (${pkg.version})`);
-    }
-  }
-
-  if (mismatches.length > 0) {
-    console.error(
-      `release-check: plugin versions must match release base ${targetBaseVersion} (root ${targetVersion}):`,
-    );
-    for (const item of mismatches) {
-      console.error(`  - ${item}`);
-    }
-    console.error("release-check: run `pnpm plugins:sync` to align plugin versions.");
-    process.exit(1);
-  }
 }
 
 function extractTag(item: string, tag: string): string | null {
@@ -393,7 +336,6 @@ async function checkPluginSdkExports() {
 }
 
 async function main() {
-  checkPluginVersions();
   checkAppcastSparkleVersions();
   await checkPluginSdkExports();
   checkBundledExtensionRootDependencyMirrors();

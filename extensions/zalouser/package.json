@@ -31,6 +31,9 @@
       "localPath": "extensions/zalouser",
       "defaultChoice": "npm"
     },
+    "release": {
+      "publishToNpm": true
+    },
     "releaseChecks": {
       "rootDependencyMirrorAllowlist": [
         "zca-js"

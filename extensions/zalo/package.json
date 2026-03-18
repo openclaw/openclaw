@@ -29,6 +29,9 @@
       "npmSpec": "@openclaw/zalo",
       "localPath": "extensions/zalo",
       "defaultChoice": "npm"
+    },
+    "release": {
+      "publishToNpm": true
     }
   }
 }
