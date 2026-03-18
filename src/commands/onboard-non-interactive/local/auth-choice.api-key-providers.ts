@@ -29,6 +29,7 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
     flagName: `--${string}`;
     envVar: string;
     runtime: RuntimeEnv;
+    allowProfile?: boolean;
   }) => Promise<ResolvedNonInteractiveApiKey | null>;
   maybeSetResolvedApiKey: (
     resolved: ResolvedNonInteractiveApiKey,
@@ -42,6 +43,9 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
     flagName: "--gigachat-api-key",
     envVar: "GIGACHAT_CREDENTIALS",
     runtime: params.runtime,
+    // Personal OAuth onboarding must not silently reuse an existing Basic
+    // username:password profile and then rewrite the provider to OAuth config.
+    allowProfile: false,
   });
   if (!resolved) {
     return null;
@@ -80,6 +84,7 @@ export async function applySimpleNonInteractiveApiKeyChoice(params: {
     flagName: `--${string}`;
     envVar: string;
     runtime: RuntimeEnv;
+    allowProfile?: boolean;
   }) => Promise<ResolvedNonInteractiveApiKey | null>;
   maybeSetResolvedApiKey: (
     resolved: ResolvedNonInteractiveApiKey,
