@@ -1,30 +1,30 @@
-import { buildMoonshotProvider } from "../../src/agents/models-config.providers.static.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-} from "../../src/agents/pi-embedded-runner/moonshot-stream-wrappers.js";
+} from "openclaw/plugin-sdk/provider-stream";
 import {
   createPluginBackedWebSearchProvider,
   getScopedCredentialValue,
   setScopedCredentialValue,
-} from "../../src/agents/tools/web-search-plugin-factory.js";
+} from "openclaw/plugin-sdk/provider-web-search";
+import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
   applyMoonshotConfig,
   applyMoonshotConfigCn,
-} from "../../src/commands/onboard-auth.config-core.js";
-import { MOONSHOT_DEFAULT_MODEL_REF } from "../../src/commands/onboard-auth.models.js";
-import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+  MOONSHOT_DEFAULT_MODEL_REF,
+} from "./onboard.js";
+import { buildMoonshotProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "moonshot";
 
-const moonshotPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Moonshot Provider",
   description: "Bundled Moonshot provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Moonshot",
@@ -35,7 +35,7 @@ const moonshotPlugin = {
           providerId: PROVIDER_ID,
           methodId: "api-key",
           label: "Kimi API key (.ai)",
-          hint: "Kimi K2.5 + Kimi Coding",
+          hint: "Kimi K2.5 + Kimi",
           optionKey: "moonshotApiKey",
           flagName: "--moonshot-api-key",
           envVar: "MOONSHOT_API_KEY",
@@ -48,14 +48,14 @@ const moonshotPlugin = {
             choiceLabel: "Kimi API key (.ai)",
             groupId: "moonshot",
             groupLabel: "Moonshot AI (Kimi K2.5)",
-            groupHint: "Kimi K2.5 + Kimi Coding",
+            groupHint: "Kimi K2.5 + Kimi",
           },
         }),
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
           methodId: "api-key-cn",
           label: "Kimi API key (.cn)",
-          hint: "Kimi K2.5 + Kimi Coding",
+          hint: "Kimi K2.5 + Kimi",
           optionKey: "moonshotApiKey",
           flagName: "--moonshot-api-key",
           envVar: "MOONSHOT_API_KEY",
@@ -68,28 +68,19 @@ const moonshotPlugin = {
             choiceLabel: "Kimi API key (.cn)",
             groupId: "moonshot",
             groupLabel: "Moonshot AI (Kimi K2.5)",
-            groupHint: "Kimi K2.5 + Kimi Coding",
+            groupHint: "Kimi K2.5 + Kimi",
           },
         }),
       ],
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          const explicitProvider = ctx.config.models?.providers?.[PROVIDER_ID];
-          const explicitBaseUrl =
-            typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
-          return {
-            provider: {
-              ...buildMoonshotProvider(),
-              ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-              apiKey,
-            },
-          };
-        },
+        run: (ctx) =>
+          buildSingleProviderApiKeyCatalog({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildMoonshotProvider,
+            allowExplicitBaseUrl: true,
+          }),
       },
       wrapStreamFn: (ctx) => {
         const thinkingType = resolveMoonshotThinkingType({
@@ -99,6 +90,7 @@ const moonshotPlugin = {
         return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
       },
     });
+    api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "kimi",
@@ -115,6 +107,4 @@ const moonshotPlugin = {
       }),
     );
   },
-};
-
-export default moonshotPlugin;
+});

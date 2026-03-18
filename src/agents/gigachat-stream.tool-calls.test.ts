@@ -171,7 +171,7 @@ describe("createGigachatStreamFn tool calling", () => {
       authMode: "oauth",
     });
 
-    const stream = streamFn(
+    const stream = await streamFn(
       { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
       {
         messages: [

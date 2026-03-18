@@ -20,6 +20,7 @@ const {
   gigachatStreamFn,
   lastCreatedSession,
   lastInitialStreamFn,
+  createOpenClawCodingToolsMock,
 } = vi.hoisted(() => {
   const contextEngineCompactMock = vi.fn(async () => ({
     ok: true as boolean,
@@ -41,12 +42,14 @@ const {
       info: { ownsCompaction: true },
       compact: contextEngineCompactMock,
     })),
-    resolveModelMock: vi.fn(() => ({
-      model: { provider: "openai", api: "responses", id: "fake", input: [] },
-      error: null,
-      authStorage: { setRuntimeApiKey: vi.fn() },
-      modelRegistry: {},
-    })),
+    resolveModelMock: vi.fn(
+      (_provider?: string, _modelId?: string, _agentDir?: string, _cfg?: unknown) => ({
+        model: { provider: "openai", api: "responses", id: "fake", input: [] },
+        error: null,
+        authStorage: { setRuntimeApiKey: vi.fn() },
+        modelRegistry: {},
+      }),
+    ),
     ensureAuthProfileStoreMock: vi.fn(),
     sessionCompactImpl: vi.fn(async () => ({
       summary: "summary",
@@ -77,6 +80,7 @@ const {
     gigachatStreamFn: vi.fn(),
     lastCreatedSession: { current: null as null | { agent: { streamFn: unknown } } },
     lastInitialStreamFn: { current: null as unknown },
+    createOpenClawCodingToolsMock: vi.fn(() => []),
   };
 });
 
@@ -223,7 +227,7 @@ vi.mock("../channel-tools.js", () => ({
 }));
 
 vi.mock("../pi-tools.js", () => ({
-  createOpenClawCodingTools: vi.fn(() => []),
+  createOpenClawCodingTools: createOpenClawCodingToolsMock,
 }));
 
 vi.mock("./google.js", () => ({
@@ -246,6 +250,15 @@ vi.mock("../transcript-policy.js", () => ({
 
 vi.mock("./extensions.js", () => ({
   buildEmbeddedExtensionFactories: vi.fn(() => ({ factories: [] })),
+}));
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
+  normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
+  prepareProviderDynamicModel: vi.fn(async () => undefined),
+  prepareProviderRuntimeAuth: vi.fn(async () => null),
+  resolveProviderRuntimePlugin: vi.fn(() => undefined),
+  runProviderDynamicModel: vi.fn(() => undefined),
 }));
 
 vi.mock("./history.js", () => ({
@@ -401,6 +414,34 @@ function wrappedCompactionArgs(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function gigachatTestConfig() {
+  return {
+    models: {
+      providers: {
+        gigachat: {
+          api: "openai-completions",
+          baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+          models: [
+            {
+              id: "GigaChat-2-Max",
+              api: "openai-completions",
+              input: ["text"],
+              contextWindow: 128_000,
+              maxTokens: 8_192,
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+              },
+            },
+          ],
+        },
+      },
+    },
+  } as never;
+}
+
 const sessionHook = (action: string) =>
   triggerInternalHook.mock.calls.find(
     (call) => call[0]?.type === "session" && call[0]?.action === action,
@@ -475,6 +516,26 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
   });
 
+  it("forwards gateway subagent binding opt-in during compaction bootstrap", async () => {
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
+    });
+
+    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      config: undefined,
+      workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
+    });
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+  });
+
   it("emits internal + plugin compaction hooks with counts", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     let sanitizedCount = 0;
@@ -493,7 +554,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       customInstructions: "focus on decisions",
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.reason).toBe(true);
     expect(sessionHook("compact:before")).toMatchObject({
       type: "session",
       action: "compact:before",
@@ -542,7 +603,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       customInstructions: "focus on decisions",
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.reason).toBe(true);
     expect(sessionHook("compact:before")?.sessionKey).toBe("session-1");
     expect(sessionHook("compact:after")?.sessionKey).toBe("session-1");
     expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
@@ -835,6 +896,12 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       authStorage: { setRuntimeApiKey: vi.fn() },
       modelRegistry: {},
     } as never);
+    vi.mocked(getApiKeyForModel).mockResolvedValueOnce({
+      apiKey: "test",
+      mode: "api-key",
+      profileId: "gigachat:business",
+      source: "profile:gigachat:business",
+    });
     ensureAuthProfileStoreMock.mockReturnValue({
       profiles: {
         "gigachat:business": {
@@ -869,6 +936,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       sessionKey: "agent:main:session-1",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
+      config: gigachatTestConfig(),
       provider: "gigachat",
       model: "GigaChat-2-Max",
       authProfileId: "gigachat:business",
@@ -893,8 +961,9 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     } as never);
     vi.mocked(getApiKeyForModel).mockResolvedValueOnce({
       apiKey: "test",
-      mode: "api_key",
+      mode: "api-key",
       profileId: "gigachat:business",
+      source: "profile:gigachat:business",
     });
     ensureAuthProfileStoreMock.mockReturnValue({
       profiles: {
@@ -938,12 +1007,13 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       sessionKey: "agent:main:session-1",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
+      config: gigachatTestConfig(),
       provider: "gigachat",
       model: "GigaChat-2-Max",
       customInstructions: "focus on decisions",
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, result.reason).toBe(true);
   });
 });
 
