@@ -685,7 +685,7 @@ describe("applyExtraParamsToAgent", () => {
       agent,
       undefined,
       "siliconflow",
-      "Pro/MiniMaxAI/MiniMax-M2.5",
+      "Pro/MiniMaxAI/MiniMax-M2.7",
       undefined,
       "off",
     );
@@ -693,7 +693,7 @@ describe("applyExtraParamsToAgent", () => {
     const model = {
       api: "openai-completions",
       provider: "siliconflow",
-      id: "Pro/MiniMaxAI/MiniMax-M2.5",
+      id: "Pro/MiniMaxAI/MiniMax-M2.7",
     } as Model<"openai-completions">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});

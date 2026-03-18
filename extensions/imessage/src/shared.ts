@@ -1,9 +1,9 @@
 import {
-  collectAllowlistProviderRestrictSendersWarnings,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
   formatTrimmedAllowFromEntries,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createAllowlistProviderRestrictSendersWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   buildChannelConfigSchema,
@@ -47,21 +47,16 @@ export const imessageResolveDmPolicy = createScopedDmSecurityResolver<ResolvedIM
   policyPathSuffix: "dmPolicy",
 });
 
-export function collectIMessageSecurityWarnings(params: {
-  account: ResolvedIMessageAccount;
-  cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
-}) {
-  return collectAllowlistProviderRestrictSendersWarnings({
-    cfg: params.cfg,
-    providerConfigPresent: params.cfg.channels?.imessage !== undefined,
-    configuredGroupPolicy: params.account.config.groupPolicy,
+export const collectIMessageSecurityWarnings =
+  createAllowlistProviderRestrictSendersWarningCollector<ResolvedIMessageAccount>({
+    providerConfigPresent: (cfg) => cfg.channels?.imessage !== undefined,
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
     surface: "iMessage groups",
     openScope: "any member",
     groupPolicyPath: "channels.imessage.groupPolicy",
     groupAllowFromPath: "channels.imessage.groupAllowFrom",
     mentionGated: false,
   });
-}
 
 export function createIMessagePluginBase(params: {
   setupWizard?: NonNullable<ChannelPlugin<ResolvedIMessageAccount>["setupWizard"]>;
