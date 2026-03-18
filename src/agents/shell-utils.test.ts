@@ -125,6 +125,23 @@ describe("getShellConfig", () => {
     expect(shell).toBe("/usr/bin/pwsh");
     expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
   });
+
+  it("CLAWDBOT_SHELL=pwsh bare name uses resolvePowerShellPath discovery", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "pwsh" }]);
+    process.env.CLAWDBOT_SHELL = "pwsh";
+    process.env.SHELL = "/usr/bin/bash";
+    process.env.PATH = binDir;
+    const { args } = getShellConfig();
+    expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
+  });
+
+  it("CLAWDBOT_SHELL=cmd uses /c instead of -c", () => {
+    process.env.CLAWDBOT_SHELL = "/usr/bin/cmd";
+    process.env.SHELL = "/usr/bin/bash";
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe("/usr/bin/cmd");
+    expect(args).toEqual(["/c"]);
+  });
 });
 
 describe("resolveShellFromPath", () => {

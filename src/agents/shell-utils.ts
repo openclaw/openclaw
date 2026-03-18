@@ -71,8 +71,16 @@ export function getShellConfig(): { shell: string; args: string[] } {
 
       // PowerShell needs -NoProfile -NonInteractive to suppress profile
       // banners and prompt hooks that leak into stdout or hang exec.
+      // For bare name overrides, use the full discovery chain (Program Files,
+      // ProgramW6432, SystemRoot, PATH) instead of PATH-only lookup.
       if (name === "pwsh" || name === "powershell") {
-        return { shell: shellPath, args: ["-NoProfile", "-NonInteractive", "-Command"] };
+        const psShell = path.isAbsolute(shellPath) ? shellPath : resolvePowerShellPath();
+        return { shell: psShell, args: ["-NoProfile", "-NonInteractive", "-Command"] };
+      }
+
+      // cmd.exe uses /c, not -c.
+      if (name === "cmd") {
+        return { shell: shellPath, args: ["/c"] };
       }
 
       return { shell: shellPath, args: ["-c"] };
