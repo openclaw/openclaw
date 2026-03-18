@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   createScopedAccountConfigAccessors,
+  createScopedChannelConfigBase,
+  createScopedDmSecurityResolver,
+  createTopLevelChannelConfigBase,
+  createHybridChannelConfigBase,
   mapAllowFromEntries,
   resolveOptionalConfigString,
 } from "./channel-config-helpers.js";
@@ -70,5 +74,190 @@ describe("createScopedAccountConfigAccessors", () => {
     });
 
     expect(accessors.resolveDefaultTo).toBeUndefined();
+  });
+});
+
+describe("createScopedChannelConfigBase", () => {
+  it("wires shared account config CRUD through the section helper", () => {
+    const base = createScopedChannelConfigBase({
+      sectionKey: "demo",
+      listAccountIds: () => ["default", "alt"],
+      resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
+      defaultAccountId: () => "default",
+      clearBaseFields: ["token"],
+    });
+
+    expect(base.listAccountIds({})).toEqual(["default", "alt"]);
+    expect(base.resolveAccount({}, "alt")).toEqual({ accountId: "alt" });
+    expect(base.defaultAccountId!({})).toBe("default");
+    expect(
+      base.setAccountEnabled!({
+        cfg: {},
+        accountId: "default",
+        enabled: true,
+      }).channels?.demo,
+    ).toEqual({ enabled: true });
+    expect(
+      base.deleteAccount!({
+        cfg: {
+          channels: {
+            demo: {
+              token: "secret",
+            },
+          },
+        },
+        accountId: "default",
+      }).channels,
+    ).toBeUndefined();
+  });
+});
+
+describe("createScopedDmSecurityResolver", () => {
+  it("builds account-aware DM policy payloads", () => {
+    const resolveDmPolicy = createScopedDmSecurityResolver<{
+      accountId?: string | null;
+      dmPolicy?: string;
+      allowFrom?: string[];
+    }>({
+      channelKey: "demo",
+      resolvePolicy: (account) => account.dmPolicy,
+      resolveAllowFrom: (account) => account.allowFrom,
+      policyPathSuffix: "dmPolicy",
+      normalizeEntry: (raw) => raw.toLowerCase(),
+    });
+
+    expect(
+      resolveDmPolicy({
+        cfg: {
+          channels: {
+            demo: {
+              accounts: {
+                alt: {},
+              },
+            },
+          },
+        },
+        accountId: "alt",
+        account: {
+          accountId: "alt",
+          dmPolicy: "allowlist",
+          allowFrom: ["Owner"],
+        },
+      }),
+    ).toEqual({
+      policy: "allowlist",
+      allowFrom: ["Owner"],
+      policyPath: "channels.demo.accounts.alt.dmPolicy",
+      allowFromPath: "channels.demo.accounts.alt.",
+      approveHint: "Approve via: openclaw pairing list demo / openclaw pairing approve demo <code>",
+      normalizeEntry: expect.any(Function),
+    });
+  });
+});
+
+describe("createTopLevelChannelConfigBase", () => {
+  it("wires top-level enable/delete semantics", () => {
+    const base = createTopLevelChannelConfigBase({
+      sectionKey: "demo",
+      resolveAccount: () => ({ accountId: "default" }),
+    });
+
+    expect(base.listAccountIds({})).toEqual(["default"]);
+    expect(base.defaultAccountId!({})).toBe("default");
+    expect(
+      base.setAccountEnabled!({
+        cfg: {},
+        accountId: "default",
+        enabled: true,
+      }).channels?.demo,
+    ).toEqual({ enabled: true });
+    expect(
+      base.deleteAccount!({
+        cfg: {
+          channels: {
+            demo: {
+              enabled: true,
+            },
+          },
+        },
+        accountId: "default",
+      }).channels,
+    ).toBeUndefined();
+  });
+});
+
+describe("createHybridChannelConfigBase", () => {
+  it("writes default account enable at the channel root and named accounts under accounts", () => {
+    const base = createHybridChannelConfigBase({
+      sectionKey: "demo",
+      listAccountIds: () => ["default", "alt"],
+      resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
+      defaultAccountId: () => "default",
+      clearBaseFields: ["token"],
+    });
+
+    expect(
+      base.setAccountEnabled!({
+        cfg: {
+          channels: {
+            demo: {
+              accounts: {
+                alt: { enabled: false },
+              },
+            },
+          },
+        },
+        accountId: "default",
+        enabled: true,
+      }).channels?.demo,
+    ).toEqual({
+      accounts: {
+        alt: { enabled: false },
+      },
+      enabled: true,
+    });
+    expect(
+      base.setAccountEnabled!({
+        cfg: {},
+        accountId: "alt",
+        enabled: true,
+      }).channels?.demo,
+    ).toEqual({
+      accounts: {
+        alt: { enabled: true },
+      },
+    });
+  });
+
+  it("can preserve the section when deleting the default account", () => {
+    const base = createHybridChannelConfigBase({
+      sectionKey: "demo",
+      listAccountIds: () => ["default", "alt"],
+      resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
+      defaultAccountId: () => "default",
+      clearBaseFields: ["token", "name"],
+      preserveSectionOnDefaultDelete: true,
+    });
+
+    expect(
+      base.deleteAccount!({
+        cfg: {
+          channels: {
+            demo: {
+              token: "secret",
+              name: "bot",
+              accounts: {
+                alt: { enabled: true },
+              },
+            },
+          },
+        },
+        accountId: "default",
+      }).channels?.demo,
+    ).toEqual({
+      accounts: {
+        alt: { enabled: true },
+      },
+    });
   });
 });
