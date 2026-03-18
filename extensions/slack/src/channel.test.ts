@@ -283,7 +283,7 @@ describe("slackPlugin agentPrompt", () => {
     });
 
     expect(hints).toEqual([
-      "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",
+      '- Slack interactive replies are disabled. If needed, ask to add `"interactiveReplies"` to `channels.slack.capabilities` (or `channels.slack.accounts.<account>.capabilities`).',
     ]);
   });
 

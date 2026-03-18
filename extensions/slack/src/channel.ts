@@ -82,6 +82,11 @@ function getTokenForOperation(
   if (operation === "read") {
     return userToken ?? botToken;
   }
+  if (!allowUserWrites) {
+    return botToken;
+  }
+  return botToken ?? userToken;
+}
 
 /**
  * Maps an OutboundIdentity (name/avatarUrl/emoji) to the SlackSendIdentity
@@ -110,12 +115,6 @@ export function mapOutboundIdentityToSlack(identity?: {
     return undefined;
   }
   return { username, iconUrl, iconEmoji };
-}
-
-  if (!allowUserWrites) {
-    return botToken;
-  }
-  return botToken ?? userToken;
 }
 
 type SlackSendFn = ReturnType<typeof getSlackRuntime>["channel"]["slack"]["sendMessageSlack"];
@@ -526,7 +525,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     textChunkLimit: 4000,
     ...createAttachedChannelResultAdapter({
       channel: "slack",
-      sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg , identity}\) => {
+      sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg, identity }) => {
         const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
           cfg,
           accountId: accountId ?? undefined,
