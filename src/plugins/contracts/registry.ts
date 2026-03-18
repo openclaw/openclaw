@@ -24,6 +24,7 @@ import openAIPlugin from "../../../extensions/openai/index.js";
 import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
 import opencodePlugin from "../../../extensions/opencode/index.js";
 import openrouterPlugin from "../../../extensions/openrouter/index.js";
+import parallelPlugin from "../../../extensions/parallel/index.js";
 import perplexityPlugin from "../../../extensions/perplexity/index.js";
 import qianfanPlugin from "../../../extensions/qianfan/index.js";
 import qwenPortalAuthPlugin from "../../../extensions/qwen-portal-auth/index.js";
@@ -83,6 +84,7 @@ const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unkn
   { ...firecrawlPlugin, credentialValue: "fc-test" },
   { ...googlePlugin, credentialValue: "AIza-test" },
   { ...moonshotPlugin, credentialValue: "sk-test" },
+  { ...parallelPlugin, credentialValue: "par-test" },
   { ...perplexityPlugin, credentialValue: "pplx-test" },
   { ...xaiPlugin, credentialValue: "xai-test" },
 ];
