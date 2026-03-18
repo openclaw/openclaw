@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention.js";
@@ -10,6 +10,21 @@ import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
+const FEISHU_CARD_TEMPLATES = new Set([
+  "blue",
+  "green",
+  "red",
+  "orange",
+  "purple",
+  "indigo",
+  "wathet",
+  "turquoise",
+  "yellow",
+  "grey",
+  "carmine",
+  "violet",
+  "lime",
+]);
 
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
@@ -124,6 +139,12 @@ async function sendReplyOrFallbackDirect(
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
 
+  const threadReplyFallbackError = params.replyInThread
+    ? new Error(
+        "Feishu thread reply failed: reply target is unavailable and cannot safely fall back to a top-level send.",
+      )
+    : null;
+
   let response: { code?: number; msg?: string; data?: { message_id?: string } };
   try {
     response = await client.im.message.reply({
@@ -138,9 +159,15 @@ async function sendReplyOrFallbackDirect(
     if (!isWithdrawnReplyError(err)) {
       throw err;
     }
+    if (threadReplyFallbackError) {
+      throw threadReplyFallbackError;
+    }
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
   if (shouldFallbackFromReplyTarget(response)) {
+    if (threadReplyFallbackError) {
+      throw threadReplyFallbackError;
+    }
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
   assertFeishuMessageApiSuccess(response, params.replyErrorPrefix);
@@ -391,7 +418,7 @@ export type SendFeishuMessageParams = {
   accountId?: string;
 };
 
-function buildFeishuPostMessagePayload(params: { messageText: string }): {
+export function buildFeishuPostMessagePayload(params: { messageText: string }): {
   content: string;
   msgType: string;
 } {
@@ -471,6 +498,59 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   });
 }
 
+export async function editMessageFeishu(params: {
+  cfg: ClawdbotConfig;
+  messageId: string;
+  text?: string;
+  card?: Record<string, unknown>;
+  accountId?: string;
+}): Promise<{ messageId: string; contentType: "post" | "interactive" }> {
+  const { cfg, messageId, text, card, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const hasText = typeof text === "string" && text.trim().length > 0;
+  const hasCard = Boolean(card);
+  if (hasText === hasCard) {
+    throw new Error("Feishu edit requires exactly one of text or card.");
+  }
+
+  const client = createFeishuClient(account);
+
+  if (card) {
+    const content = JSON.stringify(card);
+    const response = await client.im.message.patch({
+      path: { message_id: messageId },
+      data: { content },
+    });
+
+    if (response.code !== 0) {
+      throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
+    }
+
+    return { messageId, contentType: "interactive" };
+  }
+
+  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
+    cfg,
+    channel: "feishu",
+  });
+  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(text!, tableMode);
+  const payload = buildFeishuPostMessagePayload({ messageText });
+  const response = await client.im.message.patch({
+    path: { message_id: messageId },
+    data: { content: payload.content },
+  });
+
+  if (response.code !== 0) {
+    throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
+  }
+
+  return { messageId, contentType: "post" };
+}
+
 export async function updateCardFeishu(params: {
   cfg: ClawdbotConfig;
   messageId: string;
@@ -518,6 +598,77 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
   };
 }
 
+/** Header configuration for structured Feishu cards. */
+export type CardHeaderConfig = {
+  /** Header title text, e.g. "💻 Coder" */
+  title: string;
+  /** Feishu header color template (blue, green, red, orange, purple, grey, etc.). Defaults to "blue". */
+  template?: string;
+};
+
+export function resolveFeishuCardTemplate(template?: string): string | undefined {
+  const normalized = template?.trim().toLowerCase();
+  if (!normalized || !FEISHU_CARD_TEMPLATES.has(normalized)) {
+    return undefined;
+  }
+  return normalized;
+}
+
+/**
+ * Build a Feishu interactive card with optional header and note footer.
+ * When header/note are omitted, behaves identically to buildMarkdownCard.
+ */
+export function buildStructuredCard(
+  text: string,
+  options?: {
+    header?: CardHeaderConfig;
+    note?: string;
+  },
+): Record<string, unknown> {
+  const elements: Record<string, unknown>[] = [{ tag: "markdown", content: text }];
+  if (options?.note) {
+    elements.push({ tag: "hr" });
+    elements.push({ tag: "markdown", content: `<font color='grey'>${options.note}</font>` });
+  }
+  const card: Record<string, unknown> = {
+    schema: "2.0",
+    config: { wide_screen_mode: true },
+    body: { elements },
+  };
+  if (options?.header) {
+    card.header = {
+      title: { tag: "plain_text", content: options.header.title },
+      template: resolveFeishuCardTemplate(options.header.template) ?? "blue",
+    };
+  }
+  return card;
+}
+
+/**
+ * Send a message as a structured card with optional header and note.
+ */
+export async function sendStructuredCardFeishu(params: {
+  cfg: ClawdbotConfig;
+  to: string;
+  text: string;
+  replyToMessageId?: string;
+  /** When true, reply creates a Feishu topic thread instead of an inline reply */
+  replyInThread?: boolean;
+  mentions?: MentionTarget[];
+  accountId?: string;
+  header?: CardHeaderConfig;
+  note?: string;
+}): Promise<FeishuSendResult> {
+  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId, header, note } =
+    params;
+  let cardText = text;
+  if (mentions && mentions.length > 0) {
+    cardText = buildMentionedCardContent(mentions, text);
+  }
+  const card = buildStructuredCard(cardText, { header, note });
+  return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
+}
+
 /**
  * Send a message as a markdown card (interactive message).
  * This renders markdown properly in Feishu (code blocks, tables, bold/italic, etc.)
@@ -540,42 +691,4 @@ export async function sendMarkdownCardFeishu(params: {
   }
   const card = buildMarkdownCard(cardText);
   return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
-}
-
-/**
- * Edit an existing text message.
- * Note: Feishu only allows editing messages within 24 hours.
- */
-export async function editMessageFeishu(params: {
-  cfg: ClawdbotConfig;
-  messageId: string;
-  text: string;
-  accountId?: string;
-}): Promise<void> {
-  const { cfg, messageId, text, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
-  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
-    cfg,
-    channel: "feishu",
-  });
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(text ?? "", tableMode);
-
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
-
-  const response = await client.im.message.update({
-    path: { message_id: messageId },
-    data: {
-      msg_type: msgType,
-      content,
-    },
-  });
-
-  if (response.code !== 0) {
-    throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
-  }
 }

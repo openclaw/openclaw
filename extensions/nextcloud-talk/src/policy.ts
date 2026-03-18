@@ -3,7 +3,7 @@ import type {
   ChannelGroupContext,
   GroupPolicy,
   GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk/nextcloud-talk";
+} from "../runtime-api.js";
 import {
   buildChannelKeyCandidates,
   evaluateMatchedGroupAccessForPolicy,
@@ -11,7 +11,7 @@ import {
   resolveChannelEntryMatchWithFallback,
   resolveMentionGatingWithBypass,
   resolveNestedAllowlistDecision,
-} from "openclaw/plugin-sdk/nextcloud-talk";
+} from "../runtime-api.js";
 import type { NextcloudTalkRoomConfig } from "./types.js";
 
 function normalizeAllowEntry(raw: string): string {
@@ -57,16 +57,10 @@ export type NextcloudTalkRoomMatch = {
 export function resolveNextcloudTalkRoomMatch(params: {
   rooms?: Record<string, NextcloudTalkRoomConfig>;
   roomToken: string;
-  roomName?: string | null;
 }): NextcloudTalkRoomMatch {
   const rooms = params.rooms ?? {};
   const allowlistConfigured = Object.keys(rooms).length > 0;
-  const roomName = params.roomName?.trim() || undefined;
-  const roomCandidates = buildChannelKeyCandidates(
-    params.roomToken,
-    roomName,
-    roomName ? normalizeChannelSlug(roomName) : undefined,
-  );
+  const roomCandidates = buildChannelKeyCandidates(params.roomToken);
   const match = resolveChannelEntryMatchWithFallback({
     entries: rooms,
     keys: roomCandidates,
@@ -101,11 +95,9 @@ export function resolveNextcloudTalkGroupToolPolicy(
   if (!roomToken) {
     return undefined;
   }
-  const roomName = params.groupChannel?.trim() || undefined;
   const match = resolveNextcloudTalkRoomMatch({
     rooms: cfg.channels?.["nextcloud-talk"]?.rooms,
     roomToken,
-    roomName,
   });
   return match.roomConfig?.tools ?? match.wildcardConfig?.tools;
 }

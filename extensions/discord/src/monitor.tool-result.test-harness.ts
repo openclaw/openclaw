@@ -1,5 +1,5 @@
+import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { vi } from "vitest";
-import type { MockFn } from "../../../src/test-utils/vitest-mock-fn.js";
 
 export const sendMock: MockFn = vi.fn();
 export const reactMock: MockFn = vi.fn();
@@ -15,8 +15,8 @@ vi.mock("./send.js", () => ({
   },
 }));
 
-vi.mock("../../../src/auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/auto-reply/dispatch.js")>();
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
     ...actual,
     dispatchInboundMessage: (...args: unknown[]) => dispatchMock(...args),
@@ -36,10 +36,10 @@ function createPairingStoreMocks() {
   };
 }
 
-vi.mock("../../../src/pairing/pairing-store.js", () => createPairingStoreMocks());
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => createPairingStoreMocks());
 
-vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),

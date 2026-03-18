@@ -14,7 +14,11 @@ vi.mock("node:fs/promises", () => ({
   },
 }));
 
-const { isWSLEnv, isWSLSync, isWSL2Sync, isWSL, resetWSLStateForTests } = await import("./wsl.js");
+let isWSLEnv: typeof import("./wsl.js").isWSLEnv;
+let isWSLSync: typeof import("./wsl.js").isWSLSync;
+let isWSL2Sync: typeof import("./wsl.js").isWSL2Sync;
+let isWSL: typeof import("./wsl.js").isWSL;
+let resetWSLStateForTests: typeof import("./wsl.js").resetWSLStateForTests;
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -29,11 +33,16 @@ describe("wsl detection", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
+    vi.resetModules();
     envSnapshot = captureEnv(["WSL_INTEROP", "WSL_DISTRO_NAME", "WSLENV"]);
     readFileSyncMock.mockReset();
     readFileMock.mockReset();
-    resetWSLStateForTests();
     setPlatform("linux");
+  });
+
+  beforeEach(async () => {
+    ({ isWSLEnv, isWSLSync, isWSL2Sync, isWSL, resetWSLStateForTests } = await import("./wsl.js"));
+    resetWSLStateForTests();
   });
 
   afterEach(() => {

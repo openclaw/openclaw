@@ -6,6 +6,7 @@ export type BasicAllowlistResolutionEntry = {
   note?: string;
 };
 
+/** Clone allowlist resolution entries into a plain serializable shape for UI and docs output. */
 export function mapBasicAllowlistResolutionEntries(
   entries: BasicAllowlistResolutionEntry[],
 ): BasicAllowlistResolutionEntry[] {
@@ -18,6 +19,7 @@ export function mapBasicAllowlistResolutionEntries(
   }));
 }
 
+/** Map allowlist inputs sequentially so resolver side effects stay ordered and predictable. */
 export async function mapAllowlistResolutionInputs<T>(params: {
   inputs: string[];
   mapInput: (input: string) => Promise<T> | T;

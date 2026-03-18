@@ -34,6 +34,7 @@ export async function probeGateway(opts: {
   auth?: GatewayProbeAuth;
   timeoutMs: number;
   includeDetails?: boolean;
+  detailLevel?: "none" | "presence" | "full";
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
   const instanceId = randomUUID();
@@ -43,11 +44,16 @@ export async function probeGateway(opts: {
 
   const disableDeviceIdentity = (() => {
     try {
-      return isLoopbackHost(new URL(opts.url).hostname);
+      const hostname = new URL(opts.url).hostname;
+      // Local authenticated probes should stay device-bound so read/detail RPCs
+      // are not scope-limited by the shared-auth scope stripping hardening.
+      return isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password);
     } catch {
       return false;
     }
   })();
+
+  const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
@@ -79,7 +85,7 @@ export async function probeGateway(opts: {
       },
       onHelloOk: async () => {
         connectLatencyMs = Date.now() - startedAt;
-        if (opts.includeDetails === false) {
+        if (detailLevel === "none") {
           settle({
             ok: true,
             connectLatencyMs,
@@ -93,6 +99,20 @@ export async function probeGateway(opts: {
           return;
         }
         try {
+          if (detailLevel === "presence") {
+            const presence = await client.request("system-presence");
+            settle({
+              ok: true,
+              connectLatencyMs,
+              error: null,
+              close,
+              health: null,
+              status: null,
+              presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
+              configSnapshot: null,
+            });
+            return;
+          }
           const [health, status, presence, configSnapshot] = await Promise.all([
             client.request("health"),
             client.request("status"),
