@@ -485,6 +485,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let draftText = "";
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
+  // Track whether a draft message was committed (flushed) before a tool call
+  // boundary so the finally block does not delete it.
+  let draftCommittedBeforeReset = false;
 
   const resolvePreviewFinalText = (text?: string) => {
     if (typeof text !== "string") {
@@ -589,6 +592,24 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       }
     }
     await draftStream.flush();
+  };
+
+  // Commit the current draft message before an assistant boundary reset
+  // (e.g., new assistant message after a tool call). This ensures any
+  // pending streaming text is flushed to Discord before forceNewMessage()
+  // orphans the draft message ID. Without this, a race between the
+  // streaming draft and the tool call result delivery can cause the reply
+  // text to vanish.
+  const commitDraftBeforeReset = async () => {
+    if (!draftStream) {
+      return;
+    }
+    await flushDraft();
+    // If a message was sent, mark it as committed so the finally block
+    // does not delete it during cleanup.
+    if (draftStream.messageId()) {
+      draftCommittedBeforeReset = true;
+    }
   };
 
   // When draft streaming is active, suppress block streaming to avoid double-streaming.
@@ -741,8 +762,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
             : undefined),
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
         onAssistantMessageStart: draftStream
-          ? () => {
+          ? async () => {
               if (shouldSplitPreviewMessages && hasStreamedMessage) {
+                // Flush pending draft text before orphaning the message ID so
+                // the preview message is committed to Discord rather than
+                // silently discarded during cleanup.
+                await commitDraftBeforeReset();
                 logVerbose("discord: calling forceNewMessage() for draft stream");
                 draftStream.forceNewMessage();
               }
@@ -752,8 +777,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
             }
           : undefined,
         onReasoningEnd: draftStream
-          ? () => {
+          ? async () => {
               if (shouldSplitPreviewMessages && hasStreamedMessage) {
+                await commitDraftBeforeReset();
                 logVerbose("discord: calling forceNewMessage() for draft stream");
                 draftStream.forceNewMessage();
               }
@@ -802,7 +828,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     try {
       // Must stop() first to flush debounced content before clear() wipes state.
       await draftStream?.stop();
-      if (!finalizedViaPreviewMessage) {
+      if (!finalizedViaPreviewMessage && !draftCommittedBeforeReset) {
         await draftStream?.clear();
       }
     } catch (err) {
