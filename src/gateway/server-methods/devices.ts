@@ -70,8 +70,9 @@ function logDeviceTokenRotationDenied(params: {
   details?: Record<string, unknown>;
 }) {
   const suffix = params.scope ? ` scope=${params.scope}` : "";
+  const detailsSuffix = params.details ? ` details=${JSON.stringify(params.details)}` : "";
   params.log.warn(
-    `device token rotation denied device=${params.deviceId} role=${params.role} reason=${params.reason}${suffix}`,
+    `device token rotation denied device=${params.deviceId} role=${params.role} reason=${params.reason}${suffix}${detailsSuffix}`,
   );
 }
 
@@ -323,10 +324,6 @@ export const deviceHandlers: GatewayRequestHandlers = {
     const entry = await revokeDeviceToken({ deviceId, role });
     if ("error" in entry) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, entry.message));
-      return;
-    }
-    if (!entry) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId/role"));
       return;
     }
     context.logGateway.info(`device token revoked device=${deviceId} role=${entry.role}`);
