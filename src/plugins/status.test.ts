@@ -7,6 +7,8 @@ let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectRep
 let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
 let buildPluginCompatibilityNotices: typeof import("./status.js").buildPluginCompatibilityNotices;
 let buildPluginCompatibilityWarnings: typeof import("./status.js").buildPluginCompatibilityWarnings;
+let formatPluginCompatibilityNotice: typeof import("./status.js").formatPluginCompatibilityNotice;
+let summarizePluginCompatibility: typeof import("./status.js").summarizePluginCompatibility;
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => loadConfigMock(),
@@ -56,6 +58,8 @@ describe("buildPluginStatusReport", () => {
       buildPluginCompatibilityWarnings,
       buildPluginInspectReport,
       buildPluginStatusReport,
+      formatPluginCompatibilityNotice,
+      summarizePluginCompatibility,
     } = await import("./status.js"));
   });
 
@@ -487,5 +491,34 @@ describe("buildPluginStatusReport", () => {
 
     expect(buildPluginCompatibilityNotices()).toEqual([]);
     expect(buildPluginCompatibilityWarnings()).toEqual([]);
+  });
+
+  it("formats and summarizes compatibility notices", () => {
+    const notice = {
+      pluginId: "legacy-plugin",
+      code: "legacy-before-agent-start" as const,
+      severity: "warn" as const,
+      message:
+        "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+    };
+
+    expect(formatPluginCompatibilityNotice(notice)).toBe(
+      "legacy-plugin still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+    );
+    expect(
+      summarizePluginCompatibility([
+        notice,
+        {
+          pluginId: "legacy-plugin",
+          code: "hook-only",
+          severity: "info",
+          message:
+            "is hook-only; this remains supported for compatibility, but it has not migrated to explicit capability registration.",
+        },
+      ]),
+    ).toEqual({
+      noticeCount: 2,
+      pluginCount: 1,
+    });
   });
 });

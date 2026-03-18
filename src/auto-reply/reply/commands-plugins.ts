@@ -10,6 +10,7 @@ import {
   buildAllPluginInspectReports,
   buildPluginInspectReport,
   buildPluginStatusReport,
+  formatPluginCompatibilityNotice,
   type PluginStatusReport,
 } from "../../plugins/status.js";
 import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
@@ -48,7 +49,7 @@ function buildPluginInspectJson(params: {
     compatibilityWarnings: inspect.compatibility.map((warning) => ({
       code: warning.code,
       severity: warning.severity,
-      message: `${warning.pluginId} ${warning.message}`,
+      message: formatPluginCompatibilityNotice(warning),
     })),
     install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
   };
@@ -69,7 +70,7 @@ function buildAllPluginInspectJson(params: {
     compatibilityWarnings: inspect.compatibility.map((warning) => ({
       code: warning.code,
       severity: warning.severity,
-      message: `${warning.pluginId} ${warning.message}`,
+      message: formatPluginCompatibilityNotice(warning),
     })),
     install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
   }));

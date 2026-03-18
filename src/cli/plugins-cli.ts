@@ -25,6 +25,7 @@ import {
   buildPluginCompatibilityNotices,
   buildPluginInspectReport,
   buildPluginStatusReport,
+  formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
 import { resolveUninstallDirectoryTarget, uninstallPlugin } from "../plugins/uninstall.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
@@ -762,7 +763,7 @@ export function registerPluginsCli(program: Command) {
       lines.push(
         ...formatInspectSection(
           "Compatibility warnings",
-          inspect.compatibility.map((warning) => `${warning.pluginId} ${warning.message}`),
+          inspect.compatibility.map(formatPluginCompatibilityNotice),
         ),
       );
       lines.push(
@@ -1103,7 +1104,7 @@ export function registerPluginsCli(program: Command) {
         lines.push(theme.warn("Compatibility:"));
         for (const notice of compatibility) {
           const marker = notice.severity === "warn" ? theme.warn("warn") : theme.muted("info");
-          lines.push(`- ${notice.pluginId} [${marker}]: ${notice.message}`);
+          lines.push(`- ${formatPluginCompatibilityNotice(notice)} [${marker}]`);
         }
       }
       const docs = formatDocsLink("/plugin", "docs.openclaw.ai/plugin");
