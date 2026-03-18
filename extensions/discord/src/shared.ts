@@ -23,9 +23,9 @@ async function loadDiscordChannelRuntime() {
   return await import("./channel.runtime.js");
 }
 
-export const discordSetupWizard = createDiscordSetupWizardProxy(async () => ({
-  discordSetupWizard: (await loadDiscordChannelRuntime()).discordSetupWizard,
-}));
+export const discordSetupWizard = createDiscordSetupWizardProxy(
+  async () => (await loadDiscordChannelRuntime()).discordSetupWizard,
+);
 
 export const discordConfigAccessors = createScopedAccountConfigAccessors({
   resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),

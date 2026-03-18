@@ -8,6 +8,7 @@ import {
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
   patchTopLevelChannelConfigSection,
+  promptParsedAllowFromForAccount,
   promptSingleChannelSecretInput,
   splitSetupEntries,
   type ChannelSetupDmPolicy,
@@ -96,34 +97,25 @@ async function promptFeishuAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0]["prompter"];
 }): Promise<OpenClawConfig> {
-  const existing = params.cfg.channels?.feishu?.allowFrom ?? [];
-  await params.prompter.note(
-    [
+  return await promptParsedAllowFromForAccount({
+    cfg: params.cfg,
+    defaultAccountId: DEFAULT_ACCOUNT_ID,
+    prompter: params.prompter,
+    noteTitle: "Feishu allowlist",
+    noteLines: [
       "Allowlist Feishu DMs by open_id or user_id.",
       "You can find user open_id in Feishu admin console or via API.",
       "Examples:",
       "- ou_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "- on_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-    ].join("\n"),
-    "Feishu allowlist",
-  );
-
-  while (true) {
-    const entry = await params.prompter.text({
-      message: "Feishu allowFrom (user open_ids)",
-      placeholder: "ou_xxxxx, ou_yyyyy",
-      initialValue: existing[0] ? String(existing[0]) : undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-    });
-    const parts = splitSetupEntries(String(entry));
-    if (parts.length === 0) {
-      await params.prompter.note("Enter at least one user.", "Feishu allowlist");
-      continue;
-    }
-
-    const unique = mergeAllowFromEntries(existing, parts);
-    return setFeishuAllowFrom(params.cfg, unique);
-  }
+    ],
+    message: "Feishu allowFrom (user open_ids)",
+    placeholder: "ou_xxxxx, ou_yyyyy",
+    parseEntries: (raw) => ({ entries: splitSetupEntries(raw) }),
+    getExistingAllowFrom: ({ cfg }) => cfg.channels?.feishu?.allowFrom ?? [],
+    mergeEntries: ({ existing, parsed }) => mergeAllowFromEntries(existing, parsed),
+    applyAllowFrom: ({ cfg, allowFrom }) => setFeishuAllowFrom(cfg, allowFrom),
+  });
 }
 
 async function noteFeishuCredentialHelp(

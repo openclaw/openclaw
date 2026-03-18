@@ -1,5 +1,4 @@
 import {
-  createTopLevelChannelDmPolicy,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   resolveLineAccount,
@@ -8,6 +7,7 @@ import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/line-core";
+import { createAllowFromSection, createTopLevelChannelDmPolicy } from "openclaw/plugin-sdk/setup";
 import {
   isLineConfigured,
   listLineAccountIds,
@@ -156,7 +156,7 @@ export const lineSetupWizard: ChannelSetupWizard = {
         }),
     },
   ],
-  allowFrom: {
+  allowFrom: createAllowFromSection({
     helpTitle: "LINE allowlist",
     helpLines: LINE_ALLOW_FROM_HELP_LINES,
     message: "LINE allowFrom (user id)",
@@ -165,15 +165,6 @@ export const lineSetupWizard: ChannelSetupWizard = {
       "LINE allowFrom requires raw user ids like U1234567890abcdef1234567890abcdef.",
     parseInputs: splitSetupEntries,
     parseId: parseLineAllowFromId,
-    resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseLineAllowFromId(entry);
-        return {
-          input: entry,
-          resolved: Boolean(id),
-          id,
-        };
-      }),
     apply: ({ cfg, accountId, allowFrom }) =>
       patchLineAccountConfig({
         cfg,
@@ -181,7 +172,7 @@ export const lineSetupWizard: ChannelSetupWizard = {
         enabled: true,
         patch: { dmPolicy: "allowlist", allowFrom },
       }),
-  },
+  }),
   dmPolicy: lineDmPolicy,
   completionNote: {
     title: "LINE webhook",
