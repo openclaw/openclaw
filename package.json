@@ -126,6 +126,10 @@
       "types": "./dist/plugin-sdk/agent-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-runtime.js"
     },
+    "./plugin-sdk/agent-steer": {
+      "types": "./dist/plugin-sdk/agent-steer.d.ts",
+      "default": "./dist/plugin-sdk/agent-steer.js"
+    },
     "./plugin-sdk/speech-runtime": {
       "types": "./dist/plugin-sdk/speech-runtime.d.ts",
       "default": "./dist/plugin-sdk/speech-runtime.js"
