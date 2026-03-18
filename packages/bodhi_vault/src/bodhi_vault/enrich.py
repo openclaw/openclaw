@@ -6,7 +6,7 @@ Phase 0 (now): Pure-Python concept matching against hard-coded reference library
     - enrich_node_concepts(): writes related_papers to node, idempotent
 
 Phase 1 (Core container online): Ollama integration.
-    - expand_content(): calls Mistral Nemo at localhost:11434
+    - expand_content(): calls gemma3:12b at localhost:11434
     - enrich_node(): full async enrichment (concepts + expanded content)
 
 The two phases are kept separate. Phase 0 works offline, no GPU needed.
@@ -97,28 +97,34 @@ def enrich_node_concepts(
 
 
 # ---------------------------------------------------------------------------
-# Phase 1 stub: Ollama integration (not wired until Core container is online)
+# Phase 1: Ollama integration (gemma3:12b, replaces NotImplementedError stub)
 # ---------------------------------------------------------------------------
 
 async def expand_content(
     content: str,
-    model: str = "mistral-nemo:12b",
+    model: str = "gemma3:12b",
     ollama_host: str = "http://127.0.0.1:11434",
 ) -> str:
     """
-    Expand a fragmented thought using local Mistral Nemo via Ollama.
+    Expand a fragmented thought using a local Ollama model.
 
-    TODO (Phase 1): implement httpx call to Ollama /api/generate.
-    Currently raises NotImplementedError to make Phase 1 wiring explicit.
-
-    The prompt:
-        "Expand this fragmented thought into 2-3 legible sentences.
-         Preserve the original meaning exactly. Do not add opinions."
+    Replaces the NotImplementedError stub. Uses gemma3:12b by default
+    (upgraded from mistral-nemo:12b). Fully offline — never calls Anthropic.
     """
-    raise NotImplementedError(
-        "expand_content requires Ollama running at localhost:11434. "
-        "Wire this in Phase 1 once the Core container is online."
+    import httpx
+
+    prompt = (
+        "Expand this fragmented thought into 2-3 legible sentences. "
+        "Preserve the original meaning exactly. Do not add opinions.\n\n"
+        f"{content}"
     )
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{ollama_host}/api/generate",
+            json={"model": model, "prompt": prompt, "stream": False},
+        )
+        resp.raise_for_status()
+        return resp.json()["response"].strip()
 
 
 async def enrich_node(
@@ -126,14 +132,11 @@ async def enrich_node(
     vault_path: Path,
     schema_path: Path,
     concepts_path: Path,
-    model: str = "mistral-nemo:12b",
+    model: str = "gemma3:12b",
     ollama_host: str = "http://127.0.0.1:11434",
 ) -> bool:
     """
     Full enrichment: expand content with Ollama + match concepts. Idempotent.
-
-    TODO (Phase 1): uncomment expand_content call once Ollama is available.
-    Currently falls back to concept matching only (Phase 0 behavior).
     """
     from bodhi_vault.read import get_node
 
@@ -143,11 +146,10 @@ async def enrich_node(
     if node.get("content_enriched"):
         return False  # Already enriched
 
-    # Phase 1: Uncomment when Ollama is online
-    # content_enriched = await expand_content(node["content"], model, ollama_host)
-    # node["content_enriched"] = content_enriched
-    # node["enrichment_model"] = model
-    # node["enriched_at"] = datetime.now(timezone.utc).isoformat()
+    content_enriched = await expand_content(node["content"], model, ollama_host)
+    node["content_enriched"] = content_enriched
+    node["enrichment_model"] = model
+    node["enriched_at"] = datetime.now(timezone.utc).isoformat()
 
     text = node.get("content", "")
     node["related_papers"] = match_concepts(text, concepts_path)
