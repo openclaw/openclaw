@@ -1,0 +1,38 @@
+{
+  "name": "smart-message-handler",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Smart Message Handler plugin for OpenClaw.",
+  "type": "module",
+  "scripts": {
+    "benchmark": "node --experimental-strip-types tools/benchmark.ts",
+    "calibrate": "node --experimental-strip-types tools/calibrate.ts",
+    "check": "oxlint src/ tests/",
+    "format": "oxfmt --check src/ tests/",
+    "format:fix": "oxfmt --write src/ tests/",
+    "smoke": "node --experimental-strip-types ./smoke-test.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "oxlint": "latest",
+    "vitest": "^4.1.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
