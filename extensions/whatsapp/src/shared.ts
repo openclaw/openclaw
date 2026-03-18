@@ -1,8 +1,7 @@
 import {
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
+  createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
@@ -37,17 +36,13 @@ export const whatsappSetupWizardProxy = createWhatsAppSetupWizardProxy(
   async () => (await loadWhatsAppChannelRuntime()).whatsappSetupWizard,
 );
 
-const whatsappConfigBase = createScopedChannelConfigBase<ResolvedWhatsAppAccount>({
+const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppAccount>({
   sectionKey: WHATSAPP_CHANNEL,
   listAccountIds: listWhatsAppAccountIds,
   resolveAccount: (cfg, accountId) => resolveWhatsAppAccount({ cfg, accountId }),
   defaultAccountId: resolveDefaultWhatsAppAccountId,
   clearBaseFields: [],
   allowTopLevel: false,
-});
-
-const whatsappConfigAccessors = createScopedAccountConfigAccessors<ResolvedWhatsAppAccount>({
-  resolveAccount: ({ cfg, accountId }) => resolveWhatsAppAccount({ cfg, accountId }),
   resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) => formatWhatsAppConfigAllowFromEntries(allowFrom),
   resolveDefaultTo: (account) => account.defaultTo,
@@ -133,7 +128,7 @@ export function createWhatsAppPluginBase(params: {
     gatewayMethods: ["web.login.start", "web.login.wait"],
     configSchema: buildChannelConfigSchema(WhatsAppConfigSchema),
     config: {
-      ...whatsappConfigBase,
+      ...whatsappConfigAdapter,
       isEnabled: (account, cfg) => account.enabled && cfg.web?.enabled !== false,
       disabledReason: () => "disabled",
       isConfigured: params.isConfigured,
@@ -147,7 +142,6 @@ export function createWhatsAppPluginBase(params: {
         dmPolicy: account.dmPolicy,
         allowFrom: account.allowFrom,
       }),
-      ...whatsappConfigAccessors,
     },
     security: {
       resolveDmPolicy: whatsappResolveDmPolicy,

@@ -1,7 +1,6 @@
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
+  createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
@@ -47,22 +46,18 @@ const loadBlueBubblesChannelRuntime = createLazyRuntimeNamedExport(
   "blueBubblesChannelRuntime",
 );
 
-const bluebubblesConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveBlueBubblesAccount({ cfg, accountId }),
+const bluebubblesConfigAdapter = createScopedChannelConfigAdapter<ResolvedBlueBubblesAccount>({
+  sectionKey: "bluebubbles",
+  listAccountIds: listBlueBubblesAccountIds,
+  resolveAccount: (cfg, accountId) => resolveBlueBubblesAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultBlueBubblesAccountId,
+  clearBaseFields: ["serverUrl", "password", "name", "webhookPath"],
   resolveAllowFrom: (account: ResolvedBlueBubblesAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     formatNormalizedAllowFromEntries({
       allowFrom,
       normalizeEntry: (entry) => normalizeBlueBubblesHandle(entry.replace(/^bluebubbles:/i, "")),
     }),
-});
-
-const bluebubblesConfigBase = createScopedChannelConfigBase<ResolvedBlueBubblesAccount>({
-  sectionKey: "bluebubbles",
-  listAccountIds: listBlueBubblesAccountIds,
-  resolveAccount: (cfg, accountId) => resolveBlueBubblesAccount({ cfg, accountId }),
-  defaultAccountId: resolveDefaultBlueBubblesAccountId,
-  clearBaseFields: ["serverUrl", "password", "name", "webhookPath"],
 });
 
 const resolveBlueBubblesDmPolicy = createScopedDmSecurityResolver<ResolvedBlueBubblesAccount>({
@@ -115,7 +110,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   configSchema: buildChannelConfigSchema(BlueBubblesConfigSchema),
   setupWizard: blueBubblesSetupWizard,
   config: {
-    ...bluebubblesConfigBase,
+    ...bluebubblesConfigAdapter,
     isConfigured: (account) => account.configured,
     describeAccount: (account): ChannelAccountSnapshot => ({
       accountId: account.accountId,
@@ -124,7 +119,6 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       configured: account.configured,
       baseUrl: account.baseUrl,
     }),
-    ...bluebubblesConfigAccessors,
   },
   actions: bluebubblesMessageActions,
   security: {
