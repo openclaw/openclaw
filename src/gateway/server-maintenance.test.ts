@@ -22,6 +22,7 @@ function createMaintenanceTimerDeps() {
     refreshGatewayHealthSnapshot: async () => ({ ok: true }) as HealthSummary,
     logHealth: { error: () => {} },
     dedupe: new Map(),
+    agentAbortControllers: new Map(),
     chatAbortControllers: new Map(),
     chatRunState: { abortedRuns: new Map() },
     chatRunBuffers: new Map(),

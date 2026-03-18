@@ -11,6 +11,7 @@ import {
   resolveActivePluginHttpRouteRegistry,
 } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { AgentAbortControllerEntry } from "./agent-abort.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -84,6 +85,7 @@ export async function createGatewayRuntimeState(params: {
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   agentRunSeq: Map<string, number>;
+  agentAbortControllers: Map<string, AgentAbortControllerEntry>;
   dedupe: Map<string, DedupeEntry>;
   chatRunState: ReturnType<typeof createChatRunState>;
   chatRunBuffers: Map<string, string>;
@@ -216,6 +218,7 @@ export async function createGatewayRuntimeState(params: {
     }
 
     const agentRunSeq = new Map<string, number>();
+    const agentAbortControllers = new Map<string, AgentAbortControllerEntry>();
     const dedupe = new Map<string, DedupeEntry>();
     const chatRunState = createChatRunState();
     const chatRunRegistry = chatRunState.registry;
@@ -237,6 +240,7 @@ export async function createGatewayRuntimeState(params: {
       broadcast,
       broadcastToConnIds,
       agentRunSeq,
+      agentAbortControllers,
       dedupe,
       chatRunState,
       chatRunBuffers,
