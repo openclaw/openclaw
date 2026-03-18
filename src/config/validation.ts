@@ -20,11 +20,15 @@ import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
+import {
+  listLegacyWebSearchConfigPaths,
+  normalizeLegacyWebSearchConfig,
+} from "./legacy-web-search.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
-const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth"]);
+const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
 
 type UnknownIssueRecord = Record<string, unknown>;
 type AllowedValuesCollection = {
@@ -222,6 +226,132 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+type TolerantBaseResult =
+  | { ok: true; config: OpenClawConfig; unknownKeyWarnings: ConfigValidationIssue[] }
+  | { ok: false; issues: ConfigValidationIssue[]; unknownKeyWarnings: ConfigValidationIssue[] };
+
+/**
+ * Recursively removes a property from an object given a path array.
+ */
+function removePathFromObject(obj: unknown, path: (string | number)[]): void {
+  if (typeof obj !== "object" || obj === null || path.length === 0) {
+    return;
+  }
+  let current = obj as Record<string, unknown>;
+  for (let i = 0; i < path.length - 1; i++) {
+    const key = path[i];
+    const next = current[key as string];
+    if (typeof next !== "object" || next === null) {
+      return;
+    }
+    current = next as Record<string, unknown>;
+  }
+  const lastKey = path[path.length - 1];
+  delete (current as Record<string, unknown>)[lastKey];
+}
+
+/**
+ * Internal helper: validates config allowing unknown keys to pass as warnings.
+ * Only `unrecognized_keys` issues from Zod's `.strict()` are demoted to warnings.
+ * All other schema violations (wrong types, invalid values, etc.) remain errors.
+ */
+function validateConfigObjectTolerantBase(
+  raw: unknown,
+  applyDefaults: boolean,
+): TolerantBaseResult {
+  const legacyIssues = findLegacyConfigIssues(raw);
+  if (legacyIssues.length > 0) {
+    return {
+      ok: false,
+      issues: legacyIssues.map((iss) => ({ path: iss.path, message: iss.message })),
+      unknownKeyWarnings: [],
+    };
+  }
+
+  const validated = OpenClawSchema.safeParse(raw);
+
+  if (validated.success) {
+    // Strict parse succeeded 鈥?no unknown keys, no warnings needed.
+    const cfg = applyDefaults
+      ? applyModelDefaults(
+          applyAgentDefaults(applySessionDefaults(validated.data as OpenClawConfig)),
+        )
+      : (validated.data as OpenClawConfig);
+    return { ok: true, config: cfg, unknownKeyWarnings: [] };
+  }
+
+  // Separate unknown-key issues from real validation errors.
+  const unknownKeyIssues = validated.error.issues.filter(
+    (issue) => issue.code === "unrecognized_keys",
+  );
+  const realErrors = validated.error.issues.filter((issue) => issue.code !== "unrecognized_keys");
+
+  if (realErrors.length > 0) {
+    // Real type/value errors must still fail 鈥?tolerant mode doesn't swallow mistakes.
+    return {
+      ok: false,
+      issues: realErrors.map((issue) => mapZodIssueToConfigIssue(issue)),
+      unknownKeyWarnings: unknownKeyIssues.map((issue) => mapZodIssueToConfigIssue(issue)),
+    };
+  }
+
+  // Only unknown-key issues remain 鈥?prune them and retry parse to get valid data.
+  // We use JSON.parse(JSON.stringify) for deep cloning as config is a POJO.
+  const cleanedRaw = JSON.parse(JSON.stringify(raw));
+  for (const issue of unknownKeyIssues) {
+    const issueRecord = issue as unknown as Record<string, unknown>;
+    const keys = issueRecord.keys;
+    if (Array.isArray(keys)) {
+      for (const key of keys) {
+        removePathFromObject(cleanedRaw, [
+          ...(issue.path as (string | number)[]),
+          key as string | number,
+        ]);
+      }
+    } else {
+      removePathFromObject(cleanedRaw, issue.path as unknown as (string | number)[]);
+    }
+  }
+
+  const passResult = OpenClawSchema.safeParse(cleanedRaw);
+  if (!passResult.success) {
+    return {
+      ok: false,
+      issues: passResult.error.issues.map((issue) => mapZodIssueToConfigIssue(issue)),
+      unknownKeyWarnings: [],
+    };
+  }
+
+  const warnings = unknownKeyIssues.map((issue) => mapZodIssueToConfigIssue(issue));
+
+  const duplicates = findDuplicateAgentDirs(passResult.data as OpenClawConfig);
+  if (duplicates.length > 0) {
+    return {
+      ok: false,
+      issues: [{ path: "agents.list", message: formatDuplicateAgentDirError(duplicates) }],
+      unknownKeyWarnings: warnings,
+    };
+  }
+
+  const avatarIssues = validateIdentityAvatar(passResult.data as OpenClawConfig);
+  if (avatarIssues.length > 0) {
+    return { ok: false, issues: avatarIssues, unknownKeyWarnings: warnings };
+  }
+
+  const tailscaleIssues = validateGatewayTailscaleBind(passResult.data as OpenClawConfig);
+  if (tailscaleIssues.length > 0) {
+    return { ok: false, issues: tailscaleIssues, unknownKeyWarnings: warnings };
+  }
+
+  const cfg = applyDefaults
+    ? applyModelDefaults(
+        applyAgentDefaults(applySessionDefaults(passResult.data as OpenClawConfig)),
+      )
+    : (passResult.data as OpenClawConfig);
+
+  return { ok: true, config: cfg, unknownKeyWarnings: warnings };
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -229,7 +359,8 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const legacyIssues = findLegacyConfigIssues(raw);
+  const normalizedRaw = normalizeLegacyWebSearchConfig(raw);
+  const legacyIssues = findLegacyConfigIssues(normalizedRaw);
   if (legacyIssues.length > 0) {
     return {
       ok: false,
@@ -239,7 +370,7 @@ export function validateConfigObjectRaw(
       })),
     };
   }
-  const validated = OpenClawSchema.safeParse(raw);
+  const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
     return {
       ok: false,
@@ -311,18 +442,57 @@ export function validateConfigObjectRawWithPlugins(
   return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false, env: params?.env });
 }
 
+/**
+ * Validates config in tolerant mode, intended for gateway startup reads.
+ *
+ * Unlike the strict validators, this function downgrades `unrecognized_keys`
+ * Zod errors to non-fatal warnings instead of hard failures. This prevents
+ * the gateway from crashing when a config file contains keys written by a
+ * newer or older version of OpenClaw that are unknown to the current schema.
+ *
+ * **Do NOT use this for CLI config validation or config writes.** Those paths
+ * must remain strict (fail-closed) to catch user typos and prevent data loss.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/40317
+ */
+export function validateConfigObjectTolerantWithPlugins(
+  raw: unknown,
+  params?: { env?: NodeJS.ProcessEnv },
+): ValidateConfigWithPluginsResult {
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: true,
+    env: params?.env,
+    tolerant: true,
+  });
+}
+
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv },
+  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv; tolerant?: boolean },
 ): ValidateConfigWithPluginsResult {
-  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
+  const base = opts.tolerant
+    ? validateConfigObjectTolerantBase(raw, opts.applyDefaults)
+    : opts.applyDefaults
+      ? validateConfigObject(raw)
+      : validateConfigObjectRaw(raw);
   if (!base.ok) {
-    return { ok: false, issues: base.issues, warnings: [] };
+    const tolerantBase = "unknownKeyWarnings" in base ? (base as TolerantBaseResult) : null;
+    const earlyWarnings: ConfigValidationIssue[] = tolerantBase?.unknownKeyWarnings ?? [];
+    return { ok: false, issues: base.issues, warnings: earlyWarnings };
   }
 
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = listLegacyWebSearchConfigPaths(raw).map((path) => ({
+    path,
+    message:
+      `${path} is deprecated for web search provider config. ` +
+      "Move it under plugins.entries.<plugin>.config.webSearch.*; OpenClaw mapped it automatically for compatibility.",
+  }));
+  // Pre-populate warnings with any unknown-key notices from tolerant base parse.
+  if ("unknownKeyWarnings" in base) {
+    warnings.push(...(base as TolerantBaseResult).unknownKeyWarnings);
+  }
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
@@ -528,8 +698,17 @@ function validateConfigObjectWithPluginsBase(
     }
   }
 
+  // The default memory slot is inferred; only a user-configured slot should block startup.
+  const pluginSlots = pluginsConfig?.slots;
+  const hasExplicitMemorySlot =
+    pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, "memory");
   const memorySlot = normalizedPlugins.slots.memory;
-  if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
+  if (
+    hasExplicitMemorySlot &&
+    typeof memorySlot === "string" &&
+    memorySlot.trim() &&
+    !knownIds.has(memorySlot)
+  ) {
     pushMissingPluginIssue("plugins.slots.memory", memorySlot);
   }
 
@@ -587,6 +766,9 @@ function validateConfigObjectWithPluginsBase(
             });
           }
         }
+      } else if (record.format === "bundle") {
+        // Compatible bundles currently expose no native OpenClaw config schema.
+        // Treat them as schema-less capability packs rather than failing validation.
       } else {
         issues.push({
           path: `plugins.entries.${pluginId}`,
