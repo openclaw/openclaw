@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { channelTestPrefixes } from "../vitest.channel-paths.mjs";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
 // (especially under GitHub Actions + Git Bash). Use `shell: true` and let the shell resolve pnpm.
@@ -42,8 +43,8 @@ const unitIsolatedFilesRaw = [
   "src/commands/agent.test.ts",
   "src/media/store.test.ts",
   "src/media/store.header-ext.test.ts",
-  "src/web/media.test.ts",
-  "src/web/auto-reply.web-auto-reply.falls-back-text-media-send-fails.test.ts",
+  "extensions/whatsapp/src/media.test.ts",
+  "extensions/whatsapp/src/auto-reply.web-auto-reply.falls-back-text-media-send-fails.test.ts",
   "src/browser/server.covers-additional-endpoint-branches.test.ts",
   "src/browser/server.post-tabs-open-profile-unknown-returns-404.test.ts",
   "src/browser/server.agent-contract-snapshot-endpoints.test.ts",
@@ -59,7 +60,6 @@ const unitIsolatedFilesRaw = [
   // Skills discovery/snapshot suites are filesystem-heavy and high-variance in vmForks lanes.
   "src/agents/skills.test.ts",
   "src/agents/skills.buildworkspaceskillsnapshot.test.ts",
-  "src/browser/extension-relay.test.ts",
   "extensions/acpx/src/runtime.test.ts",
   // Shell-heavy script harness can contend under vmForks startup bursts.
   "test/scripts/ios-team-id.test.ts",
@@ -80,19 +80,32 @@ const unitIsolatedFilesRaw = [
   "src/auto-reply/reply.triggers.trigger-handling.targets-active-session-native-stop.test.ts",
   "src/auto-reply/reply.triggers.group-intro-prompts.test.ts",
   "src/auto-reply/reply.triggers.trigger-handling.handles-inline-commands-strips-it-before-agent.test.ts",
-  "src/web/auto-reply.web-auto-reply.compresses-common-formats-jpeg-cap.test.ts",
+  "extensions/whatsapp/src/auto-reply.web-auto-reply.compresses-common-formats-jpeg-cap.test.ts",
   // Setup-heavy bot bootstrap suite.
-  "src/telegram/bot.create-telegram-bot.test.ts",
+  "extensions/telegram/src/bot.create-telegram-bot.test.ts",
   // Medium-heavy bot behavior suite; move off unit-fast critical path.
-  "src/telegram/bot.test.ts",
+  "extensions/telegram/src/bot.test.ts",
   // Slack slash registration tests are setup-heavy and can bottleneck unit-fast.
-  "src/slack/monitor/slash.test.ts",
+  "extensions/slack/src/monitor/slash.test.ts",
   // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
-  "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
+  "extensions/imessage/src/monitor.shutdown.unhandled-rejection.test.ts",
   // Mutates process.cwd() and mocks core module loaders; isolate from the shared fast lane.
   "src/infra/git-commit.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
+const unitSingletonIsolatedFilesRaw = [];
+const unitSingletonIsolatedFiles = unitSingletonIsolatedFilesRaw.filter((file) =>
+  fs.existsSync(file),
+);
+const unitVmForkSingletonFilesRaw = [
+  "src/channels/plugins/contracts/inbound.telegram.contract.test.ts",
+];
+const unitVmForkSingletonFiles = unitVmForkSingletonFilesRaw.filter((file) => fs.existsSync(file));
+const groupedUnitIsolatedFiles = unitIsolatedFiles.filter(
+  (file) => !unitSingletonIsolatedFiles.includes(file),
+);
+const channelSingletonFilesRaw = [];
+const channelSingletonFiles = channelSingletonFilesRaw.filter((file) => fs.existsSync(file));
 
 const children = new Set();
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
@@ -139,20 +152,55 @@ const runs = [
             "vitest.unit.config.ts",
             `--pool=${useVmForks ? "vmForks" : "forks"}`,
             ...(disableIsolation ? ["--isolate=false"] : []),
-            ...unitIsolatedFiles.flatMap((file) => ["--exclude", file]),
+            ...[
+              ...unitIsolatedFiles,
+              ...unitSingletonIsolatedFiles,
+              ...unitVmForkSingletonFiles,
+            ].flatMap((file) => ["--exclude", file]),
           ],
         },
-        {
-          name: "unit-isolated",
+        ...(groupedUnitIsolatedFiles.length > 0
+          ? [
+              {
+                name: "unit-isolated",
+                args: [
+                  "vitest",
+                  "run",
+                  "--config",
+                  "vitest.unit.config.ts",
+                  "--pool=forks",
+                  ...groupedUnitIsolatedFiles,
+                ],
+              },
+            ]
+          : []),
+        ...unitSingletonIsolatedFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-isolated`,
           args: [
             "vitest",
             "run",
             "--config",
             "vitest.unit.config.ts",
-            "--pool=forks",
-            ...unitIsolatedFiles,
+            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            file,
           ],
-        },
+        })),
+        ...unitVmForkSingletonFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-vmforks`,
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.unit.config.ts",
+            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            ...(disableIsolation ? ["--isolate=false"] : []),
+            file,
+          ],
+        })),
+        ...channelSingletonFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-channels-isolated`,
+          args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
+        })),
       ]
     : [
         {
@@ -303,7 +351,6 @@ const passthroughRequiresSingleRun = passthroughOptionArgs.some((arg) => {
   const [flag] = arg.split("=", 1);
   return SINGLE_RUN_ONLY_FLAGS.has(flag);
 });
-const channelPrefixes = ["src/telegram/", "src/discord/", "src/web/", "src/browser/", "src/line/"];
 const baseConfigPrefixes = ["src/agents/", "src/auto-reply/", "src/commands/", "test/", "ui/"];
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 const walkTestFiles = (rootDir) => {
@@ -347,14 +394,14 @@ const inferTarget = (fileFilter) => {
   if (fileFilter.endsWith(".e2e.test.ts")) {
     return { owner: "e2e", isolated };
   }
+  if (channelTestPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
+    return { owner: "channels", isolated };
+  }
   if (fileFilter.startsWith("extensions/")) {
     return { owner: "extensions", isolated };
   }
   if (fileFilter.startsWith("src/gateway/")) {
     return { owner: "gateway", isolated };
-  }
-  if (channelPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
-    return { owner: "channels", isolated };
   }
   if (baseConfigPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
     return { owner: "base", isolated };
@@ -381,9 +428,24 @@ const resolveFilterMatches = (fileFilter) => {
   }
   return allKnownTestFiles.filter((file) => file.includes(normalizedFilter));
 };
+const isVmForkSingletonUnitFile = (fileFilter) => unitVmForkSingletonFiles.includes(fileFilter);
 const createTargetedEntry = (owner, isolated, filters) => {
   const name = isolated ? `${owner}-isolated` : owner;
   const forceForks = isolated;
+  if (owner === "unit-vmforks") {
+    return {
+      name,
+      args: [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.unit.config.ts",
+        `--pool=${useVmForks ? "vmForks" : "forks"}`,
+        ...(disableIsolation ? ["--isolate=false"] : []),
+        ...filters,
+      ],
+    };
+  }
   if (owner === "unit") {
     return {
       name,
@@ -425,7 +487,7 @@ const createTargetedEntry = (owner, isolated, filters) => {
         "run",
         "--config",
         "vitest.channels.config.ts",
-        ...(forceForks ? ["--pool=forks"] : []),
+        ...(forceForks ? ["--pool=forks"] : useVmForks ? ["--pool=vmForks"] : []),
         ...filters,
       ],
     };
@@ -461,16 +523,19 @@ const targetedEntries = (() => {
   const groups = passthroughFileFilters.reduce((acc, fileFilter) => {
     const matchedFiles = resolveFilterMatches(fileFilter);
     if (matchedFiles.length === 0) {
-      const target = inferTarget(normalizeRepoPath(fileFilter));
-      const key = `${target.owner}:${target.isolated ? "isolated" : "default"}`;
+      const normalizedFile = normalizeRepoPath(fileFilter);
+      const target = inferTarget(normalizedFile);
+      const owner = isVmForkSingletonUnitFile(normalizedFile) ? "unit-vmforks" : target.owner;
+      const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
-      files.push(normalizeRepoPath(fileFilter));
+      files.push(normalizedFile);
       acc.set(key, files);
       return acc;
     }
     for (const matchedFile of matchedFiles) {
       const target = inferTarget(matchedFile);
-      const key = `${target.owner}:${target.isolated ? "isolated" : "default"}`;
+      const owner = isVmForkSingletonUnitFile(matchedFile) ? "unit-vmforks" : target.owner;
+      const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
       files.push(matchedFile);
       acc.set(key, files);

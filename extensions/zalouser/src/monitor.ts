@@ -1,19 +1,22 @@
 import {
   DM_GROUP_ACCESS_REASON,
+  resolveDmGroupAccessWithLists,
+} from "openclaw/plugin-sdk/channel-policy";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
-  KeyedAsyncQueue,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
-  resolveDmGroupAccessWithLists,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/reply-history";
+import { createDeferred } from "../../shared/deferred.js";
 import type {
   MarkdownTableMode,
   OpenClawConfig,
   OutboundReplyPayload,
   RuntimeEnv,
-} from "openclaw/plugin-sdk/zalouser";
+} from "../runtime-api.js";
 import {
   createTypingCallbacks,
   createScopedPairingAccess,
@@ -27,11 +30,11 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveSenderCommandAuthorization,
+  resolveSenderScopedGroupPolicy,
   sendMediaWithLeadingCaption,
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/zalouser";
-import { createDeferred } from "../../shared/deferred.js";
+} from "../runtime-api.js";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
@@ -349,6 +352,10 @@ async function processMessage(
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
   const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((v) => String(v));
+  const senderGroupPolicy = resolveSenderScopedGroupPolicy({
+    groupPolicy,
+    groupAllowFrom: configGroupAllowFrom,
+  });
   const shouldComputeCommandAuth = core.channel.commands.shouldComputeCommandAuthorized(
     commandBody,
     config,
@@ -360,10 +367,11 @@ async function processMessage(
   const accessDecision = resolveDmGroupAccessWithLists({
     isGroup,
     dmPolicy,
-    groupPolicy,
+    groupPolicy: senderGroupPolicy,
     allowFrom: configAllowFrom,
     groupAllowFrom: configGroupAllowFrom,
     storeAllowFrom,
+    groupAllowFromFallbackToAllowFrom: false,
     isSenderAllowed: (allowFrom) => isSenderAllowed(senderId, allowFrom),
   });
   if (isGroup && accessDecision.decision !== "allow") {
