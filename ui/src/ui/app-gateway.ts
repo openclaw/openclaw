@@ -75,10 +75,13 @@ function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string):
     }
     const streamStartedAt = (host as unknown as { chatStreamStartedAt?: number | null })
       .chatStreamStartedAt;
+    const toolStreamById = (host as unknown as { toolStreamById?: Map<string, unknown> })
+      .toolStreamById;
     if (
       host.chatRunId ||
       host.chatStream ||
-      (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)
+      (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS) ||
+      (toolStreamById && toolStreamById.size > 0)
     ) {
       return;
     }
@@ -94,10 +97,13 @@ function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string):
     }
     const streamStartedAt = (host as unknown as { chatStreamStartedAt?: number | null })
       .chatStreamStartedAt;
+    const toolStreamById = (host as unknown as { toolStreamById?: Map<string, unknown> })
+      .toolStreamById;
     if (
       host.chatRunId ||
       host.chatStream ||
-      (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)
+      (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS) ||
+      (toolStreamById && toolStreamById.size > 0)
     ) {
       return;
     }
