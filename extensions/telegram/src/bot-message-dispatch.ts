@@ -40,6 +40,7 @@ import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
+import { retryTelegramFinalReplyDelivery } from "./final-reply-retry.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
   type ArchivedPreview,
@@ -479,6 +480,7 @@ export const dispatchTelegramMessage = async ({
     const result = await deliverReplies({
       ...deliveryBaseOptions,
       replies: [payload],
+      abortSignal: opts.fetchAbortSignal,
       onVoiceRecording: sendRecordVoice,
       silent: silentErrorReplies && payload.isError === true,
     });
