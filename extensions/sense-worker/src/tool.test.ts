@@ -42,4 +42,16 @@ describe("sense worker tool", () => {
     expect((result as any).content[0].text).toContain("Sense summary");
     expect((result as any).details.url).toContain("/execute");
   });
+
+  it("passes through generate_draft task", async () => {
+    const tool = createSenseWorkerTool(fakeApi());
+    const result = await tool.execute("id", {
+      action: "execute",
+      task: "generate_draft",
+      input: "Write a short follow-up note.",
+      params: { tone: "polite" },
+    });
+    expect((result as any).content[0].text).toContain("Sense summary");
+    expect((result as any).details.status).toBe(200);
+  });
 });

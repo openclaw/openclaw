@@ -5,6 +5,8 @@ import { callSense, checkSenseHealth } from "./client.js";
 type SensePluginConfig = {
   baseUrl?: string;
   timeoutMs?: number;
+  token?: string;
+  tokenEnv?: string;
 };
 
 function normalizeTimeout(value: unknown, fallback: number): number {
@@ -28,16 +30,20 @@ export function createSenseWorkerTool(api: OpenClawPluginApi) {
   const pluginConfig = (api.pluginConfig ?? {}) as SensePluginConfig;
   const baseUrl = pluginConfig.baseUrl?.trim() || undefined;
   const timeoutMs = normalizeTimeout(pluginConfig.timeoutMs, 5_000);
+  const token = pluginConfig.token?.trim() || undefined;
+  const tokenEnv = pluginConfig.tokenEnv?.trim() || undefined;
 
   return {
     name: "sense-worker",
     label: "Sense Worker",
     description:
-      "Call the Sense worker node over LAN for offloaded summarize or heavy compute tasks.",
+      "Call the Sense worker node over LAN for offloaded summarize, generate_draft, or heavy compute tasks.",
     parameters: Type.Object({
       action: Type.Unsafe<"health" | "execute">({ type: "string", enum: ["health", "execute"] }),
       task: Type.Optional(
-        Type.String({ description: "Remote task name for execute, e.g. summarize." }),
+        Type.String({
+          description: "Remote task name for execute, e.g. summarize or generate_draft.",
+        }),
       ),
       input: Type.Optional(Type.String({ description: "Task input text for the Sense worker." })),
       params: Type.Optional(
@@ -56,6 +62,8 @@ export function createSenseWorkerTool(api: OpenClawPluginApi) {
         const result = await checkSenseHealth({
           baseUrl,
           timeoutMs: requestTimeoutMs,
+          token,
+          tokenEnv,
           logger: api.logger,
         });
         return {
@@ -75,6 +83,8 @@ export function createSenseWorkerTool(api: OpenClawPluginApi) {
       const result = await callSense(task, input, forwardParams, {
         baseUrl,
         timeoutMs: requestTimeoutMs,
+        token,
+        tokenEnv,
         logger: api.logger,
       });
       return {

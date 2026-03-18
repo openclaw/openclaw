@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -40,6 +41,18 @@ def build_local_fallback_summary(text: str, max_bullets: int = 2) -> str:
     return "\n".join(bullets)
 
 
+def build_local_fallback_draft(text: str) -> str:
+    cleaned = _normalize_whitespace(text)
+    if not cleaned:
+        return "ご連絡ありがとうございます。内容を確認し、折り返しご案内いたします。"
+    excerpt = cleaned[:120]
+    return (
+        "ご連絡ありがとうございます。\n"
+        f"以下の内容で一次整理しました: {excerpt}\n"
+        "担当に引き継いで、折り返しご連絡いたします。"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Minimal ops workflow: offload summarize to Sense worker with local fallback."
@@ -48,13 +61,14 @@ def main() -> int:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--task", default="summarize")
+    parser.add_argument("--token")
+    parser.add_argument("--token-env", default="SENSE_WORKER_TOKEN")
     parser.add_argument("--input")
     parser.add_argument("--input-file")
     parser.add_argument("--params-json", default="{}")
     parser.add_argument("--no-fallback", action="store_true")
     argv = sys.argv[1:]
-    if argv[:1] == ["--"]:
-        argv = argv[1:]
+    argv = [arg for arg in argv if arg != "--"]
     args = parser.parse_args(argv)
 
     text = _read_input(args)
@@ -69,17 +83,23 @@ def main() -> int:
         "params": params,
     }
     url = f"{args.base_url.rstrip('/')}/execute"
+    token = args.token or os.environ.get(args.token_env)
     print(
         f"[sense-workflow] agent={args.agent} action=execute task={args.task} target={url}",
         file=sys.stderr,
     )
-    rc = request_json("POST", url, payload, args.timeout)
+    rc = request_json("POST", url, payload, args.timeout, token=token)
     if rc == 0:
         return 0
     if args.no_fallback:
         return rc
 
-    summary = build_local_fallback_summary(text)
+    if args.task == "generate_draft":
+        fallback_key = "draft"
+        fallback_value = build_local_fallback_draft(text)
+    else:
+        fallback_key = "summary"
+        fallback_value = build_local_fallback_summary(text)
     print(
         json.dumps(
             {
@@ -87,7 +107,7 @@ def main() -> int:
                 "path": "local_fallback",
                 "agent": args.agent,
                 "task": args.task,
-                "summary": summary,
+                fallback_key: fallback_value,
                 "error": "sense_worker_unavailable",
             },
             ensure_ascii=False,

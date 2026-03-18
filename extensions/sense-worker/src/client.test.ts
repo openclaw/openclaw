@@ -52,6 +52,49 @@ describe("sense worker client", () => {
       input: "hello",
       params: { mode: "short" },
     });
+    expect(init?.headers).toMatchObject({ Accept: "application/json" });
+  });
+
+  it("sends shared token from explicit config", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ status: "ok", result: "done" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await checkSenseHealth({
+      baseUrl: "http://sense.local:8787",
+      token: "test-shared-token",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    expect(init?.headers).toMatchObject({
+      Accept: "application/json",
+      "X-Sense-Worker-Token": "test-shared-token",
+    });
+  });
+
+  it("sends shared token from env fallback", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubEnv("SENSE_WORKER_TOKEN", "env-shared-token");
+
+    await checkSenseHealth({ baseUrl: "http://sense.local:8787" });
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    expect(init?.headers).toMatchObject({
+      Accept: "application/json",
+      "X-Sense-Worker-Token": "env-shared-token",
+    });
   });
 
   it("fails on invalid json", async () => {

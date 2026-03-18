@@ -2,13 +2,16 @@
 
 ## Purpose
 
-Provide a minimal OpenClaw-side workflow for offloading summarize tasks from the T550 host to the Sense worker over LAN while keeping an ops-owned fallback path.
+Provide a minimal OpenClaw-side workflow for offloading selected text tasks from the T550 host to the Sense worker over LAN while keeping an ops-owned fallback path.
 
 ## Scope
 
 - Primary owner: `ops`
-- Primary task: `summarize`
+- Primary tasks:
+  - `summarize`
+  - `generate_draft`
 - Transport: `POST http://192.168.11.11:8787/execute`
+- Auth: optional shared header `X-Sense-Worker-Token`
 - Safe default: local fallback summary when Sense is unavailable or times out
 
 ## Command
@@ -18,10 +21,24 @@ cd /home/deepnoa/openclaw
 pnpm sense:summarize -- --input "Long text to summarize"
 ```
 
+Generate a short draft:
+
+```bash
+cd /home/deepnoa/openclaw
+pnpm sense:draft -- --input "Prepare a short follow-up note for a corporate inquiry."
+```
+
 You can also pass a file:
 
 ```bash
 pnpm sense:summarize -- --input-file /path/to/input.txt
+```
+
+If shared-token auth is enabled on the worker, export the token first:
+
+```bash
+export SENSE_WORKER_TOKEN="replace-with-shared-token"
+pnpm sense:summarize -- --input "Long text to summarize"
 ```
 
 ## Output contract
@@ -41,6 +58,8 @@ Fallback run prints JSON like:
 }
 ```
 
+For `task=generate_draft`, fallback returns `draft` instead of `summary`.
+
 ## Logging
 
 The workflow writes a short request log to stderr:
@@ -50,6 +69,27 @@ The workflow writes a short request log to stderr:
 - target URL
 
 The Sense adapter itself logs request / response / timeout details when invoked as a plugin tool.
+
+## Success and fallback checks
+
+- Success:
+  - `pnpm sense:summarize -- --input "..."`
+  - `pnpm sense:draft -- --input "..."`
+- Fallback:
+  - `pnpm sense:summarize -- --base-url http://192.168.11.11:9999 --input "..."`
+  - `pnpm sense:draft -- --base-url http://192.168.11.11:9999 --input "..."`
+
+## Troubleshooting
+
+- `401 Unauthorized`
+  - `SENSE_WORKER_TOKEN` on T550 does not match the worker-side token.
+- token header is sent but request still succeeds with a wrong token
+  - current Sense worker is not yet enforcing token verification.
+  - OpenClaw-side auth transport is ready, but worker-side `401` enforcement must be enabled on Sense.
+- `fetch failed`
+  - worker is unavailable, wrong base URL, or LAN route is down.
+- timeout
+  - increase `--timeout` or reduce worker-side processing time.
 
 ## Next integration step
 

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
 DEFAULT_BASE_URL = "http://192.168.11.11:8787"
 DEFAULT_TIMEOUT = 5.0
+DEFAULT_TOKEN_ENV = "SENSE_WORKER_TOKEN"
 
 
 def try_parse_json(text: str):
@@ -19,8 +21,20 @@ def try_parse_json(text: str):
         return text
 
 
-def request_json(method: str, url: str, payload: dict | None, timeout: float) -> int:
+def resolve_token(token: str | None, token_env: str | None) -> str | None:
+    if token and token.strip():
+        return token.strip()
+    env_name = token_env.strip() if token_env and token_env.strip() else DEFAULT_TOKEN_ENV
+    value = os.environ.get(env_name)
+    if value and value.strip():
+        return value.strip()
+    return None
+
+
+def request_json(method: str, url: str, payload: dict | None, timeout: float, token: str | None = None) -> int:
     headers = {"Accept": "application/json"}
+    if token:
+        headers["X-Sense-Worker-Token"] = token
     data = None
     if payload is not None:
         headers["Content-Type"] = "application/json"
@@ -79,14 +93,17 @@ def main() -> int:
     parser.add_argument("command", choices=["health", "execute"])
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    parser.add_argument("--token")
+    parser.add_argument("--token-env", default=DEFAULT_TOKEN_ENV)
     parser.add_argument("--task", default="summarize")
     parser.add_argument("--input", default="OpenClaw から Sense へ接続テスト")
     parser.add_argument("--params-json", default="{}")
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/")
+    token = resolve_token(args.token, args.token_env)
     if args.command == "health":
-        return request_json("GET", f"{base_url}/health", None, args.timeout)
+        return request_json("GET", f"{base_url}/health", None, args.timeout, token=token)
 
     try:
         params = json.loads(args.params_json)
@@ -99,7 +116,7 @@ def main() -> int:
         "input": args.input,
         "params": params,
     }
-    return request_json("POST", f"{base_url}/execute", payload, args.timeout)
+    return request_json("POST", f"{base_url}/execute", payload, args.timeout, token=token)
 
 
 if __name__ == "__main__":

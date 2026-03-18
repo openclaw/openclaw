@@ -1,6 +1,8 @@
 export type SenseClientConfig = {
   baseUrl?: string;
   timeoutMs?: number;
+  token?: string;
+  tokenEnv?: string;
   logger?: {
     debug?: (...args: unknown[]) => void;
     info?: (...args: unknown[]) => void;
@@ -24,6 +26,7 @@ export type SenseCallResult = {
 
 const DEFAULT_BASE_URL = "http://192.168.11.11:8787";
 const DEFAULT_TIMEOUT_MS = 5_000;
+const DEFAULT_TOKEN_ENV = "SENSE_WORKER_TOKEN";
 
 function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
@@ -37,6 +40,7 @@ async function fetchJson(params: {
   method: "GET" | "POST";
   url: string;
   timeoutMs: number;
+  token?: string;
   body?: unknown;
   logger?: SenseClientConfig["logger"];
 }): Promise<SenseCallResult> {
@@ -47,9 +51,18 @@ async function fetchJson(params: {
     params.logger?.info?.(
       `[sense-worker] request method=${params.method} url=${params.url} body=${params.body ? "yes" : "no"}`,
     );
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+    };
+    if (params.body) {
+      headers["Content-Type"] = "application/json";
+    }
+    if (params.token) {
+      headers["X-Sense-Worker-Token"] = params.token;
+    }
     const response = await fetch(params.url, {
       method: params.method,
-      headers: params.body ? { "Content-Type": "application/json" } : undefined,
+      headers,
       body: params.body ? JSON.stringify(params.body) : undefined,
       signal: ctrl.signal,
     });
@@ -87,12 +100,25 @@ async function fetchJson(params: {
   }
 }
 
+function resolveToken(config: SenseClientConfig): string | undefined {
+  if (typeof config.token === "string" && config.token.trim()) {
+    return config.token.trim();
+  }
+  const envName =
+    typeof config.tokenEnv === "string" && config.tokenEnv.trim()
+      ? config.tokenEnv.trim()
+      : DEFAULT_TOKEN_ENV;
+  const value = process.env[envName];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 export async function checkSenseHealth(config: SenseClientConfig = {}): Promise<SenseCallResult> {
   const baseUrl = config.baseUrl?.trim() || DEFAULT_BASE_URL;
   return await fetchJson({
     method: "GET",
     url: buildUrl(baseUrl, "/health"),
     timeoutMs: config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    token: resolveToken(config),
     logger: config.logger,
   });
 }
@@ -116,6 +142,7 @@ export async function callSense(
     method: "POST",
     url: buildUrl(baseUrl, "/execute"),
     timeoutMs: config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    token: resolveToken(config),
     body: payload,
     logger: config.logger,
   });
@@ -124,4 +151,6 @@ export async function callSense(
 export const __testing = {
   DEFAULT_BASE_URL,
   DEFAULT_TIMEOUT_MS,
+  DEFAULT_TOKEN_ENV,
+  resolveToken,
 };
