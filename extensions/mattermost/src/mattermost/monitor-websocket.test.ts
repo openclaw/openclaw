@@ -332,4 +332,64 @@ describe("mattermost websocket monitor", () => {
       vi.useRealTimers();
     }
   });
+
+  it("does not terminate while a posted handler is still in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new FakeWebSocket();
+      let resolvePosted: (() => void) | undefined;
+      const onPosted = vi.fn(
+        async () =>
+          await new Promise<void>((resolve) => {
+            resolvePosted = resolve;
+          }),
+      );
+      const runtime = testRuntime();
+      const connectOnce = createMattermostConnectOnce({
+        wsUrl: "wss://example.invalid/api/v4/websocket",
+        botToken: "token",
+        runtime,
+        nextSeq: () => 1,
+        onPosted,
+        webSocketFactory: () => socket,
+        heartbeatIntervalMs: 1_000,
+        heartbeatTimeoutMs: 1_500,
+      });
+
+      const connected = connectOnce();
+      queueMicrotask(() => {
+        socket.emitOpen();
+        socket.emitMessage(
+          Buffer.from(
+            JSON.stringify({
+              event: "posted",
+              data: {
+                post: JSON.stringify({
+                  id: "post-1",
+                  channel_id: "channel-1",
+                  user_id: "user-1",
+                  message: "hello",
+                }),
+              },
+            }),
+          ),
+        );
+      });
+      await vi.runAllTicks();
+      expect(onPosted).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(socket.terminateCalls).toBe(0);
+      expect(runtime.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("mattermost websocket heartbeat timed out"),
+      );
+
+      resolvePosted?.();
+      await vi.runAllTicks();
+      socket.emitClose(1000);
+      await connected;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

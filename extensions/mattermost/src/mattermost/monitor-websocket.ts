@@ -117,6 +117,7 @@ export function createMattermostConnectOnce(
       opts.heartbeatTimeoutMs ?? heartbeatIntervalMs * 3,
     );
     let lastActivityAt = Date.now();
+    let inFlightHandlerCount = 0;
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
     const noteActivity = () => {
       lastActivityAt = Date.now();
@@ -131,7 +132,7 @@ export function createMattermostConnectOnce(
       cleanupHeartbeat();
       heartbeatTimer = setInterval(() => {
         const idleMs = Date.now() - lastActivityAt;
-        if (idleMs > heartbeatTimeoutMs) {
+        if (idleMs > heartbeatTimeoutMs && inFlightHandlerCount === 0) {
           const message = `mattermost websocket heartbeat timed out after ${Math.round(idleMs / 1000)}s`;
           opts.runtime.error?.(message);
           opts.statusSink?.({ lastError: message });
@@ -154,6 +155,17 @@ export function createMattermostConnectOnce(
         }
       }, heartbeatIntervalMs);
       heartbeatTimer.unref?.();
+    };
+
+    const withInFlightHandler = async <T>(handler: () => Promise<T>): Promise<T> => {
+      inFlightHandlerCount++;
+      noteActivity();
+      try {
+        return await handler();
+      } finally {
+        inFlightHandlerCount = Math.max(0, inFlightHandlerCount - 1);
+        noteActivity();
+      }
     };
 
     try {
@@ -208,7 +220,7 @@ export function createMattermostConnectOnce(
               return;
             }
             try {
-              await opts.onReaction(payload);
+              await withInFlightHandler(() => opts.onReaction!(payload));
             } catch (err) {
               opts.runtime.error?.(`mattermost reaction handler failed: ${String(err)}`);
             }
@@ -223,7 +235,7 @@ export function createMattermostConnectOnce(
             return;
           }
           try {
-            await opts.onPosted(parsed.post, parsed.payload);
+            await withInFlightHandler(() => opts.onPosted(parsed.post, parsed.payload));
           } catch (err) {
             opts.runtime.error?.(`mattermost handler failed: ${String(err)}`);
           }

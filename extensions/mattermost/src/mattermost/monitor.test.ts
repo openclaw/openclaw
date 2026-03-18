@@ -141,7 +141,7 @@ describe("resolveMattermostReplyRootId with block streaming payloads", () => {
         threadRootId: "thread-root-1",
         replyToId: "streamed-reply-id",
       }),
-    ).toBeUndefined();
+    ).toBe("streamed-reply-id");
   });
 });
 
@@ -167,12 +167,21 @@ describe("resolveMattermostReplyRootId", () => {
     expect(resolveMattermostReplyRootId({})).toBeUndefined();
   });
 
-  it("ignores reply targets for direct messages", () => {
+  it("preserves explicit reply targets for direct messages", () => {
     expect(
       resolveMattermostReplyRootId({
         kind: "direct",
         threadRootId: "thread-root-456",
         replyToId: "child-post-789",
+      }),
+    ).toBe("child-post-789");
+  });
+
+  it("still ignores implicit thread roots for direct messages", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        kind: "direct",
+        threadRootId: "thread-root-456",
       }),
     ).toBeUndefined();
   });

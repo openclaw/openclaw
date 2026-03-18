@@ -7,6 +7,7 @@ import {
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
@@ -53,6 +54,14 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   }
   const agentSet = new Set(agent);
   return channel.filter((name) => agentSet.has(name));
+}
+
+export function resolveTypingTtlMsForContext(
+  ctx: Pick<MsgContext, "Surface" | "Provider" | "ChatType">,
+): number | undefined {
+  const typingChannel = normalizeMessageChannel(ctx.Surface ?? ctx.Provider);
+  const typingChatType = normalizeChatType(ctx.ChatType);
+  return typingChannel === "mattermost" && typingChatType === "direct" ? 0 : undefined;
 }
 
 export async function getReplyFromConfig(
@@ -115,7 +124,6 @@ export async function getReplyFromConfig(
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
-  const typingChannel = normalizeMessageChannel(ctx.Surface ?? ctx.Provider);
   const typing = createTypingController({
     onReplyStart: opts?.onReplyStart,
     onCleanup: opts?.onTypingCleanup,
@@ -123,7 +131,7 @@ export async function getReplyFromConfig(
     // Mattermost DMs should keep the native typing indicator alive until the run
     // actually finishes. The client already expires stale typing pulses on its
     // own, so the generic 2m safety TTL only hides long-running work.
-    typingTtlMs: typingChannel === "mattermost" ? 0 : undefined,
+    typingTtlMs: resolveTypingTtlMsForContext(ctx),
     silentToken: SILENT_REPLY_TOKEN,
     log: defaultRuntime.log,
   });

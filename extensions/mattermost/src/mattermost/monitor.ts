@@ -272,7 +272,7 @@ export function resolveMattermostReplyRootId(params: {
   replyToId?: string;
 }): string | undefined {
   if (params.kind === "direct") {
-    return undefined;
+    return params.replyToId?.trim() || undefined;
   }
   const threadRootId = params.threadRootId?.trim();
   if (threadRootId) {
@@ -354,6 +354,14 @@ function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]):
   const suffix = mediaList.length === 1 ? label : `${label}s`;
   const tag = allImages ? "<media:image>" : "<media:document>";
   return `${tag} (${mediaList.length} ${suffix})`;
+}
+
+function buildMattermostFileIdPlaceholder(fileIds?: string[] | null): string {
+  const count = Array.isArray(fileIds) ? fileIds.length : 0;
+  if (count <= 0) {
+    return "";
+  }
+  return `[Mattermost ${count === 1 ? "file" : "files"}]`;
 }
 
 function buildMattermostWsUrl(baseUrl: string): string {
@@ -1521,11 +1529,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       kind !== "direct" &&
       ((botUsername ? rawText.toLowerCase().includes(`@${botUsername.toLowerCase()}`) : false) ||
         core.channel.mentions.matchesMentionPatterns(rawText, mentionRegexes));
-    const pendingBody =
-      rawText ||
-      (post.file_ids?.length
-        ? `[Mattermost ${post.file_ids.length === 1 ? "file" : "files"}]`
-        : "");
+    const pendingBody = rawText || buildMattermostFileIdPlaceholder(post.file_ids);
     const pendingSender = senderName;
     const recordPendingHistory = () => {
       const trimmed = pendingBody.trim();
@@ -1593,8 +1597,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const replyTargetPost = await fetchMattermostPost(client, replyReferenceId);
         const replyTargetSender =
           replyTargetPost.user_id != null ? await resolveUserInfo(replyTargetPost.user_id) : null;
-        const replyTargetMedia = await resolveMattermostMedia(replyTargetPost.file_ids);
-        const replyTargetPlaceholder = buildMattermostAttachmentPlaceholder(replyTargetMedia);
+        const replyTargetPlaceholder = buildMattermostFileIdPlaceholder(replyTargetPost.file_ids);
         const replyTargetText = [replyTargetPost.message?.trim() || "", replyTargetPlaceholder]
           .filter(Boolean)
           .join("\n")
