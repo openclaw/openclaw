@@ -695,6 +695,14 @@ export function createOllamaStreamFn(
         const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
           assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop";
 
+        if (reason === "stop") {
+          stream.push({
+            type: "text_end",
+            contentIndex,
+            message: assistantMessage,
+          });
+        }
+
         stream.push({
           type: "done",
           reason,
