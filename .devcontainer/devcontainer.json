@@ -1,4 +1,9 @@
 {
   "image": "mcr.microsoft.com/devcontainers/universal:2",
-  "features": {}
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    }
+  },
+  "postCreateCommand": "npm install -g pnpm && pnpm install"
 }
