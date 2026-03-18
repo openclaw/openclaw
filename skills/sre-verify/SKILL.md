@@ -66,6 +66,7 @@ Verify the deployment contains the fix and the service is stable.
    - Verify response codes, response times, and payload correctness
 
 3. **Check pod stability** (5-minute window post-deploy):
+
    ```bash
    kubectl get pods -n <namespace> -l app=<service> \
      -o custom-columns='NAME:.metadata.name,RESTARTS:.status.containerStatuses[0].restartCount,STATUS:.status.phase,REASON:.status.containerStatuses[0].state.waiting.reason'

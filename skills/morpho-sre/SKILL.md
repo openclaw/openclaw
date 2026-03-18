@@ -54,7 +54,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
 - In monitored Slack incident threads, human follow-ups after the first bot reply must pass ingress and trigger fresh live checks; do not treat them like duplicate alert updates.
 - If an incident thread drifts into unrelated design/history questions, redirect that discussion to a DM or new thread instead of mixing it into RCA.
-- Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack context. Wait for net-new evidence, mitigation, validation, or a PR URL before replying.
+- Do not send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack context. Wait for net-new evidence, mitigation, validation, or a PR URL before replying.
 - Reply with conclusions only. This applies to ALL bot communications — Slack threads, Slack DMs, channel posts, PR comments, Linear comments, and any other output surface. Never include investigation steps, intermediate reasoning, tool output summaries, or step-by-step analysis. Every message must read as a polished summary, not a live investigation log. All investigation work happens silently; only the final answer is sent.
 - Fix PR gate — when RCA confidence is high:
   1. First, search for an existing open PR that already fixes the issue: `gh search prs --repo <owner/repo> --state open --match title,body --limit 10 -- "<keyword>"`. Also check recent merged PRs that may not yet be deployed.
@@ -89,6 +89,18 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - Mandatory order: `consumer-bug-preflight.sh` -> telemetry + Linear known-issue search -> Foundry/Tenderly/onchain checks.
   - Never answer with "no access" for Sentry, PostHog, Linear, or Foundry without a live probe and the exact error.
   - Never promote a secondary symptom (for example a later direct Etherscan revert or empty balance after workaround txs) to "root cause confirmed" unless it also explains the original in-app failure.
+- Rewards / provider incidents (details in `references/rewards-provider-incidents.md`):
+  - before naming a stale-row/write-path cause or opening a PR, include one live DB row/provenance fact for the affected reward entity
+  - the reply must also name the exact consuming repo/path that would change the active code path
+  - if the same reward token appears on both supply and borrow for one market, quote the live reward row/provenance first, then prove the provider-side truth
+
+## Single-Vault API / GraphQL Data Incidents
+
+- Details in `references/single-vault-incidents.md`.
+- Preferred collector: `single-vault-graphql-evidence.sh`.
+- compare against one healthy control vault on the same chain before calling it chain-wide.
+- Compare public surfaces: `vaultV2ByAddress`, `vaultV2s` with `address_in`, `vaultV2transactions`.
+- before naming an ingestion/provenance root cause, add one live DB row/provenance fact and one job-path or simulation fact for the affected entity.
 
 ## Gotchas
 
