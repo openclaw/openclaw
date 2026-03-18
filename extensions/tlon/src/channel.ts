@@ -3,6 +3,7 @@ import type { ChannelAccountSnapshot, ChannelPlugin } from "openclaw/plugin-sdk/
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { tlonChannelConfigSchema } from "./config-schema.js";
+import { resolveTlonOutboundSessionRoute } from "./session-route.js";
 import {
   applyTlonSetupConfig,
   createTlonSetupWizardBase,
@@ -97,6 +98,7 @@ export const tlonPlugin: ChannelPlugin = {
       looksLikeId: (target) => Boolean(parseTlonTarget(target)),
       hint: formatTargetHint(),
     },
+    resolveOutboundSessionRoute: (params) => resolveTlonOutboundSessionRoute(params),
   },
   outbound: {
     deliveryMode: "direct",
