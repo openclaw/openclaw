@@ -191,8 +191,8 @@
     bottom: 10px;
     width: 3px;
     border-radius: 999px;
-    background: color-mix(in srgb, #2de3d1 86%, transparent);
-    box-shadow: 0 0 14px color-mix(in srgb, #2de3d1 34%, transparent);
+    background: color-mix(in srgb, var(--accent) 86%, transparent);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
   }
 
   .sidebar--collapsed .sidebar-shell__footer {
