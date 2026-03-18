@@ -81,9 +81,10 @@ function setLastSessionEntry(params: {
   });
 }
 
-function setWhatsAppAllowFrom(allowFrom: string[]) {
+function setWhatsAppAllowFrom(allowFrom: string[], allowTo?: string[]) {
   vi.mocked(resolveWhatsAppAccount).mockReturnValue({
     allowFrom,
+    ...(allowTo !== undefined ? { allowTo } : {}),
   } as unknown as ReturnType<typeof resolveWhatsAppAccount>);
 }
 
@@ -142,6 +143,41 @@ describe("resolveDeliveryTarget", () => {
       to: "+15550000099",
     });
 
+    expect(result.to).toBe("+15550000099");
+  });
+
+  it("uses allowTo for implicit target validation when configured", async () => {
+    // allowFrom is locked to the owner (+15550000001); allowTo opens a contact (+15550000099).
+    // Implicit delivery to the contact should not be rerouted back to the owner.
+    setLastSessionEntry({
+      sessionId: "sess-w3",
+      lastChannel: "whatsapp",
+      lastTo: "+15550000099",
+    });
+    setWhatsAppAllowFrom(["+15550000001"], ["+15550000099"]);
+    setStoredWhatsAppAllowFrom([]);
+
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveLastTarget(cfg);
+
+    expect(result.channel).toBe("whatsapp");
+    expect(result.to).toBe("+15550000099");
+  });
+
+  it("allowTo wildcard skips implicit target redirect", async () => {
+    // allowTo: ["*"] means allow all — any implicit target should pass through unchanged.
+    setLastSessionEntry({
+      sessionId: "sess-w4",
+      lastChannel: "whatsapp",
+      lastTo: "+15550000099",
+    });
+    setWhatsAppAllowFrom(["+15550000001"], ["*"]);
+    setStoredWhatsAppAllowFrom([]);
+
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveLastTarget(cfg);
+
+    expect(result.channel).toBe("whatsapp");
     expect(result.to).toBe("+15550000099");
   });
 

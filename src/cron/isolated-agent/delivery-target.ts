@@ -152,8 +152,8 @@ export async function resolveDeliveryTarget(
   let allowFromOverride: string[] | undefined;
   if (channel === "whatsapp") {
     const resolvedAccountId = normalizeAccountId(accountId);
-    const configuredAllowFromRaw =
-      resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? [];
+    const resolvedAccount = resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId });
+    const configuredAllowFromRaw = resolvedAccount.allowFrom ?? [];
     const configuredAllowFrom = configuredAllowFromRaw
       .map((entry) => String(entry).trim())
       .filter((entry) => entry && entry !== "*")
@@ -164,9 +164,21 @@ export async function resolveDeliveryTarget(
       .filter((entry): entry is string => Boolean(entry));
     allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
 
-    if (toCandidate && mode === "implicit" && allowFromOverride.length > 0) {
+    // When allowTo is configured, use it as the effective outbound list for implicit
+    // target validation so that scheduled delivery is decoupled from the inbound allowFrom.
+    const configuredAllowTo = resolvedAccount.allowTo;
+    const effectiveOutboundList =
+      configuredAllowTo != null
+        ? configuredAllowTo
+            .map((entry) => String(entry).trim())
+            .filter((entry) => entry !== "*")
+            .map((entry) => normalizeWhatsAppTarget(entry))
+            .filter((entry): entry is string => Boolean(entry))
+        : allowFromOverride;
+
+    if (toCandidate && mode === "implicit" && effectiveOutboundList.length > 0) {
       const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
-      if (!normalizedCurrentTarget || !allowFromOverride.includes(normalizedCurrentTarget)) {
+      if (!normalizedCurrentTarget || !effectiveOutboundList.includes(normalizedCurrentTarget)) {
         toCandidate = allowFromOverride[0];
       }
     }
