@@ -137,6 +137,12 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "voice-call",
 ] as const;
 
+const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
+  // Direct import avoids a circular init path:
+  // accounts.ts -> runtime-api.ts -> openclaw/plugin-sdk/matrix -> extensions/matrix/api.ts -> accounts.ts
+  "extensions/matrix/src/matrix/accounts.ts",
+] as const;
+
 function readSource(path: string): string {
   return readFileSync(resolve(ROOT_DIR, "..", path), "utf8");
 }
@@ -377,6 +383,7 @@ describe("channel import guardrails", () => {
       for (const file of collectExtensionFiles(extensionId)) {
         const normalized = file.replaceAll("\\", "/");
         if (
+          LOCAL_EXTENSION_API_BARREL_EXCEPTIONS.some((suffix) => normalized.endsWith(suffix)) ||
           normalized.endsWith("/api.ts") ||
           normalized.includes(".test.") ||
           normalized.includes(".spec.") ||
