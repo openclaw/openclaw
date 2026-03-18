@@ -114,7 +114,7 @@ still handles `/compact` and overflow recovery. There is no automatic fallback
 to the legacy engine's compaction path.
 
 If you are building a non-owning context engine, implement `compact()` by
-calling `delegateCompactionToRuntime(...)` from `openclaw/plugin-sdk`.
+calling `delegateCompactionToRuntime(...)` from `openclaw/plugin-sdk/core`.
 
 ## Tips
 

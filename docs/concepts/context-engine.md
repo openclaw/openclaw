@@ -213,7 +213,7 @@ That means there are two valid plugin patterns:
 - **Owning mode** — implement your own compaction algorithm and set
   `ownsCompaction: true`.
 - **Delegating mode** — set `ownsCompaction: false` and have `compact()` call
-  `delegateCompactionToRuntime(...)` from `openclaw/plugin-sdk` to use
+  `delegateCompactionToRuntime(...)` from `openclaw/plugin-sdk/core` to use
   OpenClaw's built-in compaction behavior.
 
 A no-op `compact()` is unsafe for an active non-owning engine because it

@@ -1814,7 +1814,7 @@ If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:
 
 ```ts
-import { delegateCompactionToRuntime } from "openclaw/plugin-sdk";
+import { delegateCompactionToRuntime } from "openclaw/plugin-sdk/core";
 
 export default function (api) {
   api.registerContextEngine("my-memory-engine", () => ({
