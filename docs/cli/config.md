@@ -198,6 +198,7 @@ Dry-run behavior:
 - `ok`: whether dry-run passed
 - `operations`: number of assignments evaluated
 - `checks`: whether schema/resolvability checks ran
+- `checks.resolvabilityComplete`: whether resolvability checks ran to completion (false when exec refs are skipped)
 - `refsChecked`: number of refs actually resolved during dry-run
 - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
 - `errors`: structured schema/resolvability failures when `ok=false`
@@ -213,6 +214,7 @@ Dry-run behavior:
   checks: {
     schema: boolean,
     resolvability: boolean,
+    resolvabilityComplete: boolean,
   },
   refsChecked: number,
   skippedExecRefs: number,
@@ -236,7 +238,8 @@ Success example:
   "inputModes": ["builder"],
   "checks": {
     "schema": false,
-    "resolvability": true
+    "resolvability": true,
+    "resolvabilityComplete": true
   },
   "refsChecked": 1,
   "skippedExecRefs": 0
@@ -253,7 +256,8 @@ Failure example:
   "inputModes": ["builder"],
   "checks": {
     "schema": false,
-    "resolvability": true
+    "resolvability": true,
+    "resolvabilityComplete": true
   },
   "refsChecked": 1,
   "skippedExecRefs": 0,

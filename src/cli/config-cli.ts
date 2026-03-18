@@ -22,6 +22,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
   isValidFileSecretRefId,
   isValidSecretProviderAlias,
   secretRefKey,
@@ -815,6 +816,50 @@ async function collectDryRunResolvabilityErrors(params: {
   return failures;
 }
 
+function collectDryRunStaticErrorsForSkippedExecRefs(params: {
+  refs: SecretRef[];
+  config: OpenClawConfig;
+}): ConfigSetDryRunError[] {
+  const failures: ConfigSetDryRunError[] = [];
+  for (const ref of params.refs) {
+    const id = ref.id.trim();
+    const refLabel = `${ref.source}:${ref.provider}:${id}`;
+    if (!id) {
+      failures.push({
+        kind: "resolvability",
+        message: "Error: Secret reference id is empty.",
+        ref: refLabel,
+      });
+      continue;
+    }
+    if (!isValidExecSecretRefId(id)) {
+      failures.push({
+        kind: "resolvability",
+        message: `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`,
+        ref: refLabel,
+      });
+      continue;
+    }
+    const providerConfig = params.config.secrets?.providers?.[ref.provider];
+    if (!providerConfig) {
+      failures.push({
+        kind: "resolvability",
+        message: `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`,
+        ref: refLabel,
+      });
+      continue;
+    }
+    if (providerConfig.source !== ref.source) {
+      failures.push({
+        kind: "resolvability",
+        message: `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`,
+        ref: refLabel,
+      });
+    }
+  }
+  return failures;
+}
+
 function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInDryRun: boolean }): {
   refsToResolve: SecretRef[];
   skippedExecRefs: SecretRef[];
@@ -893,15 +938,15 @@ export async function runConfigSet(opts: {
     if (!modeResolution.ok) {
       throw modeError(modeResolution.error);
     }
+    if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
+      throw modeError("--allow-exec requires --dry-run.");
+    }
 
     const batchEntries = parseBatchSource(opts.cliOptions);
     if (batchEntries) {
       if (opts.path !== undefined || opts.value !== undefined) {
         throw modeError("batch mode does not accept <path> or <value> arguments.");
       }
-    }
-    if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
-      throw modeError("--allow-exec requires --dry-run.");
     }
     const operations = batchEntries
       ? parseBatchOperations(batchEntries)
@@ -941,6 +986,12 @@ export async function runConfigSet(opts: {
       }
       if (hasJsonMode || hasBuilderMode) {
         errors.push(
+          ...collectDryRunStaticErrorsForSkippedExecRefs({
+            refs: selectedDryRunRefs.skippedExecRefs,
+            config: nextConfig,
+          }),
+        );
+        errors.push(
           ...(await collectDryRunResolvabilityErrors({
             refs: selectedDryRunRefs.refsToResolve,
             config: nextConfig,
@@ -955,6 +1006,8 @@ export async function runConfigSet(opts: {
         checks: {
           schema: hasJsonMode,
           resolvability: hasJsonMode || hasBuilderMode,
+          resolvabilityComplete:
+            (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,
         },
         refsChecked: selectedDryRunRefs.refsToResolve.length,
         skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,

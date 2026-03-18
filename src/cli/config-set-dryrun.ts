@@ -14,6 +14,7 @@ export type ConfigSetDryRunResult = {
   checks: {
     schema: boolean;
     resolvability: boolean;
+    resolvabilityComplete: boolean;
   };
   refsChecked: number;
   skippedExecRefs: number;

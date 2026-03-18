@@ -639,14 +639,84 @@ describe("config cli", () => {
     });
 
     it("rejects --allow-exec without --dry-run", async () => {
+      const nonexistentBatchPath = path.join(
+        os.tmpdir(),
+        `openclaw-config-batch-nonexistent-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+      );
       await expect(
-        runConfigCommand(["config", "set", "gateway.port", "19001", "--allow-exec"]),
+        runConfigCommand(["config", "set", "--batch-file", nonexistentBatchPath, "--allow-exec"]),
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
       expect(mockError).toHaveBeenCalledWith(
         expect.stringContaining("config set mode error: --allow-exec requires --dry-run."),
+      );
+    });
+
+    it("fails dry-run when skipped exec refs use an unconfigured provider", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        secrets: {
+          providers: {},
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "channels.discord.token",
+          "--ref-provider",
+          "runner",
+          "--ref-source",
+          "exec",
+          "--ref-id",
+          "openai",
+          "--dry-run",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining('Secret provider "runner" is not configured'),
+      );
+    });
+
+    it("fails dry-run when skipped exec refs use a provider with mismatched source", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        secrets: {
+          providers: {
+            runner: {
+              source: "env",
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "channels.discord.token",
+          "--ref-provider",
+          "runner",
+          "--ref-source",
+          "exec",
+          "--ref-id",
+          "openai",
+          "--dry-run",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Secret provider "runner" has source "env" but ref requests "exec".',
+        ),
       );
     });
 
@@ -843,7 +913,7 @@ describe("config cli", () => {
       expect(typeof raw).toBe("string");
       const payload = JSON.parse(String(raw)) as {
         ok: boolean;
-        checks: { schema: boolean; resolvability: boolean };
+        checks: { schema: boolean; resolvability: boolean; resolvabilityComplete: boolean };
         refsChecked: number;
         skippedExecRefs: number;
         operations: number;
@@ -855,6 +925,7 @@ describe("config cli", () => {
       expect(payload.checks).toEqual({
         schema: false,
         resolvability: true,
+        resolvabilityComplete: true,
       });
     });
 
@@ -891,10 +962,13 @@ describe("config cli", () => {
       expect(typeof raw).toBe("string");
       const payload = JSON.parse(String(raw)) as {
         ok: boolean;
+        checks: { resolvability: boolean; resolvabilityComplete: boolean };
         refsChecked: number;
         skippedExecRefs: number;
       };
       expect(payload.ok).toBe(true);
+      expect(payload.checks.resolvability).toBe(true);
+      expect(payload.checks.resolvabilityComplete).toBe(false);
       expect(payload.refsChecked).toBe(0);
       expect(payload.skippedExecRefs).toBe(1);
     });
