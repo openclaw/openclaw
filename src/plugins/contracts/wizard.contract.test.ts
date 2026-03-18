@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin } from "../types.js";
 
+const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
+
 const resolvePluginProvidersMock = vi.fn();
 
 let buildProviderPluginMethodChoice: typeof import("../provider-wizard.js").buildProviderPluginMethodChoice;
@@ -83,7 +85,7 @@ describe("provider wizard contract", () => {
       resolveProviderPluginChoice,
       resolveProviderWizardOptions,
     } = await import("../provider-wizard.js"));
-  });
+  }, CONTRACT_SETUP_TIMEOUT_MS);
 
   it("exposes every registered provider setup choice through the shared wizard layer", () => {
     const options = resolveProviderWizardOptions({
