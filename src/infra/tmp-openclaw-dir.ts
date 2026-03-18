@@ -140,6 +140,33 @@ export function resolvePreferredOpenClawTmpDir(
     return fallbackPath;
   };
 
+  // Allow overriding the temporary directory via environment variable
+  // This must be checked BEFORE the default logic to ensure the override is respected
+  // even if the default directory already exists.
+  if (process.env.OPENCLAW_TMP_DIR) {
+    const overridePath = process.env.OPENCLAW_TMP_DIR;
+    const state = resolveDirState(overridePath);
+    if (state === "available") {
+      return overridePath;
+    }
+    if (state === "invalid") {
+      if (tryRepairWritableBits(overridePath)) {
+        return overridePath;
+      }
+      throw new Error(`Unsafe OPENCLAW_TMP_DIR: ${overridePath}`);
+    }
+    try {
+      mkdirSync(overridePath, { recursive: true, mode: 0o700 });
+      chmodSync(overridePath, 0o700);
+    } catch {
+      throw new Error(`Unable to create OPENCLAW_TMP_DIR: ${overridePath}`);
+    }
+    if (resolveDirState(overridePath) !== "available" && !tryRepairWritableBits(overridePath)) {
+      throw new Error(`Unsafe OPENCLAW_TMP_DIR: ${overridePath}`);
+    }
+    return overridePath;
+  }
+
   const existingPreferredState = resolveDirState(POSIX_OPENCLAW_TMP_DIR);
   if (existingPreferredState === "available") {
     return POSIX_OPENCLAW_TMP_DIR;
