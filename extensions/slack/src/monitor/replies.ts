@@ -38,10 +38,11 @@ export async function deliverReplies(params: {
   identity?: SlackSendIdentity;
 }) {
   for (const payload of params.replies) {
-    // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
-    // must not force threading.
-    const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
-    const threadTs = inlineReplyToId ?? params.replyThreadTs;
+    const threadTs = resolveDeliveredSlackReplyThreadTs({
+      replyToMode: params.replyToMode,
+      payloadReplyToId: payload.replyToId,
+      replyThreadTs: params.replyThreadTs,
+    });
     const reply = resolveSendableOutboundReplyParts(payload);
     const slackBlocks = readSlackReplyBlocks(payload);
     if (!reply.hasContent && !slackBlocks?.length) {
@@ -101,6 +102,17 @@ export async function deliverReplies(params: {
       params.runtime.log?.(`delivered reply to ${params.target}`);
     }
   }
+}
+
+export function resolveDeliveredSlackReplyThreadTs(params: {
+  replyToMode: "off" | "first" | "all";
+  payloadReplyToId?: string;
+  replyThreadTs?: string;
+}): string | undefined {
+  // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
+  // must not force threading.
+  const inlineReplyToId = params.replyToMode === "off" ? undefined : params.payloadReplyToId;
+  return inlineReplyToId ?? params.replyThreadTs;
 }
 
 export type SlackRespondFn = (payload: {

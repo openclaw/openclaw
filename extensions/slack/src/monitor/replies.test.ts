@@ -6,7 +6,7 @@ vi.mock("../send.js", () => ({
 }));
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
-import { deliverSlackSlashReplies } from "./replies.js";
+import { deliverSlackSlashReplies, resolveDeliveredSlackReplyThreadTs } from "./replies.js";
 
 function baseParams(overrides?: Record<string, unknown>) {
   return {
@@ -119,5 +119,27 @@ describe("deliverSlackSlashReplies chunking", () => {
       text,
       response_type: "ephemeral",
     });
+  });
+});
+
+describe("resolveDeliveredSlackReplyThreadTs", () => {
+  it("prefers explicit reply targets when reply threading is enabled", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "first",
+        payloadReplyToId: "reply-tag.1",
+        replyThreadTs: "planned.1",
+      }),
+    ).toBe("reply-tag.1");
+  });
+
+  it("ignores explicit reply targets when reply threading is off", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "off",
+        payloadReplyToId: "reply-tag.1",
+        replyThreadTs: "planned.1",
+      }),
+    ).toBe("planned.1");
   });
 });
