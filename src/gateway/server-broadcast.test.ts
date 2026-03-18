@@ -137,6 +137,51 @@ describe("createGatewayBroadcaster", () => {
       expect(slowSend).not.toHaveBeenCalled();
     });
 
+    it("scope-filtered clients do not advance their seq counter", () => {
+      const clients = new Set<GatewayWsClient>();
+      // Client only has approvals scope (no admin).
+      const approvals = makeClient("approvals", { scopes: ["operator.approvals"] });
+      // Admin client sees everything.
+      const admin = makeClient("admin", { scopes: ["operator.admin"] });
+      clients.add(approvals);
+      clients.add(admin);
+      const { broadcast } = createGatewayBroadcaster({ clients });
+
+      // General event -- both clients receive it (no scope guard on "tick").
+      broadcast("tick", {});
+      // Approval event -- both receive (approvals has scope, admin has admin).
+      broadcast("exec.approval.requested", { id: "a1" });
+      // Pairing event -- only admin receives (approvals client lacks pairing scope).
+      broadcast("device.pair.requested", { requestId: "r1" });
+      // Another general event.
+      broadcast("tick", {});
+
+      // Admin saw all four events: seq 1, 2, 3, 4.
+      expect(allSentSeqs(admin)).toEqual([1, 2, 3, 4]);
+      // Approvals client was filtered out of the pairing event, so it only saw
+      // three events with a gap-free seq: 1, 2, 3 (not 1, 2, 4).
+      expect(allSentSeqs(approvals)).toEqual([1, 2, 3]);
+    });
+
+    it("slow consumer closed without dropIfSlow does not advance seq", () => {
+      const clients = new Set<GatewayWsClient>();
+      // Slow client without dropIfSlow gets closed.
+      const slow = makeClient("slow", { bufferedAmount: 100 * 1024 * 1024 });
+      const normal = makeClient("normal");
+      clients.add(slow);
+      clients.add(normal);
+      const { broadcast } = createGatewayBroadcaster({ clients });
+
+      // Without dropIfSlow, slow client is closed.
+      broadcast("e1", {});
+
+      const slowClose = slow.socket.close as ReturnType<typeof vi.fn>;
+      expect(slowClose).toHaveBeenCalledWith(1008, "slow consumer");
+      const slowSend = slow.socket.send as ReturnType<typeof vi.fn>;
+      expect(slowSend).not.toHaveBeenCalled();
+      expect(allSentSeqs(normal)).toEqual([1]);
+    });
+
     it("recovers seq after a failed send followed by a successful one", () => {
       const clients = new Set<GatewayWsClient>();
       const c = makeClient("c1");
