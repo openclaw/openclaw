@@ -70,7 +70,7 @@
   padding-top: 0;
 }
 
-.shell--chat-focus .content > * + * {
+.shell--chat-focus .content>*+* {
   margin-top: 0;
 }
 
@@ -682,18 +682,16 @@
   bottom: 10px;
   width: 3px;
   border-radius: 999px;
-  background: color-mix(in srgb, #2de3d1 86%, transparent);
-  box-shadow: 0 0 14px color-mix(in srgb, #2de3d1 34%, transparent);
+  background: color-mix(in srgb, var(--accent) 86%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
 .sidebar--collapsed .nav-item.active,
 .sidebar--collapsed .nav-item--active {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, #0b2f34 84%, var(--bg-elevated) 16%) 0%,
-    color-mix(in srgb, #081f25 90%, var(--bg) 10%) 100%
-  );
-  border-color: color-mix(in srgb, #1ed2c2 18%, var(--border) 82%);
+  background: linear-gradient(180deg,
+      color-mix(in srgb, var(--accent) 14%, var(--bg-elevated) 86%) 0%,
+      color-mix(in srgb, var(--accent) 8%, var(--bg) 92%) 100%);
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--border) 82%);
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
     0 10px 20px color-mix(in srgb, black 18%, transparent);
@@ -855,7 +853,7 @@
   overflow-x: hidden;
 }
 
-.content > * + * {
+.content>*+* {
   margin-top: 20px;
 }
 
@@ -871,7 +869,7 @@
   padding-bottom: 0;
 }
 
-.content--chat > * + * {
+.content--chat>*+* {
   margin-top: 0;
 }
 
@@ -930,7 +928,7 @@
   padding-bottom: 0;
 }
 
-.content--chat .content-header > div:first-child {
+.content--chat .content-header>div:first-child {
   text-align: left;
 }
 
