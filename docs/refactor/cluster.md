@@ -111,7 +111,7 @@ Strong examples:
 - `extensions/matrix/src/setup-surface.ts`
 - `extensions/irc/src/setup-surface.ts`
 
-Existing helper seam:
+Existing helper surface:
 
 - `src/channels/plugins/setup-wizard-helpers.ts`
 
@@ -187,7 +187,7 @@ Strong examples:
 - `extensions/telegram/src/channel.ts`
 - `extensions/nextcloud-talk/src/channel.ts`
 
-Existing helper seam:
+Existing helper surface:
 
 - `src/plugin-sdk/channel-lifecycle.ts`
 
