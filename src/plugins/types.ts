@@ -1431,6 +1431,7 @@ export const isPluginHookName = (hookName: unknown): hookName is PluginHookName 
 export const PROMPT_INJECTION_HOOK_NAMES = [
   "before_prompt_build",
   "before_agent_start",
+  "after_agent_complete",
 ] as const satisfies readonly PluginHookName[];
 
 export type PromptInjectionHookName = (typeof PROMPT_INJECTION_HOOK_NAMES)[number];
