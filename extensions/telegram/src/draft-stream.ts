@@ -375,12 +375,17 @@ export function createTelegramDraftStream(params: {
     if (!renderedText) {
       return false;
     }
-    if (renderedText.length > maxChars) {
-      // Telegram text messages/edits cap at 4096 chars.
+    // Telegram text messages/edits cap at 4096 chars.
+    // Use the effective payload length: when HTML parse mode is disabled for
+    // this generation, the actual payload is the shorter plain text, not the
+    // expanded HTML renderedText.
+    const effectiveLength =
+      parseModeDisabledForGeneration === generation ? trimmed.length : renderedText.length;
+    if (effectiveLength > maxChars) {
       // Stop streaming once we exceed the cap to avoid repeated API failures.
       streamState.stopped = true;
       params.warn?.(
-        `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
+        `telegram stream preview stopped (text length ${effectiveLength} > ${maxChars})`,
       );
       return false;
     }
@@ -430,7 +435,7 @@ export function createTelegramDraftStream(params: {
           plainText: trimmed,
         });
       }
-      if (sent) {
+      if (sent && sendGeneration === generation) {
         previewRevision += 1;
         lastDeliveredText = trimmed;
         // Reflect the actual text and parse mode that was delivered. When the
