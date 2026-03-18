@@ -538,6 +538,9 @@ export function renderApp(state: AppViewState) {
                       : nothing
                   }
                 </a>
+                <div class="sidebar-mode-switch">
+                  ${renderTopbarThemeModeToggle(state)}
+                </div>
                 ${(() => {
                   const version = state.hello?.server?.version ?? "";
                   return version
@@ -1531,6 +1534,8 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                borderRadius: state.settings.borderRadius,
+                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1602,6 +1607,8 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                borderRadius: state.settings.borderRadius,
+                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1667,6 +1674,8 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                borderRadius: state.settings.borderRadius,
+                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1732,6 +1741,8 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                borderRadius: state.settings.borderRadius,
+                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1797,6 +1808,8 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                borderRadius: state.settings.borderRadius,
+                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1862,6 +1875,8 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                borderRadius: state.settings.borderRadius,
+                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
