@@ -28,7 +28,12 @@ enum HostEnvSecurityPolicy {
         "_JAVA_OPTIONS",
         "JDK_JAVA_OPTIONS",
         "PYTHONBREAKPOINT",
-        "DOTNET_STARTUP_HOOKS"
+        "DOTNET_STARTUP_HOOKS",
+        "DOTNET_ADDITIONAL_DEPS",
+        "GLIBC_TUNABLES",
+        "MAVEN_OPTS",
+        "SBT_OPTS",
+        "GRADLE_USER_HOME"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
