@@ -676,21 +676,20 @@ function replayToolCallNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function resolveReplayAllowedToolName(
+function resolveReplayToolCallName(
   rawName: string,
+  rawId: string,
   allowedToolNames?: Set<string>,
 ): string | null {
-  const trimmed = rawName.trim();
+  if (rawName.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS * 2) {
+    return null;
+  }
+  const normalized = normalizeToolCallNameForDispatch(rawName, allowedToolNames, rawId);
+  const trimmed = normalized.trim();
   if (!trimmed || trimmed.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS || /\s/.test(trimmed)) {
     return null;
   }
-  if (!allowedToolNames || allowedToolNames.size === 0) {
-    return trimmed;
-  }
-  return (
-    resolveExactAllowedToolName(trimmed, allowedToolNames) ??
-    resolveStructuredAllowedToolName(trimmed, allowedToolNames)
-  );
+  return trimmed;
 }
 
 function sanitizeReplayToolCallInputs(
@@ -719,17 +718,14 @@ function sanitizeReplayToolCallInputs(
         continue;
       }
 
-      if (
-        !replayToolCallHasInput(block) ||
-        !replayToolCallNonEmptyString(block.id) ||
-        !replayToolCallNonEmptyString(block.name)
-      ) {
+      if (!replayToolCallHasInput(block) || !replayToolCallNonEmptyString(block.id)) {
         changed = true;
         messageChanged = true;
         continue;
       }
 
-      const resolvedName = resolveReplayAllowedToolName(block.name, allowedToolNames);
+      const rawName = typeof block.name === "string" ? block.name : "";
+      const resolvedName = resolveReplayToolCallName(rawName, block.id, allowedToolNames);
       if (!resolvedName) {
         changed = true;
         messageChanged = true;

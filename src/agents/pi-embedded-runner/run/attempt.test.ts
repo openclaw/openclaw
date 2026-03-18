@@ -904,6 +904,30 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(seenContext.messages).toBe(messages);
   });
 
+  it("normalizes provider-prefixed replayed tool names before provider replay", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "call_1", name: "functions.read", input: { path: "." } }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ content?: Array<{ name?: string }> }>;
+    };
+    expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
+  });
+
   it("canonicalizes mixed-case allowlisted tool names on replay", async () => {
     const messages = [
       {
@@ -926,6 +950,54 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("ReadFile");
+  });
+
+  it("recovers blank replayed tool names from their ids", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "functionswrite4", name: "   ", arguments: {} }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["write"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ content?: Array<{ name?: string }> }>;
+    };
+    expect(seenContext.messages[0]?.content?.[0]?.name).toBe("write");
+  });
+
+  it("recovers mangled replayed tool names before dropping the call", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "functionsread3", arguments: {} }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ content?: Array<{ name?: string }> }>;
+    };
+    expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
   });
 
   it("drops orphaned tool results after replay sanitization removes a tool-call turn", async () => {
