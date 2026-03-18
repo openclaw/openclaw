@@ -4,7 +4,7 @@
  * Detects and reports configuration issues for Twitch accounts.
  */
 
-import type { ChannelStatusIssue } from "../api.js";
+import type { ChannelStatusIssue } from "../runtime-api.js";
 import { getAccountConfig } from "./config.js";
 import { resolveTwitchToken } from "./token.js";
 import type { ChannelAccountSnapshot } from "./types.js";
