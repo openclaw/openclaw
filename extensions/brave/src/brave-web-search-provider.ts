@@ -11,11 +11,11 @@ import {
   readNumberParam,
   readProviderEnvValue,
   readStringParam,
+  resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
-  resolveProviderWebSearchPluginConfig,
   setTopLevelCredentialValue,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
@@ -605,14 +605,24 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "brave", "apiKey", value);
     },
-    createTool: (ctx) => {
-      const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "brave");
-      const searchConfig = {
-        ...(ctx.searchConfig as SearchConfigRecord | undefined),
-        ...(pluginConfig as SearchConfigRecord | undefined),
-      };
-      return createBraveToolDefinition(searchConfig);
-    },
+    createTool: (ctx) =>
+      createBraveToolDefinition(
+        (() => {
+          const searchConfig = ctx.searchConfig as SearchConfigRecord | undefined;
+          const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "brave");
+          if (!pluginConfig) {
+            return searchConfig;
+          }
+          return {
+            ...(searchConfig ?? {}),
+            ...(pluginConfig.apiKey === undefined ? {} : { apiKey: pluginConfig.apiKey }),
+            brave: {
+              ...resolveBraveConfig(searchConfig),
+              ...pluginConfig,
+            },
+          } as SearchConfigRecord;
+        })(),
+      ),
   };
 }
 
