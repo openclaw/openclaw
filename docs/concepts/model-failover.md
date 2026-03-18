@@ -70,7 +70,7 @@ they are tried first, but OpenClaw may rotate to another profile on rate limits/
 User‑pinned profiles stay locked to that profile; if it fails and model fallbacks
 are configured, OpenClaw moves to the next model instead of switching profiles.
 
-### Why OAuth can “look lost”
+### Why OAuth can "look lost"
 
 If you have both an OAuth profile and an API key profile for the same provider, round‑robin can switch between them across messages unless pinned. To force a single profile:
 

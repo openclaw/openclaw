@@ -116,7 +116,7 @@ Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (de
 
 When truncation occurs, the runtime can inject an in-prompt warning block under Project Context. Configure this with `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`; default `once`).
 
-## Skills: what’s injected vs loaded on-demand
+## Skills: injected vs loaded on-demand
 
 The system prompt includes a compact **skills list** (name + description + location). This list has real overhead.
 
@@ -131,7 +131,7 @@ Tools affect context in two ways:
 
 `/context detail` breaks down the biggest tool schemas so you can see what dominates.
 
-## Commands, directives, and “inline shortcuts”
+## Commands, directives, and "inline shortcuts"
 
 Slash commands are handled by the Gateway. There are a few different behaviors:
 

@@ -2290,7 +2290,7 @@ Preferred setup split:
 - optional DM allowlist resolution (for example `@username` -> numeric id)
 - optional completion note after setup finishes
 
-### Write a new messaging channel (step‑by‑step)
+### Write a new messaging channel (step-by-step)
 
 Use this when you want a **new chat surface** (a "messaging channel"), not a model provider.
 Model provider docs live under `/providers/*`.
