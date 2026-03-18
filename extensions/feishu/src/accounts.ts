@@ -1,5 +1,5 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type {
   FeishuConfig,

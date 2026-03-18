@@ -62,6 +62,32 @@ const cases = [
   },
 ];
 
+function formatFixGuidance(testCase, details) {
+  const command = `node ${testCase.args.join(" ")}`;
+  const guidance = [
+    "[startup-memory] Fix guidance",
+    `Case: ${testCase.label}`,
+    `Command: ${command}`,
+    "Next steps:",
+    `1. Run \`${command}\` locally on the built tree.`,
+    "2. If this is an RSS overage, compare the startup import graph against the last passing commit and look for newly eager imports, bootstrap side effects, or plugin loading on the command path.",
+    "3. If this is a non-zero exit, inspect the first transitive import/config error in stderr and fix that root cause before re-checking memory.",
+    "LLM prompt:",
+    `"OpenClaw startup-memory CI failed for '${testCase.label}'. Analyze this failure, identify the first runtime/import side effect that makes startup heavier or broken, and propose the smallest safe patch. Failure output:\n${details}"`,
+  ];
+  return `${guidance.join("\n")}\n`;
+}
+
+function formatFailure(testCase, message, details = "") {
+  const trimmedDetails = details.trim();
+  const sections = [message];
+  if (trimmedDetails) {
+    sections.push(trimmedDetails);
+  }
+  sections.push(formatFixGuidance(testCase, trimmedDetails || message));
+  return sections.join("\n\n");
+}
+
 function parseMaxRssMb(stderr) {
   const matches = [...stderr.matchAll(new RegExp(`^${MAX_RSS_MARKER}(\\d+)\\s*$`, "gm"))];
   const lastMatch = matches.at(-1);
@@ -120,18 +146,27 @@ function runCase(testCase) {
 
   if (result.status !== 0) {
     throw new Error(
-      `${testCase.label} exited with ${String(result.status)}\n${stderr.trim() || result.stdout || ""}`,
+      formatFailure(
+        testCase,
+        `${testCase.label} exited with ${String(result.status)}`,
+        stderr.trim() || result.stdout || "",
+      ),
     );
   }
   if (maxRssMb == null) {
-    throw new Error(`${testCase.label} did not report max RSS\n${stderr.trim()}`);
+    throw new Error(formatFailure(testCase, `${testCase.label} did not report max RSS`, stderr));
   }
   if (matrixBootstrapWarning) {
-    throw new Error(`${testCase.label} triggered Matrix crypto bootstrap during startup`);
+    throw new Error(
+      formatFailure(testCase, `${testCase.label} triggered Matrix crypto bootstrap during startup`),
+    );
   }
   if (maxRssMb > testCase.limitMb) {
     throw new Error(
-      `${testCase.label} used ${maxRssMb.toFixed(1)} MB RSS (limit ${testCase.limitMb} MB)`,
+      formatFailure(
+        testCase,
+        `${testCase.label} used ${maxRssMb.toFixed(1)} MB RSS (limit ${testCase.limitMb} MB)`,
+      ),
     );
   }
 
