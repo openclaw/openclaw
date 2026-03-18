@@ -3,8 +3,8 @@ import {
   buildAccountScopedAllowlistConfigEditor,
   resolveLegacyDmAllowlistConfigPaths,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
-  buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyConfiguredRouteWarnings,
   collectOpenProviderGroupPolicyWarnings,
 } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -60,6 +60,14 @@ type DiscordSendFn = ReturnType<
 
 const meta = getChatChannelMeta("discord");
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
+
+const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAccount>({
+  channelKey: "discord",
+  resolvePolicy: (account) => account.config.dm?.policy,
+  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
+  allowFromPathSuffix: "dm.",
+  normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
+});
 
 function formatDiscordIntents(intents?: {
   messageContent?: string;
@@ -300,18 +308,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     }),
   },
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "discord",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dm?.policy,
-        allowFrom: account.config.dm?.allowFrom ?? [],
-        allowFromPathSuffix: "dm.",
-        normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
-      });
-    },
+    resolveDmPolicy: resolveDiscordDmPolicy,
     collectWarnings: ({ account, cfg }) => {
       const guildEntries = account.config.guilds ?? {};
       const guildsConfigured = Object.keys(guildEntries).length > 0;
