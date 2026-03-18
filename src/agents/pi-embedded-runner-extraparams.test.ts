@@ -2,6 +2,21 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
+const resolveProviderCapabilitiesWithPluginMock = vi.fn(
+  (params: { provider: string; workspaceDir?: string }) => {
+    if (
+      params.provider === "workspace-anthropic-proxy" &&
+      params.workspaceDir === "/tmp/workspace-capabilities"
+    ) {
+      return {
+        anthropicToolSchemaMode: "openai-functions",
+        anthropicToolChoiceMode: "openai-string-modes",
+      };
+    }
+    return undefined;
+  },
+);
+
 vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
   const {
@@ -65,6 +80,10 @@ vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
       const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
       return createOpenRouterSystemCacheWrapper(createOpenRouterWrapper(streamFn, thinkingLevel));
     },
+    resolveProviderCapabilitiesWithPlugin: (params: {
+      provider: string;
+      workspaceDir?: string;
+    }) => resolveProviderCapabilitiesWithPluginMock(params),
   };
 });
 
@@ -1045,6 +1064,64 @@ describe("applyExtraParamsToAgent", () => {
         },
       },
     ]);
+  });
+
+  it("uses workspace plugin capability metadata for anthropic tool payload normalization", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        tool_choice: { type: "any" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      { plugins: { enabled: true } },
+      "workspace-anthropic-proxy",
+      "proxy-model",
+      undefined,
+      "low",
+      undefined,
+      "/tmp/workspace-capabilities",
+    );
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "workspace-anthropic-proxy",
+      id: "proxy-model",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "read",
+          description: "Read file",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ]);
+    expect(payloads[0]?.tool_choice).toBe("required");
+    expect(resolveProviderCapabilitiesWithPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "workspace-anthropic-proxy",
+        workspaceDir: "/tmp/workspace-capabilities",
+      }),
+    );
   });
 
   it("removes invalid negative Google thinkingBudget and maps Gemini 3.1 to thinkingLevel", () => {
