@@ -286,8 +286,8 @@ async function handleTextMessage(
 
 async function handleImageMessage(params: ZaloImageMessageParams): Promise<void> {
   const { message, mediaMaxMb, account, core, runtime } = params;
-  const { photo, photo_url, caption } = message;
-  const imageUrl = photo_url ?? photo;
+  const { caption } = message;
+  const imageUrl = resolveZaloImageUrl(message);
 
   let mediaPath: string | undefined;
   let mediaType: string | undefined;
