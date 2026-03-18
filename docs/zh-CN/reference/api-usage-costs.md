@@ -79,8 +79,13 @@ OpenClaw 可以从以下来源获取凭据：
 
 `web_search` 使用 API 密钥，可能产生使用费用：
 
-- **Brave Search API**：`BRAVE_API_KEY` 或 `tools.web.search.apiKey`
-- **Perplexity**（通过 OpenRouter）：`PERPLEXITY_API_KEY` 或 `OPENROUTER_API_KEY`
+- **Brave Search API**：`BRAVE_API_KEY` 或 `plugins.entries.brave.config.webSearch.apiKey`
+- **Gemini**：`GEMINI_API_KEY` 或 `plugins.entries.google.config.webSearch.apiKey`
+- **Grok**：`XAI_API_KEY` 或 `plugins.entries.xai.config.webSearch.apiKey`
+- **Kimi**：`KIMI_API_KEY`、`MOONSHOT_API_KEY` 或 `plugins.entries.moonshot.config.webSearch.apiKey`
+- **Perplexity**：`PERPLEXITY_API_KEY`、`OPENROUTER_API_KEY` 或 `plugins.entries.perplexity.config.webSearch.apiKey`
+
+旧的 `tools.web.search.*` 提供商路径仍会通过兼容层加载，但不再是推荐配置方式。
 
 **Brave 免费套餐（额度充裕）：**
 

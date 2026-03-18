@@ -79,11 +79,13 @@ See [Memory](/concepts/memory).
 
 `web_search` uses API keys and may incur usage charges depending on your provider:
 
-- **Brave Search API**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
-- **Gemini (Google Search)**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
-- **Grok (xAI)**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
-- **Kimi (Moonshot)**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
-- **Perplexity Search API**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
+- **Brave Search API**: `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
+- **Gemini (Google Search)**: `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
+- **Grok (xAI)**: `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
+- **Kimi (Moonshot)**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `plugins.entries.moonshot.config.webSearch.apiKey`
+- **Perplexity Search API**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
+
+Legacy `tools.web.search.*` provider paths still load through the temporary compatibility shim, but they are no longer the recommended config surface.
 
 **Brave Search free credit:** Each Brave plan includes \$5/month in renewing
 free credit. The Search plan costs \$5 per 1,000 requests, so the credit covers
