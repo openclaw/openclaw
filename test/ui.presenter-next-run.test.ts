@@ -13,5 +13,4 @@ describe("formatNextRun", () => {
     // Validate format structure: weekday + comma + datetime with digits + relative time in parentheses
     expect(out).toMatch(/^.+, .*\p{N}.*\(.+\)$/u);
   });
-  });
 });
