@@ -7,24 +7,22 @@ import {
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import { createDelegatedSetupWizardProxy } from "openclaw/plugin-sdk/setup";
 import {
-  listWhatsAppAccountIds,
-  resolveDefaultWhatsAppAccountId,
-  resolveWhatsAppAccount,
-  type ResolvedWhatsAppAccount,
-} from "./accounts.js";
-import {
-  resolveWhatsAppGroupRequireMention,
-  resolveWhatsAppGroupToolPolicy,
-} from "./group-policy.js";
-import {
   buildChannelConfigSchema,
   formatWhatsAppConfigAllowFromEntries,
   getChatChannelMeta,
   normalizeE164,
   resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
   WhatsAppConfigSchema,
   type ChannelPlugin,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/whatsapp-core";
+import {
+  listWhatsAppAccountIds,
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAccount,
+  type ResolvedWhatsAppAccount,
+} from "./accounts.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
 
@@ -91,6 +89,7 @@ export function createWhatsAppSetupWizardProxy(
 }
 
 export function createWhatsAppPluginBase(params: {
+  groups: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["groups"]>;
   setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setup"]>;
   isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
@@ -108,7 +107,7 @@ export function createWhatsAppPluginBase(params: {
   | "setup"
   | "groups"
 > {
-  return createChannelPluginBase({
+  return {
     id: WHATSAPP_CHANNEL,
     meta: {
       ...getChatChannelMeta(WHATSAPP_CHANNEL),
@@ -174,23 +173,6 @@ export function createWhatsAppPluginBase(params: {
       },
     },
     setup: params.setup,
-    groups: {
-      resolveRequireMention: resolveWhatsAppGroupRequireMention,
-      resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-      resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
-    },
-  }) as Pick<
-    ChannelPlugin<ResolvedWhatsAppAccount>,
-    | "id"
-    | "meta"
-    | "setupWizard"
-    | "capabilities"
-    | "reload"
-    | "gatewayMethods"
-    | "configSchema"
-    | "config"
-    | "security"
-    | "setup"
-    | "groups"
-  >;
+    groups: params.groups,
+  };
 }
