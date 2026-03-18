@@ -42,6 +42,8 @@
   "imessage",
   "imessage-core",
   "whatsapp",
+  "whatsapp-action-runtime",
+  "whatsapp-login-qr",
   "whatsapp-core",
   "line",
   "line-core",

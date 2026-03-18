@@ -1,11 +1,11 @@
-import { getActiveWebListener } from "../../../extensions/whatsapp/runtime-api.js";
+import { getActiveWebListener } from "openclaw/plugin-sdk/whatsapp";
 import {
   getWebAuthAgeMs,
-  logoutWeb,
   logWebSelfId,
+  logoutWeb,
   readWebSelfId,
   webAuthExists,
-} from "../../../extensions/whatsapp/runtime-api.js";
+} from "openclaw/plugin-sdk/whatsapp";
 import {
   createLazyRuntimeMethodBinder,
   createLazyRuntimeSurface,
@@ -63,16 +63,15 @@ const handleWhatsAppActionLazy: PluginRuntime["channel"]["whatsapp"]["handleWhat
     return handleWhatsAppAction(...args);
   };
 
-let webLoginQrPromise: Promise<
-  typeof import("../../../extensions/whatsapp/login-qr-api.js")
-> | null = null;
+let webLoginQrPromise: Promise<typeof import("openclaw/plugin-sdk/whatsapp-login-qr")> | null =
+  null;
 let webChannelPromise: Promise<typeof import("../../channels/web/index.js")> | null = null;
 let whatsappActionsPromise: Promise<
-  typeof import("../../../extensions/whatsapp/action-runtime-api.js")
+  typeof import("openclaw/plugin-sdk/whatsapp-action-runtime")
 > | null = null;
 
 function loadWebLoginQr() {
-  webLoginQrPromise ??= import("../../../extensions/whatsapp/login-qr-api.js");
+  webLoginQrPromise ??= import("openclaw/plugin-sdk/whatsapp-login-qr");
   return webLoginQrPromise;
 }
 
@@ -82,7 +81,7 @@ function loadWebChannel() {
 }
 
 function loadWhatsAppActions() {
-  whatsappActionsPromise ??= import("../../../extensions/whatsapp/action-runtime-api.js");
+  whatsappActionsPromise ??= import("openclaw/plugin-sdk/whatsapp-action-runtime");
   return whatsappActionsPromise;
 }
 
