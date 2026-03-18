@@ -780,12 +780,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
       const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
-      const resolvedInstructions = resolveCompactionInstructions(
-        customInstructions,
-        runtime?.customInstructions,
-      );
       const structuredInstructions = buildCompactionStructureInstructions(
-        resolvedInstructions,
+        customInstructions,
         summarizationInstructions,
       );
 

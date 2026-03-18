@@ -1,4 +1,3 @@
-import ipaddr from "ipaddr.js";
 import { describe, expect, it } from "vitest";
 import { blockedIpv6MulticastLiterals } from "../../shared/net/ip-test-fixtures.js";
 import { isBlockedHostnameOrIp, isPrivateIpAddress } from "./ssrf.js";
@@ -122,8 +121,8 @@ describe("isBlockedHostnameOrIp", () => {
     expect(isBlockedHostnameOrIp(value)).toBe(expected);
   });
 
-  it("supports opt-in policy to allow RFC2544 benchmark range via allowCidrs", () => {
-    const policy = { allowCidrs: [ipaddr.parseCIDR("198.18.0.0/15")] };
+  it("supports opt-in policy to allow RFC2544 benchmark range", () => {
+    const policy = { allowRfc2544BenchmarkRange: true };
     expect(isBlockedHostnameOrIp("198.18.0.1")).toBe(true);
     expect(isBlockedHostnameOrIp("198.18.0.1", policy)).toBe(false);
     expect(isBlockedHostnameOrIp("::ffff:198.18.0.1", policy)).toBe(false);

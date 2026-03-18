@@ -101,7 +101,7 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
 
 const SLACK_MEDIA_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
-  allowCidrs: ["198.18.0.0/15"],
+  allowRfc2544BenchmarkRange: true,
 };
 
 /**

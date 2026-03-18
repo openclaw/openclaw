@@ -5,9 +5,9 @@ import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-r
 export type CompactionSafeguardRuntimeValue = {
   maxHistoryShare?: number;
   contextWindowTokens?: number;
-  customInstructions?: string;
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   identifierInstructions?: string;
+  customInstructions?: string;
   /**
    * Model to use for compaction summarization.
    * Passed through runtime because `ctx.model` is undefined in the compact.ts workflow

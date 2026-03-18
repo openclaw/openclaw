@@ -14,7 +14,7 @@ const TELEGRAM_MEDIA_SSRF_POLICY = {
   // Telegram file downloads should trust api.telegram.org even when DNS/proxy
   // resolution maps to private/internal ranges in restricted networks.
   allowedHostnames: ["api.telegram.org"],
-  allowCidrs: ["198.18.0.0/15"],
+  allowRfc2544BenchmarkRange: true,
 };
 
 /**

@@ -316,14 +316,14 @@ export type AgentCompactionConfig = {
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;
+  /** Additional compaction-summary instructions that can preserve language or persona continuity. */
+  customInstructions?: string;
   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
   recentTurnsPreserve?: number;
   /** Identifier-preservation instruction policy for compaction summaries. */
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
   identifierInstructions?: string;
-  /** Custom instructions for compaction summaries (e.g. language preservation). Falls back to built-in language-preservation defaults when unset. */
-  customInstructions?: string;
   /** Optional quality-audit retries for safeguard compaction summaries. */
   qualityGuard?: AgentCompactionQualityGuardConfig;
   /** Post-compaction session memory index sync mode. */

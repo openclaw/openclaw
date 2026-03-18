@@ -16,7 +16,7 @@ const DISCORD_CDN_HOSTNAMES = [
 // Allow Discord CDN downloads when VPN/proxy DNS resolves to RFC2544 benchmark ranges.
 const DISCORD_MEDIA_SSRF_POLICY: SsrFPolicy = {
   hostnameAllowlist: DISCORD_CDN_HOSTNAMES,
-  allowCidrs: ["198.18.0.0/15"],
+  allowRfc2544BenchmarkRange: true,
 };
 
 function mergeHostnameList(...lists: Array<string[] | undefined>): string[] | undefined {
@@ -47,7 +47,9 @@ function resolveDiscordMediaSsrFPolicy(policy?: SsrFPolicy): SsrFPolicy {
     ...policy,
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
-    allowCidrs: [...(DISCORD_MEDIA_SSRF_POLICY.allowCidrs ?? []), ...(policy.allowCidrs ?? [])],
+    allowRfc2544BenchmarkRange:
+      Boolean(DISCORD_MEDIA_SSRF_POLICY.allowRfc2544BenchmarkRange) ||
+      Boolean(policy.allowRfc2544BenchmarkRange),
   };
 }
 
