@@ -433,6 +433,12 @@ export function classifyFailoverReasonFromHttpStatus(
   if (status === 529) {
     return "overloaded";
   }
+  if (status === 404) {
+    // A 404 from a fallback candidate means the endpoint or model was not
+    // found on that provider. Treat it as model_not_found so the fallback
+    // loop continues to the next candidate instead of silently succeeding.
+    return "model_not_found";
+  }
   if (status === 400 || status === 422) {
     // Some providers return quota/balance errors under HTTP 400, so do not
     // let the generic format fallback mask an explicit billing signal.

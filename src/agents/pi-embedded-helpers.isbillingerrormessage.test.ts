@@ -557,6 +557,13 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
       ),
     ).toBe("overloaded");
   });
+
+  it("treats HTTP 404 as model_not_found so fallback loop continues", () => {
+    expect(classifyFailoverReasonFromHttpStatus(404)).toBe("model_not_found");
+    expect(classifyFailoverReasonFromHttpStatus(404, "404 status code (no body)")).toBe(
+      "model_not_found",
+    );
+  });
 });
 
 describe("isFailoverErrorMessage", () => {
