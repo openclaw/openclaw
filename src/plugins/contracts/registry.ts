@@ -1,6 +1,17 @@
+import anthropicPlugin from "../../../extensions/anthropic/index.js";
+import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
+import googlePlugin from "../../../extensions/google/index.js";
+import minimaxPlugin from "../../../extensions/minimax/index.js";
+import mistralPlugin from "../../../extensions/mistral/index.js";
+import moonshotPlugin from "../../../extensions/moonshot/index.js";
+import openAIPlugin from "../../../extensions/openai/index.js";
+import qwenPortalAuthPlugin from "../../../extensions/qwen-portal-auth/index.js";
+import xaiPlugin from "../../../extensions/xai/index.js";
+import zaiPlugin from "../../../extensions/zai/index.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withBundledPluginEnablementCompat } from "../bundled-compat.js";
 import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
+import { createCapturedPluginRegistration } from "../captured-registration.js";
 import { loadOpenClawPlugins } from "../loader.js";
 import { createPluginLoaderLogger } from "../logger.js";
 import { resolvePluginProviders } from "../providers.js";
@@ -11,6 +22,11 @@ import type {
   SpeechProviderPlugin,
   WebSearchProviderPlugin,
 } from "../types.js";
+
+type RegistrablePlugin = {
+  id: string;
+  register: (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
+};
 
 type CapabilityContractEntry<T> = {
   pluginId: string;
@@ -65,25 +81,65 @@ export const providerContractRegistry: ProviderContractEntry[] = [];
 
 export let providerContractLoadError: Error | undefined;
 
+// Plugins with static imports that bypass jiti's CJS transform. jiti is
+// incompatible with vitest vmForks (Cannot set property require of VM context
+// which has only a getter) and can produce undefined exports for plugins whose
+// dependency chains re-import from the plugin SDK. Calling plugin.register()
+// directly here is safe in all vitest pool modes and avoids the jiti module
+// cache divergence that makes vi.mock() ineffective for jiti-loaded modules.
+const staticBundledProviderPlugins: RegistrablePlugin[] = [
+  anthropicPlugin,
+  githubCopilotPlugin,
+  googlePlugin,
+  minimaxPlugin,
+  mistralPlugin,
+  moonshotPlugin,
+  openAIPlugin,
+  qwenPortalAuthPlugin,
+  xaiPlugin,
+  zaiPlugin,
+];
+
+function captureRegistrations(plugin: RegistrablePlugin) {
+  const captured = createCapturedPluginRegistration();
+  plugin.register(captured.api);
+  return captured;
+}
+
+function buildStaticProviderEntries(): ProviderContractEntry[] {
+  return staticBundledProviderPlugins.flatMap((plugin) => {
+    const captured = captureRegistrations(plugin);
+    return captured.providers.map((provider) => ({ pluginId: plugin.id, provider }));
+  });
+}
+
 function loadBundledProviderRegistry(): ProviderContractEntry[] {
+  // Start with statically-imported providers (reliable in all vitest pool modes).
+  const staticEntries = buildStaticProviderEntries();
+  const staticPluginIdSet = new Set(staticBundledProviderPlugins.map((plugin) => plugin.id));
+
+  // Supplement with jiti-loaded providers for the remaining bundled plugins
+  // whose runtime contracts do not depend on vi.mock interception.
   try {
     providerContractLoadError = undefined;
-    return resolvePluginProviders({
+    const jitiEntries = resolvePluginProviders({
       bundledProviderAllowlistCompat: true,
       bundledProviderVitestCompat: true,
       cache: false,
       activate: false,
     })
-      .filter((provider): provider is ProviderPlugin & { pluginId: string } =>
-        Boolean(provider.pluginId),
+      .filter(
+        (provider): provider is ProviderPlugin & { pluginId: string } =>
+          Boolean(provider.pluginId) && !staticPluginIdSet.has(provider.pluginId as string),
       )
       .map((provider) => ({
         pluginId: provider.pluginId,
         provider,
       }));
+    return [...staticEntries, ...jitiEntries];
   } catch (error) {
     providerContractLoadError = error instanceof Error ? error : new Error(String(error));
-    return [];
+    return staticEntries;
   }
 }
 

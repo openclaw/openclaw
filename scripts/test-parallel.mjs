@@ -91,6 +91,10 @@ const unitIsolatedFilesRaw = [
   "extensions/imessage/src/monitor.shutdown.unhandled-rejection.test.ts",
   // Mutates process.cwd() and mocks core module loaders; isolate from the shared fast lane.
   "src/infra/git-commit.test.ts",
+  // Loads bundled provider plugins via jiti; jiti's CJS transform is incompatible with
+  // vmForks (Cannot set property require of VM context which has only a getter). Run in
+  // process forks so vitest patches CJS require correctly and vi.mock works as expected.
+  "src/plugins/contracts/runtime.contract.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 const unitSingletonIsolatedFilesRaw = [];
