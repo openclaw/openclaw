@@ -30,6 +30,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  /**
+   * Keep the active-run registry entry alive until the caller explicitly
+   * clears it. Used when retry/failover pacing happens after the attempt
+   * returns, so the session does not look idle between attempts.
+   */
+  deferActiveRunCleanup?: boolean;
 };
 
 export type EmbeddedRunAttemptResult = {
@@ -66,4 +72,6 @@ export type EmbeddedRunAttemptResult = {
   clientToolCall?: { name: string; params: Record<string, unknown> };
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
+  /** Explicit cleanup hook when active-run cleanup was deferred. */
+  clearDeferredActiveRun?: () => void;
 };
