@@ -94,3 +94,145 @@
   - node service hygiene
   - default agent configuration hygiene
   - plugin mismatch warning hygiene
+
+## 2026-03-18 UTC - Voltaris V2 final acceptance receipts
+
+- Capture time: `2026-03-18T17:41:50Z`
+- Chosen SSOT location: `08_DAILY_LOG.md`
+  - basis: this file is the durable append-only human-readable mission evidence log already used alongside `07_HANDOVER_ADDENDUM.md` and `09_CLOSEOUT_CHECKLIST.md`; the `tmp/mission-018-*` and `tmp/mission-019-*` capture folders hold lap telemetry and terse machine summaries, not long-form final acceptance receipts.
+- Acceptance statement:
+  - `Voltaris V2 is OPERATIONAL in the upgraded sandbox lane. Writable workspace, official-page web fetch, and Python exec are all proven live by the two successful operational verification prompts below.`
+
+### Voltaris V2 Final Acceptance Receipts
+
+#### Operational verification prompt 1
+
+Prompt used:
+
+```text
+1. Operational verification prompt — Voltaris V2
+
+You are Voltaris V2 operating in your upgraded sandboxed lane.
+
+Your job is to prove that your upgraded environment is operational by completing all four tasks below in one response, with short receipts.
+
+Rules:
+- Stay inside your governed sandboxed operating posture.
+- Use tools only when needed.
+- Be concise.
+- For each task, return a clear result and one proof line.
+- If any task fails, say exactly where and why.
+
+Tasks:
+
+A. File write test
+Create a file named `voltaris_v2_operational_check.txt` in your writable workspace with exactly this one-line content:
+`Voltaris V2 is operational.`
+
+Then report:
+- the absolute file path
+- whether the file write succeeded
+
+B. Web test
+Use the web tool to fetch one official OpenClaw page and give a one-sentence summary of what it says.
+
+Then report:
+- which page you used
+- one-sentence summary
+
+C. Python exec test
+Use exec to run:
+`python3 -c "print(6*7)"`
+
+Then report:
+- exact stdout
+
+D. Final status
+Give a final verdict of either:
+- `OPERATIONAL`
+- `PARTIAL`
+- `FAILED`
+
+Output format:
+
+1. FILE WRITE
+- path:
+- result:
+
+2. WEB
+- page:
+- result:
+
+3. PYTHON
+- stdout:
+
+4. FINAL VERDICT
+- status:
+- short reason:
+```
+
+Output returned:
+
+```text
+1. FILE WRITE
+- path: /workspace/voltaris_v2_operational_check.txt
+- result: succeeded (proof: write tool returned “Successfully wrote 27 bytes to /workspace/voltaris_v2_operational_check.txt”)
+
+2. WEB
+- page: https://docs.openclaw.ai/sandbox
+- result: This page documents the OpenClaw Sandbox CLI for inspecting and managing isolated agent runtimes, including explain/recreate workflows.
+
+3. PYTHON
+- stdout: 42
+
+4. FINAL VERDICT
+- status: OPERATIONAL
+- short reason: All three checks completed successfully with valid receipts (file write, official docs fetch, and Python exec output).
+```
+
+#### Operational verification prompt 2
+
+Prompt used:
+
+```text
+2. Operational verification prompt — richer task
+
+You are Voltaris V2 operating in your upgraded sandboxed lane.
+
+Complete this end-to-end operational check.
+
+Tasks:
+1. Create a file named `voltaris_v2_brief.txt` in your writable workspace.
+2. Use the web tool to fetch one official OpenClaw documentation page related to sandboxing or tools.
+3. Write a 3-bullet briefing into that file covering:
+   - what page you used
+   - one key takeaway
+   - one practical implication for your own operating environment
+4. Use exec to run:
+   `python3 -c "print('sandbox-ok')"`
+5. Reply with:
+   - the absolute file path
+   - the 3 bullets you wrote
+   - the exact python output
+   - a final status of `OPERATIONAL`, `PARTIAL`, or `FAILED`
+
+Be concise and include exact failure points if anything does not work.
+```
+
+Output returned:
+
+```text
+- absolute file path: /workspace/voltaris_v2_brief.txt
+- bullets written:
+- Page used: https://docs.openclaw.ai/sandbox (Sandbox CLI documentation).
+- Key takeaway: OpenClaw sandbox commands let operators inspect effective sandbox mode/policy and recreate runtimes after config or update changes.
+- Practical implication: I should verify sandbox scope/tool gates with `openclaw sandbox explain` and treat recreate as a workspace-reset boundary when troubleshooting.
+- exact python output: sandbox-ok
+- final status: OPERATIONAL
+```
+
+- Verified truth:
+  - both operational verification prompts returned `OPERATIONAL`
+  - both receipts prove writable file operations, official OpenClaw web access, and Python execution in the upgraded sandbox lane
+- Next action:
+  - treat this section as the final acceptance evidence block for Voltaris V2 upgrade closeout
