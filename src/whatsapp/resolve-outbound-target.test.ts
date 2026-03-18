@@ -203,6 +203,74 @@ describe("resolveWhatsAppOutboundTarget", () => {
     });
   });
 
+  describe("allowTo overrides allowFrom for outbound gating", () => {
+    it("allows target not in allowFrom when allowTo contains wildcard", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET, PRIMARY_TARGET);
+      const result = resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: [SECONDARY_TARGET],
+        allowTo: ["*"],
+        mode: "implicit",
+      });
+      expect(result).toEqual({ ok: true, to: PRIMARY_TARGET });
+    });
+
+    it("allows target in allowTo even when not in allowFrom", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET, PRIMARY_TARGET);
+      const result = resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: [SECONDARY_TARGET],
+        allowTo: [PRIMARY_TARGET],
+        mode: "implicit",
+      });
+      expect(result).toEqual({ ok: true, to: PRIMARY_TARGET });
+    });
+
+    it("blocks target not in allowTo even if it is in allowFrom", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
+      const result = resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: [PRIMARY_TARGET],
+        allowTo: [SECONDARY_TARGET],
+        mode: "implicit",
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("falls back to allowFrom when allowTo is undefined", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET, PRIMARY_TARGET);
+      const result = resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: [PRIMARY_TARGET],
+        allowTo: undefined,
+        mode: "implicit",
+      });
+      expect(result).toEqual({ ok: true, to: PRIMARY_TARGET });
+    });
+
+    it("falls back to allowFrom when allowTo is null", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET, PRIMARY_TARGET);
+      const result = resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: [PRIMARY_TARGET],
+        allowTo: null,
+        mode: "implicit",
+      });
+      expect(result).toEqual({ ok: true, to: PRIMARY_TARGET });
+    });
+
+    it("treats empty allowTo as unrestricted outbound (allow all)", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET);
+      const result = resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: [SECONDARY_TARGET],
+        allowTo: [],
+        mode: "implicit",
+      });
+      expect(result).toEqual({ ok: true, to: PRIMARY_TARGET });
+    });
+  });
+
   describe("whitespace handling", () => {
     it("trims whitespace from to parameter", () => {
       mockNormalizedDirectMessage(PRIMARY_TARGET);
