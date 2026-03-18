@@ -499,8 +499,9 @@ export function applyJobResult(
         }
       }
     } else if (result.status === "error" && job.enabled) {
-      const retryConfig = resolveRetryConfig(state.deps.cronConfig);
-      const transient = isTransientCronError(result.error, retryConfig.retryOn);
+      // Recurring jobs: use default transient patterns only. cron.retry.retryOn is documented
+      // for one-shot retries; narrowing it must not disable recurring network/timeout retries.
+      const transient = isTransientCronError(result.error);
       // Use full backoff ladder for recurring jobs when not explicitly set (retry-storm protection).
       // resolveRetryConfig defaults to slice(0,3); one-shot path uses that; recurring keeps full ladder.
       const recurringBackoffMs =
@@ -543,6 +544,7 @@ export function applyJobResult(
       state.deps.log.info(
         {
           jobId: job.id,
+          jobName: job.name,
           transient,
           consecutiveErrors: job.state.consecutiveErrors,
           backoffMs: backoff,

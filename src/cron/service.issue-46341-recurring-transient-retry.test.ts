@@ -123,6 +123,23 @@ describe("issue #46341: recurring job transient error retry", () => {
     expect(nextRun).toBeLessThanOrEqual(ENDED_AT + 30_000);
   });
 
+  it("still retries recurring network errors when cron.retry.retryOn is narrowed (one-shot only)", () => {
+    const job = makeCronJob("0 10 * * *");
+    const state = makeState({
+      retry: { retryOn: ["rate_limit"] },
+    });
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "fetch failed: econnreset",
+      startedAt: NOW_MS,
+      endedAt: ENDED_AT,
+    });
+
+    const nextRun = job.state.nextRunAtMs!;
+    expect(nextRun).toBeLessThanOrEqual(ENDED_AT + 30_000);
+  });
+
   it("does NOT retry early for permanent (non-transient) errors — waits for natural schedule", () => {
     // Every 60 seconds
     const job = makeEveryJob(60_000);
