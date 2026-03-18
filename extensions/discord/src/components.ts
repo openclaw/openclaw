@@ -597,8 +597,19 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
       fields,
     };
   }
+  const text = readOptionalString(obj.text);
+  const hasBlocks = blocks !== undefined && blocks.length > 0;
+
+  // If the spec carries no meaningful content (no blocks, no modal, no text),
+  // return null so the caller falls back to the regular message path.
+  // This prevents an empty `components: { blocks: [] }` from silently
+  // swallowing media attachments by routing through the v2 components path.
+  if (!hasBlocks && !modal && !text) {
+    return null;
+  }
+
   return {
-    text: readOptionalString(obj.text),
+    text,
     reusable,
     container:
       typeof obj.container === "object" && obj.container && !Array.isArray(obj.container)

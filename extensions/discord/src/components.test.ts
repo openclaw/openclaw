@@ -71,6 +71,34 @@ describe("discord components", () => {
       }),
     ).toThrow("filename");
   });
+
+  it("returns null for empty components to avoid dropping media", () => {
+    // Empty blocks array — should fall back to regular message path
+    expect(readDiscordComponentSpec({ blocks: [] })).toBeNull();
+    // No blocks, no modal, no text — trivially empty
+    expect(readDiscordComponentSpec({})).toBeNull();
+    // Only reusable flag, no actual content
+    expect(readDiscordComponentSpec({ reusable: true })).toBeNull();
+    // Only container, no content
+    expect(readDiscordComponentSpec({ container: { accentColor: "#ff0000" } })).toBeNull();
+  });
+
+  it("returns spec when text-only components are provided", () => {
+    const spec = readDiscordComponentSpec({ text: "Hello world" });
+    expect(spec).not.toBeNull();
+    expect(spec?.text).toBe("Hello world");
+  });
+
+  it("returns spec when modal-only components are provided", () => {
+    const spec = readDiscordComponentSpec({
+      modal: {
+        title: "Test",
+        fields: [{ type: "text", label: "Name" }],
+      },
+    });
+    expect(spec).not.toBeNull();
+    expect(spec?.modal).toBeDefined();
+  });
 });
 
 describe("discord component registry", () => {
