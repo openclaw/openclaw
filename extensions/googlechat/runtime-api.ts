@@ -9,8 +9,11 @@ export {
   readStringParam,
 } from "../../src/agents/tools/common.js";
 export {
+  createScopedChannelConfigAdapter,
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
+  createTopLevelChannelConfigAdapter,
+  createHybridChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "../../src/plugin-sdk/channel-config-helpers.js";
 export {

@@ -5,7 +5,7 @@
  */
 
 import {
-  createHybridChannelConfigBase,
+  createHybridChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { z } from "zod";
@@ -32,7 +32,7 @@ const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynol
   normalizeEntry: (raw) => raw.toLowerCase().trim(),
 });
 
-const synologyChatConfigBase = createHybridChannelConfigBase<ResolvedSynologyChatAccount>({
+const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynologyChatAccount>({
   sectionKey: CHANNEL_ID,
   listAccountIds: (cfg: any) => listAccountIds(cfg),
   resolveAccount: (cfg: any, accountId?: string | null) => resolveAccount(cfg, accountId),
@@ -48,6 +48,9 @@ const synologyChatConfigBase = createHybridChannelConfigBase<ResolvedSynologyCha
     "botName",
     "allowInsecureSsl",
   ],
+  resolveAllowFrom: (account) => account.allowedUserIds,
+  formatAllowFrom: (allowFrom) =>
+    allowFrom.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean),
 });
 
 function waitUntilAbort(signal?: AbortSignal, onAbort?: () => void): Promise<void> {
@@ -100,7 +103,7 @@ export function createSynologyChatPlugin() {
     setupWizard: synologyChatSetupWizard,
 
     config: {
-      ...synologyChatConfigBase,
+      ...synologyChatConfigAdapter,
     },
 
     pairing: {

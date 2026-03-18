@@ -1,7 +1,6 @@
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
+  createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
@@ -51,18 +50,11 @@ function normalizePairingTarget(raw: string): string {
   return normalized.split(/[!@]/, 1)[0]?.trim() ?? "";
 }
 
-const ircConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }),
-  resolveAllowFrom: (account: ResolvedIrcAccount) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) =>
-    formatNormalizedAllowFromEntries({
-      allowFrom,
-      normalizeEntry: normalizeIrcAllowEntry,
-    }),
-  resolveDefaultTo: (account: ResolvedIrcAccount) => account.config.defaultTo,
-});
-
-const ircConfigBase = createScopedChannelConfigBase<ResolvedIrcAccount, CoreConfig>({
+const ircConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedIrcAccount,
+  ResolvedIrcAccount,
+  CoreConfig
+>({
   sectionKey: "irc",
   listAccountIds: listIrcAccountIds,
   resolveAccount: (cfg, accountId) => resolveIrcAccount({ cfg, accountId }),
@@ -79,6 +71,13 @@ const ircConfigBase = createScopedChannelConfigBase<ResolvedIrcAccount, CoreConf
     "passwordFile",
     "channels",
   ],
+  resolveAllowFrom: (account: ResolvedIrcAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    formatNormalizedAllowFromEntries({
+      allowFrom,
+      normalizeEntry: normalizeIrcAllowEntry,
+    }),
+  resolveDefaultTo: (account: ResolvedIrcAccount) => account.config.defaultTo,
 });
 
 const resolveIrcDmPolicy = createScopedDmSecurityResolver<ResolvedIrcAccount>({
@@ -116,7 +115,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
   reload: { configPrefixes: ["channels.irc"] },
   configSchema: buildChannelConfigSchema(IrcConfigSchema),
   config: {
-    ...ircConfigBase,
+    ...ircConfigAdapter,
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({
       accountId: account.accountId,
@@ -129,7 +128,6 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
       nick: account.nick,
       passwordSource: account.passwordSource,
     }),
-    ...ircConfigAccessors,
   },
   security: {
     resolveDmPolicy: resolveIrcDmPolicy,

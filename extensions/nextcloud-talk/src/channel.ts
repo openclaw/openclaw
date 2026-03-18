@@ -1,7 +1,6 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
+  createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
@@ -51,19 +50,8 @@ const meta = {
   quickstartAllowFrom: true,
 };
 
-const nextcloudTalkConfigAccessors =
-  createScopedAccountConfigAccessors<ResolvedNextcloudTalkAccount>({
-    resolveAccount: ({ cfg, accountId }) =>
-      resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId }),
-    resolveAllowFrom: (account) => account.config.allowFrom,
-    formatAllowFrom: (allowFrom) =>
-      formatAllowFromLowercase({
-        allowFrom,
-        stripPrefixRe: /^(nextcloud-talk|nc-talk|nc):/i,
-      }),
-  });
-
-const nextcloudTalkConfigBase = createScopedChannelConfigBase<
+const nextcloudTalkConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedNextcloudTalkAccount,
   ResolvedNextcloudTalkAccount,
   CoreConfig
 >({
@@ -72,6 +60,12 @@ const nextcloudTalkConfigBase = createScopedChannelConfigBase<
   resolveAccount: (cfg, accountId) => resolveNextcloudTalkAccount({ cfg, accountId }),
   defaultAccountId: resolveDefaultNextcloudTalkAccountId,
   clearBaseFields: ["botSecret", "botSecretFile", "baseUrl", "name"],
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    formatAllowFromLowercase({
+      allowFrom,
+      stripPrefixRe: /^(nextcloud-talk|nc-talk|nc):/i,
+    }),
 });
 
 const resolveNextcloudTalkDmPolicy = createScopedDmSecurityResolver<ResolvedNextcloudTalkAccount>({
@@ -105,7 +99,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
   reload: { configPrefixes: ["channels.nextcloud-talk"] },
   configSchema: buildChannelConfigSchema(NextcloudTalkConfigSchema),
   config: {
-    ...nextcloudTalkConfigBase,
+    ...nextcloudTalkConfigAdapter,
     isConfigured: (account) => Boolean(account.secret?.trim() && account.baseUrl?.trim()),
     describeAccount: (account) => ({
       accountId: account.accountId,
@@ -115,7 +109,6 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
       secretSource: account.secretSource,
       baseUrl: account.baseUrl ? "[set]" : "[missing]",
     }),
-    ...nextcloudTalkConfigAccessors,
   },
   security: {
     resolveDmPolicy: resolveNextcloudTalkDmPolicy,
