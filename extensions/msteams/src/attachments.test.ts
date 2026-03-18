@@ -212,6 +212,9 @@ const createMediaEntriesWithType = (contentType: string, ...paths: string[]) =>
   paths.map((path) => ({ path, contentType }));
 const createHostedContentsWithType = (contentType: string, ...ids: string[]) =>
   ids.map((id) => ({ id, contentType, contentBytes: PNG_BASE64 }));
+/** Like createHostedContentsWithType but with contentBytes: null to exercise the $value fetch path. */
+const createHostedContentsNullBytes = (contentType: string, ...ids: string[]) =>
+  ids.map((id) => ({ id, contentType, contentBytes: null }));
 const createImageMediaEntries = (...paths: string[]) =>
   createMediaEntriesWithType(CONTENT_TYPE_IMAGE_PNG, ...paths);
 const createHostedImageContents = (...ids: string[]) =>
@@ -848,6 +851,20 @@ describe("msteams attachments", () => {
       expectAttachmentMediaLength(media, 0);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
+
+    it("appends /views/original to Bot Framework attachment URLs", async () => {
+      const bfUrl = "https://smba.trafficmanager.net/amer/72f988bf/v3/attachments/0-wus-d11-abc";
+      const media = await downloadAttachmentsWithFetch(
+        createContentUrlAttachments("image/*", bfUrl),
+        fetchRemoteMediaMock,
+        { allowHosts: ["smba.trafficmanager.net"], resolveFn: publicResolveFn },
+      );
+
+      expect(fetchRemoteMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({ url: `${bfUrl}/views/original` }),
+      );
+      expectAttachmentMediaLength(media, 1);
+    });
   });
 
   describe("buildMSTeamsGraphMessageUrls", () => {
@@ -926,6 +943,41 @@ describe("msteams attachments", () => {
       const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
       expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(true);
       expect(calledUrls).not.toContain(escapedUrl);
+    });
+
+    it("skips hosted content when $value fetch fails", async () => {
+      const tokenProvider = createTokenProvider();
+      const graphFetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith("/hostedContents")) {
+          // contentBytes: null forces the $value fetch path
+          return createGraphCollectionResponse(
+            createHostedContentsNullBytes(CONTENT_TYPE_IMAGE_PNG, "1"),
+          );
+        }
+        if (url.includes("/hostedContents/1/$value")) {
+          return createNotFoundResponse();
+        }
+        if (url.endsWith("/attachments")) {
+          return createGraphCollectionResponse([]);
+        }
+        return createNotFoundResponse();
+      }) as unknown as FetchFn;
+
+      const { media } = await downloadGraphMediaWithMockOptions(
+        {},
+        {
+          fetchFn: graphFetchMock,
+          tokenProvider,
+        },
+      );
+
+      expectAttachmentMediaLength(media.media, 0);
+      expect(saveMediaBufferMock).not.toHaveBeenCalled();
+      // Verify the $value fetch was actually attempted with the correct URL.
+      expect(graphFetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/hostedContents/1/$value"),
+        expect.anything(),
+      );
     });
   });
 

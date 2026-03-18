@@ -26,6 +26,24 @@ type DownloadCandidate = {
   placeholder: string;
 };
 
+/** Detect Bot Framework /v3/attachments/{id} URLs that need /views/original. */
+const BF_ATTACHMENT_RE = /\/v3\/attachments\/[^/]+\/?$/i;
+function isBotFrameworkAttachmentUrl(url: string): boolean {
+  try {
+    return BF_ATTACHMENT_RE.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/** Rewrite Bot Framework attachment URLs to append /views/original, preserving query strings. */
+function rewriteBotFrameworkUrl(url: string): string {
+  if (!isBotFrameworkAttachmentUrl(url)) return url;
+  const parsed = new URL(url);
+  parsed.pathname = parsed.pathname.replace(/\/+$/, "") + "/views/original";
+  return parsed.toString();
+}
+
 function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate | null {
   const contentType = normalizeContentType(att.contentType);
   const name = typeof att.name === "string" ? att.name.trim() : "";
@@ -62,8 +80,13 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
     return null;
   }
 
+  // Bot Framework attachment URLs (…/v3/attachments/{id}) return JSON metadata;
+  // append /views/original to retrieve the actual binary content.
+  // Preserve any query string (e.g. signed URLs with ?sig=...).
+  let url = rewriteBotFrameworkUrl(contentUrl);
+
   return {
-    url: contentUrl,
+    url,
     fileHint: name || undefined,
     contentTypeHint: contentType,
     placeholder: inferPlaceholder({ contentType, fileName: name }),
@@ -194,8 +217,10 @@ export async function downloadMSTeamsAttachments(params: {
         continue;
       }
       seenUrls.add(inline.url);
+      // Apply Bot Framework URL rewrite to inline <img src> URLs too.
+      const rewrittenUrl = rewriteBotFrameworkUrl(inline.url);
       candidates.push({
-        url: inline.url,
+        url: rewrittenUrl,
         fileHint: inline.fileHint,
         contentTypeHint: inline.contentType,
         placeholder: inline.placeholder,

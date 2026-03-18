@@ -49,7 +49,7 @@ export const DEFAULT_MEDIA_HOST_ALLOWLIST = [
   "asm.skype.com",
   "ams.skype.com",
   "media.ams.skype.com",
-  // Bot Framework attachment URLs
+  // Bot Framework attachment URLs — regional variants (smba, smba.eu, smba.ap, etc.)
   "trafficmanager.net",
   "blob.core.windows.net",
   "azureedge.net",
@@ -59,6 +59,10 @@ export const DEFAULT_MEDIA_HOST_ALLOWLIST = [
 export const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   "api.botframework.com",
   "botframework.com",
+  // Bot Framework attachment service URLs — regional variants
+  "smba.trafficmanager.net",
+  "smba.eu.trafficmanager.net",
+  "smba.ap.trafficmanager.net",
   "graph.microsoft.com",
   "graph.microsoft.us",
   "graph.microsoft.de",

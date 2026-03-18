@@ -173,7 +173,7 @@ function normalizeGraphAttachment(att: GraphAttachment): MSTeamsAttachmentLike {
  * Download all hosted content from a Teams message (images, documents, etc.).
  * Renamed from downloadGraphHostedImages to support all file types.
  */
-async function downloadGraphHostedContent(params: {
+export async function downloadGraphHostedContent(params: {
   accessToken: string;
   messageUrl: string;
   maxBytes: number;
@@ -191,16 +191,75 @@ async function downloadGraphHostedContent(params: {
     return { media: [], status: hosted.status, count: 0 };
   }
 
+  const fetchFn = params.fetchFn ?? fetch;
   const out: MSTeamsInboundMedia[] = [];
   for (const item of hosted.items) {
+    let buffer: Buffer | undefined;
+    let headerMime: string | undefined;
+
+    // Fast path: use contentBytes when the collection response includes them.
     const contentBytes = typeof item.contentBytes === "string" ? item.contentBytes : "";
-    if (!contentBytes) {
-      continue;
+    if (contentBytes) {
+      try {
+        buffer = Buffer.from(contentBytes, "base64");
+      } catch {
+        // Fall through to $value fetch.
+      }
     }
-    let buffer: Buffer;
-    try {
-      buffer = Buffer.from(contentBytes, "base64");
-    } catch {
+
+    // Graph collection responses typically return contentBytes as null.
+    // Fetch the raw binary from the individual $value endpoint instead.
+    if (!buffer && item.id) {
+      try {
+        const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(item.id)}/$value`;
+        const { response: valRes, release } = await fetchWithSsrFGuard({
+          url: valueUrl,
+          fetchImpl: fetchFn,
+          init: { headers: { Authorization: `Bearer ${params.accessToken}` } },
+          policy: params.ssrfPolicy,
+        });
+        try {
+          if (valRes.ok) {
+            const contentLength = Number(valRes.headers.get("content-length") ?? "0");
+            if (contentLength > params.maxBytes) {
+              // Skip oversized content without buffering.
+            } else if (valRes.body) {
+              // Stream with bounded read to avoid buffering oversized payloads
+              // when content-length is missing or misreported.
+              const chunks: Uint8Array[] = [];
+              let totalBytes = 0;
+              let oversized = false;
+              const reader = valRes.body.getReader();
+              try {
+                for (;;) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  totalBytes += value.byteLength;
+                  if (totalBytes > params.maxBytes) {
+                    oversized = true;
+                    await reader.cancel();
+                    break;
+                  }
+                  chunks.push(value);
+                }
+              } finally {
+                reader.releaseLock();
+              }
+              if (!oversized && chunks.length > 0) {
+                buffer = Buffer.concat(chunks);
+                headerMime = valRes.headers.get("content-type") ?? undefined;
+              }
+            }
+          }
+        } finally {
+          await release();
+        }
+      } catch {
+        // Network/fetch failure — skip this item.
+      }
+    }
+
+    if (!buffer) {
       continue;
     }
     if (buffer.byteLength > params.maxBytes) {
@@ -208,7 +267,7 @@ async function downloadGraphHostedContent(params: {
     }
     const mime = await getMSTeamsRuntime().media.detectMime({
       buffer,
-      headerMime: item.contentType ?? undefined,
+      headerMime: headerMime ?? item.contentType ?? undefined,
     });
     // Download any file type, not just images
     try {

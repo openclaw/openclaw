@@ -1,6 +1,7 @@
 import {
   buildMSTeamsGraphMessageUrls,
   downloadMSTeamsAttachments,
+  downloadGraphHostedContent,
   downloadMSTeamsGraphMedia,
   type MSTeamsAccessTokenProvider,
   type MSTeamsAttachmentLike,
@@ -51,64 +52,89 @@ export async function resolveMSTeamsInboundMedia(params: {
     preserveFilenames,
   });
 
-  if (mediaList.length === 0) {
-    const onlyHtmlAttachments =
-      attachments.length > 0 &&
-      attachments.every((att) => String(att.contentType ?? "").startsWith("text/html"));
+  // Teams represents inline pasted images as text/html attachments with hostedContents.
+  // Always attempt the Graph hostedContents path when HTML attachments are present,
+  // even if some regular file attachments already downloaded successfully,
+  // because mixed messages can have both regular files and inline pasted images.
+  const hasHtmlAttachments = attachments.some((att) =>
+    String(att.contentType ?? "").startsWith("text/html"),
+  );
 
-    if (onlyHtmlAttachments) {
-      const messageUrls = buildMSTeamsGraphMessageUrls({
+  // Teams represents inline pasted images as text/html attachments with hostedContents.
+  if (hasHtmlAttachments) {
+    const messageUrls = buildMSTeamsGraphMessageUrls({
+      conversationType,
+      conversationId,
+      messageId: activity.id ?? undefined,
+      replyToId: activity.replyToId ?? undefined,
+      conversationMessageId,
+      channelData: activity.channelData,
+    });
+    if (messageUrls.length === 0) {
+      log.debug?.("graph message url unavailable", {
         conversationType,
-        conversationId,
+        hasChannelData: Boolean(activity.channelData),
         messageId: activity.id ?? undefined,
         replyToId: activity.replyToId ?? undefined,
-        conversationMessageId,
-        channelData: activity.channelData,
       });
-      if (messageUrls.length === 0) {
-        log.debug?.("graph message url unavailable", {
-          conversationType,
-          hasChannelData: Boolean(activity.channelData),
-          messageId: activity.id ?? undefined,
-          replyToId: activity.replyToId ?? undefined,
-        });
-      } else {
-        const attempts: Array<{
-          url: string;
-          hostedStatus?: number;
-          attachmentStatus?: number;
-          hostedCount?: number;
-          attachmentCount?: number;
-          tokenError?: boolean;
-        }> = [];
-        for (const messageUrl of messageUrls) {
-          const graphMedia = await downloadMSTeamsGraphMedia({
+    } else if (mediaList.length > 0) {
+      // Mixed message: we already have some media from direct downloads.
+      // Only fetch hostedContents (inline images) to avoid duplicating attachments.
+      for (const messageUrl of messageUrls) {
+        try {
+          const token = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+          if (!token) break;
+          const hosted = await downloadGraphHostedContent({
             messageUrl,
-            tokenProvider,
+            accessToken: token,
             maxBytes,
-            allowHosts,
-            authAllowHosts: params.authAllowHosts,
             preserveFilenames,
           });
-          attempts.push({
-            url: messageUrl,
-            hostedStatus: graphMedia.hostedStatus,
-            attachmentStatus: graphMedia.attachmentStatus,
-            hostedCount: graphMedia.hostedCount,
-            attachmentCount: graphMedia.attachmentCount,
-            tokenError: graphMedia.tokenError,
-          });
-          if (graphMedia.media.length > 0) {
-            mediaList = graphMedia.media;
+          if (hosted.media.length > 0) {
+            mediaList = [...mediaList, ...hosted.media];
             break;
           }
-          if (graphMedia.tokenError) {
-            break;
-          }
+        } catch {
+          // Token acquisition or Graph fetch failed — continue to next URL candidate.
         }
-        if (mediaList.length === 0) {
-          log.debug?.("graph media fetch empty", { attempts });
+      }
+    } else {
+      // No media yet: try the full Graph path (hostedContents + attachments).
+      const attempts: Array<{
+        url: string;
+        hostedStatus?: number;
+        attachmentStatus?: number;
+        hostedCount?: number;
+        attachmentCount?: number;
+        tokenError?: boolean;
+      }> = [];
+      for (const messageUrl of messageUrls) {
+        const graphMedia = await downloadMSTeamsGraphMedia({
+          messageUrl,
+          tokenProvider,
+          maxBytes,
+          allowHosts,
+          authAllowHosts: params.authAllowHosts,
+          preserveFilenames,
+        });
+        attempts.push({
+          url: messageUrl,
+          hostedStatus: graphMedia.hostedStatus,
+          attachmentStatus: graphMedia.attachmentStatus,
+          hostedCount: graphMedia.hostedCount,
+          attachmentCount: graphMedia.attachmentCount,
+          tokenError: graphMedia.tokenError,
+        });
+        if (graphMedia.media.length > 0) {
+          mediaList = graphMedia.media;
+          break;
         }
+        if (graphMedia.tokenError) {
+          break;
+        }
+      }
+      if (mediaList.length === 0) {
+        log.debug?.("graph media fetch empty", { attempts });
       }
     }
   }

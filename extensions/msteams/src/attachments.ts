@@ -3,7 +3,11 @@ export {
   /** @deprecated Use `downloadMSTeamsAttachments` instead. */
   downloadMSTeamsImageAttachments,
 } from "./attachments/download.js";
-export { buildMSTeamsGraphMessageUrls, downloadMSTeamsGraphMedia } from "./attachments/graph.js";
+export {
+  buildMSTeamsGraphMessageUrls,
+  downloadGraphHostedContent,
+  downloadMSTeamsGraphMedia,
+} from "./attachments/graph.js";
 export {
   buildMSTeamsAttachmentPlaceholder,
   summarizeMSTeamsHtmlAttachments,
