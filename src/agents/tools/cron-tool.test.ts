@@ -82,11 +82,12 @@ describe("cron tool", () => {
     callId: string;
     agentSessionKey: string;
     jobSessionKey?: string;
+    job?: Record<string, unknown>;
   }): Promise<string | undefined> {
     const tool = createTestCronTool({ agentSessionKey: params.agentSessionKey });
     await tool.execute(params.callId, {
       action: "add",
-      job: {
+      job: params.job ?? {
         name: "wake-up",
         schedule: { at: new Date(123).toISOString() },
         ...(params.jobSessionKey ? { sessionKey: params.jobSessionKey } : {}),
@@ -293,6 +294,38 @@ describe("cron tool", () => {
       jobSessionKey: "agent:main:telegram:group:-100123:topic:99",
     });
     expect(sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
+  });
+
+  it("does not stamp isolated agentTurn cron.add with caller sessionKey when missing", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const sessionKey = await executeAddAndReadSessionKey({
+      callId: "call-agentturn-isolated-no-session-key",
+      agentSessionKey: "agent:main:bluebubbles:direct:+12253851518",
+      job: {
+        name: "watcher",
+        schedule: { at: new Date(123).toISOString() },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "watch stuff" },
+      },
+    });
+    expect(sessionKey).toBeUndefined();
+  });
+
+  it("stamps current-bound agentTurn cron.add with caller sessionKey when resolved", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const sessionKey = await executeAddAndReadSessionKey({
+      callId: "call-agentturn-current-session-key",
+      agentSessionKey: "agent:main:bluebubbles:direct:+12253851518",
+      job: {
+        name: "watcher",
+        schedule: { at: new Date(123).toISOString() },
+        sessionTarget: "current",
+        payload: { kind: "agentTurn", message: "watch stuff" },
+      },
+    });
+    expect(sessionKey).toBe("agent:main:bluebubbles:direct:+12253851518");
   });
 
   it("adds recent context for systemEvent reminders when contextMessages > 0", async () => {

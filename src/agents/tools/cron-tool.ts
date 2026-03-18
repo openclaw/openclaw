@@ -535,7 +535,20 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 (job as { agentId?: string }).agentId = agentId;
               }
             }
-            if (!("sessionKey" in job) && resolvedSessionKey) {
+            const payloadKind =
+              "payload" in job &&
+              (job as { payload?: { kind?: string } }).payload &&
+              typeof (job as { payload?: { kind?: string } }).payload?.kind === "string"
+                ? (job as { payload?: { kind?: string } }).payload?.kind
+                : undefined;
+            const sessionTarget =
+              typeof (job as { sessionTarget?: string }).sessionTarget === "string"
+                ? (job as { sessionTarget?: string }).sessionTarget?.trim().toLowerCase()
+                : "";
+            const shouldInheritSessionKey = !(
+              payloadKind === "agentTurn" && sessionTarget === "isolated"
+            );
+            if (!("sessionKey" in job) && resolvedSessionKey && shouldInheritSessionKey) {
               (job as { sessionKey?: string }).sessionKey = resolvedSessionKey;
             }
           }
