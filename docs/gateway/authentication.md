@@ -159,7 +159,7 @@ Use `--agent <id>` to target a specific agent; omit it to use the configured def
 
 ## Troubleshooting
 
-### “No credentials found”
+### "No credentials found"
 
 If the Anthropic token profile is missing, run `claude setup-token` on the
 **gateway host**, then re-check:

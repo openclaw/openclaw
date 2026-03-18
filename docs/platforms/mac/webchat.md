@@ -26,7 +26,7 @@ agent (with a session switcher for other sessions).
 
 - Logs: `./scripts/clawlog.sh` (subsystem `ai.openclaw`, category `WebChatSwiftUI`).
 
-## How it’s wired
+## How it is wired
 
 - Data plane: Gateway WS methods `chat.history`, `chat.send`, `chat.abort`,
   `chat.inject` and events `chat`, `agent`, `presence`, `tick`, `health`.

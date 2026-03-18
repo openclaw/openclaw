@@ -90,7 +90,7 @@ more natural.
 - Modes: `off` (default), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`).
 - Applies only to **block replies**, not final replies or tool summaries.
 
-## “Stream chunks or everything”
+## "Stream chunks or everything"
 
 This maps to:
 

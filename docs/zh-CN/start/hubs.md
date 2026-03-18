@@ -183,12 +183,6 @@ x-i18n:
 - [模板：TOOLS](/reference/templates/TOOLS)
 - [模板：USER](/reference/templates/USER)
 
-## 实验（探索性）
-
-- [新手引导配置协议](/experiments/onboarding-config-protocol)
-- [研究：记忆](/experiments/research/memory)
-- [模型配置探索](/experiments/proposals/model-config)
-
 ## 项目
 
 - [致谢](/reference/credits)

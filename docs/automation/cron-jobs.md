@@ -700,7 +700,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 
 ## Troubleshooting
 
-### “Nothing runs”
+### "Nothing runs"
 
 - Check cron is enabled: `cron.enabled` and `OPENCLAW_SKIP_CRON`.
 - Check the Gateway is running continuously (cron runs inside the Gateway process).

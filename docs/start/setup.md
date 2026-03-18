@@ -27,7 +27,7 @@ Last updated: 2026-01-01
 - `pnpm`
 - Docker (optional; only for containerized setup/e2e — see [Docker](/install/docker))
 
-## Tailoring strategy (so updates don’t hurt)
+## Tailoring strategy (so updates do not hurt)
 
 If you want “100% tailored to me” _and_ easy updates, keep your customization in:
 

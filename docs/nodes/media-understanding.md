@@ -21,7 +21,7 @@ integration.
 - Support **provider APIs** and **CLI fallbacks**.
 - Allow multiple models with ordered fallback (error/size/timeout).
 
-## High‑level behavior
+## High-level behavior
 
 1. Collect inbound attachments (`MediaPaths`, `MediaUrls`, `MediaTypes`).
 2. For each enabled capability (image/audio/video), select attachments per policy (default: **first**).
@@ -334,7 +334,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 }
 ```
 
-### 4) Multi‑modal single entry (explicit capabilities)
+### 4) Multi-modal single entry (explicit capabilities)
 
 ```json5
 {

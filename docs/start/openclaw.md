@@ -102,7 +102,7 @@ If you already ship your own workspace files from a repo, you can disable bootst
 }
 ```
 
-## The config that turns it into “an assistant”
+## The config that turns it into "an assistant"
 
 OpenClaw defaults to a good assistant setup, but you’ll usually want to tune:
 
