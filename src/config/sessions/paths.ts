@@ -8,7 +8,6 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js
 import { resolveStateDir } from "../paths.js";
 
 const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fs.constants;
-const MANAGED_PATH_CASE_INSENSITIVE = process.platform === "win32" || process.platform === "darwin";
 const OPEN_DIRECTORY_FLAGS =
   fs.constants.O_RDONLY |
   (typeof fs.constants.O_DIRECTORY === "number" ? fs.constants.O_DIRECTORY : 0) |
@@ -232,25 +231,39 @@ export function isManagedSessionsDir(
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): boolean {
   const resolvedSessionsDir = path.resolve(sessionsDir);
-  if (path.basename(resolvedSessionsDir).toLowerCase() !== "sessions") {
-    return false;
-  }
-
   const agentDir = path.dirname(resolvedSessionsDir);
-  const agentsDir = path.dirname(agentDir);
-  if (path.basename(agentsDir).toLowerCase() !== "agents") {
-    return false;
-  }
-
   const agentId = path.basename(agentDir);
   if (!agentId) {
     return false;
   }
 
   const expectedSessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
+  const compareCaseInsensitively = shouldCompareManagedPathsCaseInsensitively(expectedSessionsDir);
+
+  if (
+    !managedPathSegmentMatches(
+      path.basename(resolvedSessionsDir),
+      "sessions",
+      compareCaseInsensitively,
+    )
+  ) {
+    return false;
+  }
+
+  const agentsDir = path.dirname(agentDir);
+  if (!managedPathSegmentMatches(path.basename(agentsDir), "agents", compareCaseInsensitively)) {
+    return false;
+  }
+
   return (
-    normalizeManagedPathForComparison(resolveComparableManagedPath(resolvedSessionsDir)) ===
-    normalizeManagedPathForComparison(resolveComparableManagedPath(expectedSessionsDir))
+    normalizeManagedPathForComparison(
+      resolveComparableManagedPath(resolvedSessionsDir),
+      compareCaseInsensitively,
+    ) ===
+    normalizeManagedPathForComparison(
+      resolveComparableManagedPath(expectedSessionsDir),
+      compareCaseInsensitively,
+    )
   );
 }
 
@@ -451,8 +464,70 @@ function resolveComparableManagedPath(filePath: string): string {
   }
 }
 
-function normalizeManagedPathForComparison(filePath: string): string {
-  return MANAGED_PATH_CASE_INSENSITIVE ? filePath.toLowerCase() : filePath;
+function managedPathSegmentMatches(
+  actual: string,
+  expected: string,
+  compareCaseInsensitively: boolean,
+): boolean {
+  return compareCaseInsensitively ? actual.toLowerCase() === expected : actual === expected;
+}
+
+function resolveManagedPathCaseProbePath(filePath: string): string | undefined {
+  let cursor = path.resolve(filePath);
+  while (true) {
+    if (safeRealpathSync(cursor)) {
+      return cursor;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      return undefined;
+    }
+    cursor = parent;
+  }
+}
+
+function resolveCaseVariantProbePath(filePath: string): string | undefined {
+  const baseName = path.basename(filePath);
+  if (!baseName) {
+    return undefined;
+  }
+
+  const lower = baseName.toLowerCase();
+  if (lower !== baseName) {
+    return path.join(path.dirname(filePath), lower);
+  }
+
+  const upper = baseName.toUpperCase();
+  if (upper !== baseName) {
+    return path.join(path.dirname(filePath), upper);
+  }
+
+  return undefined;
+}
+
+function shouldCompareManagedPathsCaseInsensitively(filePath: string): boolean {
+  if (process.platform === "win32") {
+    return true;
+  }
+
+  const probePath = resolveManagedPathCaseProbePath(filePath);
+  if (!probePath) {
+    return false;
+  }
+
+  const caseVariantProbePath = resolveCaseVariantProbePath(probePath);
+  if (!caseVariantProbePath) {
+    return false;
+  }
+
+  return fs.existsSync(caseVariantProbePath);
+}
+
+function normalizeManagedPathForComparison(
+  filePath: string,
+  compareCaseInsensitively: boolean,
+): string {
+  return compareCaseInsensitively ? filePath.toLowerCase() : filePath;
 }
 
 function resolvePathWithinSessionsDir(

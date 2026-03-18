@@ -256,4 +256,44 @@ describe("isManagedSessionsDir", () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("does not treat case-variant paths as managed on case-sensitive state roots", async () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-managed-case-sensitive-"));
+    try {
+      const stateDir = path.join(tempDir, "StateRoot");
+      fs.mkdirSync(stateDir, { recursive: true });
+
+      const realExistsSync = fs.existsSync.bind(fs);
+      vi.spyOn(fs, "existsSync").mockImplementation((candidatePath) => {
+        const resolved = path.resolve(String(candidatePath));
+        if (resolved === path.join(tempDir, "stateroot")) {
+          return false;
+        }
+        return realExistsSync(candidatePath);
+      });
+
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      } as NodeJS.ProcessEnv;
+      const caseVariantSessionsDir = path.join(stateDir, "AGENTS", "Main", "sessions");
+
+      const { isManagedSessionStorePath, isManagedSessionTranscriptPath, isManagedSessionsDir } =
+        await import("./paths.js");
+
+      expect(isManagedSessionsDir(caseVariantSessionsDir, env)).toBe(false);
+      expect(
+        isManagedSessionStorePath(path.join(caseVariantSessionsDir, "sessions.json"), env),
+      ).toBe(false);
+      expect(
+        isManagedSessionTranscriptPath(path.join(caseVariantSessionsDir, "sess-1.jsonl"), env),
+      ).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
