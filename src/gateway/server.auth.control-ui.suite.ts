@@ -252,9 +252,7 @@ export function registerControlUiAndPairingSuite(): void {
     await configureTrustedProxyControlUiAuth();
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { requestDevicePairing } = await import("../infra/device-pairing.js");
-    const { identity } = await createOperatorIdentityFixture(
-      "openclaw-control-ui-trusted-proxy-",
-    );
+    const { identity } = await createOperatorIdentityFixture("openclaw-control-ui-trusted-proxy-");
     const pendingRequest = await requestDevicePairing({
       deviceId: identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
