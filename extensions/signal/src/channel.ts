@@ -36,7 +36,8 @@ import { signalSetupAdapter } from "./setup-core.js";
 import { createSignalPluginBase, signalConfigAccessors, signalSetupWizard } from "./shared.js";
 
 const signalMessageActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
+  describeMessageTool: (ctx) =>
+    getSignalRuntime().channel.signal.messageActions?.describeMessageTool?.(ctx) ?? null,
   supportsAction: (ctx) =>
     getSignalRuntime().channel.signal.messageActions?.supportsAction?.(ctx) ?? false,
   handleAction: async (ctx) => {
