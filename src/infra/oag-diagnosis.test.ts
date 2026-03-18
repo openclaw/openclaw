@@ -39,6 +39,13 @@ vi.mock("./oag-memory.js", () => ({
   recordDiagnosis: vi.fn(async (r: unknown) => {
     mockMemory.current.diagnoses.push(r);
   }),
+  withOagMemory: vi.fn(async (fn: (memory: unknown) => boolean | void) => {
+    const memory = JSON.parse(JSON.stringify(mockMemory.current));
+    const result = fn(memory);
+    if (result !== false) {
+      mockMemory.current = memory as typeof mockMemory.current;
+    }
+  }),
 }));
 
 const {

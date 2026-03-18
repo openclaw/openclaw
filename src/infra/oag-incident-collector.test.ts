@@ -52,8 +52,8 @@ describe("oag-incident-collector", () => {
     expect(collectActiveIncidents()).toHaveLength(0);
   });
 
-  it("evicts oldest incident when exceeding 100 limit", () => {
-    for (let i = 0; i < 105; i++) {
+  it("evicts oldest incident when exceeding 1000 limit", () => {
+    for (let i = 0; i < 1005; i++) {
       recordOagIncident({
         type: "stale_detection",
         channel: `ch-${i}`,
@@ -61,7 +61,7 @@ describe("oag-incident-collector", () => {
       });
     }
     const incidents = collectActiveIncidents();
-    expect(incidents.length).toBeLessThanOrEqual(100);
+    expect(incidents.length).toBeLessThanOrEqual(1000);
   });
 
   it("stores lastError field on new incident", () => {

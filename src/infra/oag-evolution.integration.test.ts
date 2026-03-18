@@ -8,7 +8,7 @@ const memoryFiles = vi.hoisted(() => new Map<string, string>());
 const configState = vi.hoisted(() => ({
   current: {
     gateway: {
-      oag: { delivery: { recoveryBudgetMs: 60000 } },
+      oag: { delivery: { recoveryBudgetMs: 60000 }, evolution: { autoApply: true } },
     },
   } as Record<string, unknown>,
 }));
@@ -76,7 +76,7 @@ describe("OAG evolution integration", () => {
     // Reset config to initial state
     configState.current = {
       gateway: {
-        oag: { delivery: { recoveryBudgetMs: 60000 } },
+        oag: { delivery: { recoveryBudgetMs: 60000 }, evolution: { autoApply: true } },
       },
     };
   });

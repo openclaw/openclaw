@@ -26,6 +26,10 @@ vi.mock("./oag-memory.js", () => ({
   loadOagMemory: vi.fn(async () => ({ version: 1, lifecycles: [], evolutions: [], diagnoses: [] })),
 }));
 
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => ({ gateway: { oag: { evolution: { autoApply: true } } } }),
+}));
+
 vi.mock("./oag-config-writer.js", () => ({
   applyOagConfigChanges: vi.fn(async () => ({ applied: true })),
 }));

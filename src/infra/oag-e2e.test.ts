@@ -11,6 +11,7 @@ const configState = vi.hoisted(() => ({
         lock: { timeoutMs: 2_000, staleMs: 30_000 },
         health: { stalePollFactor: 2 },
         notes: { dedupWindowMs: 60_000, maxDeliveredHistory: 20 },
+        evolution: { autoApply: true },
       },
     },
   } as Record<string, unknown>,
@@ -101,6 +102,7 @@ describe("OAG E2E pipeline tests", () => {
           lock: { timeoutMs: 2_000, staleMs: 30_000 },
           health: { stalePollFactor: 2 },
           notes: { dedupWindowMs: 60_000, maxDeliveredHistory: 20 },
+          evolution: { autoApply: true },
         },
       },
     };
@@ -324,29 +326,29 @@ describe("OAG E2E pipeline tests", () => {
   });
 
   describe("Test 4: Incident collector overflow", () => {
-    it("retains only 100 incidents and evicts oldest", () => {
-      // Step 1: Record 105 incidents with unique keys
-      for (let i = 0; i < 105; i++) {
+    it("retains only 1000 incidents and evicts oldest", () => {
+      // Step 1: Record 1005 incidents with unique keys (MAX_ACTIVE_INCIDENTS = 1000)
+      for (let i = 0; i < 1005; i++) {
         recordOagIncident({
           type: "stale_detection",
-          channel: `channel-${String(i).padStart(3, "0")}`,
+          channel: `channel-${String(i).padStart(4, "0")}`,
           detail: `incident-${i}`,
         });
       }
 
-      // Step 2: Verify only 100 retained
+      // Step 2: Verify only 1000 retained
       const incidents = collectActiveIncidents();
-      expect(incidents).toHaveLength(100);
+      expect(incidents).toHaveLength(1000);
 
       // Step 3: Verify oldest 5 were evicted
       const channels = incidents.map((inc) => inc.channel);
       for (let i = 0; i < 5; i++) {
-        expect(channels).not.toContain(`channel-${String(i).padStart(3, "0")}`);
+        expect(channels).not.toContain(`channel-${String(i).padStart(4, "0")}`);
       }
 
-      // Step 4: Verify newest 100 present
-      for (let i = 5; i < 105; i++) {
-        expect(channels).toContain(`channel-${String(i).padStart(3, "0")}`);
+      // Step 4: Verify newest 1000 present
+      for (let i = 5; i < 1005; i++) {
+        expect(channels).toContain(`channel-${String(i).padStart(4, "0")}`);
       }
     });
   });

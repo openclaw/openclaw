@@ -66,6 +66,7 @@ vi.mock("./oag-config.js", () => ({
   resolveOagEvolutionRestartRegressionThreshold: () => 5,
   resolveOagEvolutionFailureRegressionThreshold: () => 3,
   resolveOagEvolutionPeriodicAnalysisIntervalMs: () => 6 * 60 * 60_000,
+  resolveOagEvolutionAutoApply: () => true,
 }));
 
 vi.mock("./oag-metrics.js", () => ({
