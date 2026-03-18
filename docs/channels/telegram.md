@@ -867,6 +867,12 @@ channels:
     proxy: socks5://<user>:<password>@proxy-host:1080
 ```
 
+    - If `api.telegram.org` is blocked on your host (e.g., datacenter IP restrictions), run a self-hosted [Telegram Bot API server](https://github.com/tdlib/telegram-bot-api) and point OpenClaw at it:
+
+```bash
+TELEGRAM_BOT_API_HOST=https://my-bot-api.example.com openclaw gateway run
+```
+
     - Node 22+ defaults to `autoSelectFamily=true` (except WSL2) and `dnsResultOrder=ipv4first`.
     - If your host is WSL2 or explicitly works better with IPv4-only behavior, force family selection:
 
@@ -944,6 +950,7 @@ Primary reference:
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
 - `channels.telegram.network.dnsResultOrder`: override DNS result order (`ipv4first` or `verbatim`). Defaults to `ipv4first` on Node 22+.
 - `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
+- `TELEGRAM_BOT_API_HOST` (env var): point all Bot API calls at a self-hosted [Telegram Bot API server](https://github.com/tdlib/telegram-bot-api). Accepts a full URL (`https://my-bot-api.example.com`) or a bare hostname (`my-bot-api.example.com`, `https://` is assumed). Trailing slashes are stripped. Takes effect at startup without any config file change.
 - `channels.telegram.webhookUrl`: enable webhook mode (requires `channels.telegram.webhookSecret`).
 - `channels.telegram.webhookSecret`: webhook secret (required when webhookUrl is set).
 - `channels.telegram.webhookPath`: local webhook path (default `/telegram-webhook`).
