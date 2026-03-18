@@ -1,5 +1,8 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { handleSlackAction, type SlackActionContext } from "../../agents/tools/slack-actions.js";
+import {
+  handleSlackAction,
+  type SlackActionContext,
+} from "../../../extensions/slack/runtime-api.js";
 import {
   extractSlackToolSend,
   isSlackInteractiveRepliesEnabled,
@@ -7,6 +10,7 @@ import {
   resolveSlackChannelId,
   handleSlackMessageAction,
 } from "../../plugin-sdk/slack.js";
+import { createLegacyMessageToolDiscoveryMethods } from "./message-tool-legacy.js";
 import { createSlackMessageToolBlocksSchema } from "./message-tool-schema.js";
 import type { ChannelMessageActionAdapter, ChannelMessageToolDiscovery } from "./types.js";
 
@@ -48,6 +52,7 @@ export function createSlackActions(
 
   return {
     describeMessageTool,
+    ...createLegacyMessageToolDiscoveryMethods(describeMessageTool),
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     handleAction: async (ctx) => {
       return await handleSlackMessageAction({

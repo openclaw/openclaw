@@ -1,6 +1,15 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSlackAccount } from "../../plugin-sdk/account-resolution.js";
+import { withNormalizedTimestamp } from "../../../src/agents/date-time.js";
+import {
+  createActionGate,
+  imageResultFromFile,
+  jsonResult,
+  readNumberParam,
+  readReactionParams,
+  readStringParam,
+} from "../../../src/agents/tools/common.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { resolveSlackAccount } from "./accounts.js";
 import {
   deleteSlackMessage,
   downloadSlackFile,
@@ -16,22 +25,10 @@ import {
   removeSlackReaction,
   sendSlackMessage,
   unpinSlackMessage,
-} from "../../plugin-sdk/slack.js";
-import {
-  parseSlackBlocksInput,
-  parseSlackTarget,
-  recordSlackThreadParticipation,
-  resolveSlackChannelId,
-} from "../../plugin-sdk/slack.js";
-import { withNormalizedTimestamp } from "../date-time.js";
-import {
-  createActionGate,
-  imageResultFromFile,
-  jsonResult,
-  readNumberParam,
-  readReactionParams,
-  readStringParam,
-} from "./common.js";
+} from "./actions.js";
+import { parseSlackBlocksInput } from "./blocks-input.js";
+import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
+import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
 
 const messagingActions = new Set([
   "sendMessage",
@@ -43,6 +40,25 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+
+export const slackActionRuntime = {
+  deleteSlackMessage,
+  downloadSlackFile,
+  editSlackMessage,
+  getSlackMemberInfo,
+  listSlackEmojis,
+  listSlackPins,
+  listSlackReactions,
+  parseSlackBlocksInput,
+  pinSlackMessage,
+  reactSlackMessage,
+  readSlackMessages,
+  recordSlackThreadParticipation,
+  removeOwnSlackReactions,
+  removeSlackReaction,
+  sendSlackMessage,
+  unpinSlackMessage,
+};
 
 export type SlackActionContext = {
   /** Current channel ID for auto-threading. */
@@ -102,7 +118,7 @@ function resolveThreadTsFromContext(
 }
 
 function readSlackBlocksParam(params: Record<string, unknown>) {
-  return parseSlackBlocksInput(params.blocks);
+  return slackActionRuntime.parseSlackBlocksInput(params.blocks);
 }
 
 export async function handleSlackAction(
@@ -163,28 +179,28 @@ export async function handleSlackAction(
       });
       if (remove) {
         if (writeOpts) {
-          await removeSlackReaction(channelId, messageId, emoji, writeOpts);
+          await slackActionRuntime.removeSlackReaction(channelId, messageId, emoji, writeOpts);
         } else {
-          await removeSlackReaction(channelId, messageId, emoji);
+          await slackActionRuntime.removeSlackReaction(channelId, messageId, emoji);
         }
         return jsonResult({ ok: true, removed: emoji });
       }
       if (isEmpty) {
         const removed = writeOpts
-          ? await removeOwnSlackReactions(channelId, messageId, writeOpts)
-          : await removeOwnSlackReactions(channelId, messageId);
+          ? await slackActionRuntime.removeOwnSlackReactions(channelId, messageId, writeOpts)
+          : await slackActionRuntime.removeOwnSlackReactions(channelId, messageId);
         return jsonResult({ ok: true, removed });
       }
       if (writeOpts) {
-        await reactSlackMessage(channelId, messageId, emoji, writeOpts);
+        await slackActionRuntime.reactSlackMessage(channelId, messageId, emoji, writeOpts);
       } else {
-        await reactSlackMessage(channelId, messageId, emoji);
+        await slackActionRuntime.reactSlackMessage(channelId, messageId, emoji);
       }
       return jsonResult({ ok: true, added: emoji });
     }
     const reactions = readOpts
-      ? await listSlackReactions(channelId, messageId, readOpts)
-      : await listSlackReactions(channelId, messageId);
+      ? await slackActionRuntime.listSlackReactions(channelId, messageId, readOpts)
+      : await slackActionRuntime.listSlackReactions(channelId, messageId);
     return jsonResult({ ok: true, reactions });
   }
 
@@ -211,7 +227,7 @@ export async function handleSlackAction(
           to,
           context,
         );
-        const result = await sendSlackMessage(to, content ?? "", {
+        const result = await slackActionRuntime.sendSlackMessage(to, content ?? "", {
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
           mediaLocalRoots: context?.mediaLocalRoots,
@@ -220,7 +236,11 @@ export async function handleSlackAction(
         });
 
         if (threadTs && result.channelId && account.accountId) {
-          recordSlackThreadParticipation(account.accountId, result.channelId, threadTs);
+          slackActionRuntime.recordSlackThreadParticipation(
+            account.accountId,
+            result.channelId,
+            threadTs,
+          );
         }
 
         // Keep "first" mode consistent even when the agent explicitly provided
@@ -248,12 +268,12 @@ export async function handleSlackAction(
           throw new Error("Slack editMessage requires content or blocks.");
         }
         if (writeOpts) {
-          await editSlackMessage(channelId, messageId, content ?? "", {
+          await slackActionRuntime.editSlackMessage(channelId, messageId, content ?? "", {
             ...writeOpts,
             blocks,
           });
         } else {
-          await editSlackMessage(channelId, messageId, content ?? "", {
+          await slackActionRuntime.editSlackMessage(channelId, messageId, content ?? "", {
             blocks,
           });
         }
@@ -265,9 +285,9 @@ export async function handleSlackAction(
           required: true,
         });
         if (writeOpts) {
-          await deleteSlackMessage(channelId, messageId, writeOpts);
+          await slackActionRuntime.deleteSlackMessage(channelId, messageId, writeOpts);
         } else {
-          await deleteSlackMessage(channelId, messageId);
+          await slackActionRuntime.deleteSlackMessage(channelId, messageId);
         }
         return jsonResult({ ok: true });
       }
@@ -279,7 +299,7 @@ export async function handleSlackAction(
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
-        const result = await readSlackMessages(channelId, {
+        const result = await slackActionRuntime.readSlackMessages(channelId, {
           ...readOpts,
           limit,
           before: before ?? undefined,
@@ -302,7 +322,7 @@ export async function handleSlackAction(
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
           : 20 * 1024 * 1024;
-        const downloaded = await downloadSlackFile(fileId, {
+        const downloaded = await slackActionRuntime.downloadSlackFile(fileId, {
           ...readOpts,
           maxBytes,
           channelId,
@@ -336,9 +356,9 @@ export async function handleSlackAction(
         required: true,
       });
       if (writeOpts) {
-        await pinSlackMessage(channelId, messageId, writeOpts);
+        await slackActionRuntime.pinSlackMessage(channelId, messageId, writeOpts);
       } else {
-        await pinSlackMessage(channelId, messageId);
+        await slackActionRuntime.pinSlackMessage(channelId, messageId);
       }
       return jsonResult({ ok: true });
     }
@@ -347,15 +367,15 @@ export async function handleSlackAction(
         required: true,
       });
       if (writeOpts) {
-        await unpinSlackMessage(channelId, messageId, writeOpts);
+        await slackActionRuntime.unpinSlackMessage(channelId, messageId, writeOpts);
       } else {
-        await unpinSlackMessage(channelId, messageId);
+        await slackActionRuntime.unpinSlackMessage(channelId, messageId);
       }
       return jsonResult({ ok: true });
     }
     const pins = writeOpts
-      ? await listSlackPins(channelId, readOpts)
-      : await listSlackPins(channelId);
+      ? await slackActionRuntime.listSlackPins(channelId, readOpts)
+      : await slackActionRuntime.listSlackPins(channelId);
     const normalizedPins = pins.map((pin) => {
       const message = pin.message
         ? withNormalizedTimestamp(
@@ -374,8 +394,8 @@ export async function handleSlackAction(
     }
     const userId = readStringParam(params, "userId", { required: true });
     const info = writeOpts
-      ? await getSlackMemberInfo(userId, readOpts)
-      : await getSlackMemberInfo(userId);
+      ? await slackActionRuntime.getSlackMemberInfo(userId, readOpts)
+      : await slackActionRuntime.getSlackMemberInfo(userId);
     return jsonResult({ ok: true, info });
   }
 
@@ -383,7 +403,9 @@ export async function handleSlackAction(
     if (!isActionEnabled("emojiList")) {
       throw new Error("Slack emoji list is disabled.");
     }
-    const result = readOpts ? await listSlackEmojis(readOpts) : await listSlackEmojis();
+    const result = readOpts
+      ? await slackActionRuntime.listSlackEmojis(readOpts)
+      : await slackActionRuntime.listSlackEmojis();
     const limit = readNumberParam(params, "limit", { integer: true });
     if (limit != null && limit > 0 && result.emoji != null) {
       const entries = Object.entries(result.emoji).toSorted(([a], [b]) => a.localeCompare(b));
