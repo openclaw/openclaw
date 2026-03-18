@@ -248,291 +248,371 @@
     "reason": "imports extension-owned file from src/plugins"
   },
   {
+    "file": "src/plugins/provider-model-definitions.ts",
+    "line": 1,
+    "kind": "import",
+    "specifier": "../../extensions/kimi-coding/onboard.js",
+    "resolvedPath": "extensions/kimi-coding/onboard.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/provider-model-definitions.ts",
+    "line": 5,
+    "kind": "import",
+    "specifier": "../../extensions/kimi-coding/provider-catalog.js",
+    "resolvedPath": "extensions/kimi-coding/provider-catalog.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/provider-model-definitions.ts",
+    "line": 17,
+    "kind": "import",
+    "specifier": "../../extensions/minimax/model-definitions.js",
+    "resolvedPath": "extensions/minimax/model-definitions.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/provider-model-definitions.ts",
+    "line": 24,
+    "kind": "import",
+    "specifier": "../../extensions/mistral/model-definitions.js",
+    "resolvedPath": "extensions/mistral/model-definitions.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/provider-model-definitions.ts",
+    "line": 33,
+    "kind": "import",
+    "specifier": "../../extensions/modelstudio/model-definitions.js",
+    "resolvedPath": "extensions/modelstudio/model-definitions.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/provider-model-definitions.ts",
+    "line": 37,
+    "kind": "import",
+    "specifier": "../../extensions/moonshot/onboard.js",
+    "resolvedPath": "extensions/moonshot/onboard.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/provider-model-definitions.ts",
+    "line": 42,
+    "kind": "import",
+    "specifier": "../../extensions/moonshot/provider-catalog.js",
+    "resolvedPath": "extensions/moonshot/provider-catalog.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/provider-model-definitions.ts",
+    "line": 43,
+    "kind": "import",
+    "specifier": "../../extensions/qianfan/onboard.js",
+    "resolvedPath": "extensions/qianfan/onboard.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/provider-model-definitions.ts",
+    "line": 47,
+    "kind": "import",
+    "specifier": "../../extensions/qianfan/provider-catalog.js",
+    "resolvedPath": "extensions/qianfan/provider-catalog.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/provider-model-definitions.ts",
+    "line": 54,
+    "kind": "import",
+    "specifier": "../../extensions/xai/model-definitions.js",
+    "resolvedPath": "extensions/xai/model-definitions.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/provider-model-definitions.ts",
+    "line": 64,
+    "kind": "import",
+    "specifier": "../../extensions/zai/model-definitions.js",
+    "resolvedPath": "extensions/zai/model-definitions.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/provider-zai-endpoint.ts",
+    "line": 6,
+    "kind": "import",
+    "specifier": "../../extensions/zai/model-definitions.js",
+    "resolvedPath": "extensions/zai/model-definitions.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
     "file": "src/plugins/runtime/runtime-discord-ops.runtime.ts",
     "line": 1,
-    "kind": "export",
-    "specifier": "../../../extensions/discord/src/audit.js",
-    "resolvedPath": "extensions/discord/src/audit.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/discord/runtime-api.js",
+    "resolvedPath": "extensions/discord/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-discord-ops.runtime.ts",
     "line": 5,
-    "kind": "export",
-    "specifier": "../../../extensions/discord/src/directory-live.js",
-    "resolvedPath": "extensions/discord/src/directory-live.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/discord/runtime-api.js",
+    "resolvedPath": "extensions/discord/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-discord-ops.runtime.ts",
     "line": 6,
-    "kind": "export",
-    "specifier": "../../../extensions/discord/src/monitor.js",
-    "resolvedPath": "extensions/discord/src/monitor.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/discord/runtime-api.js",
+    "resolvedPath": "extensions/discord/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-discord-ops.runtime.ts",
     "line": 7,
-    "kind": "export",
-    "specifier": "../../../extensions/discord/src/probe.js",
-    "resolvedPath": "extensions/discord/src/probe.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/discord/runtime-api.js",
+    "resolvedPath": "extensions/discord/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-discord-ops.runtime.ts",
     "line": 8,
-    "kind": "export",
-    "specifier": "../../../extensions/discord/src/resolve-channels.js",
-    "resolvedPath": "extensions/discord/src/resolve-channels.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/discord/runtime-api.js",
+    "resolvedPath": "extensions/discord/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-discord-ops.runtime.ts",
     "line": 9,
-    "kind": "export",
-    "specifier": "../../../extensions/discord/src/resolve-users.js",
-    "resolvedPath": "extensions/discord/src/resolve-users.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/discord/runtime-api.js",
+    "resolvedPath": "extensions/discord/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-discord-ops.runtime.ts",
     "line": 21,
-    "kind": "export",
-    "specifier": "../../../extensions/discord/src/send.js",
-    "resolvedPath": "extensions/discord/src/send.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/discord/runtime-api.js",
+    "resolvedPath": "extensions/discord/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-discord.ts",
     "line": 1,
     "kind": "import",
-    "specifier": "../../../extensions/discord/src/channel-actions.js",
-    "resolvedPath": "extensions/discord/src/channel-actions.js",
-    "reason": "imports extension implementation from src/plugins"
+    "specifier": "../../../extensions/discord/runtime-api.js",
+    "resolvedPath": "extensions/discord/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-discord.ts",
     "line": 11,
     "kind": "import",
-    "specifier": "../../../extensions/discord/src/monitor/thread-bindings.js",
-    "resolvedPath": "extensions/discord/src/monitor/thread-bindings.js",
-    "reason": "imports extension implementation from src/plugins"
+    "specifier": "../../../extensions/discord/runtime-api.js",
+    "resolvedPath": "extensions/discord/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-imessage.ts",
-    "line": 1,
+    "line": 5,
     "kind": "import",
-    "specifier": "../../../extensions/imessage/src/monitor.js",
-    "resolvedPath": "extensions/imessage/src/monitor.js",
-    "reason": "imports extension implementation from src/plugins"
-  },
-  {
-    "file": "src/plugins/runtime/runtime-imessage.ts",
-    "line": 2,
-    "kind": "import",
-    "specifier": "../../../extensions/imessage/src/probe.js",
-    "resolvedPath": "extensions/imessage/src/probe.js",
-    "reason": "imports extension implementation from src/plugins"
-  },
-  {
-    "file": "src/plugins/runtime/runtime-imessage.ts",
-    "line": 3,
-    "kind": "import",
-    "specifier": "../../../extensions/imessage/src/send.js",
-    "resolvedPath": "extensions/imessage/src/send.js",
-    "reason": "imports extension implementation from src/plugins"
+    "specifier": "../../../extensions/imessage/runtime-api.js",
+    "resolvedPath": "extensions/imessage/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-media.ts",
     "line": 1,
     "kind": "import",
-    "specifier": "../../../extensions/whatsapp/src/media.js",
-    "resolvedPath": "extensions/whatsapp/src/media.js",
-    "reason": "imports extension implementation from src/plugins"
+    "specifier": "../../../extensions/whatsapp/runtime-api.js",
+    "resolvedPath": "extensions/whatsapp/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-signal.ts",
-    "line": 1,
+    "line": 6,
     "kind": "import",
-    "specifier": "../../../extensions/signal/src/index.js",
-    "resolvedPath": "extensions/signal/src/index.js",
-    "reason": "imports extension implementation from src/plugins"
-  },
-  {
-    "file": "src/plugins/runtime/runtime-signal.ts",
-    "line": 2,
-    "kind": "import",
-    "specifier": "../../../extensions/signal/src/probe.js",
-    "resolvedPath": "extensions/signal/src/probe.js",
-    "reason": "imports extension implementation from src/plugins"
-  },
-  {
-    "file": "src/plugins/runtime/runtime-signal.ts",
-    "line": 3,
-    "kind": "import",
-    "specifier": "../../../extensions/signal/src/send.js",
-    "resolvedPath": "extensions/signal/src/send.js",
-    "reason": "imports extension implementation from src/plugins"
+    "specifier": "../../../extensions/signal/runtime-api.js",
+    "resolvedPath": "extensions/signal/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-slack-ops.runtime.ts",
     "line": 4,
-    "kind": "export",
-    "specifier": "../../../extensions/slack/src/directory-live.js",
-    "resolvedPath": "extensions/slack/src/directory-live.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/slack/runtime-api.js",
+    "resolvedPath": "extensions/slack/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-slack-ops.runtime.ts",
     "line": 5,
-    "kind": "export",
-    "specifier": "../../../extensions/slack/src/index.js",
-    "resolvedPath": "extensions/slack/src/index.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/slack/runtime-api.js",
+    "resolvedPath": "extensions/slack/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-slack-ops.runtime.ts",
     "line": 6,
-    "kind": "export",
-    "specifier": "../../../extensions/slack/src/probe.js",
-    "resolvedPath": "extensions/slack/src/probe.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/slack/runtime-api.js",
+    "resolvedPath": "extensions/slack/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-slack-ops.runtime.ts",
     "line": 7,
-    "kind": "export",
-    "specifier": "../../../extensions/slack/src/resolve-channels.js",
-    "resolvedPath": "extensions/slack/src/resolve-channels.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/slack/runtime-api.js",
+    "resolvedPath": "extensions/slack/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-slack-ops.runtime.ts",
     "line": 8,
-    "kind": "export",
-    "specifier": "../../../extensions/slack/src/resolve-users.js",
-    "resolvedPath": "extensions/slack/src/resolve-users.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/slack/runtime-api.js",
+    "resolvedPath": "extensions/slack/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-slack-ops.runtime.ts",
     "line": 9,
-    "kind": "export",
-    "specifier": "../../../extensions/slack/src/send.js",
-    "resolvedPath": "extensions/slack/src/send.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/slack/runtime-api.js",
+    "resolvedPath": "extensions/slack/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/runtime/runtime-slack-ops.runtime.ts",
+    "line": 10,
+    "kind": "import",
+    "specifier": "../../../extensions/slack/runtime-api.js",
+    "resolvedPath": "extensions/slack/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-telegram-ops.runtime.ts",
-    "line": 4,
-    "kind": "export",
-    "specifier": "../../../extensions/telegram/src/audit.js",
-    "resolvedPath": "extensions/telegram/src/audit.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "line": 1,
+    "kind": "import",
+    "specifier": "../../../extensions/telegram/runtime-api.js",
+    "resolvedPath": "extensions/telegram/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-telegram-ops.runtime.ts",
-    "line": 5,
-    "kind": "export",
-    "specifier": "../../../extensions/telegram/src/monitor.js",
-    "resolvedPath": "extensions/telegram/src/monitor.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "line": 2,
+    "kind": "import",
+    "specifier": "../../../extensions/telegram/runtime-api.js",
+    "resolvedPath": "extensions/telegram/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-telegram-ops.runtime.ts",
-    "line": 6,
-    "kind": "export",
-    "specifier": "../../../extensions/telegram/src/probe.js",
-    "resolvedPath": "extensions/telegram/src/probe.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "line": 3,
+    "kind": "import",
+    "specifier": "../../../extensions/telegram/runtime-api.js",
+    "resolvedPath": "extensions/telegram/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-telegram-ops.runtime.ts",
-    "line": 17,
-    "kind": "export",
-    "specifier": "../../../extensions/telegram/src/send.js",
-    "resolvedPath": "extensions/telegram/src/send.js",
-    "reason": "re-exports extension implementation from src/plugins"
-  },
-  {
-    "file": "src/plugins/runtime/runtime-telegram-ops.runtime.ts",
-    "line": 18,
-    "kind": "export",
-    "specifier": "../../../extensions/telegram/src/token.js",
-    "resolvedPath": "extensions/telegram/src/token.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "line": 14,
+    "kind": "import",
+    "specifier": "../../../extensions/telegram/runtime-api.js",
+    "resolvedPath": "extensions/telegram/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-telegram.ts",
     "line": 1,
     "kind": "import",
-    "specifier": "../../../extensions/telegram/src/audit.js",
-    "resolvedPath": "extensions/telegram/src/audit.js",
-    "reason": "imports extension implementation from src/plugins"
+    "specifier": "../../../extensions/telegram/runtime-api.js",
+    "resolvedPath": "extensions/telegram/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-telegram.ts",
     "line": 2,
     "kind": "import",
-    "specifier": "../../../extensions/telegram/src/channel-actions.js",
-    "resolvedPath": "extensions/telegram/src/channel-actions.js",
-    "reason": "imports extension implementation from src/plugins"
+    "specifier": "../../../extensions/telegram/runtime-api.js",
+    "resolvedPath": "extensions/telegram/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-telegram.ts",
     "line": 6,
     "kind": "import",
-    "specifier": "../../../extensions/telegram/src/thread-bindings.js",
-    "resolvedPath": "extensions/telegram/src/thread-bindings.js",
-    "reason": "imports extension implementation from src/plugins"
+    "specifier": "../../../extensions/telegram/runtime-api.js",
+    "resolvedPath": "extensions/telegram/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-telegram.ts",
     "line": 7,
     "kind": "import",
-    "specifier": "../../../extensions/telegram/src/token.js",
-    "resolvedPath": "extensions/telegram/src/token.js",
-    "reason": "imports extension implementation from src/plugins"
+    "specifier": "../../../extensions/telegram/runtime-api.js",
+    "resolvedPath": "extensions/telegram/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/runtime/runtime-whatsapp-login-tool.ts",
+    "line": 1,
+    "kind": "export",
+    "specifier": "../../../extensions/whatsapp/runtime-api.js",
+    "resolvedPath": "extensions/whatsapp/runtime-api.js",
+    "reason": "re-exports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-whatsapp-login.runtime.ts",
     "line": 1,
-    "kind": "export",
-    "specifier": "../../../extensions/whatsapp/src/login.js",
-    "resolvedPath": "extensions/whatsapp/src/login.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "kind": "import",
+    "specifier": "../../../extensions/whatsapp/runtime-api.js",
+    "resolvedPath": "extensions/whatsapp/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-whatsapp-outbound.runtime.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../../extensions/whatsapp/src/send.js",
-    "resolvedPath": "extensions/whatsapp/src/send.js",
-    "reason": "re-exports extension implementation from src/plugins"
+    "line": 4,
+    "kind": "import",
+    "specifier": "../../../extensions/whatsapp/runtime-api.js",
+    "resolvedPath": "extensions/whatsapp/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-whatsapp.ts",
     "line": 1,
     "kind": "import",
-    "specifier": "../../../extensions/whatsapp/src/active-listener.js",
-    "resolvedPath": "extensions/whatsapp/src/active-listener.js",
-    "reason": "imports extension implementation from src/plugins"
+    "specifier": "../../../extensions/whatsapp/runtime-api.js",
+    "resolvedPath": "extensions/whatsapp/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-whatsapp.ts",
     "line": 8,
     "kind": "import",
-    "specifier": "../../../extensions/whatsapp/src/auth-store.js",
-    "resolvedPath": "extensions/whatsapp/src/auth-store.js",
-    "reason": "imports extension implementation from src/plugins"
+    "specifier": "../../../extensions/whatsapp/runtime-api.js",
+    "resolvedPath": "extensions/whatsapp/runtime-api.js",
+    "reason": "imports extension-owned file from src/plugins"
   },
   {
     "file": "src/plugins/runtime/runtime-whatsapp.ts",
-    "line": 80,
+    "line": 75,
     "kind": "dynamic-import",
-    "specifier": "../../../extensions/whatsapp/src/login-qr.js",
-    "resolvedPath": "extensions/whatsapp/src/login-qr.js",
-    "reason": "dynamically imports extension implementation from src/plugins"
+    "specifier": "../../../extensions/whatsapp/login-qr-api.js",
+    "resolvedPath": "extensions/whatsapp/login-qr-api.js",
+    "reason": "dynamically imports extension-owned file from src/plugins"
+  },
+  {
+    "file": "src/plugins/runtime/runtime-whatsapp.ts",
+    "line": 85,
+    "kind": "dynamic-import",
+    "specifier": "../../../extensions/whatsapp/action-runtime.runtime.js",
+    "resolvedPath": "extensions/whatsapp/action-runtime.runtime.js",
+    "reason": "dynamically imports extension-owned file from src/plugins"
   }
 ]
