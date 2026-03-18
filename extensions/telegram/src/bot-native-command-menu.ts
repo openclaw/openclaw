@@ -33,8 +33,17 @@ type TelegramPluginCommandSpec = {
  */
 function extractRateLimitRetryAfterSeconds(err: unknown): number | undefined {
   if (!err || typeof err !== "object") return undefined;
-  const maybe = err as { error_code?: unknown; description?: unknown };
+  const maybe = err as {
+    error_code?: unknown;
+    parameters?: { retry_after?: unknown };
+    description?: unknown;
+  };
   if (maybe.error_code !== 429) return undefined;
+  // Prefer the structured retry_after from GrammyError.parameters
+  if (typeof maybe.parameters?.retry_after === "number" && maybe.parameters.retry_after > 0) {
+    return maybe.parameters.retry_after;
+  }
+  // Fallback to parsing the description string
   const desc = typeof maybe.description === "string" ? maybe.description : "";
   const match = /retry after (\d+)/i.exec(desc);
   if (match?.[1]) return parseInt(match[1], 10);
