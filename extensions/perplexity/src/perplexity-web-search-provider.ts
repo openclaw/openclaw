@@ -3,9 +3,6 @@ import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
-} from "../../../src/agents/tools/common.js";
-import type { SearchConfigRecord } from "../../../src/agents/tools/web-search-provider-common.js";
-import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
@@ -19,21 +16,18 @@ import {
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
-  throwWebSearchApiError,
-  withTrustedWebSearchEndpoint,
-  writeCachedSearchPayload,
-} from "../../../src/agents/tools/web-search-provider-common.js";
-import {
   resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
-} from "../../../src/agents/tools/web-search-provider-config.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type {
-  WebSearchCredentialResolutionSource,
-  WebSearchProviderPlugin,
-  WebSearchProviderToolDefinition,
-} from "../../../src/plugins/types.js";
-import { wrapWebContent } from "../../../src/security/external-content.js";
+  throwWebSearchApiError,
+  type OpenClawConfig,
+  type SearchConfigRecord,
+  type WebSearchCredentialResolutionSource,
+  type WebSearchProviderPlugin,
+  type WebSearchProviderToolDefinition,
+  withTrustedWebSearchEndpoint,
+  wrapWebContent,
+  writeCachedSearchPayload,
+} from "openclaw/plugin-sdk/provider-web-search";
 
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
