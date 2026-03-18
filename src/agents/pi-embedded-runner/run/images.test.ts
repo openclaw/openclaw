@@ -305,4 +305,31 @@ describe("detectAndLoadPromptImages", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("allows prompt image refs inside configured allowedRoots", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-ws-"));
+    const allowedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-allowed-"));
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    const imagePath = path.join(allowedDir, "shared.png");
+    await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `Inspect ${imagePath}`,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+        allowedRoots: [allowedDir],
+      });
+
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(1);
+      expect(result.skippedCount).toBe(0);
+      expect(result.images).toHaveLength(1);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(allowedDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -473,9 +473,10 @@ export function createOpenClawCodingTools(options?: {
           cwd: sandboxRoot ?? workspaceRoot,
           sandbox:
             sandboxRoot && allowWorkspaceWrites
-              ? { root: sandboxRoot, bridge: sandboxFsBridge! }
+              ? { root: sandboxRoot, bridge: sandboxFsBridge!, allowedRoots }
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
+          allowedRoots,
         });
   const tools: AnyAgentTool[] = [
     ...base,

@@ -6,6 +6,7 @@ export type SandboxedBridgeMediaPathConfig = {
   root: string;
   bridge: SandboxFsBridge;
   workspaceOnly?: boolean;
+  allowedRoots?: string[];
 };
 
 export function createSandboxBridgeReadFile(params: {
@@ -34,6 +35,7 @@ export async function resolveSandboxedBridgeMediaPath(params: {
       filePath: hostPath,
       cwd: params.sandbox.root,
       root: params.sandbox.root,
+      additionalRoots: params.sandbox.allowedRoots,
     });
   };
 
