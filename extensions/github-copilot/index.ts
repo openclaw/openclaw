@@ -5,7 +5,8 @@ import {
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { coerceSecretRef, githubCopilotLoginCommand } from "openclaw/plugin-sdk/provider-auth";
+import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+import { githubCopilotLoginCommand } from "openclaw/plugin-sdk/provider-auth-login";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
