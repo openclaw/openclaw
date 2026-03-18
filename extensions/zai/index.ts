@@ -1,16 +1,11 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import {
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
+  definePluginEntry,
   type ProviderAuthContext,
   type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { resolveRequiredHomeDir } from "openclaw/plugin-sdk/infra-runtime";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
@@ -23,7 +18,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { DEFAULT_CONTEXT_TOKENS, normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
 import { createZaiToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
-import { fetchZaiUsage } from "openclaw/plugin-sdk/provider-usage";
+import { fetchZaiUsage, resolveLegacyPiAgentAccessToken } from "openclaw/plugin-sdk/provider-usage";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -66,27 +61,6 @@ function resolveGlm5ForwardCompatModel(
     contextWindow: DEFAULT_CONTEXT_TOKENS,
     maxTokens: DEFAULT_CONTEXT_TOKENS,
   } as ProviderRuntimeModel);
-}
-
-function resolveLegacyZaiUsageToken(env: NodeJS.ProcessEnv): string | undefined {
-  try {
-    const authPath = path.join(
-      resolveRequiredHomeDir(env, os.homedir),
-      ".pi",
-      "agent",
-      "auth.json",
-    );
-    if (!fs.existsSync(authPath)) {
-      return undefined;
-    }
-    const parsed = JSON.parse(fs.readFileSync(authPath, "utf8")) as Record<
-      string,
-      { access?: string }
-    >;
-    return parsed["z-ai"]?.access || parsed.zai?.access;
-  } catch {
-    return undefined;
-  }
 }
 
 function resolveZaiDefaultModel(modelIdOverride?: string): string {
@@ -251,12 +225,11 @@ function buildZaiApiKeyMethod(params: {
   };
 }
 
-const zaiPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Z.AI Provider",
   description: "Bundled Z.AI provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Z.AI",
@@ -328,7 +301,7 @@ const zaiPlugin = {
         if (apiKey) {
           return { token: apiKey };
         }
-        const legacyToken = resolveLegacyZaiUsageToken(ctx.env);
+        const legacyToken = resolveLegacyPiAgentAccessToken(ctx.env, ["z-ai", "zai"]);
         return legacyToken ? { token: legacyToken } : null;
       },
       fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
@@ -336,6 +309,4 @@ const zaiPlugin = {
     });
     api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
   },
-};
-
-export default zaiPlugin;
+});

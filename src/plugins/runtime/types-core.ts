@@ -39,7 +39,7 @@ export type PluginRuntimeCore = {
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
   media: {
-    loadWebMedia: typeof import("../../../extensions/whatsapp/src/media.js").loadWebMedia;
+    loadWebMedia: typeof import("../../../extensions/whatsapp/runtime-api.js").loadWebMedia;
     detectMime: typeof import("../../media/mime.js").detectMime;
     mediaKindFromMime: typeof import("../../media/constants.js").mediaKindFromMime;
     isVoiceCompatibleAudio: typeof import("../../media/audio.js").isVoiceCompatibleAudio;
@@ -47,15 +47,20 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
-    textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
-    textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
-    listVoices: typeof import("../../tts/tts.js").listSpeechVoices;
+    textToSpeech: typeof import("../../tts/runtime.js").textToSpeech;
+    textToSpeechTelephony: typeof import("../../tts/runtime.js").textToSpeechTelephony;
+    listVoices: typeof import("../../tts/runtime.js").listSpeechVoices;
   };
   mediaUnderstanding: {
     runFile: typeof import("../../media-understanding/runtime.js").runMediaUnderstandingFile;
     describeImageFile: typeof import("../../media-understanding/runtime.js").describeImageFile;
+    describeImageFileWithModel: typeof import("../../media-understanding/runtime.js").describeImageFileWithModel;
     describeVideoFile: typeof import("../../media-understanding/runtime.js").describeVideoFile;
     transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
+  };
+  imageGeneration: {
+    generate: typeof import("../../image-generation/runtime.js").generateImage;
+    listProviders: typeof import("../../image-generation/runtime.js").listRuntimeImageGenerationProviders;
   };
   webSearch: {
     listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;

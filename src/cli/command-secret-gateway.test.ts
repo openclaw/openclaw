@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const callGateway = vi.fn();
@@ -7,7 +7,13 @@ vi.mock("../gateway/call.js", () => ({
   callGateway,
 }));
 
-const { resolveCommandSecretRefsViaGateway } = await import("./command-secret-gateway.js");
+let resolveCommandSecretRefsViaGateway: typeof import("./command-secret-gateway.js").resolveCommandSecretRefsViaGateway;
+
+beforeEach(async () => {
+  vi.resetModules();
+  callGateway.mockReset();
+  ({ resolveCommandSecretRefsViaGateway } = await import("./command-secret-gateway.js"));
+});
 
 describe("resolveCommandSecretRefsViaGateway", () => {
   function makeTalkApiKeySecretRefConfig(envKey: string): OpenClawConfig {

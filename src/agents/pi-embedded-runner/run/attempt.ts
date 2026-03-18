@@ -41,6 +41,7 @@ import {
   buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
   buildBootstrapInjectionStats,
+  prependBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -100,6 +101,7 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
+import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
@@ -110,6 +112,7 @@ import {
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
+import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import { buildModelAliasLines } from "../model.js";
 import {
   clearActiveEmbeddedRun,
@@ -1279,9 +1282,13 @@ export function buildAfterTurnRuntimeContext(params: {
     | "messageChannel"
     | "messageProvider"
     | "agentAccountId"
+    | "currentChannelId"
+    | "currentThreadTs"
+    | "currentMessageId"
     | "config"
     | "skillsSnapshot"
     | "senderIsOwner"
+    | "senderId"
     | "provider"
     | "modelId"
     | "thinkLevel"
@@ -1294,25 +1301,29 @@ export function buildAfterTurnRuntimeContext(params: {
   workspaceDir: string;
   agentDir: string;
 }): Partial<CompactEmbeddedPiSessionParams> {
-  return {
+  return buildEmbeddedCompactionRuntimeContext({
     sessionKey: params.attempt.sessionKey,
     messageChannel: params.attempt.messageChannel,
     messageProvider: params.attempt.messageProvider,
     agentAccountId: params.attempt.agentAccountId,
+    currentChannelId: params.attempt.currentChannelId,
+    currentThreadTs: params.attempt.currentThreadTs,
+    currentMessageId: params.attempt.currentMessageId,
     authProfileId: params.attempt.authProfileId,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     config: params.attempt.config,
     skillsSnapshot: params.attempt.skillsSnapshot,
     senderIsOwner: params.attempt.senderIsOwner,
+    senderId: params.attempt.senderId,
     provider: params.attempt.provider,
-    model: params.attempt.modelId,
+    modelId: params.attempt.modelId,
     thinkLevel: params.attempt.thinkLevel,
     reasoningLevel: params.attempt.reasoningLevel,
     bashElevated: params.attempt.bashElevated,
     extraSystemPrompt: params.attempt.extraSystemPrompt,
     ownerNumbers: params.attempt.ownerNumbers,
-  };
+  });
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -1619,10 +1630,20 @@ export async function runEmbeddedAttempt(
     const reasoningTagHint = isReasoningTagProvider(params.provider);
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
-      ? listChannelSupportedActions({
-          cfg: params.config,
-          channel: runtimeChannel,
-        })
+      ? listChannelSupportedActions(
+          buildEmbeddedMessageActionDiscoveryInput({
+            cfg: params.config,
+            channel: runtimeChannel,
+            currentChannelId: params.currentChannelId,
+            currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
+            accountId: params.agentAccountId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            agentId: sessionAgentId,
+            senderId: params.senderId,
+          }),
+        )
       : undefined;
     const messageToolHints = runtimeChannel
       ? resolveChannelMessageToolHints({
@@ -1665,6 +1686,9 @@ export async function runEmbeddedAttempt(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
+    const heartbeatPrompt = isDefaultAgent
+      ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+      : undefined;
 
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
@@ -1675,9 +1699,7 @@ export async function runEmbeddedAttempt(
       ownerDisplay: ownerDisplay.ownerDisplay,
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
       reasoningTagHint,
-      heartbeatPrompt: isDefaultAgent
-        ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
-        : undefined,
+      heartbeatPrompt,
       skillsPrompt,
       docsPath: docsPath ?? undefined,
       ttsHint,
@@ -1694,7 +1716,6 @@ export async function runEmbeddedAttempt(
       userTime,
       userTimeFormat,
       contextFiles,
-      bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
     });
     const systemPromptReport = buildSystemPromptReport({
@@ -2378,7 +2399,13 @@ export async function runEmbeddedAttempt(
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
-        let effectivePrompt = params.prompt;
+        let effectivePrompt = prependBootstrapPromptWarning(
+          params.prompt,
+          bootstrapPromptWarning.lines,
+          {
+            preserveExactPrompt: heartbeatPrompt,
+          },
+        );
         const hookCtx = {
           agentId: hookAgentId,
           sessionKey: params.sessionKey,
@@ -2397,7 +2424,7 @@ export async function runEmbeddedAttempt(
         });
         {
           if (hookResult?.prependContext) {
-            effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
+            effectivePrompt = `${hookResult.prependContext}\n\n${effectivePrompt}`;
             log.debug(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );

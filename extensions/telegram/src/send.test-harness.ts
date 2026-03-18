@@ -1,4 +1,4 @@
-import type { MockFn } from "openclaw/plugin-sdk/test-utils";
+import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
@@ -44,7 +44,7 @@ type TelegramSendTestMocks = {
   maybePersistResolvedTelegramTarget: MockFn;
 };
 
-vi.mock("../../whatsapp/src/media.js", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
@@ -59,6 +59,14 @@ vi.mock("grammy", () => ({
       },
     ) {
       botCtorSpy(token, options);
+    }
+  },
+  HttpError: class HttpError extends Error {
+    constructor(
+      message = "HttpError",
+      public error?: unknown,
+    ) {
+      super(message);
     }
   },
   InputFile: class {},
@@ -94,5 +102,6 @@ export function installTelegramSendTestHooks() {
 }
 
 export async function importTelegramSendModule() {
+  vi.resetModules();
   return await import("./send.js");
 }

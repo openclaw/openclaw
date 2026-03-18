@@ -5,6 +5,8 @@ import {
   resolveEmbeddedPiProjectSettingsPolicy,
 } from "./pi-project-settings.js";
 
+type EmbeddedPiSettingsArgs = Parameters<typeof buildEmbeddedPiSettingsSnapshot>[0];
+
 describe("resolveEmbeddedPiProjectSettingsPolicy", () => {
   it("defaults to sanitize", () => {
     expect(resolveEmbeddedPiProjectSettingsPolicy()).toBe(
@@ -104,7 +106,7 @@ describe("buildEmbeddedPiSettingsSnapshot", () => {
             args: ["/plugins/probe.mjs"],
           },
         },
-      },
+      } as EmbeddedPiSettingsArgs["pluginSettings"],
       projectSettings: {
         mcpServers: {
           bundleProbe: {
@@ -112,11 +114,11 @@ describe("buildEmbeddedPiSettingsSnapshot", () => {
             args: ["/workspace/probe.ts"],
           },
         },
-      },
+      } as EmbeddedPiSettingsArgs["projectSettings"],
       policy: "sanitize",
     });
 
-    expect(snapshot.mcpServers).toEqual({
+    expect((snapshot as Record<string, unknown>).mcpServers).toEqual({
       bundleProbe: {
         command: "deno",
         args: ["/workspace/probe.ts"],

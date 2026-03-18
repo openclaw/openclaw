@@ -1,8 +1,5 @@
 import {
-  applyAccountNameToChannelSection,
-  DEFAULT_ACCOUNT_ID,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
+  createPatchedAccountSetupAdapter,
   parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,
@@ -16,7 +13,7 @@ import type {
   ChannelSetupWizard,
   ChannelSetupWizardTextInput,
 } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
@@ -145,61 +142,29 @@ export const imessageCompletionNote = {
   ],
 };
 
-export const imessageSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
+export const imessageSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
+  channelKey: channel,
+  buildPatch: (input) => buildIMessageSetupPatch(input),
+});
+
+export const imessageSetupStatusBase = {
+  configuredLabel: "configured",
+  unconfiguredLabel: "needs setup",
+  configuredHint: "imsg found",
+  unconfiguredHint: "imsg missing",
+  configuredScore: 1,
+  unconfiguredScore: 0,
+  resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
+    listIMessageAccountIds(cfg).some((accountId) => {
+      const account = resolveIMessageAccount({ cfg, accountId });
+      return Boolean(
+        account.config.cliPath ||
+        account.config.dbPath ||
+        account.config.allowFrom ||
+        account.config.service ||
+        account.config.region,
+      );
     }),
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          imessage: {
-            ...next.channels?.imessage,
-            enabled: true,
-            ...buildIMessageSetupPatch(input),
-          },
-        },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        imessage: {
-          ...next.channels?.imessage,
-          enabled: true,
-          accounts: {
-            ...next.channels?.imessage?.accounts,
-            [accountId]: {
-              ...next.channels?.imessage?.accounts?.[accountId],
-              enabled: true,
-              ...buildIMessageSetupPatch(input),
-            },
-          },
-        },
-      },
-    };
-  },
 };
 
 export function createIMessageSetupWizardProxy(
@@ -208,23 +173,7 @@ export function createIMessageSetupWizardProxy(
   return {
     channel,
     status: {
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs setup",
-      configuredHint: "imsg found",
-      unconfiguredHint: "imsg missing",
-      configuredScore: 1,
-      unconfiguredScore: 0,
-      resolveConfigured: ({ cfg }) =>
-        listIMessageAccountIds(cfg).some((accountId) => {
-          const account = resolveIMessageAccount({ cfg, accountId });
-          return Boolean(
-            account.config.cliPath ||
-            account.config.dbPath ||
-            account.config.allowFrom ||
-            account.config.service ||
-            account.config.region,
-          );
-        }),
+      ...imessageSetupStatusBase,
       resolveStatusLines: async (params) =>
         (await loadWizard()).imessageSetupWizard.status.resolveStatusLines?.(params) ?? [],
       resolveSelectionHint: async (params) =>

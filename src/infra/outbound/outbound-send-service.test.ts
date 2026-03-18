@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 }));
 
-vi.mock("../../channels/plugins/message-actions.js", () => ({
+vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
@@ -32,7 +32,10 @@ vi.mock("../../config/sessions.js", () => ({
   appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
 }));
 
-import { executePollAction, executeSendAction } from "./outbound-send-service.js";
+type OutboundSendServiceModule = typeof import("./outbound-send-service.js");
+
+let executePollAction: OutboundSendServiceModule["executePollAction"];
+let executeSendAction: OutboundSendServiceModule["executeSendAction"];
 
 describe("executeSendAction", () => {
   function pluginActionResult(messageId: string) {
@@ -88,7 +91,9 @@ describe("executeSendAction", () => {
     });
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ executePollAction, executeSendAction } = await import("./outbound-send-service.js"));
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();

@@ -3,7 +3,8 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/core";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
 import {
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
@@ -14,6 +15,8 @@ import {
   resolveIMessageGroupToolPolicy,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/imessage";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { getIMessageRuntime } from "./runtime.js";
@@ -21,12 +24,7 @@ import { imessageSetupAdapter } from "./setup-core.js";
 import { createIMessagePluginBase, imessageSetupWizard } from "./shared.js";
 import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
 
-let imessageChannelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
-
-async function loadIMessageChannelRuntime() {
-  imessageChannelRuntimePromise ??= import("./channel.runtime.js");
-  return imessageChannelRuntimePromise;
-}
+const loadIMessageChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
 function buildIMessageBaseSessionKey(params: {
   cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
@@ -34,14 +32,7 @@ function buildIMessageBaseSessionKey(params: {
   accountId?: string | null;
   peer: RoutePeer;
 }) {
-  return buildAgentSessionKey({
-    agentId: params.agentId,
-    channel: "imessage",
-    accountId: params.accountId,
-    peer: params.peer,
-    dmScope: params.cfg.session?.dmScope ?? "main",
-    identityLinks: params.cfg.session?.identityLinks,
-  });
+  return buildOutboundBaseSessionKey({ ...params, channel: "imessage" });
 }
 
 function resolveIMessageOutboundSessionRoute(params: {

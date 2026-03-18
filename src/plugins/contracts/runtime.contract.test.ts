@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
 import type { ProviderRuntimeModel } from "../types.js";
@@ -327,6 +330,38 @@ describe("provider runtime contract", () => {
       });
     });
 
+    it("owns openai gpt-5.4 mini forward-compat resolution", () => {
+      const provider = requireProviderContractProvider("openai");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5-mini"
+              ? createModel({
+                  id,
+                  provider: "openai",
+                  api: "openai-responses",
+                  baseUrl: "https://api.openai.com/v1",
+                  input: ["text", "image"],
+                  reasoning: true,
+                  contextWindow: 400_000,
+                  maxTokens: 128_000,
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-5.4-mini",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      });
+    });
+
     it("owns direct openai transport normalization", () => {
       const provider = requireProviderContractProvider("openai");
       expect(
@@ -512,6 +547,33 @@ describe("provider runtime contract", () => {
       ).resolves.toEqual({
         token: "env-zai-token",
       });
+    });
+
+    it("falls back to legacy pi auth tokens for usage auth", async () => {
+      const provider = requireProviderContractProvider("zai");
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-contract-"));
+      await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
+      await fs.writeFile(
+        path.join(home, ".pi", "agent", "auth.json"),
+        `${JSON.stringify({ "z-ai": { access: "legacy-zai-token" } }, null, 2)}\n`,
+        "utf8",
+      );
+
+      try {
+        await expect(
+          provider.resolveUsageAuth?.({
+            config: {} as never,
+            env: { HOME: home } as NodeJS.ProcessEnv,
+            provider: "zai",
+            resolveApiKeyFromConfigAndStore: () => undefined,
+            resolveOAuthToken: async () => null,
+          }),
+        ).resolves.toEqual({
+          token: "legacy-zai-token",
+        });
+      } finally {
+        await fs.rm(home, { recursive: true, force: true });
+      }
     });
 
     it("owns usage snapshot fetching", async () => {
