@@ -1,6 +1,7 @@
 import { PermissionFlagsBits } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
+import type { ActionGate } from "../runtime-api.js";
 import {
   discordModerationActionRuntime,
   handleDiscordModerationAction,
@@ -12,7 +13,7 @@ const kickMemberDiscord = vi.fn(async () => ({ ok: true }));
 const timeoutMemberDiscord = vi.fn(async () => ({ id: "user-1" }));
 const hasAnyGuildPermissionDiscord = vi.fn(async () => false);
 
-const enableAllActions = (_key: keyof DiscordActionConfig, _defaultValue = true) => true;
+const enableAllActions: ActionGate<DiscordActionConfig> = (_key, _defaultValue = true) => true;
 
 describe("discord moderation sender authorization", () => {
   beforeEach(() => {

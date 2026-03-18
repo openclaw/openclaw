@@ -11,20 +11,6 @@ import {
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/channel-runtime";
 import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw/plugin-sdk/core";
-import {
-  buildComputedAccountStatusSnapshot,
-  buildTokenChannelStatusSummary,
-  type ChannelMessageActionAdapter,
-  type ChannelPlugin,
-  DEFAULT_ACCOUNT_ID,
-  getChatChannelMeta,
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
-  PAIRING_APPROVED_MESSAGE,
-  projectCredentialSnapshotFields,
-  resolveConfiguredFromCredentialStatuses,
-  type OpenClawConfig,
-} from "./runtime-api.js";
 import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   listDiscordAccountIds,
@@ -48,6 +34,20 @@ import {
 } from "./normalize.js";
 import { probeDiscord, type DiscordProbe } from "./probe.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
+import {
+  buildComputedAccountStatusSnapshot,
+  buildTokenChannelStatusSummary,
+  type ChannelMessageActionAdapter,
+  type ChannelPlugin,
+  DEFAULT_ACCOUNT_ID,
+  getChatChannelMeta,
+  listDiscordDirectoryGroupsFromConfig,
+  listDiscordDirectoryPeersFromConfig,
+  PAIRING_APPROVED_MESSAGE,
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromCredentialStatuses,
+  type OpenClawConfig,
+} from "./runtime-api.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
 import { discordSetupAdapter } from "./setup-core.js";
@@ -131,12 +131,16 @@ function hasDiscordExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
 
 function readDiscordAllowlistConfig(account: ResolvedDiscordAccount) {
   const groupOverrides: Array<{ label: string; entries: string[] }> = [];
-  for (const [guildKey, guildCfg] of Object.entries(account.config.guilds ?? {})) {
+  for (const [guildKey, guildCfg] of Object.entries(account.config.guilds ?? {}) as Array<
+    [string, { users?: unknown[]; channels?: Record<string, { users?: unknown[] }> }]
+  >) {
     const entries = (guildCfg?.users ?? []).map(String).filter(Boolean);
     if (entries.length > 0) {
       groupOverrides.push({ label: `guild ${guildKey}`, entries });
     }
-    for (const [channelKey, channelCfg] of Object.entries(guildCfg?.channels ?? {})) {
+    for (const [channelKey, channelCfg] of Object.entries(guildCfg?.channels ?? {}) as Array<
+      [string, { users?: unknown[] }]
+    >) {
       const channelEntries = (channelCfg?.users ?? []).map(String).filter(Boolean);
       if (channelEntries.length > 0) {
         groupOverrides.push({

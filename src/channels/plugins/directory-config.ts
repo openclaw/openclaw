@@ -123,9 +123,12 @@ export async function listDiscordDirectoryPeersFromConfig(
     account.config.allowFrom ?? account.config.dm?.allowFrom,
     account.config.dms,
   );
-  for (const guild of Object.values(account.config.guilds ?? {})) {
+  for (const guild of Object.values(account.config.guilds ?? {}) as Array<{
+    users?: unknown[];
+    channels?: Record<string, { users?: unknown[] }>;
+  }>) {
     addTrimmedEntries(ids, guild.users ?? []);
-    for (const channel of Object.values(guild.channels ?? {})) {
+    for (const channel of Object.values(guild.channels ?? {}) as Array<{ users?: unknown[] }>) {
       addTrimmedEntries(ids, channel.users ?? []);
     }
   }
@@ -153,7 +156,9 @@ export async function listDiscordDirectoryGroupsFromConfig(
     return [];
   }
   const ids = new Set<string>();
-  for (const guild of Object.values(account.config.guilds ?? {})) {
+  for (const guild of Object.values(account.config.guilds ?? {}) as Array<{
+    channels?: Record<string, unknown>;
+  }>) {
     addTrimmedEntries(ids, Object.keys(guild.channels ?? {}));
   }
 

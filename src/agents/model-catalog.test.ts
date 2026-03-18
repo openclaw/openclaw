@@ -242,6 +242,51 @@ describe("loadModelCatalog", () => {
         provider: "openai-codex",
         id: "gpt-5.4",
         name: "gpt-5.4",
+        contextWindow: 1_050_000,
+      }),
+    );
+  });
+
+  it("replaces stale discovered openai-codex gpt-5.4 catalog metadata", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.2",
+        provider: "openai",
+        name: "GPT-5.2",
+        reasoning: true,
+        contextWindow: 1_050_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.3-codex",
+        provider: "openai-codex",
+        name: "GPT-5.3 Codex",
+        reasoning: true,
+        contextWindow: 272000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.4",
+        provider: "openai-codex",
+        name: "GPT-5.4",
+        reasoning: true,
+        contextWindow: 272000,
+        input: ["text", "image"],
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    const codexGpt54 = result.filter(
+      (entry) => entry.provider === "openai-codex" && entry.id === "gpt-5.4",
+    );
+
+    expect(codexGpt54).toHaveLength(1);
+    expect(codexGpt54[0]).toEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        contextWindow: 1_050_000,
       }),
     );
   });

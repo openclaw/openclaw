@@ -20,6 +20,7 @@ describe("web search runtime", () => {
         envVars: ["CUSTOM_SEARCH_API_KEY"],
         placeholder: "custom-...",
         signupUrl: "https://example.com/signup",
+        credentialPath: "tools.web.search.custom.apiKey",
         autoDetectOrder: 1,
         getCredentialValue: () => "configured",
         setCredentialValue: () => {},

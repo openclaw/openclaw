@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { discoverModels } from "../pi-model-discovery.js";
 
 vi.mock("../pi-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
@@ -459,6 +460,46 @@ describe("resolveModel", () => {
     });
   });
 
+  it("does not run OpenRouter dynamic resolution when the registry already resolved the model", () => {
+    mockDiscoveredModel({
+      provider: "openrouter",
+      modelId: "openrouter/healer-alpha",
+      templateModel: {
+        id: "openrouter/healer-alpha",
+        name: "Healer Alpha",
+        api: "openai-completions",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262144,
+        maxTokens: 65536,
+      },
+    });
+    mockGetOpenRouterModelCapabilities.mockReturnValue({
+      name: "Unexpected Dynamic Path",
+      input: ["text"],
+      reasoning: false,
+      contextWindow: 8192,
+      maxTokens: 2048,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+
+    const result = resolveModel("openrouter", "openrouter/healer-alpha", "/tmp/agent");
+
+    expect(mockGetOpenRouterModelCapabilities).not.toHaveBeenCalled();
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/healer-alpha",
+      name: "Healer Alpha",
+      input: ["text", "image"],
+      contextWindow: 262144,
+      maxTokens: 65536,
+    });
+  });
+
   it("falls back to text-only when OpenRouter API cache is empty", () => {
     mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
 
@@ -664,6 +705,106 @@ describe("resolveModel", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
+  });
+
+  it("prefers the codex gpt-5.4 forward-compat model over stale discovered metadata", () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex") {
+          return null;
+        }
+        if (modelId === "gpt-5.4") {
+          return {
+            ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+            contextWindow: 272000,
+            maxTokens: 128000,
+          };
+        }
+        if (modelId === "gpt-5.3-codex") {
+          return {
+            ...buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"),
+            name: "GPT-5.3 Codex",
+          };
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("keeps the resolved codex gpt-5.4 model when config overrides give it a larger context window", () => {
+    mockOpenAICodexTemplateModel();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            models: [
+              {
+                id: "gpt-5.4",
+                contextWindow: 1_200_000,
+                maxTokens: 64_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_200_000,
+      maxTokens: 64_000,
+    });
+  });
+
+  it("prefers the codex gpt-5.4 forward-compat model on async resolve when discovery is stale", async () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex") {
+          return null;
+        }
+        if (modelId === "gpt-5.4") {
+          return {
+            ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+            contextWindow: 272000,
+            maxTokens: 128000,
+          };
+        }
+        if (modelId === "gpt-5.3-codex") {
+          return {
+            ...buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"),
+            name: "GPT-5.3 Codex",
+          };
+        }
+        return null;
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const result = await resolveModelAsync("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
   });
 
   it("builds an openai-codex fallback for gpt-5.3-codex-spark", () => {
@@ -1052,6 +1193,46 @@ describe("resolveModel", () => {
       headers: { "X-Custom-Auth": "token-123" },
       id: "gpt-5.4",
       provider: "openai-codex",
+    });
+  });
+
+  it("preserves configured openai-codex overrides when stale discovery loses to the dynamic gpt-5.4 model", () => {
+    vi.mocked(discoverModels).mockReturnValue({
+      find: vi.fn((provider: string, modelId: string) => {
+        if (provider !== "openai-codex" || modelId !== "gpt-5.4") {
+          return null;
+        }
+        return {
+          ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+          contextWindow: 272000,
+          maxTokens: 64000,
+        };
+      }),
+    } as unknown as ReturnType<typeof discoverModels>);
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://custom.example.com",
+            headers: { "X-Custom-Auth": "token-123" },
+            models: [{ id: "gpt-5.4" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://custom.example.com",
+      headers: { "X-Custom-Auth": "token-123" },
+      id: "gpt-5.4",
+      provider: "openai-codex",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
     });
   });
 

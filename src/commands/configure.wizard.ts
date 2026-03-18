@@ -173,7 +173,7 @@ async function promptWebToolsConfig(
     applySearchKey,
     hasKeyInEnv,
   } = await import("./onboard-search.js");
-  type SP = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
+  type SP = NonNullable<(typeof SEARCH_PROVIDER_OPTIONS)[number]["value"]>;
   const defaultProvider = SEARCH_PROVIDER_OPTIONS[0]?.value;
   if (!defaultProvider) {
     throw new Error("No web search providers are registered.");

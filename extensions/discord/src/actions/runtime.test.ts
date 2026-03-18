@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
+import type { ActionGate } from "../runtime-api.js";
 import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
 import {
@@ -78,11 +79,11 @@ const {
   timeoutMemberDiscord,
 } = discordSendMocks;
 
-const enableAllActions = () => true;
+const enableAllActions: ActionGate<DiscordActionConfig> = () => true;
 
-const disabledActions = (key: keyof DiscordActionConfig) => key !== "reactions";
-const channelInfoEnabled = (key: keyof DiscordActionConfig) => key === "channelInfo";
-const moderationEnabled = (key: keyof DiscordActionConfig) => key === "moderation";
+const disabledActions: ActionGate<DiscordActionConfig> = (key) => key !== "reactions";
+const channelInfoEnabled: ActionGate<DiscordActionConfig> = (key) => key === "channelInfo";
+const moderationEnabled: ActionGate<DiscordActionConfig> = (key) => key === "moderation";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -406,7 +407,7 @@ describe("handleDiscordMessagingAction", () => {
   });
 });
 
-const channelsEnabled = (key: keyof DiscordActionConfig) => key === "channels";
+const channelsEnabled: ActionGate<DiscordActionConfig> = (key) => key === "channels";
 const channelsDisabled = () => false;
 
 describe("handleDiscordGuildAction - channel management", () => {

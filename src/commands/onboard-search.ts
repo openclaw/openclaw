@@ -12,7 +12,9 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = string;
+export type SearchProvider = NonNullable<
+  NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
+>;
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -29,7 +31,7 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] =
   resolvePluginWebSearchProviders({
     bundledAllowlistCompat: true,
   }).map((provider) => ({
-    value: provider.id,
+    value: provider.id as SearchProvider,
     label: provider.label,
     hint: provider.hint,
     envKeys: provider.envVars,
@@ -99,7 +101,11 @@ export function applySearchKey(
     config,
     bundledAllowlistCompat: true,
   }).find((candidate) => candidate.id === provider);
-  const search = { ...config.tools?.web?.search, provider, enabled: true };
+  const search: NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"] = {
+    ...config.tools?.web?.search,
+    provider,
+    enabled: true,
+  };
   if (providerEntry) {
     providerEntry.setCredentialValue(search as Record<string, unknown>, key);
   }
@@ -128,7 +134,7 @@ function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): Op
           ...config.tools?.web?.search,
           provider,
           enabled: true,
-        },
+        } as NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"],
       },
     },
   };
@@ -189,7 +195,7 @@ export async function setupSearch(
     return SEARCH_PROVIDER_OPTIONS[0].value;
   })();
 
-  type PickerValue = string;
+  type PickerValue = SearchProvider | "__skip__";
   const choice = await prompter.select<PickerValue>({
     message: "Search provider",
     options: [

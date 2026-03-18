@@ -143,7 +143,7 @@ export function createDiscordSetupWizardBase(handlers: {
         resolveDiscordAccount({ cfg, accountId }).config.groupPolicy ?? "allowlist",
       currentEntries: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
         Object.entries(resolveDiscordAccount({ cfg, accountId }).config.guilds ?? {}).flatMap(
-          ([guildKey, value]) => {
+          ([guildKey, value]: [string, { channels?: Record<string, unknown> }]) => {
             const channels = value?.channels ?? {};
             const channelKeys = Object.keys(channels);
             if (channelKeys.length === 0) {

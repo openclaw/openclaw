@@ -1755,7 +1755,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   let slashShutdownCleanup: Promise<void> | null = null;
 
   // Clean up slash commands on shutdown
-  if (slashEnabled) {
+  if ((getSlashCommandState(account.accountId)?.registeredCommands.length ?? 0) > 0) {
     const runAbortCleanup = () => {
       if (slashShutdownCleanup) {
         return;

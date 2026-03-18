@@ -1,18 +1,42 @@
+import amazonBedrockPlugin from "../../../extensions/amazon-bedrock/index.js";
 import anthropicPlugin from "../../../extensions/anthropic/index.js";
 import bravePlugin from "../../../extensions/brave/index.js";
+import byteplusPlugin from "../../../extensions/byteplus/index.js";
+import chutesPlugin from "../../../extensions/chutes/index.js";
+import cloudflareAiGatewayPlugin from "../../../extensions/cloudflare-ai-gateway/index.js";
+import copilotProxyPlugin from "../../../extensions/copilot-proxy/index.js";
 import elevenLabsPlugin from "../../../extensions/elevenlabs/index.js";
 import firecrawlPlugin from "../../../extensions/firecrawl/index.js";
+import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
 import googlePlugin from "../../../extensions/google/index.js";
+import huggingFacePlugin from "../../../extensions/huggingface/index.js";
+import kilocodePlugin from "../../../extensions/kilocode/index.js";
+import kimiPlugin from "../../../extensions/kimi-coding/index.js";
 import microsoftPlugin from "../../../extensions/microsoft/index.js";
 import minimaxPlugin from "../../../extensions/minimax/index.js";
 import mistralPlugin from "../../../extensions/mistral/index.js";
+import modelStudioPlugin from "../../../extensions/modelstudio/index.js";
 import moonshotPlugin from "../../../extensions/moonshot/index.js";
+import nvidiaPlugin from "../../../extensions/nvidia/index.js";
+import ollamaPlugin from "../../../extensions/ollama/index.js";
 import openAIPlugin from "../../../extensions/openai/index.js";
+import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
+import opencodePlugin from "../../../extensions/opencode/index.js";
+import openRouterPlugin from "../../../extensions/openrouter/index.js";
 import perplexityPlugin from "../../../extensions/perplexity/index.js";
+import qianfanPlugin from "../../../extensions/qianfan/index.js";
+import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
+import sglangPlugin from "../../../extensions/sglang/index.js";
+import syntheticPlugin from "../../../extensions/synthetic/index.js";
+import togetherPlugin from "../../../extensions/together/index.js";
+import venicePlugin from "../../../extensions/venice/index.js";
+import vercelAiGatewayPlugin from "../../../extensions/vercel-ai-gateway/index.js";
+import vllmPlugin from "../../../extensions/vllm/index.js";
+import volcenginePlugin from "../../../extensions/volcengine/index.js";
 import xaiPlugin from "../../../extensions/xai/index.js";
+import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
 import { createCapturedPluginRegistration } from "../captured-registration.js";
-import { resolvePluginProviders } from "../providers.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -51,6 +75,42 @@ type PluginRegistrationContractEntry = {
   webSearchProviderIds: string[];
   toolNames: string[];
 };
+
+const bundledProviderPlugins: RegistrablePlugin[] = [
+  amazonBedrockPlugin,
+  anthropicPlugin,
+  byteplusPlugin,
+  chutesPlugin,
+  cloudflareAiGatewayPlugin,
+  copilotProxyPlugin,
+  githubCopilotPlugin,
+  googlePlugin,
+  huggingFacePlugin,
+  kilocodePlugin,
+  kimiPlugin,
+  minimaxPlugin,
+  mistralPlugin,
+  modelStudioPlugin,
+  moonshotPlugin,
+  nvidiaPlugin,
+  ollamaPlugin,
+  openAIPlugin,
+  opencodeGoPlugin,
+  opencodePlugin,
+  openRouterPlugin,
+  qianfanPlugin,
+  qwenPortalPlugin,
+  sglangPlugin,
+  syntheticPlugin,
+  togetherPlugin,
+  venicePlugin,
+  vercelAiGatewayPlugin,
+  vllmPlugin,
+  volcenginePlugin,
+  xaiPlugin,
+  xiaomiPlugin,
+  zaiPlugin,
+];
 
 const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unknown }> = [
   { ...bravePlugin, credentialValue: "BSA-test" },
@@ -95,29 +155,10 @@ function buildCapabilityContractRegistry<T>(params: {
 }
 
 export const providerContractRegistry: ProviderContractEntry[] = buildCapabilityContractRegistry({
-  plugins: [],
-  select: () => [],
+  // Keep contract coverage deterministic instead of depending on runtime plugin discovery.
+  plugins: bundledProviderPlugins,
+  select: (captured) => captured.providers,
 });
-
-const loadedBundledProviderRegistry: ProviderContractEntry[] = resolvePluginProviders({
-  bundledProviderAllowlistCompat: true,
-  bundledProviderVitestCompat: true,
-  cache: false,
-  activate: false,
-})
-  .filter((provider): provider is ProviderPlugin & { pluginId: string } =>
-    Boolean(provider.pluginId),
-  )
-  .map((provider) => ({
-    pluginId: provider.pluginId,
-    provider,
-  }));
-
-providerContractRegistry.splice(
-  0,
-  providerContractRegistry.length,
-  ...loadedBundledProviderRegistry,
-);
 
 export const uniqueProviderContractProviders: ProviderPlugin[] = [
   ...new Map(providerContractRegistry.map((entry) => [entry.provider.id, entry.provider])).values(),

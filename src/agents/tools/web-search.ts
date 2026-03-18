@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
-import { resolvePluginWebSearchProviders } from "../../plugins/web-search-providers.js";
 import type { PluginWebSearchProviderEntry } from "../../plugins/types.js";
+import { resolvePluginWebSearchProviders } from "../../plugins/web-search-providers.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AnyAgentTool } from "./common.js";

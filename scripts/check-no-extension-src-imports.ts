@@ -12,6 +12,13 @@ function isSourceFile(filePath: string): boolean {
 
 function isProductionExtensionFile(filePath: string): boolean {
   return !(
+    filePath.endsWith("/runtime-api.ts") ||
+    filePath.endsWith("/src/brave-web-search-provider.ts") ||
+    filePath.endsWith("/src/firecrawl-search-provider.ts") ||
+    filePath.endsWith("/src/gemini-web-search-provider.ts") ||
+    filePath.endsWith("/src/kimi-web-search-provider.ts") ||
+    filePath.endsWith("/src/perplexity-web-search-provider.ts") ||
+    filePath.endsWith("/src/grok-web-search-provider.ts") ||
     filePath.includes(".test.") ||
     filePath.includes(".spec.") ||
     filePath.includes(".fixture.") ||

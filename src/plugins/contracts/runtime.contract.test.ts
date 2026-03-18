@@ -29,7 +29,6 @@ vi.mock("openclaw/plugin-sdk/qwen-portal-auth", async () => {
 let requireBundledProviderContractProvider: typeof import("./registry.js").requireProviderContractProvider;
 let openAIPlugin: (typeof import("../../../extensions/openai/index.js"))["default"];
 let qwenPortalPlugin: (typeof import("../../../extensions/qwen-portal-auth/index.js"))["default"];
-
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
   return {
     id: overrides.id,

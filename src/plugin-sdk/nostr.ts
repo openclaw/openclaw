@@ -1,12 +1,15 @@
 // Narrow plugin-sdk surface for the bundled nostr plugin.
 // Keep this list additive and scoped to symbols used under extensions/nostr.
 
-export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export {
+  AllowFromListSchema,
+  buildChannelConfigSchema,
+} from "../channels/plugins/config-schema.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
-export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
+export { DmPolicySchema, MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
 export { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";

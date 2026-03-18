@@ -206,7 +206,7 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   }),
-  buildPluginCompatibilityNotices: vi.fn((): PluginCompatibilityNotice[] => []),
+  buildPluginCompatibilityNotices: vi.fn<() => PluginCompatibilityNotice[]>(() => []),
 }));
 
 vi.mock("../memory/manager.js", () => ({

@@ -6,6 +6,7 @@ export {
   getTopLevelCredentialValue,
   setScopedCredentialValue,
   setTopLevelCredentialValue,
+  withForcedProvider,
 } from "../agents/tools/web-search-provider-config.js";
 export { withTrustedWebToolsEndpoint } from "../agents/tools/web-guarded-fetch.js";
 export {
@@ -17,20 +18,4 @@ export {
   writeCache,
 } from "../agents/tools/web-shared.js";
 
-/**
- * @deprecated Implement provider-owned `createTool(...)` directly on the
- * returned WebSearchProviderPlugin instead of routing through core.
- */
-export function createPluginBackedWebSearchProvider(
-  provider: WebSearchProviderPlugin,
-): WebSearchProviderPlugin {
-  return {
-    ...provider,
-    createTool: () => {
-      throw new Error(
-        `createPluginBackedWebSearchProvider(${provider.id}) is no longer supported. ` +
-          "Define provider-owned createTool(...) directly in the extension's WebSearchProviderPlugin.",
-      );
-    },
-  };
-}
+export type { WebSearchProviderPlugin };

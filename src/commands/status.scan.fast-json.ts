@@ -186,8 +186,6 @@ export async function scanStatusJsonFast(
     : null;
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
   const memory = await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
-  const pluginCompatibility = buildPluginCompatibilityNotices({ config: cfg });
-
   return {
     cfg,
     sourceConfig: loadedRaw,
@@ -211,6 +209,6 @@ export async function scanStatusJsonFast(
     summary,
     memory,
     memoryPlugin,
-    pluginCompatibility,
+    pluginCompatibility: buildPluginCompatibilityNotices({ config: cfg }),
   };
 }

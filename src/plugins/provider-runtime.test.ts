@@ -492,4 +492,33 @@ describe("provider-runtime", () => {
 
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
+
+  it("only returns the bundled codex auth hint when bundled openai owns the provider", () => {
+    resolveOwningPluginIdsForProviderMock.mockImplementation((params) => {
+      if (params.provider === "openai") {
+        return ["custom-openai"];
+      }
+      return undefined;
+    });
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "custom-openai",
+        label: "Custom OpenAI",
+        aliases: ["openai"],
+        auth: [],
+        buildMissingAuthMessage: () => 'Custom auth required for provider "openai".',
+      },
+    ]);
+
+    const result = buildProviderMissingAuthMessageWithPlugin({
+      provider: "openai",
+      context: {
+        env: process.env,
+        provider: "openai",
+        listProfileIds: (provider) => (provider === "openai-codex" ? ["default"] : []),
+      },
+    });
+
+    expect(result).toBe('Custom auth required for provider "openai".');
+  });
 });

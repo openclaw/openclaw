@@ -131,6 +131,21 @@ function mergeConfiguredOptInProviderModels(params: {
   }
 }
 
+function catalogEntryKey(entry: { provider: string; id: string }) {
+  return `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
+}
+
+function shouldReplaceSupplementalCatalogEntry(params: {
+  existing: ModelCatalogEntry;
+  supplemental: ModelCatalogEntry;
+}) {
+  return (
+    params.supplemental.provider.toLowerCase().trim() === "openai-codex" &&
+    params.supplemental.id.toLowerCase().trim() === "gpt-5.4" &&
+    (params.supplemental.contextWindow ?? 0) > (params.existing.contextWindow ?? 0)
+  );
+}
+
 export function resetModelCatalogCacheForTest() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
@@ -220,18 +235,25 @@ export async function loadModelCatalog(params?: {
         },
       });
       if (supplemental.length > 0) {
-        const seen = new Set(
-          models.map(
-            (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
-          ),
+        const modelIndexByKey = new Map(
+          models.map((entry, index) => [catalogEntryKey(entry), index]),
         );
         for (const entry of supplemental) {
-          const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
-          if (seen.has(key)) {
+          const key = catalogEntryKey(entry);
+          const existingIndex = modelIndexByKey.get(key);
+          if (existingIndex !== undefined) {
+            if (
+              shouldReplaceSupplementalCatalogEntry({
+                existing: models[existingIndex],
+                supplemental: entry,
+              })
+            ) {
+              models[existingIndex] = entry;
+            }
             continue;
           }
           models.push(entry);
-          seen.add(key);
+          modelIndexByKey.set(key, models.length - 1);
         }
       }
 

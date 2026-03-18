@@ -90,7 +90,7 @@ const runTui = vi.hoisted(() => vi.fn(async (_options: unknown) => {}));
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const buildPluginCompatibilityNotices = vi.hoisted(() =>
-  vi.fn((): PluginCompatibilityNotice[] => []),
+  vi.fn<() => PluginCompatibilityNotice[]>(() => []),
 );
 
 vi.mock("../commands/onboard-channels.js", () => ({
@@ -460,10 +460,7 @@ describe("runSetupWizard", () => {
     const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.some((call) => call?.[1] === "Plugin compatibility")).toBe(true);
     expect(
-      calls.some((call) => {
-        const body = call?.[0];
-        return typeof body === "string" && body.includes("legacy-plugin");
-      }),
+      calls.some((call) => typeof call?.[0] === "string" && call[0].includes("legacy-plugin")),
     ).toBe(true);
   });
 

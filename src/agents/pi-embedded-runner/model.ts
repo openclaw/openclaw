@@ -232,6 +232,87 @@ function resolveExplicitModelWithRegistry(params: {
   return undefined;
 }
 
+function preferResolvedModel(
+  discoveredModel: Model<Api> | undefined,
+  dynamicModel: Model<Api> | undefined,
+): Model<Api> | undefined {
+  if (!dynamicModel) {
+    return discoveredModel;
+  }
+  if (!discoveredModel) {
+    return dynamicModel;
+  }
+  const dynamicContextWindow = dynamicModel.contextWindow ?? 0;
+  const discoveredContextWindow = discoveredModel.contextWindow ?? 0;
+  if (dynamicContextWindow > discoveredContextWindow) {
+    return dynamicModel;
+  }
+  if (dynamicContextWindow < discoveredContextWindow) {
+    return discoveredModel;
+  }
+  const dynamicMaxTokens = dynamicModel.maxTokens ?? 0;
+  const discoveredMaxTokens = discoveredModel.maxTokens ?? 0;
+  if (dynamicMaxTokens > discoveredMaxTokens) {
+    return dynamicModel;
+  }
+  return discoveredModel;
+}
+
+function shouldPreferDynamicModelOverride(params: { provider: string; modelId: string }): boolean {
+  return normalizeProviderId(params.provider) === "openai-codex" && params.modelId === "gpt-5.4";
+}
+
+function shouldSkipDynamicModelResolution(params: {
+  provider: string;
+  modelId: string;
+  explicitModel: ReturnType<typeof resolveExplicitModelWithRegistry>;
+}): boolean {
+  return (
+    params.explicitModel?.kind === "resolved" &&
+    !shouldPreferDynamicModelOverride(params) &&
+    normalizeProviderId(params.provider) === "openrouter"
+  );
+}
+
+function resolvePreferredResolvedModel(params: {
+  provider: string;
+  modelId: string;
+  explicitModel: ReturnType<typeof resolveExplicitModelWithRegistry>;
+  pluginDynamicModel: Model<Api> | undefined;
+  providerConfig?: InlineProviderConfig;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): Model<Api> | undefined {
+  const { provider, modelId, explicitModel, pluginDynamicModel, providerConfig, cfg, agentDir } =
+    params;
+  if (explicitModel?.kind === "suppressed") {
+    return undefined;
+  }
+  if (!pluginDynamicModel) {
+    return explicitModel?.kind === "resolved" ? explicitModel.model : undefined;
+  }
+  const configuredDynamicModel = applyConfiguredProviderOverrides({
+    discoveredModel: pluginDynamicModel,
+    providerConfig,
+    modelId,
+  });
+  if (explicitModel?.kind === "resolved") {
+    if (!shouldPreferDynamicModelOverride({ provider, modelId })) {
+      return explicitModel.model;
+    }
+    const preferredModel = preferResolvedModel(explicitModel.model, configuredDynamicModel);
+    if (preferredModel === explicitModel.model) {
+      return explicitModel.model;
+    }
+  }
+  return normalizeResolvedModel({
+    provider,
+    cfg,
+    agentDir,
+    model: configuredDynamicModel,
+  });
+}
+
 export function resolveModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -239,15 +320,14 @@ export function resolveModelWithRegistry(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
 }): Model<Api> | undefined {
+  const { provider, modelId, cfg, modelRegistry, agentDir } = params;
   const explicitModel = resolveExplicitModelWithRegistry(params);
   if (explicitModel?.kind === "suppressed") {
     return undefined;
   }
-  if (explicitModel?.kind === "resolved") {
-    return explicitModel.model;
+  if (shouldSkipDynamicModelResolution({ provider, modelId, explicitModel })) {
+    return explicitModel?.kind === "resolved" ? explicitModel.model : undefined;
   }
-
-  const { provider, modelId, cfg, modelRegistry, agentDir } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const pluginDynamicModel = runProviderDynamicModel({
     provider,
@@ -261,13 +341,17 @@ export function resolveModelWithRegistry(params: {
       providerConfig,
     },
   });
-  if (pluginDynamicModel) {
-    return normalizeResolvedModel({
-      provider,
-      cfg,
-      agentDir,
-      model: pluginDynamicModel,
-    });
+  const preferredResolvedModel = resolvePreferredResolvedModel({
+    provider,
+    modelId,
+    explicitModel,
+    pluginDynamicModel,
+    providerConfig,
+    cfg,
+    agentDir,
+  });
+  if (preferredResolvedModel) {
+    return preferredResolvedModel;
   }
 
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
@@ -387,17 +471,36 @@ export async function resolveModelAsync(
         },
       });
     }
-  }
-  const model =
-    explicitModel?.kind === "resolved"
-      ? explicitModel.model
-      : resolveModelWithRegistry({
+  } else if (
+    explicitModel.kind === "resolved" &&
+    shouldPreferDynamicModelOverride({ provider, modelId })
+  ) {
+    const providerPlugin = resolveProviderRuntimePlugin({
+      provider,
+      config: cfg,
+    });
+    if (providerPlugin?.prepareDynamicModel) {
+      await prepareProviderDynamicModel({
+        provider,
+        config: cfg,
+        context: {
+          config: cfg,
+          agentDir: resolvedAgentDir,
           provider,
           modelId,
           modelRegistry,
-          cfg,
-          agentDir: resolvedAgentDir,
-        });
+          providerConfig: resolveConfiguredProviderConfig(cfg, provider),
+        },
+      });
+    }
+  }
+  const model = resolveModelWithRegistry({
+    provider,
+    modelId,
+    modelRegistry,
+    cfg,
+    agentDir: resolvedAgentDir,
+  });
   if (model) {
     return { model, authStorage, modelRegistry };
   }

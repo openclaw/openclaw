@@ -294,9 +294,23 @@ async function run() {
     `[test-extension] Running ${plan.testFiles.length} test files for ${plan.extensionId} with ${plan.config}`,
   );
 
+  // Node 24 + Vitest loader state can crash some extension suites before test
+  // discovery. Run the affected suites in forked workers until upstream is fixed.
+  const forkPoolExtensionIds = new Set(["nostr", "synology-chat"]);
+  const poolArgs = forkPoolExtensionIds.has(plan.extensionId) ? ["--pool=forks"] : [];
+
   const child = spawn(
     pnpm,
-    ["exec", "vitest", "run", "--config", plan.config, ...plan.testFiles, ...passthroughArgs],
+    [
+      "exec",
+      "vitest",
+      "run",
+      "--config",
+      plan.config,
+      ...poolArgs,
+      ...plan.testFiles,
+      ...passthroughArgs,
+    ],
     {
       cwd: repoRoot,
       stdio: "inherit",
