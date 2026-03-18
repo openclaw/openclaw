@@ -1,17 +1,4 @@
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "openclaw/plugin-sdk/bluebubbles";
-import {
-  buildChannelConfigSchema,
-  buildComputedAccountStatusSnapshot,
-  buildProbeChannelStatusSummary,
-  collectBlueBubblesStatusIssues,
-  DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
-  PAIRING_APPROVED_MESSAGE,
-  resolveBlueBubblesGroupRequireMention,
-  resolveBlueBubblesGroupToolPolicy,
-  setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk/bluebubbles";
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import {
@@ -28,6 +15,19 @@ import {
 import { bluebubblesMessageActions } from "./actions.js";
 import type { BlueBubblesProbe } from "./channel.runtime.js";
 import { BlueBubblesConfigSchema } from "./config-schema.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "./runtime-api.js";
+import {
+  buildChannelConfigSchema,
+  buildComputedAccountStatusSnapshot,
+  buildProbeChannelStatusSummary,
+  collectBlueBubblesStatusIssues,
+  DEFAULT_ACCOUNT_ID,
+  deleteAccountFromConfigSection,
+  PAIRING_APPROVED_MESSAGE,
+  resolveBlueBubblesGroupRequireMention,
+  resolveBlueBubblesGroupToolPolicy,
+  setAccountEnabledInConfigSection,
+} from "./runtime-api.js";
 import { blueBubblesSetupAdapter } from "./setup-core.js";
 import { blueBubblesSetupWizard } from "./setup-surface.js";
 import {
