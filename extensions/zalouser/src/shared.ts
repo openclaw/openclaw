@@ -1,6 +1,6 @@
 import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/zalouser";
-import { buildChannelConfigSchema, formatAllowFromLowercase } from "openclaw/plugin-sdk/zalouser";
+import type { ChannelPlugin } from "../runtime-api.js";
+import { buildChannelConfigSchema, formatAllowFromLowercase } from "../runtime-api.js";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
