@@ -136,6 +136,35 @@ function pluginWebSearchApiKey(
 }
 
 describe("web search provider config", () => {
+  it("does not warn for legacy brave config when bundled web search allowlist compat applies", () => {
+    const res = validateConfigObjectWithPlugins({
+      plugins: {
+        allow: ["bluebubbles", "memory-core"],
+      },
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            apiKey: "test-brave-key", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).not.toContainEqual(
+      expect.objectContaining({
+        path: "plugins.entries.brave",
+        message: expect.stringContaining(
+          "plugin disabled (not in allowlist) but config is present",
+        ),
+      }),
+    );
+  });
+
   it("accepts perplexity provider and config", () => {
     const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
