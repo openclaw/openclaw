@@ -133,6 +133,10 @@ function renderElement(el: ACElement): TemplateResult | typeof nothing {
       return renderBadge(el);
     case "CompoundButton":
       return renderCompoundButton(el);
+    case "Icon":
+      return renderIcon(el);
+    case "List":
+      return renderList(el);
     case "Input.Text":
       return renderInputText(el);
     case "Input.Number":
@@ -479,6 +483,34 @@ function renderCompoundButton(el: ACElement): TemplateResult {
       </span>
     </button>
   `;
+}
+
+function renderIcon(el: ACElement): TemplateResult {
+  const name = typeof el.name === "string" ? el.name : "";
+  const size = typeof el.size === "string" ? el.size : "";
+  const color = typeof el.color === "string" ? el.color : "";
+  const style = el.style === "filled" ? "ac-icon--filled" : "";
+  const sizeClass = size ? `ac-icon--${size.toLowerCase()}` : "";
+  const colorClass = color ? `ac-icon--${color.toLowerCase()}` : "";
+  return html`<span class="ac-icon ${sizeClass} ${colorClass} ${style}">${name}</span>`;
+}
+
+function renderList(el: ACElement): TemplateResult {
+  const items = Array.isArray(el.items) ? (el.items as ACElement[]) : [];
+  const isOrdered = el.style === "ordered";
+  const listItems = items.map((item) => {
+    const text = typeof item.text === "string" ? item.text : "";
+    const icon = item.icon as ACElement | undefined;
+    return html`
+      <li class="ac-list__item">
+        ${icon && typeof icon === "object" && icon.name ? renderIcon(icon) : nothing}
+        <span>${text}</span>
+      </li>
+    `;
+  });
+  return isOrdered
+    ? html`<ol class="ac-list ac-list--ordered">${listItems}</ol>`
+    : html`<ul class="ac-list ac-list--unordered">${listItems}</ul>`;
 }
 
 function renderChart(el: ACElement): TemplateResult {

@@ -487,6 +487,79 @@
   color: var(--muted);
 }
 
+/* Icon */
+.ac-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  vertical-align: middle;
+  color: var(--text);
+}
+
+.ac-icon--small {
+  font-size: 12px;
+}
+
+.ac-icon--medium {
+  font-size: 16px;
+}
+
+.ac-icon--large {
+  font-size: 24px;
+}
+
+.ac-icon--extralarge {
+  font-size: 32px;
+}
+
+.ac-icon--filled {
+  font-weight: 700;
+}
+
+.ac-icon--accent {
+  color: var(--accent);
+}
+
+.ac-icon--good {
+  color: var(--success, #22c55e);
+}
+
+.ac-icon--warning {
+  color: var(--warning, #f59e0b);
+}
+
+.ac-icon--attention {
+  color: var(--destructive, #ef4444);
+}
+
+/* List */
+.ac-list {
+  margin: 6px 0;
+  padding-left: 24px;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.ac-list--unordered {
+  list-style-type: disc;
+}
+
+.ac-list--ordered {
+  list-style-type: decimal;
+}
+
+.ac-list__item {
+  padding: 2px 0;
+  display: list-item;
+}
+
+.ac-list__item .ac-icon {
+  margin-right: 6px;
+}
+
 /* Chart (simplified data display) */
 .ac-chart {
   margin: 6px 0;
