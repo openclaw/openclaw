@@ -93,6 +93,29 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
+    test("prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on empty string", () => {
+      const prevHandshakeTimeout = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      const prevTestHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "75";
+      process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
+      try {
+        expect(getHandshakeTimeoutMs()).toBe(75);
+        process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "";
+        expect(getHandshakeTimeoutMs()).toBe(20);
+      } finally {
+        if (prevHandshakeTimeout === undefined) {
+          delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = prevHandshakeTimeout;
+        }
+        if (prevTestHandshakeTimeout === undefined) {
+          delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = prevTestHandshakeTimeout;
+        }
+      }
+    });
+
     test("connect (req) handshake returns hello-ok payload", async () => {
       const { STATE_DIR, createConfigIO } = await import("../config/config.js");
       const ws = await openWs(port);
