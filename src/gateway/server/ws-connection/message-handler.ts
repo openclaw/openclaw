@@ -69,6 +69,7 @@ import {
   TICK_INTERVAL_MS,
 } from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
+import { configObjectModifiesProtectedPath } from "../../server-methods/config.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
 import { classifyWsEndpoint, getEndpointSecurity } from "../../ws-endpoint.js";
@@ -1302,6 +1303,47 @@ export function attachGatewayWsMessageHandler(params: {
             );
             respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, authResult.reason));
             return;
+          }
+        }
+
+        // Security: Elevated capability check for protected config paths.
+        // When config.set or config.patch modifies security-sensitive paths
+        // (auth, tailscale, security, etc.), require admin:config capability
+        // instead of just admin:write.
+        if (messageAuthContext && (req.method === "config.set" || req.method === "config.patch")) {
+          const raw = (req.params as { raw?: string } | undefined)?.raw;
+          if (raw) {
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(raw);
+            } catch {
+              // If JSON parse fails, let the handler below reject it
+              parsed = undefined;
+            }
+            if (parsed && configObjectModifiesProtectedPath(parsed)) {
+              const protectedAuthResult = authorizeMessage(
+                messageAuthContext,
+                "gateway.method.config.set_protected",
+                {
+                  requireCapabilityForAll: false,
+                  logDenied: true,
+                },
+              );
+              if (!protectedAuthResult.ok) {
+                logWsControl.warn(
+                  `protected config change denied conn=${connId} remote=${remoteAddr ?? "?"} method=${req.method} required=${protectedAuthResult.missingCapability}`,
+                );
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.INVALID_REQUEST, protectedAuthResult.reason),
+                );
+                return;
+              }
+              logWsControl.warn(
+                `protected config change conn=${connId} remote=${remoteAddr ?? "?"} method=${req.method}`,
+              );
+            }
           }
         }
 

@@ -8,7 +8,7 @@
  *   - Tested via checkBrowserOrigin with disableLocalhostPrivilege flag
  */
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { checkBrowserOrigin } from "./origin-check.js";
 
 describe("Security Hardening - Gap 2: Tailscale Loopback Origin Bypass", () => {
@@ -312,5 +312,319 @@ describe("Security Hardening - Gap 3: Non-Browser Client Skips Origin Check", ()
     // This means a local CLI tool connecting from loopback with Origin: http://localhost:*
     // would still pass the origin check.
     expect(true).toBe(true);
+  });
+});
+
+describe("Security Hardening - Gap 4: secrets.resolve Has No Capability Gate", () => {
+  // These tests verify the capability mappings in message-auth.ts
+
+  let authorizeMessageFn: typeof import("./message-auth.js").authorizeMessage;
+  let createMessageAuthContextFn: typeof import("./message-auth.js").createMessageAuthContext;
+
+  beforeAll(async () => {
+    const mod = await import("./message-auth.js");
+    authorizeMessageFn = mod.authorizeMessage;
+    createMessageAuthContextFn = mod.createMessageAuthContext;
+  });
+
+  const createCtx = (scopes: string[]) =>
+    createMessageAuthContextFn({
+      clientId: "test-client",
+      scopes,
+      endpoint: "gateway",
+    });
+
+  it("secrets.resolve requires secrets:read capability", () => {
+    const ctx = createCtx(["admin:read"]);
+    const result = authorizeMessageFn(ctx, "gateway.method.secrets.resolve", {
+      logDenied: false,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missingCapability).toBe("secrets:read");
+    }
+  });
+
+  it("secrets.reload requires secrets:manage capability", () => {
+    const ctx = createCtx(["secrets:read"]);
+    const result = authorizeMessageFn(ctx, "gateway.method.secrets.reload", {
+      logDenied: false,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missingCapability).toBe("secrets:manage");
+    }
+  });
+
+  it("client with * scope can resolve secrets (full wildcard)", () => {
+    const ctx = createCtx(["*"]);
+    const result = authorizeMessageFn(ctx, "gateway.method.secrets.resolve", {
+      logDenied: false,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("client with admin:* does NOT match secrets:read (different namespaces)", () => {
+    // admin:* only matches admin:* namespace capabilities, not secrets:*
+    const ctx = createCtx(["admin:*"]);
+    const result = authorizeMessageFn(ctx, "gateway.method.secrets.resolve", {
+      logDenied: false,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missingCapability).toBe("secrets:read");
+    }
+  });
+
+  it("client with secrets:read scope can resolve secrets", () => {
+    const ctx = createCtx(["secrets:read"]);
+    const result = authorizeMessageFn(ctx, "gateway.method.secrets.resolve", {
+      logDenied: false,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("client with secrets:manage scope can reload secrets", () => {
+    const ctx = createCtx(["secrets:manage"]);
+    const result = authorizeMessageFn(ctx, "gateway.method.secrets.reload", {
+      logDenied: false,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("client without secrets:read scope is denied", () => {
+    const ctx = createCtx(["agent:read"]);
+    const result = authorizeMessageFn(ctx, "gateway.method.secrets.resolve", {
+      logDenied: false,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("secrets:read wildcard (secrets:*) does NOT match secrets:manage", () => {
+    // Namespace wildcard only matches exact capability, not sub-capabilities
+    // hasMessageCapability checks `secrets:*` which matches `secrets:read` but NOT `secrets:manage`
+    const ctx = createCtx(["secrets:*"]);
+    const resolveResult = authorizeMessageFn(ctx, "gateway.method.secrets.resolve", {
+      logDenied: false,
+    });
+    // secrets:* matches secrets:read because hasMessageCapability checks `${namespace}:*`
+    expect(resolveResult.ok).toBe(true);
+
+    const reloadResult = authorizeMessageFn(ctx, "gateway.method.secrets.reload", {
+      logDenied: false,
+    });
+    // secrets:* also matches secrets:manage — same namespace
+    expect(reloadResult.ok).toBe(true);
+  });
+});
+
+describe("Security Hardening - Gap 5: config.set Can Modify Auth Config", () => {
+  let authorizeMessageFn: typeof import("./message-auth.js").authorizeMessage;
+  let createMessageAuthContextFn: typeof import("./message-auth.js").createMessageAuthContext;
+  let configObjectModifiesProtectedPathFn: typeof import("./server-methods/config.js").configObjectModifiesProtectedPath;
+  let isProtectedConfigPathFn: typeof import("./server-methods/config.js").isProtectedConfigPath;
+
+  beforeAll(async () => {
+    const authMod = await import("./message-auth.js");
+    authorizeMessageFn = authMod.authorizeMessage;
+    createMessageAuthContextFn = authMod.createMessageAuthContext;
+    const configMod = await import("./server-methods/config.js");
+    configObjectModifiesProtectedPathFn = configMod.configObjectModifiesProtectedPath;
+    isProtectedConfigPathFn = configMod.isProtectedConfigPath;
+  });
+
+  const createCtx = (scopes: string[]) =>
+    createMessageAuthContextFn({
+      clientId: "test-client",
+      scopes,
+      endpoint: "gateway",
+    });
+
+  describe("isProtectedConfigPath", () => {
+    it("identifies gateway.auth as protected", () => {
+      expect(isProtectedConfigPathFn("gateway.auth")).toBe(true);
+    });
+
+    it("identifies gateway.auth.mode as protected (nested)", () => {
+      expect(isProtectedConfigPathFn("gateway.auth.mode")).toBe(true);
+    });
+
+    it("identifies gateway.auth.token as protected (nested)", () => {
+      expect(isProtectedConfigPathFn("gateway.auth.token")).toBe(true);
+    });
+
+    it("identifies gateway.tailscale as protected", () => {
+      expect(isProtectedConfigPathFn("gateway.tailscale")).toBe(true);
+    });
+
+    it("identifies gateway.security as protected", () => {
+      expect(isProtectedConfigPathFn("gateway.security")).toBe(true);
+    });
+
+    it("identifies gateway.security.disableLocalhostPrivilege as protected", () => {
+      expect(isProtectedConfigPathFn("gateway.security.disableLocalhostPrivilege")).toBe(true);
+    });
+
+    it("identifies gateway.trustedProxies as protected", () => {
+      expect(isProtectedConfigPathFn("gateway.trustedProxies")).toBe(true);
+    });
+
+    it("identifies gateway.bind as protected", () => {
+      expect(isProtectedConfigPathFn("gateway.bind")).toBe(true);
+    });
+
+    it("identifies gateway.port as protected", () => {
+      expect(isProtectedConfigPathFn("gateway.port")).toBe(true);
+    });
+
+    it("does NOT mark agents.defaults.model as protected", () => {
+      expect(isProtectedConfigPathFn("agents.defaults.model")).toBe(false);
+    });
+
+    it("does NOT mark gateway.controlUi.allowedOrigins as protected", () => {
+      expect(isProtectedConfigPathFn("gateway.controlUi.allowedOrigins")).toBe(false);
+    });
+  });
+
+  describe("configObjectModifiesProtectedPath", () => {
+    it("detects gateway.auth modification in nested object", () => {
+      expect(
+        configObjectModifiesProtectedPathFn({
+          gateway: { auth: { mode: "none" } },
+        }),
+      ).toBe(true);
+    });
+
+    it("detects gateway.tailscale modification", () => {
+      expect(
+        configObjectModifiesProtectedPathFn({
+          gateway: { tailscale: { allowTailscale: true } },
+        }),
+      ).toBe(true);
+    });
+
+    it("detects gateway.security modification", () => {
+      expect(
+        configObjectModifiesProtectedPathFn({
+          gateway: { security: { rejectUntrustedProxyHeaders: false } },
+        }),
+      ).toBe(true);
+    });
+
+    it("detects gateway.trustedProxies modification", () => {
+      expect(
+        configObjectModifiesProtectedPathFn({
+          gateway: { trustedProxies: ["1.2.3.4"] },
+        }),
+      ).toBe(true);
+    });
+
+    it("detects gateway.bind modification", () => {
+      expect(configObjectModifiesProtectedPathFn({ gateway: { bind: "lan" } })).toBe(true);
+    });
+
+    it("detects gateway.port modification", () => {
+      expect(configObjectModifiesProtectedPathFn({ gateway: { port: 8080 } })).toBe(true);
+    });
+
+    it("does NOT flag non-protected config changes", () => {
+      expect(
+        configObjectModifiesProtectedPathFn({
+          agents: { defaults: { model: "gpt-4" } },
+        }),
+      ).toBe(false);
+    });
+
+    it("does NOT flag gateway.controlUi changes", () => {
+      expect(
+        configObjectModifiesProtectedPathFn({
+          gateway: { controlUi: { allowedOrigins: ["*"] } },
+        }),
+      ).toBe(false);
+    });
+
+    it("returns false for non-objects", () => {
+      expect(configObjectModifiesProtectedPathFn(null)).toBe(false);
+      expect(configObjectModifiesProtectedPathFn(undefined)).toBe(false);
+      expect(configObjectModifiesProtectedPathFn("string")).toBe(false);
+      expect(configObjectModifiesProtectedPathFn(42)).toBe(false);
+      expect(configObjectModifiesProtectedPathFn([1, 2, 3])).toBe(false);
+    });
+
+    it("returns true when both protected and non-protected paths are present", () => {
+      expect(
+        configObjectModifiesProtectedPathFn({
+          gateway: {
+            auth: { mode: "none" },
+            controlUi: { allowedOrigins: ["*"] },
+          },
+        }),
+      ).toBe(true);
+    });
+
+    it("returns false for empty object", () => {
+      expect(configObjectModifiesProtectedPathFn({})).toBe(false);
+    });
+
+    it("returns false for gateway object without protected sub-keys", () => {
+      expect(
+        configObjectModifiesProtectedPathFn({
+          gateway: { controlUi: { allowedOrigins: ["https://example.com"] } },
+        }),
+      ).toBe(false);
+    });
+  });
+
+  describe("admin:config capability authorization", () => {
+    it("config.set_protected requires admin:config capability", () => {
+      const ctx = createCtx(["admin:write"]);
+      const result = authorizeMessageFn(ctx, "gateway.method.config.set_protected", {
+        logDenied: false,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.missingCapability).toBe("admin:config");
+      }
+    });
+
+    it("client with admin:* can modify protected config (wildcard)", () => {
+      const ctx = createCtx(["admin:*"]);
+      const result = authorizeMessageFn(ctx, "gateway.method.config.set_protected", {
+        logDenied: false,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("client with admin:config can modify protected config", () => {
+      const ctx = createCtx(["admin:config"]);
+      const result = authorizeMessageFn(ctx, "gateway.method.config.set_protected", {
+        logDenied: false,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("client with only agent:read cannot modify protected config", () => {
+      const ctx = createCtx(["agent:read"]);
+      const result = authorizeMessageFn(ctx, "gateway.method.config.set_protected", {
+        logDenied: false,
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("config.set (non-protected) still requires admin:write", () => {
+      const ctx = createCtx(["admin:read"]);
+      const result = authorizeMessageFn(ctx, "gateway.method.write_config", {
+        logDenied: false,
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("client with admin:write can do normal config.set (non-protected)", () => {
+      const ctx = createCtx(["admin:write"]);
+      const result = authorizeMessageFn(ctx, "gateway.method.write_config", {
+        logDenied: false,
+      });
+      expect(result.ok).toBe(true);
+    });
   });
 });

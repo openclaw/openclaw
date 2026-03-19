@@ -32,6 +32,9 @@ const DEFAULT_MESSAGE_CAPABILITIES: Record<string, string> = {
   "gateway.event.presence": "agent:read",
   "gateway.event.message": "agent:read",
   "gateway.event.error": "agent:read",
+  "gateway.method.secrets.resolve": "secrets:read",
+  "gateway.method.secrets.reload": "secrets:manage",
+  "gateway.method.config.set_protected": "admin:config",
 };
 
 export function createMessageAuthContext(params: {

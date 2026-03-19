@@ -65,6 +65,49 @@ function isPathWithin(targetPath: string, basePath: string): boolean {
   return resolvedTarget.startsWith(resolvedBase + path.sep) || resolvedTarget === resolvedBase;
 }
 
+/**
+ * Config paths that control authentication, network binding, and security policy.
+ * Modifying these requires the `admin:config` capability instead of just `admin:write`.
+ */
+const PROTECTED_CONFIG_PATHS = [
+  "gateway.auth",
+  "gateway.tailscale",
+  "gateway.security",
+  "gateway.trustedProxies",
+  "gateway.bind",
+  "gateway.port",
+] as const;
+
+export function isProtectedConfigPath(configPath: string): boolean {
+  return PROTECTED_CONFIG_PATHS.some(
+    (protectedPath) => configPath === protectedPath || configPath.startsWith(protectedPath + "."),
+  );
+}
+
+/**
+ * Check if a parsed config object (from config.set or config.patch raw JSON)
+ * modifies any protected config paths. Recursively checks nested keys.
+ *
+ * For example, { gateway: { auth: { mode: "none" } } } would return true
+ * because "gateway.auth" is a protected path.
+ */
+export function configObjectModifiesProtectedPath(obj: unknown, prefix = ""): boolean {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+    return false;
+  }
+  for (const [key, value] of Object.entries(obj)) {
+    const fullPath = prefix ? `${prefix}.${key}` : key;
+    if (isProtectedConfigPath(fullPath)) {
+      return true;
+    }
+    // Recurse into nested objects to check deeper paths
+    if (configObjectModifiesProtectedPath(value, fullPath)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function requireConfigBaseHash(
   params: unknown,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
