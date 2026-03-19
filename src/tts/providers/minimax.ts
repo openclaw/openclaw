@@ -84,10 +84,7 @@ export async function minimaxTTS(params: {
   }
 }
 
-export async function listMiniMaxVoices(params: {
-  apiKey: string;
-  baseUrl?: string;
-}): Promise<SpeechVoiceOption[]> {
+export async function listMiniMaxVoices(): Promise<SpeechVoiceOption[]> {
   // MiniMax doesn't have a public list voices API, so we return common voices
   // Users can use custom voice IDs from their MiniMax dashboard
   return MINIMAX_VOICE_IDS.map((voiceId) => ({
@@ -101,18 +98,8 @@ export function buildMiniMaxSpeechProvider(): SpeechProviderPlugin {
     id: "minimax",
     label: "MiniMax",
     models: MINIMAX_TTS_MODELS,
-    listVoices: async (req) => {
-      const apiKey =
-        req.apiKey ||
-        req.config?.minimax.apiKey ||
-        process.env.MINIMAX_API_KEY;
-      if (!apiKey) {
-        throw new Error("MiniMax API key missing");
-      }
-      return listMiniMaxVoices({
-        apiKey,
-        baseUrl: req.baseUrl ?? req.config?.minimax.baseUrl,
-      });
+    listVoices: async (_req) => {
+      return listMiniMaxVoices();
     },
     isConfigured: ({ config }) =>
       Boolean(config.minimax?.apiKey || process.env.MINIMAX_API_KEY),

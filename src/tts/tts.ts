@@ -479,6 +479,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "minimax")) {
+    return "minimax";
+  }
   return "microsoft";
 }
 
