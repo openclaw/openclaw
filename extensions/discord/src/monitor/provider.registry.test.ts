@@ -1,5 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { clearPluginCommands, registerPluginCommand } from "../../../../src/plugins/commands.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   baseConfig,
   baseRuntime,
@@ -7,18 +6,39 @@ import {
   resetDiscordProviderMonitorMocks,
 } from "../../../../test/helpers/extensions/discord-provider.test-support.js";
 
-const { createDiscordNativeCommandMock, clientHandleDeployRequestMock, monitorLifecycleMock } =
-  getProviderMonitorTestMocks();
+const {
+  createDiscordNativeCommandMock,
+  clientHandleDeployRequestMock,
+  monitorLifecycleMock,
+  resolveDiscordAccountMock,
+} = getProviderMonitorTestMocks();
 
 describe("monitorDiscordProvider real plugin registry", () => {
-  beforeEach(() => {
-    clearPluginCommands();
+  beforeEach(async () => {
+    vi.resetModules();
     resetDiscordProviderMonitorMocks({
       nativeCommands: [{ name: "status", description: "Status", acceptsArgs: false }],
     });
+    vi.doMock("../accounts.js", () => ({
+      resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
+        resolveDiscordAccountMock(...args),
+    }));
+    vi.doMock("../probe.js", () => ({
+      fetchDiscordApplicationId: async () => "app-1",
+    }));
+    vi.doMock("../token.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../token.js")>();
+      return {
+        ...actual,
+        normalizeDiscordToken: (value?: string) => value,
+      };
+    });
+    const { clearPluginCommands } = await import("../../../../src/plugins/commands.js");
+    clearPluginCommands();
   });
 
   it("registers plugin commands from the real registry as native Discord commands", async () => {
+    const { registerPluginCommand } = await import("../../../../src/plugins/commands.js");
     expect(
       registerPluginCommand("demo-plugin", {
         name: "pair",

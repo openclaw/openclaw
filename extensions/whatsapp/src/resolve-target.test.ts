@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { installCommonResolveTargetErrorCases } from "../../shared/resolve-target-test-helpers.js";
 
-vi.mock("openclaw/plugin-sdk/whatsapp", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/whatsapp")>(
-    "openclaw/plugin-sdk/whatsapp",
-  );
+const whatsappMocks = vi.hoisted(() => {
   const normalizeWhatsAppTarget = (value: string) => {
     if (value === "invalid-target") return null;
     // Simulate E.164 normalization: strip leading + and whatsapp: prefix.
@@ -12,45 +9,68 @@ vi.mock("openclaw/plugin-sdk/whatsapp", async () => {
     return stripped.includes("@g.us") ? stripped : `${stripped}@s.whatsapp.net`;
   };
 
+  const resolveWhatsAppOutboundTarget = ({
+    to,
+    allowFrom,
+    mode,
+  }: {
+    to?: string;
+    allowFrom: string[];
+    mode: "explicit" | "implicit";
+  }) => {
+    const raw = typeof to === "string" ? to.trim() : "";
+    if (!raw) {
+      return { ok: false, error: new Error("missing target") };
+    }
+    const normalized = normalizeWhatsAppTarget(raw);
+    if (!normalized) {
+      return { ok: false, error: new Error("invalid target") };
+    }
+
+    if (mode === "implicit" && !normalized.endsWith("@g.us")) {
+      const allowAll = allowFrom.includes("*");
+      const allowExact = allowFrom.some((entry) => {
+        if (!entry) {
+          return false;
+        }
+        const normalizedEntry = normalizeWhatsAppTarget(entry.trim());
+        return normalizedEntry?.toLowerCase() === normalized.toLowerCase();
+      });
+      if (!allowAll && !allowExact) {
+        return { ok: false, error: new Error("target not allowlisted") };
+      }
+    }
+
+    return { ok: true, to: normalized };
+  };
+
+  return {
+    normalizeWhatsAppTarget,
+    resolveWhatsAppOutboundTarget,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/whatsapp", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/whatsapp")>(
+    "openclaw/plugin-sdk/whatsapp",
+  );
+
+  return {
+    ...actual,
+    normalizeWhatsAppTarget: whatsappMocks.normalizeWhatsAppTarget,
+    isWhatsAppGroupJid: (value: string) => value.endsWith("@g.us"),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/whatsapp-core", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/whatsapp-core")>(
+    "openclaw/plugin-sdk/whatsapp-core",
+  );
+
   return {
     ...actual,
     getChatChannelMeta: () => ({ id: "whatsapp", label: "WhatsApp" }),
-    normalizeWhatsAppTarget,
-    isWhatsAppGroupJid: (value: string) => value.endsWith("@g.us"),
-    resolveWhatsAppOutboundTarget: ({
-      to,
-      allowFrom,
-      mode,
-    }: {
-      to?: string;
-      allowFrom: string[];
-      mode: "explicit" | "implicit";
-    }) => {
-      const raw = typeof to === "string" ? to.trim() : "";
-      if (!raw) {
-        return { ok: false, error: new Error("missing target") };
-      }
-      const normalized = normalizeWhatsAppTarget(raw);
-      if (!normalized) {
-        return { ok: false, error: new Error("invalid target") };
-      }
-
-      if (mode === "implicit" && !normalized.endsWith("@g.us")) {
-        const allowAll = allowFrom.includes("*");
-        const allowExact = allowFrom.some((entry) => {
-          if (!entry) {
-            return false;
-          }
-          const normalizedEntry = normalizeWhatsAppTarget(entry.trim());
-          return normalizedEntry?.toLowerCase() === normalized.toLowerCase();
-        });
-        if (!allowAll && !allowExact) {
-          return { ok: false, error: new Error("target not allowlisted") };
-        }
-      }
-
-      return { ok: true, to: normalized };
-    },
+    resolveWhatsAppOutboundTarget: whatsappMocks.resolveWhatsAppOutboundTarget,
     missingTargetError: (provider: string, hint: string) =>
       new Error(`Delivering to ${provider} requires target ${hint}`),
   };

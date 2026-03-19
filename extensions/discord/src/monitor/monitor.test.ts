@@ -205,9 +205,19 @@ describe("agent components", () => {
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
     expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("[Discord component: hello clicked"),
+      expect.objectContaining({
+        contextKey: "discord:agent-button:dm-channel:hello:123456789",
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(readAllowFromStoreMock).toHaveBeenCalledWith({
+      provider: "discord",
+      accountId: "default",
+      dmPolicy: "allowlist",
+    });
   });
 
   it("matches tag-based allowlist entries for DM select menus", async () => {

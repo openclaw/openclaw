@@ -30,6 +30,7 @@ export const readAllowFromStoreMock: AnyMockFn = vi.fn().mockResolvedValue([]);
 export const upsertPairingRequestMock: AnyMockFn = vi
   .fn()
   .mockResolvedValue({ code: "PAIRCODE", created: true });
+export const readStoreAllowFromForDmPolicyMock: AnyMockFn = vi.fn().mockResolvedValue([]);
 
 export type MockSock = {
   ev: EventEmitter;
@@ -96,13 +97,33 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  const mockModule = Object.create(null) as Record<string, unknown>;
+  Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
+  Object.defineProperty(mockModule, "loadConfig", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: () => mockLoadConfig(),
+  });
+  return mockModule;
+});
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
-    loadConfig: () => mockLoadConfig(),
+    ...getPairingStoreMocks(),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => getPairingStoreMocks());
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: (...args: unknown[]) =>
+      readStoreAllowFromForDmPolicyMock(...args),
+  };
+});
 
 vi.mock("./session.js", () => ({
   createWaSocket: vi.fn().mockResolvedValue(sock),
@@ -144,6 +165,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
       code: "PAIRCODE",
       created: true,
     });
+    readStoreAllowFromForDmPolicyMock.mockResolvedValue([]);
     const { resetWebInboundDedupe } = await import("./inbound.js");
     resetWebInboundDedupe();
     if (createAuthDir) {

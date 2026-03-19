@@ -35,10 +35,15 @@ export function setupAccessControlTestHarness(): void {
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig: () => config,
-  };
+  const mockModule = Object.create(null) as Record<string, unknown>;
+  Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
+  Object.defineProperty(mockModule, "loadConfig", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: () => config,
+  });
+  return mockModule;
 });
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {

@@ -32,16 +32,21 @@ export function resetLoadConfigMock() {
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig: () => {
+  const mockModule = Object.create(null) as Record<string, unknown>;
+  Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
+  Object.defineProperty(mockModule, "loadConfig", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: () => {
       const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
       if (typeof getter === "function") {
         return getter();
       }
       return DEFAULT_CONFIG;
     },
-  };
+  });
+  return mockModule;
 });
 
 // Some web modules live under `src/web/auto-reply/*` and import config via a different
@@ -52,16 +57,21 @@ vi.mock("../../config/config.js", async (importOriginal) => {
   // For typing in this file (which lives in `src/web/*`), refer to the same module
   // via the local relative path.
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig: () => {
+  const mockModule = Object.create(null) as Record<string, unknown>;
+  Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
+  Object.defineProperty(mockModule, "loadConfig", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: () => {
       const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
       if (typeof getter === "function") {
         return getter();
       }
       return DEFAULT_CONFIG;
     },
-  };
+  });
+  return mockModule;
 });
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
