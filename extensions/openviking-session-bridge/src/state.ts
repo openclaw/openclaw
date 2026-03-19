@@ -44,3 +44,41 @@ export function markFinalized(stateDir: string, sessionId: string): void {
   if (!existing) return;
   saveCheckpoint(stateDir, { ...existing, finalized: true, updatedAt: new Date().toISOString() });
 }
+
+/**
+ * Return all non-finalized checkpoints found in stateDir.
+ *
+ * Used at plugin startup to replay sessions that were interrupted before
+ * session_end fired or before the flush completed (e.g. process killed).
+ * Corrupted or unreadable checkpoint files are silently skipped.
+ */
+export function listPendingCheckpoints(stateDir: string): SessionCheckpoint[] {
+  try {
+    if (!fs.existsSync(stateDir)) return [];
+    const entries = fs.readdirSync(stateDir);
+    const pending: SessionCheckpoint[] = [];
+    for (const file of entries) {
+      // Only process our checkpoint files; ignore tmp files from in-progress writes.
+      if (!file.endsWith(".json") || file.includes(".tmp.")) continue;
+      const p = path.join(stateDir, file);
+      try {
+        const raw = fs.readFileSync(p, "utf-8");
+        const cp = JSON.parse(raw) as unknown;
+        if (
+          cp &&
+          typeof cp === "object" &&
+          !Array.isArray(cp) &&
+          typeof (cp as Record<string, unknown>).openclawSessionId === "string" &&
+          (cp as Record<string, unknown>).finalized === false
+        ) {
+          pending.push(cp as SessionCheckpoint);
+        }
+      } catch {
+        // Skip corrupted entries.
+      }
+    }
+    return pending;
+  } catch {
+    return [];
+  }
+}
