@@ -1,11 +1,13 @@
 import { format } from "node:util";
 import {
+  DEFAULT_GROUP_HISTORY_LIMIT,
   GROUP_POLICY_BLOCKED_LABEL,
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
+  type HistoryEntry,
   type RuntimeEnv,
 } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -180,10 +182,18 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const startupMs = Date.now();
-  const startupGraceMs = 0;
+  const startupGraceMs = 60_000; // 1 min grace window to catch recent messages after restart
   // Cold starts should ignore old room history, but once we have a persisted
   // /sync cursor we want restart backlogs to replay just like other channels.
   const dropPreStartupMessages = !client.hasPersistedSyncState();
+  const historyLimit = Math.max(
+    0,
+    accountConfig.historyLimit ??
+      (cfg as { messages?: { groupChat?: { historyLimit?: number } } }).messages?.groupChat
+        ?.historyLimit ??
+      DEFAULT_GROUP_HISTORY_LIMIT,
+  );
+  const roomHistories = new Map<string, HistoryEntry[]>();
   const directTracker = createDirectRoomTracker(client, { log: logVerboseMessage });
   registerMatrixAutoJoin({ client, accountConfig, runtime });
   const warnedEncryptedRooms = new Set<string>();
@@ -216,6 +226,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     getRoomInfo,
     getMemberDisplayName,
     needsRoomAliasesForConfig,
+    historyLimit,
+    roomHistories,
   });
 
   try {

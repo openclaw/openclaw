@@ -133,6 +133,13 @@ export {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
+export type { HistoryEntry } from "../auto-reply/reply/history.js";
+export {
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
+  recordPendingHistoryEntryIfEnabled,
+} from "../auto-reply/reply/history.js";
 export { normalizeStringEntries } from "../shared/string-normalization.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { redactSensitiveText } from "../logging/redact.js";

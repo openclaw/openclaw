@@ -63,7 +63,15 @@ export type MatrixMediaInfo =
   | TimedFileInfo
   | VideoFileInfo;
 
-export type MatrixTextContent = TextualMessageEventContent & MatrixReplyMeta;
+export type MatrixMentions = {
+  user_ids?: string[];
+  room?: boolean;
+};
+
+export type MatrixTextContent = TextualMessageEventContent &
+  MatrixReplyMeta & {
+    "m.mentions"?: MatrixMentions;
+  };
 
 export type MatrixMediaContent = MessageEventContent &
   MatrixReplyMeta & {

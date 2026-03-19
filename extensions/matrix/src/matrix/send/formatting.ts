@@ -25,6 +25,7 @@ export function buildTextContent(body: string, relation?: MatrixRelation): Matri
         body,
       };
   applyMatrixFormatting(content, body);
+  applyMatrixMentions(content, body);
   return content;
 }
 
@@ -35,6 +36,20 @@ export function applyMatrixFormatting(content: MatrixFormattedContent, body: str
   }
   content.format = "org.matrix.custom.html";
   content.formatted_body = formatted;
+}
+
+/**
+ * Extract Matrix user IDs (@user:server) from message text and attach m.mentions.
+ * Only sets the field when at least one valid MXID is found.
+ */
+function applyMatrixMentions(content: MatrixTextContent, body: string): void {
+  const mxidPattern = /@[a-zA-Z0-9._=\-/]+:[a-zA-Z0-9.\-]+(?::\d+)?/g;
+  const matches = body.match(mxidPattern);
+  if (!matches || matches.length === 0) {
+    return;
+  }
+  const uniqueIds = [...new Set(matches)];
+  content["m.mentions"] = { user_ids: uniqueIds };
 }
 
 export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | undefined {

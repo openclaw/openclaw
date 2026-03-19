@@ -1,4 +1,6 @@
 import {
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
   createReplyPrefixOptions,
   createTypingCallbacks,
   ensureConfiguredAcpBindingReady,
@@ -6,13 +8,16 @@ import {
   getAgentScopedMediaLocalRoots,
   logInboundDrop,
   logTypingFailure,
+  recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
+  type HistoryEntry,
   type PluginRuntime,
   type ReplyPayload,
   type RuntimeEnv,
   type RuntimeLogger,
 } from "../../runtime-api.js";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
+import { resolveMatrixAccount } from "../accounts.js";
 import { formatMatrixMediaUnavailableText } from "../media-text.js";
 import { fetchMatrixPollSnapshot } from "../poll-summary.js";
 import {
@@ -32,7 +37,7 @@ import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
-import { resolveMentions } from "./mentions.js";
+import { resolveMentions, stripMatrixMentionForCommand } from "./mentions.js";
 import { handleInboundMatrixReaction } from "./reaction-events.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
@@ -82,6 +87,8 @@ export type MatrixMonitorHandlerParams = {
   ) => Promise<{ name?: string; canonicalAlias?: string; altAliases: string[] }>;
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
   needsRoomAliasesForConfig: boolean;
+  historyLimit: number;
+  roomHistories: Map<string, HistoryEntry[]>;
 };
 
 function resolveMatrixMentionPrecheckText(params: {
@@ -152,6 +159,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     getRoomInfo,
     getMemberDisplayName,
     needsRoomAliasesForConfig,
+    historyLimit,
+    roomHistories,
   } = params;
   let cachedStoreAllowFrom: {
     value: string[];
@@ -333,10 +342,22 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       };
       const storeAllowFrom = await readStoreAllowFrom();
       const roomUsers = roomConfig?.users ?? [];
+
+      // F5: Hot-reload — re-read raw allowlist entries from live config on each message.
+      // New entries must be full Matrix IDs (@user:server); display-name resolution
+      // only happens at startup.
+      const hotCfg = core.config.loadConfig() as CoreConfig;
+      const hotAccountCfg = resolveMatrixAccount({
+        cfg: hotCfg,
+        accountId,
+      }).config;
+      const hotDmAllowFrom = (hotAccountCfg.dm?.allowFrom ?? []).map(String);
+      const hotGroupAllowFrom = (hotAccountCfg.groupAllowFrom ?? []).map(String);
+
       const accessState = resolveMatrixMonitorAccessState({
-        allowFrom,
+        allowFrom: [...allowFrom, ...hotDmAllowFrom],
         storeAllowFrom,
-        groupAllowFrom,
+        groupAllowFrom: [...groupAllowFrom, ...hotGroupAllowFrom],
         roomUsers,
         senderId,
         isRoom,
@@ -481,8 +502,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         surface: "matrix",
       });
       const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-      const hasControlCommandInMessage = core.channel.text.hasControlCommand(
+      const textForCommandDetection = stripMatrixMentionForCommand(
         mentionPrecheckText,
+        selfUserId,
+        mentionRegexes,
+        selfDisplayName,
+      );
+      if (textForCommandDetection !== mentionPrecheckText) {
+        logger.info(
+          `stripped mention for command detection: "${mentionPrecheckText}" → "${textForCommandDetection}"`,
+          { roomId },
+        );
+      }
+      const hasControlCommandInMessage = core.channel.text.hasControlCommand(
+        textForCommandDetection,
         cfg,
       );
       const commandGate = resolveControlCommandGate({
@@ -521,6 +554,18 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
       if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
         logger.info("skipping room message", { roomId, reason: "no-mention" });
+        // F4: Record non-mentioned messages as pending history context
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: roomHistories,
+          historyKey: roomId,
+          limit: historyLimit,
+          entry: {
+            sender: await getSenderName(),
+            body: mentionPrecheckText,
+            timestamp: eventTs ?? undefined,
+            messageId: event.event_id ?? undefined,
+          },
+        });
         return;
       }
 
@@ -599,6 +644,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
       const senderName = await getSenderName();
+      const selfDisplayName = await getMemberDisplayName(roomId, selfUserId).catch(() => null);
       const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
       const roomName = roomInfo?.name;
 
@@ -660,11 +706,33 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         body: textWithId,
       });
 
+      // F4: Build history context — prepend buffered non-mentioned messages to the body
+      let combinedBody = body;
+      const historyKey = isRoom ? roomId : undefined;
+      if (isRoom && historyKey) {
+        combinedBody = buildPendingHistoryContextFromMap({
+          historyMap: roomHistories,
+          historyKey,
+          limit: historyLimit,
+          currentMessage: combinedBody,
+          formatEntry: (entry) => {
+            const mediaTag = entry.mediaPath ? ` [media:${entry.mediaPath}]` : "";
+            return core.channel.reply.formatAgentEnvelope({
+              channel: "Matrix",
+              from: roomName ?? roomId,
+              timestamp: entry.timestamp,
+              body: `${entry.sender}: ${entry.body}${mediaTag}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
+              envelope: envelopeOptions,
+            });
+          },
+        });
+      }
+
       const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
       const ctxPayload = core.channel.reply.finalizeInboundContext({
-        Body: body,
+        Body: combinedBody,
         RawBody: bodyText,
-        CommandBody: bodyText,
+        CommandBody: stripMatrixMentionForCommand(bodyText, selfUserId, mentionRegexes, selfDisplayName),
         From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
         To: `room:${roomId}`,
         SessionKey: route.sessionKey,
@@ -830,12 +898,28 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       });
       markDispatchIdle();
       if (!queuedFinal) {
+        // F4: Clear history buffer even when no reply was dispatched
+        if (isRoom && historyKey) {
+          clearHistoryEntriesIfEnabled({
+            historyMap: roomHistories,
+            historyKey,
+            limit: historyLimit,
+          });
+        }
         return;
       }
       const finalCount = counts.final;
       logVerboseMessage(
         `matrix: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );
+      // F4: Clear history buffer after successful reply
+      if (isRoom && historyKey) {
+        clearHistoryEntriesIfEnabled({
+          historyMap: roomHistories,
+          historyKey,
+          limit: historyLimit,
+        });
+      }
     } catch (err) {
       runtime.error?.(`matrix handler failed: ${String(err)}`);
     }
