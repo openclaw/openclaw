@@ -1,11 +1,8 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { slackPlugin } from "../../../extensions/slack/src/channel.js";
-import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
-import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 const slackConfig = {
@@ -55,53 +52,72 @@ const runDrySend = (params: {
     action: "send",
   });
 
-let createPluginRuntime: typeof import("../../plugins/runtime/index.js").createPluginRuntime;
-let setSlackRuntime: typeof import("../../../extensions/slack/src/runtime.js").setSlackRuntime;
-let setTelegramRuntime: typeof import("../../../extensions/telegram/src/runtime.js").setTelegramRuntime;
-let setWhatsAppRuntime: typeof import("../../../extensions/whatsapp/src/runtime.js").setWhatsAppRuntime;
-
-function installChannelRuntimes(params?: { includeTelegram?: boolean; includeWhatsApp?: boolean }) {
-  const runtime = createPluginRuntime();
-  setSlackRuntime(runtime);
-  if (params?.includeTelegram !== false) {
-    setTelegramRuntime(runtime);
-  }
-  if (params?.includeWhatsApp !== false) {
-    setWhatsAppRuntime(runtime);
-  }
-}
-
-describe("runMessageAction context isolation", () => {
-  beforeAll(async () => {
-    ({ createPluginRuntime } = await import("../../plugins/runtime/index.js"));
-    ({ setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js"));
-    ({ setTelegramRuntime } = await import("../../../extensions/telegram/src/runtime.js"));
-    ({ setWhatsAppRuntime } = await import("../../../extensions/whatsapp/src/runtime.js"));
+const createDryRunPlugin = (id: "slack" | "whatsapp" | "telegram" | "imessage"): ChannelPlugin => {
+  const plugin = createOutboundTestPlugin({
+    id,
+    outbound: {} as never,
   });
 
+  const resolveTarget: NonNullable<
+    NonNullable<ChannelPlugin["messaging"]>["targetResolver"]
+  >["resolveTarget"] = async ({ input, normalized }) => {
+    if (id === "slack") {
+      const raw = input.replace(/^#/, "");
+      return { to: `channel:${raw}`, kind: "group", source: "normalized" };
+    }
+    if (id === "telegram") {
+      return { to: `group:${normalized || input}`, kind: "group", source: "normalized" };
+    }
+    if (id === "whatsapp") {
+      return { to: `group:${normalized || input}`, kind: "group", source: "normalized" };
+    }
+    return { to: normalized || input, kind: "user", source: "normalized" };
+  };
+
+  return {
+    ...plugin,
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({}),
+    },
+    messaging: {
+      inferTargetChatType: ({ to }) => {
+        if (id === "imessage" && to.startsWith("imessage:")) {
+          return "direct";
+        }
+        return "group";
+      },
+      targetResolver: {
+        looksLikeId: () => true,
+        resolveTarget,
+      },
+    },
+  };
+};
+
+describe("runMessageAction context isolation", () => {
   beforeEach(() => {
-    installChannelRuntimes();
     setActivePluginRegistry(
       createTestRegistry([
         {
           pluginId: "slack",
           source: "test",
-          plugin: slackPlugin,
+          plugin: createDryRunPlugin("slack"),
         },
         {
           pluginId: "whatsapp",
           source: "test",
-          plugin: whatsappPlugin,
+          plugin: createDryRunPlugin("whatsapp"),
         },
         {
           pluginId: "telegram",
           source: "test",
-          plugin: telegramPlugin,
+          plugin: createDryRunPlugin("telegram"),
         },
         {
           pluginId: "imessage",
           source: "test",
-          plugin: createIMessageTestPlugin(),
+          plugin: createDryRunPlugin("imessage"),
         },
       ]),
     );
