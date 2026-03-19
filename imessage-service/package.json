@@ -1,0 +1,9 @@
+{
+  "name": "openclaw-imessage-service",
+  "version": "1.0.0",
+  "description": "iMessage service for Stitch - Contacts-filtered read/write",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  }
+}
