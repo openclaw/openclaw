@@ -27,6 +27,14 @@ function requestHeartbeatNow(...args: unknown[]) {
   return requestHeartbeatNowMock(...args);
 }
 
+function enqueueSystemEvent(...args: unknown[]) {
+  return enqueueSystemEventMock(...args);
+}
+
+function requestHeartbeatNow(...args: unknown[]) {
+  return requestHeartbeatNowMock(...args);
+}
+
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent,
 }));
