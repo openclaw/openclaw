@@ -858,7 +858,18 @@ function isJsonApiInternalServerError(raw: string): boolean {
   // Non-standard providers (e.g. MiniMax) may use different message text:
   // {"type":"api_error","message":"unknown error, 520 (1000)"}
   // Any api_error type indicates a provider-side failure regardless of message text.
-  return value.includes('"type":"api_error"');
+  //
+  // However, some proxies (e.g. Ollama) may wrap client-side 4xx failures in
+  // api_error payloads. If a leading 4xx status is present, defer to the
+  // explicit status-based classifiers (auth, billing, format) instead.
+  if (!value.includes('"type":"api_error"')) {
+    return false;
+  }
+  const status = extractLeadingHttpStatus(raw.trim());
+  if (status && status.code >= 400 && status.code < 500) {
+    return false;
+  }
+  return true;
 }
 
 export function parseImageDimensionError(raw: string): {
