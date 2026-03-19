@@ -65,13 +65,6 @@ tools_required:
   - **Availability**：检查错误处理与超时机制。
   - **Fault-tolerance**：验证异常情况下的结构化错误返回。
 
-### 4. 部署与演进 (Evolution)
-> **目标**：实现服务的持续可用与发现。
-
-- **服务注册**：将服务注册至发现平台：`https://jjyzmyvfy5.coze.bytedance.net/register`。
-- **版本管理**：保持向后兼容，通过 `/info` 宣告版本变更。
-- **持续优化**：根据反馈接口收集的数据进行迭代。
-
 ---
 
 ## 产出标准 (Output Specification)
