@@ -175,22 +175,29 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
       const effectiveForce = force && !host.chatHasAutoScrolled;
       const canStartFollowing = effectiveForce || host.chatUserNearBottom;
       const isNewBlock = Boolean(latestBlockId && latestBlockId !== host.chatAutoScrollBlockId);
+      // Resolve scroll mode: pin forces bottom; otherwise follow the block's default.
+      const resolveMode = (pin: boolean): ChatAutoScrollMode =>
+        pin ? "bottom" : (latestBlock?.defaultMode ?? "bottom");
       if (isNewBlock) {
         if (!canStartFollowing) {
           host.chatNewMessagesBelow = true;
           return;
         }
         host.chatAutoScrollBlockId = latestBlockId;
-        host.chatAutoScrollMode = effectiveForce
-          ? "bottom"
-          : (latestBlock?.defaultMode ?? "bottom");
-        host.chatBottomFollowPinned = effectiveForce;
+        // Preserve an explicit user bottom-pin across block boundaries (e.g. tool
+        // activity that flushes a stream segment and opens a new live block).
+        // Without this a "jump to latest" click mid-run is lost at the next segment.
+        const enforceBottom = effectiveForce || host.chatBottomFollowPinned;
+        host.chatAutoScrollMode = resolveMode(enforceBottom);
+        host.chatBottomFollowPinned = enforceBottom;
       } else if (
         latestBlockId &&
         host.chatAutoScrollBlockId === latestBlockId &&
         !host.chatBottomFollowPinned
       ) {
-        host.chatAutoScrollMode = latestBlock?.defaultMode ?? "bottom";
+        // On a forced return (e.g. tab re-entry) always reinitialise to bottom
+        // regardless of the block's default streaming mode; otherwise honour it.
+        host.chatAutoScrollMode = resolveMode(effectiveForce);
       }
       const shouldStick = shouldStickToLatestBlock(host, latestBlockId, effectiveForce);
 
