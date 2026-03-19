@@ -1,9 +1,9 @@
+import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
+import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { resolveGatewayPort } from "../../config/config.js";
-import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../../gateway/credentials.js";
-import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { colorize, theme } from "../../terminal/theme.js";
@@ -116,14 +116,15 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
   return targets;
 }
 
+const DEFAULT_PROBE_BUDGET_MS: Record<TargetKind, number> = {
+  localLoopback: 8000,
+  sshTunnel: 2000,
+  configRemote: 1500,
+  explicit: 1500,
+};
+
 export function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
-  if (kind === "localLoopback") {
-    return Math.min(800, overallMs);
-  }
-  if (kind === "sshTunnel") {
-    return Math.min(2000, overallMs);
-  }
-  return Math.min(1500, overallMs);
+  return Math.min(DEFAULT_PROBE_BUDGET_MS[kind] ?? 1500, overallMs);
 }
 
 export function sanitizeSshTarget(value: unknown): string | null {
