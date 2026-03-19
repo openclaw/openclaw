@@ -323,9 +323,38 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **30%** of 4k\nModel: `gpt-4.1-mini`",
+      "**Session Usage**\nInput: **1.2k** tokens\nOutput: **300** tokens\nTotal: **1.5k** tokens\nContext: **38%** of 4k\nModel: `gpt-4.1-mini`",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+  });
+
+  it("uses totalTokens (context snapshot) for /usage context percentage, not accumulated inputTokens", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              model: "gpt-5",
+              inputTokens: 510_400, // accumulated billing across all turns
+              outputTokens: 12_000,
+              totalTokens: 109_000, // latest context snapshot
+              contextTokens: 128_000,
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "usage",
+      "",
+    );
+
+    // Context % must use totalTokens (109k/128k = 85%), not inputTokens (510.4k/128k = 399%)
+    expect(result.content).toContain("Context: **85%** of 128k");
   });
 
   it("reports the current thinking level for bare /think", async () => {

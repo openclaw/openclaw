@@ -255,7 +255,9 @@ function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ) {
-  const used = session?.inputTokens ?? 0;
+  // Prefer totalTokens (latest prompt/context snapshot) over inputTokens
+  // (accumulated billing total across all turns) for context-window display.
+  const used = session?.totalTokens ?? session?.inputTokens ?? 0;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (!used || !limit) {
     return nothing;
