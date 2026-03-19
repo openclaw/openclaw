@@ -134,6 +134,8 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /outbound not configured for channel/i,
 ];
 
+const STALE_CRON_DELIVERY_MAX_START_DELAY_MS = 3 * 60 * 60_000;
+
 type CompletedDirectCronDelivery = {
   ts: number;
   results: OutboundDeliveryResult[];
@@ -172,6 +174,21 @@ function pruneCompletedDirectCronDeliveries(now: number) {
     }
     COMPLETED_DIRECT_CRON_DELIVERIES.delete(oldest[0]);
   }
+}
+
+function resolveCronDeliveryScheduledAtMs(params: { job: CronJob; runStartedAt: number }): number {
+  const scheduledAt = params.job.state?.nextRunAtMs;
+  return typeof scheduledAt === "number" && Number.isFinite(scheduledAt)
+    ? scheduledAt
+    : params.runStartedAt;
+}
+
+function resolveCronDeliveryStartDelayMs(params: { job: CronJob; runStartedAt: number }): number {
+  return params.runStartedAt - resolveCronDeliveryScheduledAtMs(params);
+}
+
+function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
+  return resolveCronDeliveryStartDelayMs(params) > STALE_CRON_DELIVERY_MAX_START_DELAY_MS;
 }
 
 function rememberCompletedDirectCronDelivery(
@@ -328,6 +345,35 @@ export async function dispatchCronDelivery(
           status: "error",
           error: params.abortReason(),
           deliveryAttempted,
+          ...params.telemetry,
+        });
+      }
+      if (
+        params.deliveryRequested &&
+        isStaleCronDelivery({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        })
+      ) {
+        deliveryAttempted = true;
+        const nowMs = Date.now();
+        const scheduledAtMs = resolveCronDeliveryScheduledAtMs({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        });
+        const startDelayMs = resolveCronDeliveryStartDelayMs({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        });
+        logWarn(
+          `[cron:${params.job.id}] skipping stale delivery scheduled at ${new Date(scheduledAtMs).toISOString()}, started ${Math.round(startDelayMs / 60_000)}m late, current age ${Math.round((nowMs - scheduledAtMs) / 60_000)}m`,
+        );
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          deliveryAttempted,
+          delivered: false,
           ...params.telemetry,
         });
       }
