@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
-import { resolveFastModeState } from "../../agents/fast-mode.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -16,7 +15,9 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { AutoReasoningConfig } from "../../config/types.agent-defaults.js";
 import { logVerbose } from "../../globals.js";
+import type { GeneratingSelector, GeneratingSource } from "../../infra/generating-metadata.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -24,17 +25,19 @@ import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
+  coerceThinkingLevelForModel,
+  type ConfiguredThinkLevel,
   type ElevatedLevel,
-  formatXHighModelHint,
+  normalizeConfiguredThinkLevel,
   normalizeThinkLevel,
   type ReasoningLevel,
-  supportsXHighThinking,
   type ThinkLevel,
   type VerboseLevel,
 } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyAgent } from "./agent-runner.js";
+import { resolveAutoThinkingLevel } from "./auto-reasoning.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
@@ -42,10 +45,11 @@ import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import type { FollowupRun } from "./queue.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
-import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
-import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
+import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
+import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -53,6 +57,23 @@ import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+
+function resolveModelReasoningCapability(params: {
+  catalog?: Array<{ provider?: string; id?: string; reasoning?: boolean }>;
+  provider: string;
+  model: string;
+}): boolean | undefined {
+  if (!Array.isArray(params.catalog) || params.catalog.length === 0) {
+    return undefined;
+  }
+  const provider = params.provider.trim().toLowerCase();
+  const model = params.model.trim().toLowerCase();
+  const found = params.catalog.find(
+    (entry) =>
+      entry.provider?.trim().toLowerCase() === provider && entry.id?.trim().toLowerCase() === model,
+  );
+  return typeof found?.reasoning === "boolean" ? found.reasoning : undefined;
+}
 
 function buildResetSessionNoticeText(params: {
   provider: string;
@@ -139,9 +160,13 @@ type RunPreparedReplyParams = {
   directives: InlineDirectives;
   defaultActivation: Parameters<typeof buildGroupIntro>[0]["defaultActivation"];
   resolvedThinkLevel: ThinkLevel | undefined;
+  configuredThinkLevel?: ConfiguredThinkLevel;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
+  generatingSource?: GeneratingSource;
+  autoReasoningEnabled?: boolean;
+  autoReasoningConfig?: AutoReasoningConfig;
   execOverrides?: ExecOverrides;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
@@ -177,10 +202,6 @@ type RunPreparedReplyParams = {
   storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
-  configuredThinkLevel?: ThinkLevel | "auto";
-  generatingSource?: import("../../infra/generating-metadata.js").GeneratingSource;
-  autoReasoningEnabled?: boolean;
-  autoReasoningConfig?: import("../../config/types.agent-defaults.js").AutoReasoningConfig;
 };
 
 export async function runPreparedReply(
@@ -227,6 +248,7 @@ export async function runPreparedReply(
   let {
     sessionEntry,
     resolvedThinkLevel,
+    configuredThinkLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
@@ -272,12 +294,9 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  const extraSystemPromptParts = [
-    inboundMetaPrompt,
-    groupChatContext,
-    groupIntro,
-    groupSystemPrompt,
-  ].filter(Boolean);
+  const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
+    .filter(Boolean)
+    .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
@@ -295,7 +314,7 @@ export async function runPreparedReply(
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
-  const baseBodyFinal = isBareSessionReset ? buildBareSessionResetPrompt(cfg) : baseBody;
+  const baseBodyFinal = isBareSessionReset ? BARE_SESSION_RESET_PROMPT : baseBody;
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
       ? {
@@ -337,30 +356,13 @@ export async function runPreparedReply(
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
-  // Extract first-token think hint from the user body BEFORE prepending system events.
-  // If done after, the System: prefix becomes parts[0] and silently shadows any
-  // low|medium|high shorthand the user typed.
-  if (!resolvedThinkLevel && prefixedBodyBase) {
-    const parts = prefixedBodyBase.split(/\s+/);
-    const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel && (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))) {
-      resolvedThinkLevel = maybeLevel;
-      prefixedBodyBase = parts.slice(1).join(" ").trim();
-    }
-  }
-  // Drain system events once, then prepend to each path's body independently.
-  // The queue/steer path uses effectiveBaseBody (unstripped, no session hints) to match
-  // main's pre-PR behavior; the immediate-run path uses prefixedBodyBase (post-hints,
-  // post-think-hint-strip) so the run sees the cleaned-up body.
-  const eventsBlock = await drainFormattedSystemEvents({
+  prefixedBodyBase = await prependSystemEvents({
     cfg,
     sessionKey,
     isMainSession,
     isNewSession,
+    prefixedBodyBase,
   });
-  const prependEvents = (body: string) => (eventsBlock ? `${eventsBlock}\n\n${body}` : body);
-  const bodyWithEvents = prependEvents(effectiveBaseBody);
-  prefixedBodyBase = prependEvents(prefixedBodyBase);
   prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
@@ -391,20 +393,109 @@ export async function runPreparedReply(
   let prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
-  if (!resolvedThinkLevel) {
-    resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
-  }
-  if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-    const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
-    if (explicitThink) {
-      typing.cleanup();
-      return {
-        text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}. Use /think high or switch to one of those models.`,
-      };
+  let effectiveGeneratingSource = params.generatingSource ?? "default";
+  let generatingSelector: GeneratingSelector | undefined;
+  let autoReasonBucket: string | undefined;
+  const autoReasoningEnabled =
+    params.autoReasoningConfig?.enabled === true || params.autoReasoningEnabled === true;
+  const emitGeneratingField = params.autoReasoningConfig?.emitGeneratingField !== false;
+  const autoThinkTraceEnabled = process.env.OPENCLAW_TRACE_AUTO_THINK === "1";
+  const effectiveConfiguredThinkLevel: ConfiguredThinkLevel =
+    normalizeConfiguredThinkLevel(configuredThinkLevel) ??
+    normalizeConfiguredThinkLevel(sessionEntry?.configuredThink ?? sessionEntry?.thinkingLevel) ??
+    normalizeConfiguredThinkLevel(agentCfg?.thinkingDefault) ??
+    "auto";
+  if (!resolvedThinkLevel && prefixedCommandBody) {
+    const parts = prefixedCommandBody.split(/\s+/);
+    const maybeLevel = normalizeThinkLevel(parts[0]);
+    const inlineThinkSupport =
+      maybeLevel &&
+      !coerceThinkingLevelForModel({
+        level: maybeLevel,
+        provider,
+        model,
+      }).coerced;
+    if (inlineThinkSupport) {
+      resolvedThinkLevel = maybeLevel;
+      effectiveGeneratingSource = "inline-directive";
+      prefixedCommandBody = parts.slice(1).join(" ").trim();
     }
-    resolvedThinkLevel = "high";
-    if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
-      sessionEntry.thinkingLevel = "high";
+  }
+  if (!resolvedThinkLevel) {
+    if (effectiveConfiguredThinkLevel === "auto" && prefixedCommandBody.trim()) {
+      const autoSelected = await resolveAutoThinkingLevel({
+        provider,
+        model,
+        messageBody: prefixedCommandBody,
+      });
+      resolvedThinkLevel = autoSelected.thinkingLevel;
+      effectiveGeneratingSource = autoSelected.source;
+      generatingSelector = autoSelected.selector;
+      autoReasonBucket = autoSelected.reasonBucket;
+    } else if (effectiveConfiguredThinkLevel !== "auto") {
+      resolvedThinkLevel = effectiveConfiguredThinkLevel;
+      effectiveGeneratingSource =
+        params.generatingSource === "inline-directive" ||
+        params.generatingSource === "session-directive"
+          ? params.generatingSource
+          : "default";
+    } else {
+      const configuredDefault = normalizeThinkLevel(agentCfg?.thinkingDefault);
+      if (configuredDefault) {
+        resolvedThinkLevel = configuredDefault;
+        effectiveGeneratingSource = "default";
+      } else {
+        resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
+        effectiveGeneratingSource = "default";
+      }
+    }
+  }
+  if (autoThinkTraceEnabled) {
+    logVerbose(
+      `[think] configured=${effectiveConfiguredThinkLevel} effective=${resolvedThinkLevel} reason=${autoReasonBucket ?? effectiveGeneratingSource}`,
+    );
+  }
+
+  const modelReasoningCapability = resolveModelReasoningCapability({
+    catalog: modelState.allowedModelCatalog,
+    provider,
+    model,
+  });
+  if (modelReasoningCapability === false && resolvedThinkLevel !== "off") {
+    resolvedThinkLevel = "off";
+    if (effectiveGeneratingSource === "auto-meta") {
+      effectiveGeneratingSource = "auto-fallback";
+    }
+    if (autoThinkTraceEnabled) {
+      logVerbose(`[think] forcing off (model has no reasoning): ${provider}/${model}`);
+    }
+  }
+
+  const resolvedThinkingLevel = coerceThinkingLevelForModel({
+    level: resolvedThinkLevel ?? "off",
+    provider,
+    model,
+  });
+  if (resolvedThinkingLevel.coerced) {
+    const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
+    resolvedThinkLevel = resolvedThinkingLevel.level;
+    if (effectiveGeneratingSource === "auto-meta") {
+      effectiveGeneratingSource = "auto-fallback";
+    }
+    if (explicitThink && autoThinkTraceEnabled) {
+      logVerbose(
+        `[think] explicit level downgraded ${directives.thinkLevel ?? "unknown"} -> ${resolvedThinkLevel} for ${provider}/${model}`,
+      );
+    }
+    if (
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      effectiveConfiguredThinkLevel !== "auto" &&
+      sessionEntry.thinkingLevel === effectiveConfiguredThinkLevel
+    ) {
+      sessionEntry.thinkingLevel = resolvedThinkingLevel.level;
+      sessionEntry.configuredThink = resolvedThinkingLevel.level;
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
@@ -412,6 +503,24 @@ export async function runPreparedReply(
           store[sessionKey] = sessionEntry;
         });
       }
+    }
+  }
+  if (sessionEntry) {
+    const nextConfigured =
+      effectiveConfiguredThinkLevel === "auto" ? "auto" : (effectiveConfiguredThinkLevel as string);
+    sessionEntry.configuredThink = nextConfigured;
+    sessionEntry.effectiveThink = resolvedThinkLevel;
+    if (effectiveConfiguredThinkLevel === "auto" && sessionEntry.thinkingLevel !== "auto") {
+      sessionEntry.thinkingLevel = "auto";
+    }
+    sessionEntry.updatedAt = Date.now();
+    if (sessionStore && sessionKey) {
+      sessionStore[sessionKey] = sessionEntry;
+    }
+    if (storePath && sessionKey && sessionStore) {
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = sessionEntry;
+      });
     }
   }
   if (resetTriggered && command.isAuthorizedSender) {
@@ -434,9 +543,7 @@ export async function runPreparedReply(
     sessionEntry,
     resolveSessionFilePathOptions({ agentId, storePath }),
   );
-  // Use bodyWithEvents (events prepended, but no session hints / untrusted context) so
-  // deferred turns receive system events while keeping the same scope as effectiveBaseBody did.
-  const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
+  const queueBodyBase = [threadContextNote, effectiveBaseBody].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
     : queueBodyBase;
@@ -473,7 +580,9 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
-  const followupRun = {
+  const configuredThinkLevelForRun: FollowupRun["run"]["configuredThinkLevel"] =
+    effectiveConfiguredThinkLevel === "auto" ? "auto" : effectiveConfiguredThinkLevel;
+  const followupRun: FollowupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
@@ -491,10 +600,7 @@ export async function runPreparedReply(
       sessionKey,
       messageProvider: resolveOriginMessageProvider({
         originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
-        // Prefer Provider over Surface for fallback channel identity.
-        // Surface can carry relayed metadata (for example "webchat") while Provider
-        // still reflects the active channel that should own tool routing.
-        provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
+        provider: ctx.Surface ?? ctx.Provider ?? sessionCtx.Provider,
       }),
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
@@ -513,16 +619,15 @@ export async function runPreparedReply(
       model,
       authProfileId,
       authProfileIdSource,
+      configuredThinkLevel: configuredThinkLevelForRun,
       thinkLevel: resolvedThinkLevel,
-      fastMode: resolveFastModeState({
-        cfg,
-        provider,
-        model,
-        sessionEntry,
-      }).enabled,
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
+      generatingSource: effectiveGeneratingSource,
+      autoReasoningEnabled: autoReasoningEnabled || effectiveConfiguredThinkLevel === "auto",
+      generatingSelector,
+      emitGeneratingField,
       execOverrides,
       bashElevated: {
         enabled: elevatedEnabled,
@@ -532,8 +637,7 @@ export async function runPreparedReply(
       timeoutMs,
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
-      inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
-      extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      extraSystemPrompt: extraSystemPrompt || undefined,
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
     },
   };

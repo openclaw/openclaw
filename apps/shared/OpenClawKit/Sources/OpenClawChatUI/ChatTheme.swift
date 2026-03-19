@@ -161,6 +161,15 @@ enum OpenClawChatTheme {
     static var divider: Color {
         Color.secondary.opacity(0.2)
     }
+
+    /// Orange accent for "running" / busy status (matches TUI).
+    static var runningStatus: Color {
+        #if os(macOS)
+        Color(nsColor: .systemOrange)
+        #else
+        Color(uiColor: .systemOrange)
+        #endif
+    }
 }
 
 enum OpenClawPlatformImageFactory {

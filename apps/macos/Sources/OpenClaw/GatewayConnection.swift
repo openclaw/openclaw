@@ -77,6 +77,7 @@ actor GatewayConnection {
         case chatHistory = "chat.history"
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
+        case chatEdit = "chat.edit"
         case chatAbort = "chat.abort"
         case skillsStatus = "skills.status"
         case skillsInstall = "skills.install"
@@ -657,6 +658,34 @@ extension GatewayConnection {
 
         return try await self.requestDecoded(
             method: .chatSend,
+            params: params,
+            timeoutMs: Double(timeoutMs))
+    }
+
+    func chatEdit(
+        sessionKey: String,
+        message: String,
+        messageId: String?,
+        userMessageIndex: Int?,
+        thinking: String,
+        idempotencyKey: String,
+        timeoutMs: Int = 30000) async throws -> OpenClawChatSendResponse
+    {
+        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
+        var params: [String: AnyCodable] = [
+            "sessionKey": AnyCodable(resolvedKey),
+            "message": AnyCodable(message),
+            "thinking": AnyCodable(thinking),
+            "idempotencyKey": AnyCodable(idempotencyKey),
+            "timeoutMs": AnyCodable(timeoutMs),
+        ]
+        if let messageId, !messageId.isEmpty {
+            params["messageId"] = AnyCodable(messageId)
+        } else if let userMessageIndex {
+            params["userMessageIndex"] = AnyCodable(userMessageIndex)
+        }
+        return try await self.requestDecoded(
+            method: .chatEdit,
             params: params,
             timeoutMs: Double(timeoutMs))
     }

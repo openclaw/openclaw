@@ -8,6 +8,7 @@ import {
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { AUTO_MODEL } from "../shared/model-constants.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
@@ -16,7 +17,11 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
-import { sanitizeRenderableText } from "./tui-formatters.js";
+import {
+  collectUserPromptPivots,
+  createLocalPromptId,
+  matchPromptPivotById,
+} from "./prompt-ids.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -43,15 +48,9 @@ type CommandHandlerContext = {
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
   noteLocalRunId: (runId: string) => void;
-  noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
-  forgetLocalBtwRunId?: (runId: string) => void;
   requestExit: () => void;
 };
-
-function isBtwCommand(text: string): boolean {
-  return /^\/btw(?::|\s|$)/i.test(text.trim());
-}
 
 export function createCommandHandlers(context: CommandHandlerContext) {
   const {
@@ -72,9 +71,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     formatSessionKey,
     applySessionInfoFromPatch,
     noteLocalRunId,
-    noteLocalBtwRunId,
     forgetLocalRunId,
-    forgetLocalBtwRunId,
     requestExit,
   } = context;
 
@@ -82,6 +79,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     state.currentAgentId = normalizeAgentId(id);
     await setSession("");
   };
+  let archiveSessionPending = false;
 
   const closeOverlayAndRender = () => {
     closeOverlay();
@@ -109,16 +107,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const openModelSelector = async () => {
     try {
       const models = await client.listModels();
-      if (models.length === 0) {
-        chatLog.addSystem("no models available");
-        tui.requestRender();
-        return;
-      }
-      const items = models.map((model) => ({
+      const autoItem = {
+        value: AUTO_MODEL,
+        label: "Auto (Recommended)",
+        description: "Let GPT-5.2 choose the best model per prompt",
+      };
+      const modelItems = models.map((model) => ({
         value: `${model.provider}/${model.id}`,
         label: `${model.provider}/${model.id}`,
         description: model.name && model.name !== model.id ? model.name : "",
       }));
+      const items = [autoItem, ...modelItems];
       const selector = createSearchableSelectList(items, 9);
       openSelector(selector, async (value) => {
         try {
@@ -126,7 +125,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             key: state.currentSessionKey,
             model: value,
           });
-          chatLog.addSystem(`model set to ${value}`);
+          const displayLabel = value === AUTO_MODEL ? "Auto (Recommended)" : value;
+          chatLog.addSystem(`model set to ${displayLabel}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
@@ -241,6 +241,50 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
+  const parseEditCommandArgs = (rawArgs: string): { promptId: string; nextText: string } | null => {
+    const trimmed = rawArgs.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const parts = trimmed.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) {
+      return null;
+    }
+
+    const first = parts[0]?.trim() ?? "";
+    const second = parts[1]?.trim() ?? "";
+
+    // Supports "/edit id p-abc12345 updated text" by allowing a copied "id" prefix.
+    if (first.toLowerCase() === "id") {
+      if (!second || parts.length < 3) {
+        return null;
+      }
+      const promptId = second;
+      const nextText = parts.slice(2).join(" ").trim();
+      if (!nextText) {
+        return null;
+      }
+      return { promptId, nextText };
+    }
+
+    if (first.toLowerCase().startsWith("id:")) {
+      const promptId = first.slice(3).trim();
+      const nextText = parts.slice(1).join(" ").trim();
+      if (!promptId || !nextText) {
+        return null;
+      }
+      return { promptId, nextText };
+    }
+
+    const promptId = first;
+    const nextText = parts.slice(1).join(" ").trim();
+    if (!promptId || !nextText) {
+      return null;
+    }
+    return { promptId, nextText };
+  };
+
   const handleCommand = async (raw: string) => {
     const { name, args } = parseCommand(raw);
     if (!name) {
@@ -299,11 +343,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await openModelSelector();
         } else {
           try {
+            const modelValue = args.trim().toLowerCase() === "auto" ? AUTO_MODEL : args;
             const result = await client.patchSession({
               key: state.currentSessionKey,
-              model: args,
+              model: modelValue,
             });
-            chatLog.addSystem(`model set to ${args}`);
+            const displayLabel = modelValue === AUTO_MODEL ? "Auto (Recommended)" : args;
+            chatLog.addSystem(`model set to ${displayLabel}`);
             applySessionInfoFromPatch(result);
             await refreshSessionInfo();
           } catch (err) {
@@ -314,6 +360,54 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "models":
         await openModelSelector();
         break;
+      case "edit":
+        if (!args) {
+          chatLog.addSystem("usage: /edit <prompt-id> <new prompt text>");
+          break;
+        }
+        try {
+          const parsed = parseEditCommandArgs(args);
+          if (!parsed) {
+            chatLog.addSystem("usage: /edit <prompt-id> <new prompt text>");
+            break;
+          }
+          const history = (await client.loadHistory({
+            sessionKey: state.currentSessionKey,
+            limit: 400,
+          })) as { messages?: unknown[] };
+          const messages = Array.isArray(history?.messages) ? history.messages : [];
+          const promptPivots = collectUserPromptPivots(messages);
+          const pivot = matchPromptPivotById(promptPivots, parsed.promptId);
+          if (!pivot) {
+            chatLog.addSystem(`edit failed: unknown prompt id ${parsed.promptId}`);
+            break;
+          }
+          chatLog.addSystem(`editing prompt ${pivot.promptId}…`);
+          const runId = randomUUID();
+          noteLocalRunId(runId);
+          state.activeChatRunId = runId;
+          setActivityStatus("sending");
+          tui.requestRender();
+          await client.editChat({
+            sessionKey: state.currentSessionKey,
+            message: parsed.nextText,
+            runId,
+            messageId: pivot.messageId,
+            userMessageIndex: pivot.userMessageIndex,
+          });
+          chatLog.addUser(parsed.nextText, createLocalPromptId());
+          setActivityStatus("waiting");
+          tui.requestRender();
+        } catch (err) {
+          if (state.activeChatRunId) {
+            forgetLocalRunId?.(state.activeChatRunId);
+          }
+          state.activeChatRunId = null;
+          chatLog.addSystem(`edit failed: ${String(err)}`);
+          setActivityStatus("error");
+          tui.requestRender();
+        }
+        break;
       case "think":
         if (!args) {
           const levels = formatThinkingLevels(
@@ -321,15 +415,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             state.sessionInfo.model,
             "|",
           );
-          chatLog.addSystem(`usage: /think <${levels}>`);
+          chatLog.addSystem(`usage: /think <auto|${levels}>`);
           break;
         }
         try {
+          const normalizedArgs = args.trim().toLowerCase();
+          const clearToAuto = normalizedArgs === "auto" || normalizedArgs === "level auto";
           const result = await client.patchSession({
             key: state.currentSessionKey,
-            thinkingLevel: args,
+            thinkingLevel: clearToAuto ? "auto" : args,
           });
-          chatLog.addSystem(`thinking set to ${args}`);
+          chatLog.addSystem(
+            clearToAuto ? "thinking set to auto (inherit)" : `thinking set to ${args}`,
+          );
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
@@ -351,27 +449,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await loadHistory();
         } catch (err) {
           chatLog.addSystem(`verbose failed: ${String(err)}`);
-        }
-        break;
-      case "fast":
-        if (!args || args === "status") {
-          chatLog.addSystem(`fast mode: ${state.sessionInfo.fastMode ? "on" : "off"}`);
-          break;
-        }
-        if (args !== "on" && args !== "off") {
-          chatLog.addSystem("usage: /fast <status|on|off>");
-          break;
-        }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            fastMode: args === "on",
-          });
-          chatLog.addSystem(`fast mode ${args === "on" ? "enabled" : "disabled"}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`fast failed: ${String(err)}`);
         }
         break;
       case "reasoning":
@@ -453,23 +530,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "new":
-        try {
-          // Clear token counts immediately to avoid stale display (#1523)
-          state.sessionInfo.inputTokens = null;
-          state.sessionInfo.outputTokens = null;
-          state.sessionInfo.totalTokens = null;
-          tui.requestRender();
-
-          // Generate unique session key to isolate this TUI client (#39217)
-          // This ensures /new creates a fresh session that doesn't broadcast
-          // to other connected TUI clients sharing the original session key.
-          const uniqueKey = `tui-${randomUUID()}`;
-          await setSession(uniqueKey);
-          chatLog.addSystem(`new session: ${uniqueKey}`);
-        } catch (err) {
-          chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
-        }
-        break;
       case "reset":
         try {
           // Clear token counts immediately to avoid stale display (#1523)
@@ -482,7 +542,24 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
           await loadHistory();
         } catch (err) {
-          chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
+          chatLog.addSystem(`reset failed: ${String(err)}`);
+        }
+        break;
+      case "archive-session":
+        if (archiveSessionPending) {
+          chatLog.addSystem("archive already in progress");
+          break;
+        }
+        archiveSessionPending = true;
+        try {
+          setActivityStatus("archiving current session...");
+          chatLog.addSystem("Archiving current session...");
+          await sendMessage("/archive-session");
+          chatLog.addSystem("Archived. Exiting now.");
+          requestExit();
+        } catch (err) {
+          archiveSessionPending = false;
+          chatLog.addSystem(`archive-session failed: ${String(err)}`);
         }
         break;
       case "abort":
@@ -509,17 +586,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       return;
     }
-    const isBtw = isBtwCommand(text);
-    const runId = randomUUID();
     try {
-      if (!isBtw) {
-        chatLog.addUser(text);
-        noteLocalRunId(runId);
-        state.activeChatRunId = runId;
-        setActivityStatus("sending");
-      } else {
-        noteLocalBtwRunId?.(runId);
-      }
+      chatLog.addUser(text, createLocalPromptId());
+      tui.requestRender();
+      const runId = randomUUID();
+      noteLocalRunId(runId);
+      state.activeChatRunId = runId;
+      setActivityStatus("sending");
       tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
@@ -529,24 +602,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         timeoutMs: opts.timeoutMs,
         runId,
       });
-      if (!isBtw) {
-        setActivityStatus("waiting");
-        tui.requestRender();
-      }
+      setActivityStatus("waiting");
+      tui.requestRender();
     } catch (err) {
-      if (isBtw) {
-        forgetLocalBtwRunId?.(runId);
-      }
-      if (!isBtw && state.activeChatRunId) {
+      if (state.activeChatRunId) {
         forgetLocalRunId?.(state.activeChatRunId);
       }
-      if (!isBtw) {
-        state.activeChatRunId = null;
-      }
-      chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);
-      if (!isBtw) {
-        setActivityStatus("error");
-      }
+      state.activeChatRunId = null;
+      chatLog.addSystem(`send failed: ${String(err)}`);
+      setActivityStatus("error");
       tui.requestRender();
     }
   };

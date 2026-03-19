@@ -69,6 +69,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       name: "model",
       description: "Set model (or open picker)",
     },
+    { name: "edit", description: "Edit a prompt by ID and re-run" },
     { name: "models", description: "Open model picker" },
     {
       name: "think",
@@ -148,6 +149,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/agent <id> (or /agents)",
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
+    "/edit <prompt-id> <new prompt text>",
     `/think <${thinkLevels}>`,
     "/fast <status|on|off>",
     "/verbose <on|off>",

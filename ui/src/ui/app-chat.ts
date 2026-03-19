@@ -1,44 +1,98 @@
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
-import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
+import { scheduleChatScroll } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
-import { executeSlashCommand } from "./chat/slash-command-executor.ts";
-import { parseSlashCommand } from "./chat/slash-commands.ts";
-import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
-import { loadModels } from "./controllers/models.ts";
+import {
+  abortChatRun,
+  editChatMessage,
+  loadChatHistory,
+  sendChatMessage,
+} from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
-import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
+import type { GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
-import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 
 export type ChatHost = {
-  client: GatewayBrowserClient | null;
-  chatMessages: unknown[];
-  chatStream: string | null;
   connected: boolean;
   chatMessage: string;
+  chatMessages: unknown[];
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
-  lastError?: string | null;
+  chatEditingMessageId: string | null;
+  chatEditingUserMessageIndex: number | null;
+  lastError: string | null;
   sessionKey: string;
   basePath: string;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
-  chatModelOverrides: Record<string, ChatModelOverride | null>;
-  chatModelsLoading: boolean;
-  chatModelCatalog: ModelCatalogEntry[];
-  updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
-  /** Callback for slash-command side effects that need app-level access. */
-  onSlashAction?: (action: string) => void;
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+
+function resolveMessageId(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const entry = message as Record<string, unknown>;
+  if (typeof entry.id === "string" && entry.id.trim()) {
+    return entry.id.trim();
+  }
+  if (typeof entry.messageId === "string" && entry.messageId.trim()) {
+    return entry.messageId.trim();
+  }
+  return null;
+}
+
+function isUserMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  return (message as { role?: unknown }).role === "user";
+}
+
+function applyLocalEditRebase(host: ChatHost, nextText: string) {
+  const pivotId = host.chatEditingMessageId;
+  const pivotUserIndex = host.chatEditingUserMessageIndex;
+  if (!pivotId && typeof pivotUserIndex !== "number") {
+    return;
+  }
+  let pivotIndex = -1;
+  let userCount = 0;
+  for (let i = 0; i < host.chatMessages.length; i++) {
+    const message = host.chatMessages[i];
+    if (!isUserMessage(message)) {
+      continue;
+    }
+    const id = resolveMessageId(message);
+    if (pivotId && id === pivotId) {
+      pivotIndex = i;
+      break;
+    }
+    if (typeof pivotUserIndex === "number" && userCount === pivotUserIndex) {
+      pivotIndex = i;
+      break;
+    }
+    userCount += 1;
+  }
+  if (pivotIndex < 0) {
+    return;
+  }
+  const kept = host.chatMessages.slice(0, pivotIndex);
+  host.chatMessages = [
+    ...kept,
+    {
+      role: "user",
+      content: [{ type: "text", text: nextText }],
+      timestamp: Date.now(),
+    },
+  ];
+}
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
@@ -87,7 +141,6 @@ function enqueueChatMessage(
   text: string,
   attachments?: ChatAttachment[],
   refreshSessions?: boolean,
-  localCommand?: { args: string; name: string },
 ) {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -102,8 +155,6 @@ function enqueueChatMessage(
       createdAt: Date.now(),
       attachments: hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined,
       refreshSessions,
-      localCommandArgs: localCommand?.args,
-      localCommandName: localCommand?.name,
     },
   ];
 }
@@ -121,8 +172,6 @@ async function sendChatMessageNow(
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  // Reset scroll state before sending to ensure auto-scroll works for the response
-  resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
   const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {
@@ -143,14 +192,42 @@ async function sendChatMessageNow(
   if (ok && opts?.restoreAttachments && opts.previousAttachments?.length) {
     host.chatAttachments = opts.previousAttachments;
   }
-  // Force scroll after sending to ensure viewport is at bottom for incoming stream
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   if (ok && !host.chatRunId) {
     void flushChatQueue(host);
   }
   if (ok && opts?.refreshSessions && runId) {
     host.refreshSessionsAfterChat.add(runId);
   }
+  return ok;
+}
+
+async function sendEditedChatMessageNow(
+  host: ChatHost,
+  message: string,
+  opts?: {
+    previousDraft?: string;
+  },
+) {
+  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+  applyLocalEditRebase(host, message);
+  const runId = await editChatMessage(host as unknown as OpenClawApp, message, {
+    messageId: host.chatEditingMessageId,
+    userMessageIndex: host.chatEditingUserMessageIndex,
+  });
+  const ok = Boolean(runId);
+  if (!ok && opts?.previousDraft != null) {
+    host.chatMessage = opts.previousDraft;
+  }
+  if (ok) {
+    host.chatEditingMessageId = null;
+    host.chatEditingUserMessageIndex = null;
+    setLastActiveSessionKey(
+      host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
+      host.sessionKey,
+    );
+  }
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   return ok;
 }
 
@@ -163,25 +240,12 @@ async function flushChatQueue(host: ChatHost) {
     return;
   }
   host.chatQueue = rest;
-  let ok = false;
-  try {
-    if (next.localCommandName) {
-      await dispatchSlashCommand(host, next.localCommandName, next.localCommandArgs ?? "");
-      ok = true;
-    } else {
-      ok = await sendChatMessageNow(host, next.text, {
-        attachments: next.attachments,
-        refreshSessions: next.refreshSessions,
-      });
-    }
-  } catch (err) {
-    host.lastError = String(err);
-  }
+  const ok = await sendChatMessageNow(host, next.text, {
+    attachments: next.attachments,
+    refreshSessions: next.refreshSessions,
+  });
   if (!ok) {
     host.chatQueue = [next, ...host.chatQueue];
-  } else if (host.chatQueue.length > 0) {
-    // Continue draining — local commands don't block on server response
-    void flushChatQueue(host);
   }
 }
 
@@ -203,6 +267,7 @@ export async function handleSendChat(
   const attachmentsToSend = messageOverride == null ? attachments : [];
   const hasAttachments = attachmentsToSend.length > 0;
 
+  // Allow sending with just attachments (no message text required)
   if (!message && !hasAttachments) {
     return;
   }
@@ -212,40 +277,28 @@ export async function handleSendChat(
     return;
   }
 
-  // Intercept local slash commands (/status, /model, /compact, etc.)
-  const parsed = parseSlashCommand(message);
-  if (parsed?.command.executeLocal) {
-    if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.name)) {
-      if (messageOverride == null) {
-        host.chatMessage = "";
-        host.chatAttachments = [];
-      }
-      enqueueChatMessage(host, message, undefined, isChatResetCommand(message), {
-        args: parsed.args,
-        name: parsed.command.name,
-      });
-      return;
-    }
-    const prevDraft = messageOverride == null ? previousDraft : undefined;
-    if (messageOverride == null) {
-      host.chatMessage = "";
-      host.chatAttachments = [];
-    }
-    await dispatchSlashCommand(host, parsed.command.name, parsed.args, {
-      previousDraft: prevDraft,
-      restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
-    });
-    return;
-  }
-
   const refreshSessions = isChatResetCommand(message);
+  const hasEditPivot =
+    host.chatEditingMessageId !== null || typeof host.chatEditingUserMessageIndex === "number";
   if (messageOverride == null) {
     host.chatMessage = "";
+    // Clear attachments when sending
     host.chatAttachments = [];
   }
 
   if (isChatBusy(host)) {
+    if (hasEditPivot) {
+      host.lastError = "Finish the current run before submitting an edited prompt.";
+      return;
+    }
     enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
+    return;
+  }
+
+  if (hasEditPivot) {
+    await sendEditedChatMessageNow(host, message, {
+      previousDraft: messageOverride == null ? previousDraft : undefined,
+    });
     return;
   }
 
@@ -259,127 +312,16 @@ export async function handleSendChat(
   });
 }
 
-function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "focus", "export"].includes(name);
-}
-
-// ── Slash Command Dispatch ──
-
-async function dispatchSlashCommand(
-  host: ChatHost,
-  name: string,
-  args: string,
-  sendOpts?: { previousDraft?: string; restoreDraft?: boolean },
-) {
-  switch (name) {
-    case "stop":
-      await handleAbortChat(host);
-      return;
-    case "new":
-      await sendChatMessageNow(host, "/new", {
-        refreshSessions: true,
-        previousDraft: sendOpts?.previousDraft,
-        restoreDraft: sendOpts?.restoreDraft,
-      });
-      return;
-    case "reset":
-      await sendChatMessageNow(host, "/reset", {
-        refreshSessions: true,
-        previousDraft: sendOpts?.previousDraft,
-        restoreDraft: sendOpts?.restoreDraft,
-      });
-      return;
-    case "clear":
-      await clearChatHistory(host);
-      return;
-    case "focus":
-      host.onSlashAction?.("toggle-focus");
-      return;
-    case "export":
-      host.onSlashAction?.("export");
-      return;
-  }
-
-  if (!host.client) {
-    return;
-  }
-
-  const targetSessionKey = host.sessionKey;
-  const result = await executeSlashCommand(host.client, targetSessionKey, name, args);
-
-  if (result.content) {
-    injectCommandResult(host, result.content);
-  }
-
-  if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
-    host.chatModelOverrides = {
-      ...host.chatModelOverrides,
-      [targetSessionKey]: result.sessionPatch.modelOverride ?? null,
-    };
-  }
-
-  if (result.action === "refresh") {
-    await refreshChat(host);
-  }
-
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
-}
-
-async function clearChatHistory(host: ChatHost) {
-  if (!host.client || !host.connected) {
-    return;
-  }
-  try {
-    await host.client.request("sessions.reset", { key: host.sessionKey });
-    host.chatMessages = [];
-    host.chatStream = null;
-    host.chatRunId = null;
-    await loadChatHistory(host as unknown as OpenClawApp);
-  } catch (err) {
-    host.lastError = String(err);
-  }
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
-}
-
-function injectCommandResult(host: ChatHost, content: string) {
-  host.chatMessages = [
-    ...host.chatMessages,
-    {
-      role: "system",
-      content,
-      timestamp: Date.now(),
-    },
-  ];
-}
-
 export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
   await Promise.all([
     loadChatHistory(host as unknown as OpenClawApp),
     loadSessions(host as unknown as OpenClawApp, {
-      activeMinutes: 0,
-      limit: 0,
-      includeGlobal: true,
-      includeUnknown: true,
+      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
     }),
     refreshChatAvatar(host),
-    refreshChatModels(host),
   ]);
   if (opts?.scheduleScroll !== false) {
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
-  }
-}
-
-async function refreshChatModels(host: ChatHost) {
-  if (!host.client || !host.connected) {
-    host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
-    return;
-  }
-  host.chatModelsLoading = true;
-  try {
-    host.chatModelCatalog = await loadModels(host.client);
-  } finally {
-    host.chatModelsLoading = false;
   }
 }
 
@@ -404,7 +346,7 @@ function resolveAgentIdForSession(host: ChatHost): string | null {
 function buildAvatarMetaUrl(basePath: string, agentId: string): string {
   const base = normalizeBasePath(basePath);
   const encoded = encodeURIComponent(agentId);
-  return base ? `${base}/avatar/${encoded}?meta=1` : `avatar/${encoded}?meta=1`;
+  return base ? `${base}/avatar/${encoded}?meta=1` : `/avatar/${encoded}?meta=1`;
 }
 
 export async function refreshChatAvatar(host: ChatHost) {

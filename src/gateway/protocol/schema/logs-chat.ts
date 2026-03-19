@@ -1,4 +1,4 @@
-import { Type, type Static } from "@sinclair/typebox";
+import { Type } from "@sinclair/typebox";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
 
 export const LogsTailParamsSchema = Type.Object(
@@ -76,8 +76,6 @@ export const ChatEditParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-
-export type ChatEditParams = Static<typeof ChatEditParamsSchema>;
 
 export const ChatEventSchema = Type.Object(
   {

@@ -96,6 +96,38 @@ struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
         }
     }
 
+    func editMessage(
+        sessionKey: String,
+        message: String,
+        messageId: String?,
+        userMessageIndex: Int?,
+        thinking: String,
+        idempotencyKey: String) async throws -> OpenClawChatSendResponse
+    {
+        struct Params: Codable {
+            var sessionKey: String
+            var message: String
+            var messageId: String?
+            var userMessageIndex: Int?
+            var thinking: String
+            var timeoutMs: Int
+            var idempotencyKey: String
+        }
+
+        let params = Params(
+            sessionKey: sessionKey,
+            message: message,
+            messageId: messageId,
+            userMessageIndex: userMessageIndex,
+            thinking: thinking,
+            timeoutMs: 30000,
+            idempotencyKey: idempotencyKey)
+        let data = try JSONEncoder().encode(params)
+        let json = String(data: data, encoding: .utf8)
+        let res = try await self.gateway.request(method: "chat.edit", paramsJSON: json, timeoutSeconds: 35)
+        return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
+    }
+
     func requestHealth(timeoutMs: Int) async throws -> Bool {
         let seconds = max(1, Int(ceil(Double(timeoutMs) / 1000.0)))
         let res = try await self.gateway.request(method: "health", paramsJSON: nil, timeoutSeconds: seconds)

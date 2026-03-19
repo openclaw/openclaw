@@ -3,56 +3,47 @@ import { createCommandHandlers } from "./tui-command-handlers.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
-type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
 
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
-  setSession?: SetSessionMock;
   loadHistory?: LoadHistoryMock;
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
-  activeChatRunId?: string | null;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
-  const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
   const addUser = vi.fn();
   const addSystem = vi.fn();
   const requestRender = vi.fn();
-  const noteLocalRunId = vi.fn();
-  const noteLocalBtwRunId = vi.fn();
   const loadHistory =
     params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
-  const state = {
-    currentSessionKey: "agent:main:main",
-    activeChatRunId: params?.activeChatRunId ?? null,
-    isConnected: params?.isConnected ?? true,
-    sessionInfo: {},
-  };
 
   const { handleCommand } = createCommandHandlers({
     client: { sendChat, resetSession } as never,
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
     opts: {},
-    state: state as never,
+    state: {
+      currentSessionKey: "agent:main:main",
+      activeChatRunId: null,
+      isConnected: params?.isConnected ?? true,
+      sessionInfo: {},
+    } as never,
     deliverDefault: false,
     openOverlay: vi.fn(),
     closeOverlay: vi.fn(),
     refreshSessionInfo: vi.fn(),
     loadHistory,
-    setSession,
+    setSession: vi.fn(),
     refreshAgents: vi.fn(),
     abortActive: vi.fn(),
     setActivityStatus,
     formatSessionKey: vi.fn(),
     applySessionInfoFromPatch: vi.fn(),
-    noteLocalRunId,
-    noteLocalBtwRunId,
+    noteLocalRunId: vi.fn(),
     forgetLocalRunId: vi.fn(),
-    forgetLocalBtwRunId: vi.fn(),
     requestExit: vi.fn(),
   });
 
@@ -60,15 +51,11 @@ function createHarness(params?: {
     handleCommand,
     sendChat,
     resetSession,
-    setSession,
     addUser,
     addSystem,
     requestRender,
     loadHistory,
     setActivityStatus,
-    noteLocalRunId,
-    noteLocalBtwRunId,
-    state,
   };
 }
 
@@ -107,7 +94,7 @@ describe("tui command handlers", () => {
     await handleCommand("/context");
 
     expect(addSystem).not.toHaveBeenCalled();
-    expect(addUser).toHaveBeenCalledWith("/context");
+    expect(addUser).toHaveBeenCalledWith("/context", expect.stringMatching(/^p-/));
     expect(sendChat).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:main",
@@ -117,49 +104,16 @@ describe("tui command handlers", () => {
     expect(requestRender).toHaveBeenCalled();
   });
 
-  it("sends /btw without hijacking the active main run", async () => {
-    const setActivityStatus = vi.fn();
-    const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
-      createHarness({
-        activeChatRunId: "run-main",
-        setActivityStatus,
-      });
-
-    await handleCommand("/btw what changed?");
-
-    expect(addUser).not.toHaveBeenCalled();
-    expect(noteLocalRunId).not.toHaveBeenCalled();
-    expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
-    expect(state.activeChatRunId).toBe("run-main");
-    expect(setActivityStatus).not.toHaveBeenCalledWith("sending");
-    expect(setActivityStatus).not.toHaveBeenCalledWith("waiting");
-    expect(sendChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "/btw what changed?",
-      }),
-    );
-  });
-
-  it("creates unique session for /new and resets shared session for /reset", async () => {
+  it("passes reset reason when handling /new and /reset", async () => {
     const loadHistory = vi.fn().mockResolvedValue(undefined);
-    const setSessionMock = vi.fn().mockResolvedValue(undefined) as SetSessionMock;
-    const { handleCommand, resetSession } = createHarness({
-      loadHistory,
-      setSession: setSessionMock,
-    });
+    const { handleCommand, resetSession } = createHarness({ loadHistory });
 
     await handleCommand("/new");
     await handleCommand("/reset");
 
-    // /new creates a unique session key (isolates TUI client) (#39217)
-    expect(setSessionMock).toHaveBeenCalledTimes(1);
-    expect(setSessionMock).toHaveBeenCalledWith(
-      expect.stringMatching(/^tui-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/),
-    );
-    // /reset still resets the shared session
-    expect(resetSession).toHaveBeenCalledTimes(1);
-    expect(resetSession).toHaveBeenCalledWith("agent:main:main", "reset");
-    expect(loadHistory).toHaveBeenCalledTimes(1); // /reset calls loadHistory directly; /new does so indirectly via setSession
+    expect(resetSession).toHaveBeenNthCalledWith(1, "agent:main:main", "new");
+    expect(resetSession).toHaveBeenNthCalledWith(2, "agent:main:main", "reset");
+    expect(loadHistory).toHaveBeenCalledTimes(2);
   });
 
   it("reports send failures and marks activity status as error", async () => {
@@ -175,21 +129,6 @@ describe("tui command handlers", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
   });
 
-  it("sanitizes control sequences in /new and /reset failures", async () => {
-    const setSession = vi.fn().mockRejectedValue(new Error("\u001b[31mboom\u001b[0m"));
-    const resetSession = vi.fn().mockRejectedValue(new Error("\u001b[31mboom\u001b[0m"));
-    const { handleCommand, addSystem } = createHarness({
-      setSession,
-      resetSession,
-    });
-
-    await handleCommand("/new");
-    await handleCommand("/reset");
-
-    expect(addSystem).toHaveBeenNthCalledWith(1, "new session failed: Error: boom");
-    expect(addSystem).toHaveBeenNthCalledWith(2, "reset failed: Error: boom");
-  });
-
   it("reports disconnected status and skips gateway send when offline", async () => {
     const { handleCommand, sendChat, addUser, addSystem, setActivityStatus } = createHarness({
       isConnected: false,
@@ -201,5 +140,98 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
+  });
+
+  it("patches session to AUTO_MODEL when /model auto", async () => {
+    const patchSession = vi.fn().mockResolvedValue({ ok: true });
+    const applySessionInfoFromPatch = vi.fn();
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const { addSystem } = createHarness();
+    const handlers = createCommandHandlers({
+      client: {
+        sendChat: vi.fn(),
+        resetSession: vi.fn(),
+        patchSession,
+        listModels: vi.fn(),
+      } as never,
+      chatLog: { addUser: vi.fn(), addSystem } as never,
+      tui: { requestRender: vi.fn() } as never,
+      opts: {},
+      state: { currentSessionKey: "agent:main:main", sessionInfo: {} } as never,
+      deliverDefault: false,
+      openOverlay: vi.fn(),
+      closeOverlay: vi.fn(),
+      refreshSessionInfo,
+      loadHistory: vi.fn(),
+      setSession: vi.fn(),
+      refreshAgents: vi.fn(),
+      abortActive: vi.fn(),
+      setActivityStatus: vi.fn(),
+      formatSessionKey: vi.fn(),
+      applySessionInfoFromPatch,
+      noteLocalRunId: vi.fn(),
+      forgetLocalRunId: vi.fn(),
+      requestExit: vi.fn(),
+    });
+
+    await handlers.handleCommand("/model auto");
+
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      model: "auto",
+    });
+    expect(addSystem).toHaveBeenCalledWith("model set to Auto (Recommended)");
+  });
+
+  it("accepts copied 'id <prompt-id>' prefix for /edit", async () => {
+    const editChat = vi.fn().mockResolvedValue({ runId: "r-edit" });
+    const loadHistory = vi.fn().mockResolvedValue({
+      messages: [{ role: "user", content: [{ type: "text", text: "first prompt" }] }],
+    });
+    const addSystem = vi.fn();
+    const addUser = vi.fn();
+
+    const handlers = createCommandHandlers({
+      client: {
+        sendChat: vi.fn(),
+        resetSession: vi.fn(),
+        loadHistory,
+        editChat,
+      } as never,
+      chatLog: { addUser, addSystem } as never,
+      tui: { requestRender: vi.fn() } as never,
+      opts: {},
+      state: {
+        currentSessionKey: "agent:main:main",
+        activeChatRunId: null,
+        isConnected: true,
+        sessionInfo: {},
+      } as never,
+      deliverDefault: false,
+      openOverlay: vi.fn(),
+      closeOverlay: vi.fn(),
+      refreshSessionInfo: vi.fn(),
+      loadHistory: vi.fn(),
+      setSession: vi.fn(),
+      refreshAgents: vi.fn(),
+      abortActive: vi.fn(),
+      setActivityStatus: vi.fn(),
+      formatSessionKey: vi.fn(),
+      applySessionInfoFromPatch: vi.fn(),
+      noteLocalRunId: vi.fn(),
+      forgetLocalRunId: vi.fn(),
+      requestExit: vi.fn(),
+    });
+
+    await handlers.handleCommand("/edit id p-1 rewritten prompt");
+
+    expect(editChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "rewritten prompt",
+        userMessageIndex: 0,
+      }),
+    );
+    expect(addUser).toHaveBeenCalledWith("rewritten prompt", expect.stringMatching(/^p-/));
   });
 });

@@ -62,8 +62,8 @@ export class ChatLog extends Container {
     this.append(new Text(theme.system(text), 1, 0));
   }
 
-  addUser(text: string) {
-    this.append(new UserMessageComponent(text));
+  addUser(text: string, promptId?: string) {
+    this.append(new UserMessageComponent(text, promptId));
   }
 
   private resolveRunId(runId?: string) {

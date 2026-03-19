@@ -7,6 +7,7 @@ import {
 } from "../routing/session-key.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
+import { collectUserPromptPivots } from "./prompt-ids.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
@@ -306,6 +307,12 @@ export function createSessionActions(context: SessionActionContext) {
       chatLog.clearAll();
       btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
+      const promptPivots = collectUserPromptPivots(record.messages ?? []);
+      const promptIdByUserIndex = new Map<number, string>();
+      for (const pivot of promptPivots) {
+        promptIdByUserIndex.set(pivot.userMessageIndex, pivot.promptId);
+      }
+      let userMessageIndex = 0;
       for (const entry of record.messages ?? []) {
         if (!entry || typeof entry !== "object") {
           continue;
@@ -321,8 +328,9 @@ export function createSessionActions(context: SessionActionContext) {
         if (message.role === "user") {
           const text = extractTextFromMessage(message);
           if (text) {
-            chatLog.addUser(text);
+            chatLog.addUser(text, promptIdByUserIndex.get(userMessageIndex));
           }
+          userMessageIndex += 1;
           continue;
         }
         if (message.role === "assistant") {

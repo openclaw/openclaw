@@ -19,15 +19,7 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   PAIRING_SCOPE,
 ];
 
-const NODE_ROLE_METHODS = new Set([
-  "node.invoke.result",
-  "node.event",
-  "node.pending.drain",
-  "node.canvas.capability.refresh",
-  "node.pending.pull",
-  "node.pending.ack",
-  "skills.bins",
-]);
+const NODE_ROLE_METHODS = new Set(["node.invoke.result", "node.event", "skills.bins"]);
 
 const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [APPROVALS_SCOPE]: [
@@ -66,27 +58,20 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "skills.status",
     "voicewake.get",
     "sessions.list",
-    "sessions.get",
     "sessions.preview",
     "sessions.resolve",
-    "sessions.subscribe",
-    "sessions.unsubscribe",
-    "sessions.messages.subscribe",
-    "sessions.messages.unsubscribe",
     "sessions.usage",
     "sessions.usage.timeseries",
     "sessions.usage.logs",
     "cron.list",
     "cron.status",
     "cron.runs",
-    "gateway.identity.get",
     "system-presence",
     "last-heartbeat",
     "node.list",
     "node.describe",
     "chat.history",
     "config.get",
-    "config.schema.lookup",
     "talk.config",
     "agents.files.list",
     "agents.files.get",
@@ -106,12 +91,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.invoke",
     "chat.send",
     "chat.abort",
-    "sessions.create",
-    "sessions.send",
-    "sessions.abort",
+    "chat.edit",
     "browser.request",
     "push.test",
-    "node.pending.enqueue",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",
@@ -121,7 +103,6 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "skills.install",
     "skills.update",
     "secrets.reload",
-    "secrets.resolve",
     "cron.add",
     "cron.update",
     "cron.remove",
