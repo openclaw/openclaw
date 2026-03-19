@@ -1844,25 +1844,28 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   const finalizeId = streamMessageId;
                   const finalizeText = pendingPatchText;
 
-                  // Reset immediately — new onPartialReply calls will create a fresh message.
-                  // Also reset patchSending so a slow in-flight patch from this turn
-                  // does not block the schedulePatch interval of the next turn.
+                  // Reset text state immediately so new onPartialReply calls create a
+                  // fresh message for the next turn. Keep patchSending as-is until
+                  // after the wait loop below — clearing it first would make the wait
+                  // a no-op and allow the old in-flight PATCH to overwrite the post
+                  // after the finalization PATCH completes.
                   streamMessageId = null;
                   pendingPatchText = "";
                   lastSentText = "";
-                  patchSending = false;
                   // Guard: pendingPatchText is set only by the interval which requires
                   // non-empty text, so finalizeText is always non-empty here in practice.
-                  // Moving the guard before the increment avoids any ambiguity about
-                  // whether streamedTurnCount could be left inflated without a matching
-                  // finalization (the concern raised in review).
-                  if (!finalizeText) return;
+                  if (!finalizeText) {
+                    patchSending = false;
+                    return;
+                  }
 
-                  // Wait for any in-flight patch to complete before finalizing.
+                  // Wait for any in-flight patch to settle before finalizing.
+                  // This must run before patchSending is cleared so the wait is not a no-op.
                   const deadline = Date.now() + 2000;
                   while (patchSending && Date.now() < deadline) {
                     await new Promise<void>((r) => setTimeout(r, 20));
                   }
+                  patchSending = false;
                   try {
                     await patchMattermostPost(blockStreamingClient, {
                       postId: finalizeId,
