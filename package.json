@@ -265,6 +265,10 @@
       "types": "./dist/plugin-sdk/whatsapp.d.ts",
       "default": "./dist/plugin-sdk/whatsapp.js"
     },
+    "./plugin-sdk/whatsapp-shared": {
+      "types": "./dist/plugin-sdk/whatsapp-shared.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-shared.js"
+    },
     "./plugin-sdk/whatsapp-action-runtime": {
       "types": "./dist/plugin-sdk/whatsapp-action-runtime.d.ts",
       "default": "./dist/plugin-sdk/whatsapp-action-runtime.js"
@@ -328,6 +332,10 @@
     "./plugin-sdk/diffs": {
       "types": "./dist/plugin-sdk/diffs.d.ts",
       "default": "./dist/plugin-sdk/diffs.js"
+    },
+    "./plugin-sdk/extension-shared": {
+      "types": "./dist/plugin-sdk/extension-shared.d.ts",
+      "default": "./dist/plugin-sdk/extension-shared.js"
     },
     "./plugin-sdk/channel-config-helpers": {
       "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
@@ -686,7 +694,6 @@
     "@aws-sdk/client-bedrock": "^3.1011.0",
     "@clack/prompts": "^1.1.0",
     "@homebridge/ciao": "^1.3.5",
-    "@lancedb/lancedb": "^0.27.0",
     "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
     "@mariozechner/pi-agent-core": "0.58.0",
@@ -696,7 +703,6 @@
     "@modelcontextprotocol/sdk": "1.27.1",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.48",
-    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
