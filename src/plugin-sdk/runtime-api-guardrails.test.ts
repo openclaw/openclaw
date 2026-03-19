@@ -70,6 +70,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export * from "./src/auto-reply.js";',
     'export * from "./src/inbound.js";',
     'export * from "./src/login.js";',
+    'export * from "./src/login-qr.js";',
     'export * from "./src/media.js";',
     'export * from "./src/send.js";',
     'export * from "./src/session.js";',

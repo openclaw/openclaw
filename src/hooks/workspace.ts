@@ -115,13 +115,20 @@ function loadHookFromDir(params: {
       return null;
     }
 
+    let baseDir = params.hookDir;
+    try {
+      baseDir = fs.realpathSync.native(params.hookDir);
+    } catch {
+      // keep the discovered path when realpath is unavailable
+    }
+
     return {
       name,
       description,
       source: params.source,
       pluginId: params.pluginId,
       filePath: hookMdPath,
-      baseDir: params.hookDir,
+      baseDir,
       handlerPath,
     };
   } catch (err) {
