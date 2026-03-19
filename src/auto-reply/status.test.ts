@@ -113,6 +113,23 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Reasoning: on");
   });
 
+  it("shows fast mode when enabled", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "fast",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Fast: on");
+  });
+
   it("notes channel model overrides in status output", () => {
     const text = buildStatusMessage({
       config: {
@@ -707,6 +724,10 @@ describe("buildHelpMessage", () => {
     expect(text).toContain("/skill <name> [input]");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
+  });
+
+  it("includes /fast in help output", () => {
+    expect(buildHelpMessage()).toContain("/fast on|off");
   });
 });
 

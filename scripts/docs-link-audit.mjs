@@ -63,7 +63,17 @@ for (const item of docsConfig.redirects || []) {
 const allFiles = walk(DOCS_DIR);
 const relAllFiles = new Set(allFiles.map((abs) => normalizeSlashes(path.relative(DOCS_DIR, abs))));
 
-const markdownFiles = allFiles.filter((abs) => /\.(md|mdx)$/i.test(abs));
+function isGeneratedTranslatedDoc(relPath) {
+  return relPath.startsWith("zh-CN/");
+}
+
+const markdownFiles = allFiles.filter((abs) => {
+  if (!/\.(md|mdx)$/i.test(abs)) {
+    return false;
+  }
+  const rel = normalizeSlashes(path.relative(DOCS_DIR, abs));
+  return !isGeneratedTranslatedDoc(rel);
+});
 const routes = new Set();
 
 for (const abs of markdownFiles) {
@@ -111,6 +121,41 @@ function resolveRoute(route) {
     seen.add(current);
   }
   return { ok: routes.has(current), terminal: current };
+}
+
+/** @param {unknown} node */
+function collectNavPageEntries(node) {
+  /** @type {string[]} */
+  const entries = [];
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      entries.push(...collectNavPageEntries(item));
+    }
+    return entries;
+  }
+
+  if (!node || typeof node !== "object") {
+    return entries;
+  }
+
+  const record = /** @type {Record<string, unknown>} */ (node);
+  if (Array.isArray(record.pages)) {
+    for (const page of record.pages) {
+      if (typeof page === "string") {
+        entries.push(page);
+      } else {
+        entries.push(...collectNavPageEntries(page));
+      }
+    }
+  }
+
+  for (const value of Object.values(record)) {
+    if (value !== record.pages) {
+      entries.push(...collectNavPageEntries(value));
+    }
+  }
+
+  return entries;
 }
 
 const markdownLinkRegex = /!?\[[^\]]*\]\(([^)]+)\)/g;
@@ -219,6 +264,25 @@ for (const abs of markdownFiles) {
       }
     }
   }
+}
+
+for (const page of collectNavPageEntries(docsConfig.navigation || [])) {
+  if (isGeneratedTranslatedDoc(String(page))) {
+    continue;
+  }
+  checked++;
+  const route = normalizeRoute(page);
+  const resolvedRoute = resolveRoute(route);
+  if (resolvedRoute.ok) {
+    continue;
+  }
+
+  broken.push({
+    file: "docs.json",
+    line: 0,
+    link: page,
+    reason: `navigation page not published (terminal: ${resolvedRoute.terminal})`,
+  });
 }
 
 console.log(`checked_internal_links=${checked}`);

@@ -142,6 +142,28 @@ describe("config io write", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "tightens world-writable state dir when writing the default config",
+    async () => {
+      await withSuiteHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        await fs.mkdir(stateDir, { recursive: true, mode: 0o777 });
+        await fs.chmod(stateDir, 0o777);
+
+        const io = createConfigIO({
+          env: {} as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: silentLogger,
+        });
+
+        await io.writeConfigFile({ gateway: { mode: "local" } });
+
+        const stat = await fs.stat(stateDir);
+        expect(stat.mode & 0o777).toBe(0o700);
+      });
+    },
+  );
+
   it('shows actionable guidance for dmPolicy="open" without wildcard allowFrom', async () => {
     await withSuiteHome(async (home) => {
       const io = createConfigIO({

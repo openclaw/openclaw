@@ -1,19 +1,23 @@
-import type { ChannelOnboardingAdapter } from "./onboarding-types.js";
+import type { ChannelSetupWizard } from "./setup-wizard.js";
 import type {
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelConfigAdapter,
   ChannelDirectoryAdapter,
+  ChannelExecApprovalAdapter,
   ChannelResolverAdapter,
   ChannelElevatedAdapter,
   ChannelGatewayAdapter,
   ChannelGroupAdapter,
   ChannelHeartbeatAdapter,
+  ChannelLifecycleAdapter,
   ChannelOutboundAdapter,
   ChannelPairingAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,
   ChannelStatusAdapter,
+  ChannelAllowlistAdapter,
+  ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
 import type {
   ChannelAgentTool,
@@ -56,8 +60,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
     };
   };
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
-  // CLI onboarding wizard hooks for this channel.
-  onboarding?: ChannelOnboardingAdapter;
+  setupWizard?: ChannelSetupWizard;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
   setup?: ChannelSetupAdapter;
@@ -72,6 +75,10 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   auth?: ChannelAuthAdapter;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
+  lifecycle?: ChannelLifecycleAdapter;
+  execApprovals?: ChannelExecApprovalAdapter;
+  allowlist?: ChannelAllowlistAdapter;
+  bindings?: ChannelConfiguredBindingProvider;
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
   messaging?: ChannelMessagingAdapter;

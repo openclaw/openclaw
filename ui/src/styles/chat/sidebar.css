@@ -82,6 +82,18 @@
   line-height: 1.5;
 }
 
+.sidebar-markdown .markdown-inline-image {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  width: auto;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  object-fit: contain;
+}
+
 .sidebar-markdown pre {
   background: rgba(0, 0, 0, 0.12);
   border-radius: 4px;

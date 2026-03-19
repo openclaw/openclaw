@@ -1,42 +1,24 @@
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "openclaw/plugin-sdk/zalouser";
+import { coerceStatusIssueAccountId, readStatusIssueFields } from "../../shared/status-issues.js";
+import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../runtime-api.js";
 
-type ZalouserAccountStatus = {
-  accountId?: unknown;
-  enabled?: unknown;
-  configured?: unknown;
-  dmPolicy?: unknown;
-  lastError?: unknown;
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  Boolean(value && typeof value === "object");
-
-const asString = (value: unknown): string | undefined =>
-  typeof value === "string" ? value : typeof value === "number" ? String(value) : undefined;
-
-function readZalouserAccountStatus(value: ChannelAccountSnapshot): ZalouserAccountStatus | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  return {
-    accountId: value.accountId,
-    enabled: value.enabled,
-    configured: value.configured,
-    dmPolicy: value.dmPolicy,
-    lastError: value.lastError,
-  };
-}
+const ZALOUSER_STATUS_FIELDS = [
+  "accountId",
+  "enabled",
+  "configured",
+  "dmPolicy",
+  "lastError",
+] as const;
 
 export function collectZalouserStatusIssues(
   accounts: ChannelAccountSnapshot[],
 ): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {
-    const account = readZalouserAccountStatus(entry);
+    const account = readStatusIssueFields(entry, ZALOUSER_STATUS_FIELDS);
     if (!account) {
       continue;
     }
-    const accountId = asString(account.accountId) ?? "default";
+    const accountId = coerceStatusIssueAccountId(account.accountId) ?? "default";
     const enabled = account.enabled !== false;
     if (!enabled) {
       continue;

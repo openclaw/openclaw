@@ -1,12 +1,15 @@
 node_modules
 **/node_modules/
 .env
+docker-compose.override.yml
 docker-compose.extra.yml
 dist
+dist-runtime
 pnpm-lock.yaml
 bun.lock
 bun.lockb
 coverage
+__openclaw_vitest__/
 __pycache__/
 *.pyc
 .tsbuildinfo
@@ -81,6 +84,7 @@ apps/ios/*.mobileprovision
 # Local untracked files
 .local/
 docs/.local/
+tmp/
 IDENTITY.md
 USER.md
 .tgz
@@ -121,3 +125,16 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+.dev-state
+docs/superpowers/plans/2026-03-10-collapsed-side-nav.md
+docs/superpowers/specs/2026-03-10-collapsed-side-nav-design.md
+.gitignore
+test/config-form.analyze.telegram.test.ts
+ui/src/ui/theme-variants.browser.test.ts
+ui/src/ui/__screenshots__
+ui/src/ui/views/__screenshots__
+ui/.vitest-attachments
+docs/superpowers
+
+# Deprecated changelog fragment workflow
+changelog/fragments/

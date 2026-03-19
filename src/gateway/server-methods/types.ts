@@ -22,6 +22,10 @@ export type GatewayClient = {
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
+  /** Internal-only auth context that cannot be supplied through gateway RPC payloads. */
+  internal?: {
+    allowModelOverride?: boolean;
+  };
 };
 
 export type RespondFn = (

@@ -10,7 +10,7 @@ title: "Setup"
 
 <Note>
 If you are setting up for the first time, start with [Getting Started](/start/getting-started).
-For wizard details, see [Onboarding Wizard](/start/wizard).
+For onboarding details, see [Onboarding (CLI)](/start/wizard).
 </Note>
 
 Last updated: 2026-01-01
@@ -27,7 +27,7 @@ Last updated: 2026-01-01
 - `pnpm`
 - Docker (optional; only for containerized setup/e2e — see [Docker](/install/docker))
 
-## Tailoring strategy (so updates don’t hurt)
+## Tailoring strategy (so updates do not hurt)
 
 If you want “100% tailored to me” _and_ easy updates, keep your customization in:
 
@@ -96,7 +96,8 @@ pnpm install
 pnpm gateway:watch
 ```
 
-`gateway:watch` runs the gateway in watch mode and reloads on TypeScript changes.
+`gateway:watch` runs the gateway in watch mode and reloads on relevant source,
+config, and bundled-plugin metadata changes.
 
 ### 2) Point the macOS app at your running Gateway
 
@@ -127,7 +128,7 @@ openclaw health
 Use this when debugging auth or deciding what to back up:
 
 - **WhatsApp**: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
-- **Telegram bot token**: config/env or `channels.telegram.tokenFile`
+- **Telegram bot token**: config/env or `channels.telegram.tokenFile` (regular file only; symlinks rejected)
 - **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
 - **Pairing allowlists**:
