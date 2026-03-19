@@ -190,6 +190,18 @@ class FallbackMemoryManager implements MemorySearchManager {
   }
 }
 
+export async function closeAllMemorySearchManagers(): Promise<void> {
+  const managers = Array.from(QMD_MANAGER_CACHE.values());
+  QMD_MANAGER_CACHE.clear();
+  for (const manager of managers) {
+    try {
+      await manager.close?.();
+    } catch (err) {
+      log.warn(`failed to close qmd memory manager: ${String(err)}`);
+    }
+  }
+}
+
 function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {
   return `${agentId}:${stableSerialize(config)}`;
 }
