@@ -50,6 +50,16 @@ Name lookup:
 - `--dry-run`
 - `--verbose`
 
+## SecretRef behavior
+
+- `openclaw message` resolves supported channel SecretRefs before running the selected action.
+- Resolution is scoped to the active action target when possible:
+  - channel-scoped when `--channel` is set (or inferred from prefixed targets like `discord:...`)
+  - account-scoped when `--account` is set (channel globals + selected account surfaces)
+  - when `--account` is omitted, OpenClaw does not force a `default` account SecretRef scope
+- Unresolved SecretRefs on unrelated channels do not block a targeted message action.
+- If the selected channel/account SecretRef is unresolved, the command fails closed for that action.
+
 ## Actions
 
 ### Core
@@ -59,6 +69,7 @@ Name lookup:
   - Required: `--target`, plus `--message` or `--media`
   - Optional: `--media`, `--reply-to`, `--thread-id`, `--gif-playback`
   - Telegram only: `--buttons` (requires `channels.telegram.capabilities.inlineButtons` to allow it)
+  - Telegram only: `--force-document` (send images and GIFs as documents to avoid Telegram compression)
   - Telegram only: `--thread-id` (forum topic id)
   - Slack only: `--thread-id` (thread timestamp; `--reply-to` uses the same field)
   - WhatsApp only: `--gif-playback`
@@ -257,4 +268,11 @@ Send Telegram inline buttons:
 ```
 openclaw message send --channel telegram --target @mychat --message "Choose:" \
   --buttons '[ [{"text":"Yes","callback_data":"cmd:yes"}], [{"text":"No","callback_data":"cmd:no"}] ]'
+```
+
+Send a Telegram image as a document to avoid compression:
+
+```bash
+openclaw message send --channel telegram --target @mychat \
+  --media ./diagram.png --force-document
 ```

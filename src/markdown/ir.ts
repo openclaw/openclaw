@@ -144,8 +144,31 @@ function applySpoilerTokens(tokens: MarkdownToken[]): void {
 }
 
 function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
+  let totalDelims = 0;
+  for (const token of tokens) {
+    if (token.type !== "text") {
+      continue;
+    }
+    const content = token.content ?? "";
+    let i = 0;
+    while (i < content.length) {
+      const next = content.indexOf("||", i);
+      if (next === -1) {
+        break;
+      }
+      totalDelims += 1;
+      i = next + 2;
+    }
+  }
+
+  if (totalDelims < 2) {
+    return tokens;
+  }
+  const usableDelims = totalDelims - (totalDelims % 2);
+
   const result: MarkdownToken[] = [];
   const state = { spoilerOpen: false };
+  let consumedDelims = 0;
 
   for (const token of tokens) {
     if (token.type !== "text") {
@@ -168,9 +191,14 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
         }
         break;
       }
+      if (consumedDelims >= usableDelims) {
+        result.push(createTextToken(token, content.slice(index)));
+        break;
+      }
       if (next > index) {
         result.push(createTextToken(token, content.slice(index, next)));
       }
+      consumedDelims += 1;
       state.spoilerOpen = !state.spoilerOpen;
       result.push({
         type: state.spoilerOpen ? "spoiler_open" : "spoiler_close",
@@ -372,6 +400,30 @@ function appendCellTextOnly(state: RenderState, cell: TableCell) {
   // Do not append styles - this is used for code blocks where inner styles would overlap
 }
 
+function appendTableBulletValue(
+  state: RenderState,
+  params: {
+    header?: TableCell;
+    value?: TableCell;
+    columnIndex: number;
+    includeColumnFallback: boolean;
+  },
+) {
+  const { header, value, columnIndex, includeColumnFallback } = params;
+  if (!value?.text) {
+    return;
+  }
+  state.text += "• ";
+  if (header?.text) {
+    appendCell(state, header);
+    state.text += ": ";
+  } else if (includeColumnFallback) {
+    state.text += `Column ${columnIndex}: `;
+  }
+  appendCell(state, value);
+  state.text += "\n";
+}
+
 function renderTableAsBullets(state: RenderState) {
   if (!state.table) {
     return;
@@ -408,20 +460,12 @@ function renderTableAsBullets(state: RenderState) {
 
       // Add each column as a bullet point
       for (let i = 1; i < row.length; i++) {
-        const header = headers[i];
-        const value = row[i];
-        if (!value?.text) {
-          continue;
-        }
-        state.text += "• ";
-        if (header?.text) {
-          appendCell(state, header);
-          state.text += ": ";
-        } else {
-          state.text += `Column ${i}: `;
-        }
-        appendCell(state, value);
-        state.text += "\n";
+        appendTableBulletValue(state, {
+          header: headers[i],
+          value: row[i],
+          columnIndex: i,
+          includeColumnFallback: true,
+        });
       }
       state.text += "\n";
     }
@@ -429,18 +473,12 @@ function renderTableAsBullets(state: RenderState) {
     // Simple table: just list headers and values
     for (const row of rows) {
       for (let i = 0; i < row.length; i++) {
-        const header = headers[i];
-        const value = row[i];
-        if (!value?.text) {
-          continue;
-        }
-        state.text += "• ";
-        if (header?.text) {
-          appendCell(state, header);
-          state.text += ": ";
-        }
-        appendCell(state, value);
-        state.text += "\n";
+        appendTableBulletValue(state, {
+          header: headers[i],
+          value: row[i],
+          columnIndex: i,
+          includeColumnFallback: false,
+        });
       }
       state.text += "\n";
     }
@@ -785,6 +823,19 @@ function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
   return merged;
 }
 
+function resolveSliceBounds(
+  span: { start: number; end: number },
+  start: number,
+  end: number,
+): { start: number; end: number } | null {
+  const sliceStart = Math.max(span.start, start);
+  const sliceEnd = Math.min(span.end, end);
+  if (sliceEnd <= sliceStart) {
+    return null;
+  }
+  return { start: sliceStart, end: sliceEnd };
+}
+
 function sliceStyleSpans(
   spans: MarkdownStyleSpan[],
   start: number,
@@ -795,15 +846,15 @@ function sliceStyleSpans(
   }
   const sliced: MarkdownStyleSpan[] = [];
   for (const span of spans) {
-    const sliceStart = Math.max(span.start, start);
-    const sliceEnd = Math.min(span.end, end);
-    if (sliceEnd > sliceStart) {
-      sliced.push({
-        start: sliceStart - start,
-        end: sliceEnd - start,
-        style: span.style,
-      });
+    const bounds = resolveSliceBounds(span, start, end);
+    if (!bounds) {
+      continue;
     }
+    sliced.push({
+      start: bounds.start - start,
+      end: bounds.end - start,
+      style: span.style,
+    });
   }
   return mergeStyleSpans(sliced);
 }
@@ -814,15 +865,15 @@ function sliceLinkSpans(spans: MarkdownLinkSpan[], start: number, end: number): 
   }
   const sliced: MarkdownLinkSpan[] = [];
   for (const span of spans) {
-    const sliceStart = Math.max(span.start, start);
-    const sliceEnd = Math.min(span.end, end);
-    if (sliceEnd > sliceStart) {
-      sliced.push({
-        start: sliceStart - start,
-        end: sliceEnd - start,
-        href: span.href,
-      });
+    const bounds = resolveSliceBounds(span, start, end);
+    if (!bounds) {
+      continue;
     }
+    sliced.push({
+      start: bounds.start - start,
+      end: bounds.end - start,
+      href: span.href,
+    });
   }
   return sliced;
 }

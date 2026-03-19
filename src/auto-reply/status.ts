@@ -1,11 +1,17 @@
 import fs from "node:fs";
-import { lookupContextTokens } from "../agents/context.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import {
+  buildModelAliasIndex,
+  resolveConfiguredModelRef,
+  resolveModelRefFromString,
+} from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
+import { resolveChannelModelOverride } from "../channels/model-overrides.js";
+import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveMainSessionKey,
@@ -66,10 +72,12 @@ type StatusArgs = {
   agentId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
+  parentSessionKey?: string;
   sessionScope?: SessionScope;
   sessionStorePath?: string;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
+  resolvedFast?: boolean;
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
@@ -83,6 +91,34 @@ type StatusArgs = {
   includeTranscriptUsage?: boolean;
   now?: number;
 };
+
+type NormalizedAuthMode = "api-key" | "oauth" | "token" | "aws-sdk" | "mixed" | "unknown";
+
+function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "api-key" || normalized.startsWith("api-key ")) {
+    return "api-key";
+  }
+  if (normalized === "oauth" || normalized.startsWith("oauth ")) {
+    return "oauth";
+  }
+  if (normalized === "token" || normalized.startsWith("token ")) {
+    return "token";
+  }
+  if (normalized === "aws-sdk" || normalized.startsWith("aws-sdk ")) {
+    return "aws-sdk";
+  }
+  if (normalized === "mixed" || normalized.startsWith("mixed ")) {
+    return "mixed";
+  }
+  if (normalized === "unknown") {
+    return "unknown";
+  }
+  return undefined;
+}
 
 function resolveRuntimeLabel(
   args: Pick<StatusArgs, "config" | "agent" | "sessionKey" | "sessionScope">,
@@ -208,7 +244,20 @@ const readUsageFromSessionLog = (
   }
 
   try {
-    const lines = fs.readFileSync(logPath, "utf-8").split(/\n+/);
+    // Read the tail only; we only need the most recent usage entries.
+    const TAIL_BYTES = 8192;
+    const stat = fs.statSync(logPath);
+    const offset = Math.max(0, stat.size - TAIL_BYTES);
+    const buf = Buffer.alloc(Math.min(TAIL_BYTES, stat.size));
+    const fd = fs.openSync(logPath, "r");
+    try {
+      fs.readSync(fd, buf, 0, buf.length, offset);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const tail = buf.toString("utf-8");
+    const lines = (offset > 0 ? tail.slice(tail.indexOf("\n") + 1) : tail).split(/\n+/);
+
     let input = 0;
     let output = 0;
     let promptTokens = 0;
@@ -235,7 +284,7 @@ const readUsageFromSessionLog = (
         }
         model = parsed.message?.model ?? parsed.model ?? model;
       } catch {
-        // ignore bad lines
+        // ignore bad lines (including a truncated first tail line)
       }
     }
 
@@ -363,12 +412,29 @@ const formatVoiceModeLine = (
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
+  const selectionConfig = {
+    agents: {
+      defaults: args.agent ?? {},
+    },
+  } as OpenClawConfig;
+  const contextConfig = args.config
+    ? ({
+        ...args.config,
+        agents: {
+          ...args.config.agents,
+          defaults: {
+            ...args.config.agents?.defaults,
+            ...args.agent,
+          },
+        },
+      } as OpenClawConfig)
+    : ({
+        agents: {
+          defaults: args.agent ?? {},
+        },
+      } as OpenClawConfig);
   const resolved = resolveConfiguredModelRef({
-    cfg: {
-      agents: {
-        defaults: args.agent ?? {},
-      },
-    } as OpenClawConfig,
+    cfg: selectionConfig,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -382,10 +448,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   let activeProvider = modelRefs.active.provider;
   let activeModel = modelRefs.active.model;
   let contextTokens =
-    entry?.contextTokens ??
-    args.agent?.contextTokens ??
-    lookupContextTokens(activeModel) ??
-    DEFAULT_CONTEXT_TOKENS;
+    resolveContextTokensForModel({
+      cfg: contextConfig,
+      provider: activeProvider,
+      model: activeModel,
+      contextTokensOverride: entry?.contextTokens ?? args.agent?.contextTokens,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
 
   let inputTokens = entry?.inputTokens;
   let outputTokens = entry?.outputTokens;
@@ -422,7 +491,12 @@ export function buildStatusMessage(args: StatusArgs): string {
         }
       }
       if (!contextTokens && logUsage.model) {
-        contextTokens = lookupContextTokens(logUsage.model) ?? contextTokens;
+        contextTokens =
+          resolveContextTokensForModel({
+            cfg: contextConfig,
+            model: logUsage.model,
+            fallbackContextTokens: contextTokens ?? undefined,
+          }) ?? contextTokens;
       }
       if (!inputTokens || inputTokens === 0) {
         inputTokens = logUsage.input;
@@ -433,9 +507,12 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
   }
 
-  const thinkLevel = args.resolvedThink ?? args.agent?.thinkingDefault ?? "off";
-  const verboseLevel = args.resolvedVerbose ?? args.agent?.verboseDefault ?? "off";
-  const reasoningLevel = args.resolvedReasoning ?? "off";
+  const thinkLevel =
+    args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
+  const verboseLevel =
+    args.resolvedVerbose ?? args.sessionEntry?.verboseLevel ?? args.agent?.verboseDefault ?? "off";
+  const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
+  const reasoningLevel = args.resolvedReasoning ?? args.sessionEntry?.reasoningLevel ?? "off";
   const elevatedLevel =
     args.resolvedElevated ??
     args.sessionEntry?.elevatedLevel ??
@@ -481,6 +558,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const optionParts = [
     `Runtime: ${runtime.label}`,
     `Think: ${thinkLevel}`,
+    fastMode ? "Fast: on" : null,
     verboseLabel,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
     elevatedLabel,
@@ -492,17 +570,27 @@ export function buildStatusMessage(args: StatusArgs): string {
   ];
   const activationLine = activationParts.filter(Boolean).join(" · ");
 
-  const activeAuthMode = resolveModelAuthMode(activeProvider, args.config);
+  const selectedAuthMode =
+    normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedProvider, args.config);
   const selectedAuthLabelValue =
     args.modelAuth ??
-    (() => {
-      const selectedAuthMode = resolveModelAuthMode(selectedProvider, args.config);
-      return selectedAuthMode && selectedAuthMode !== "unknown" ? selectedAuthMode : undefined;
-    })();
+    (selectedAuthMode && selectedAuthMode !== "unknown" ? selectedAuthMode : undefined);
+  const activeAuthMode =
+    normalizeAuthMode(args.activeModelAuth) ?? resolveModelAuthMode(activeProvider, args.config);
   const activeAuthLabelValue =
     args.activeModelAuth ??
     (activeAuthMode && activeAuthMode !== "unknown" ? activeAuthMode : undefined);
-  const showCost = activeAuthLabelValue === "api-key" || activeAuthLabelValue === "mixed";
+  const selectedModelLabel = modelRefs.selected.label || "unknown";
+  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
+  const fallbackState = resolveActiveFallbackState({
+    selectedModelRef: selectedModelLabel,
+    activeModelRef: activeModelLabel,
+    state: entry,
+  });
+  const effectiveCostAuthMode = fallbackState.active
+    ? activeAuthMode
+    : (selectedAuthMode ?? activeAuthMode);
+  const showCost = effectiveCostAuthMode === "api-key" || effectiveCostAuthMode === "mixed";
   const costConfig = showCost
     ? resolveModelCostConfig({
         provider: activeProvider,
@@ -523,22 +611,54 @@ export function buildStatusMessage(args: StatusArgs): string {
       : undefined;
   const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
 
-  const selectedModelLabel = modelRefs.selected.label || "unknown";
-  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
-  const fallbackState = resolveActiveFallbackState({
-    selectedModelRef: selectedModelLabel,
-    activeModelRef: activeModelLabel,
-    state: entry,
-  });
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
-  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}`;
+  const channelModelNote = (() => {
+    if (!args.config || !entry) {
+      return undefined;
+    }
+    if (entry.modelOverride?.trim() || entry.providerOverride?.trim()) {
+      return undefined;
+    }
+    const channelOverride = resolveChannelModelOverride({
+      cfg: args.config,
+      channel: entry.channel ?? entry.origin?.provider,
+      groupId: entry.groupId,
+      groupChannel: entry.groupChannel,
+      groupSubject: entry.subject,
+      parentSessionKey: args.parentSessionKey,
+    });
+    if (!channelOverride) {
+      return undefined;
+    }
+    const aliasIndex = buildModelAliasIndex({
+      cfg: args.config,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    const resolvedOverride = resolveModelRefFromString({
+      raw: channelOverride.model,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+    });
+    if (!resolvedOverride) {
+      return undefined;
+    }
+    if (
+      resolvedOverride.ref.provider !== selectedProvider ||
+      resolvedOverride.ref.model !== selectedModel
+    ) {
+      return undefined;
+    }
+    return "channel override";
+  })();
+  const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
+  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
   const fallbackLine = fallbackState.active
     ? `↪️ Fallback: ${activeModelLabel}${
         showFallbackAuth ? ` · 🔑 ${activeAuthLabelValue}` : ""
       } (${fallbackState.reason ?? "selected model unavailable"})`
     : null;
-  const commit = resolveCommitHash();
+  const commit = resolveCommitHash({ moduleUrl: import.meta.url });
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
   const usagePair = formatUsagePair(inputTokens, outputTokens);
   const cacheLine = formatCacheLine(inputTokens, cacheRead, cacheWrite);
@@ -611,11 +731,11 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
   lines.push("");
 
-  const optionParts = ["/think <level>", "/model <id>", "/verbose on|off"];
-  if (cfg?.commands?.config === true) {
+  const optionParts = ["/think <level>", "/model <id>", "/fast on|off", "/verbose on|off"];
+  if (isCommandFlagEnabled(cfg, "config")) {
     optionParts.push("/config");
   }
-  if (cfg?.commands?.debug === true) {
+  if (isCommandFlagEnabled(cfg, "debug")) {
     optionParts.push("/debug");
   }
   lines.push("Options");

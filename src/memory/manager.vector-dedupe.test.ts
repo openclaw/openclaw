@@ -4,8 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryIndexManager } from "./index.js";
-import { buildFileEntry } from "./internal.js";
-import { createMemoryManagerOrThrow } from "./test-manager.js";
 
 vi.mock("./embeddings.js", () => {
   return {
@@ -21,23 +19,41 @@ vi.mock("./embeddings.js", () => {
   };
 });
 
+type MemoryInternalModule = typeof import("./internal.js");
+type TestManagerModule = typeof import("./test-manager.js");
+
+let buildFileEntry: MemoryInternalModule["buildFileEntry"];
+let createMemoryManagerOrThrow: TestManagerModule["createMemoryManagerOrThrow"];
+
 describe("memory vector dedupe", () => {
   let workspaceDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
 
+  async function seedMemoryWorkspace(rootDir: string) {
+    await fs.mkdir(path.join(rootDir, "memory"));
+    await fs.writeFile(path.join(rootDir, "MEMORY.md"), "Hello memory.");
+  }
+
+  async function closeManagerIfOpen() {
+    if (!manager) {
+      return;
+    }
+    await manager.close();
+    manager = null;
+  }
+
   beforeEach(async () => {
+    vi.resetModules();
+    ({ buildFileEntry } = await import("./internal.js"));
+    ({ createMemoryManagerOrThrow } = await import("./test-manager.js"));
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
-    await fs.mkdir(path.join(workspaceDir, "memory"));
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
+    await seedMemoryWorkspace(workspaceDir);
   });
 
   afterEach(async () => {
-    if (manager) {
-      await manager.close();
-      manager = null;
-    }
+    await closeManagerIfOpen();
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 

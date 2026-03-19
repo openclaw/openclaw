@@ -1,52 +1,53 @@
-import { describe, expect, it } from "vitest";
-import { isTruthyEnvValue, normalizeZaiEnv } from "./env.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../test-utils/env.js";
+
+const loggerMocks = vi.hoisted(() => ({
+  info: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    info: loggerMocks.info,
+  }),
+}));
+
+type EnvModule = typeof import("./env.js");
+
+let isTruthyEnvValue: EnvModule["isTruthyEnvValue"];
+let logAcceptedEnvOption: EnvModule["logAcceptedEnvOption"];
+let normalizeEnv: EnvModule["normalizeEnv"];
+let normalizeZaiEnv: EnvModule["normalizeZaiEnv"];
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } =
+    await import("./env.js"));
+});
 
 describe("normalizeZaiEnv", () => {
-  function withZaiEnv(env: { zaiApiKey?: string; legacyZaiApiKey?: string }, run: () => void) {
-    const prevZai = process.env.ZAI_API_KEY;
-    const prevLegacy = process.env.Z_AI_API_KEY;
-    if (env.zaiApiKey === undefined) {
-      delete process.env.ZAI_API_KEY;
-    } else {
-      process.env.ZAI_API_KEY = env.zaiApiKey;
-    }
-    if (env.legacyZaiApiKey === undefined) {
-      delete process.env.Z_AI_API_KEY;
-    } else {
-      process.env.Z_AI_API_KEY = env.legacyZaiApiKey;
-    }
-    try {
-      run();
-    } finally {
-      if (prevZai === undefined) {
-        delete process.env.ZAI_API_KEY;
-      } else {
-        process.env.ZAI_API_KEY = prevZai;
-      }
-      if (prevLegacy === undefined) {
-        delete process.env.Z_AI_API_KEY;
-      } else {
-        process.env.Z_AI_API_KEY = prevLegacy;
-      }
-    }
-  }
-
   it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", () => {
-    withZaiEnv({ zaiApiKey: "", legacyZaiApiKey: "zai-legacy" }, () => {
+    withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: "zai-legacy" }, () => {
       normalizeZaiEnv();
       expect(process.env.ZAI_API_KEY).toBe("zai-legacy");
     });
   });
 
   it("does not override existing ZAI_API_KEY", () => {
-    withZaiEnv({ zaiApiKey: "zai-current", legacyZaiApiKey: "zai-legacy" }, () => {
+    withEnv({ ZAI_API_KEY: "zai-current", Z_AI_API_KEY: "zai-legacy" }, () => {
       normalizeZaiEnv();
       expect(process.env.ZAI_API_KEY).toBe("zai-current");
     });
   });
 
   it("ignores blank legacy Z_AI_API_KEY values", () => {
-    withZaiEnv({ zaiApiKey: "", legacyZaiApiKey: "   " }, () => {
+    withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: "   " }, () => {
+      normalizeZaiEnv();
+      expect(process.env.ZAI_API_KEY).toBe("");
+    });
+  });
+
+  it("does not copy when legacy Z_AI_API_KEY is unset", () => {
+    withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: undefined }, () => {
       normalizeZaiEnv();
       expect(process.env.ZAI_API_KEY).toBe("");
     });
@@ -66,5 +67,79 @@ describe("isTruthyEnvValue", () => {
     expect(isTruthyEnvValue("false")).toBe(false);
     expect(isTruthyEnvValue("")).toBe(false);
     expect(isTruthyEnvValue(undefined)).toBe(false);
+  });
+});
+
+describe("logAcceptedEnvOption", () => {
+  it("logs accepted env options once with redaction and formatting", () => {
+    loggerMocks.info.mockClear();
+
+    withEnv(
+      {
+        VITEST: "",
+        NODE_ENV: "development",
+        OPENCLAW_TEST_ENV: "  line one\nline two  ",
+      },
+      () => {
+        logAcceptedEnvOption({
+          key: "OPENCLAW_TEST_ENV",
+          description: "test option",
+          redact: true,
+        });
+        logAcceptedEnvOption({
+          key: "OPENCLAW_TEST_ENV",
+          description: "test option",
+          redact: true,
+        });
+      },
+    );
+
+    expect(loggerMocks.info).toHaveBeenCalledTimes(1);
+    expect(loggerMocks.info).toHaveBeenCalledWith(
+      "env: OPENCLAW_TEST_ENV=<redacted> (test option)",
+    );
+  });
+
+  it("skips blank values and test-mode logging", () => {
+    loggerMocks.info.mockClear();
+
+    withEnv(
+      {
+        VITEST: "1",
+        NODE_ENV: "development",
+        OPENCLAW_BLANK_ENV: "value",
+      },
+      () => {
+        logAcceptedEnvOption({
+          key: "OPENCLAW_BLANK_ENV",
+          description: "skipped in vitest",
+        });
+      },
+    );
+
+    withEnv(
+      {
+        VITEST: "",
+        NODE_ENV: "development",
+        OPENCLAW_BLANK_ENV: "   ",
+      },
+      () => {
+        logAcceptedEnvOption({
+          key: "OPENCLAW_BLANK_ENV",
+          description: "blank value",
+        });
+      },
+    );
+
+    expect(loggerMocks.info).not.toHaveBeenCalled();
+  });
+});
+
+describe("normalizeEnv", () => {
+  it("normalizes the legacy ZAI env alias", () => {
+    withEnv({ ZAI_API_KEY: "", Z_AI_API_KEY: "zai-legacy" }, () => {
+      normalizeEnv();
+      expect(process.env.ZAI_API_KEY).toBe("zai-legacy");
+    });
   });
 });

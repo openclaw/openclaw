@@ -1,46 +1,60 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
+import { getCommandPathWithRootOptions } from "../cli/argv.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import {
+  POSIX_OPENCLAW_TMP_DIR,
+  resolvePreferredOpenClawTmpDir,
+} from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig } from "./config.js";
 import type { ConsoleStyle } from "./console.js";
+import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
+import { formatLocalIsoWithOffset } from "./timestamps.js";
 
-export const DEFAULT_LOG_DIR = resolvePreferredOpenClawTmpDir();
-export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // legacy single-file path
+type ProcessWithBuiltinModule = NodeJS.Process & {
+  getBuiltinModule?: (id: string) => unknown;
+};
+
+function canUseNodeFs(): boolean {
+  const getBuiltinModule = (process as ProcessWithBuiltinModule).getBuiltinModule;
+  if (typeof getBuiltinModule !== "function") {
+    return false;
+  }
+  try {
+    return getBuiltinModule("fs") !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+function resolveDefaultLogDir(): string {
+  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
+}
+
+function resolveDefaultLogFile(defaultLogDir: string): string {
+  return canUseNodeFs()
+    ? path.join(defaultLogDir, "openclaw.log")
+    : `${POSIX_OPENCLAW_TMP_DIR}/openclaw.log`;
+}
+
+export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
+export const DEFAULT_LOG_FILE = resolveDefaultLogFile(DEFAULT_LOG_DIR); // legacy single-file path
 
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+const DEFAULT_MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB
 
-function resolveNodeRequire(): ((id: string) => NodeJS.Require) | null {
-  const getBuiltinModule = (
-    process as NodeJS.Process & {
-      getBuiltinModule?: (id: string) => unknown;
-    }
-  ).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
-    return null;
-  }
-  try {
-    const moduleNamespace = getBuiltinModule("module") as {
-      createRequire?: (id: string) => NodeJS.Require;
-    };
-    return typeof moduleNamespace.createRequire === "function"
-      ? moduleNamespace.createRequire
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-const requireConfig = resolveNodeRequire()?.(import.meta.url) ?? null;
+const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
 export type LoggerSettings = {
   level?: LogLevel;
   file?: string;
+  maxFileBytes?: number;
   consoleLevel?: LogLevel;
   consoleStyle?: ConsoleStyle;
 };
@@ -50,12 +64,18 @@ type LogObj = { date?: Date } & Record<string, unknown>;
 type ResolvedSettings = {
   level: LogLevel;
   file: string;
+  maxFileBytes: number;
 };
 export type LoggerResolvedSettings = ResolvedSettings;
 export type LogTransportRecord = Record<string, unknown>;
 export type LogTransport = (logObj: LogTransportRecord) => void;
 
 const externalTransports = new Set<LogTransport>();
+
+function shouldSkipLoadConfigFallback(argv: string[] = process.argv): boolean {
+  const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
+  return primary === "config" && secondary === "validate";
+}
 
 function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
   logger.attachTransport((logObj: LogObj) => {
@@ -70,10 +90,38 @@ function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTranspo
   });
 }
 
+function canUseSilentVitestFileLogFastPath(envLevel: LogLevel | undefined): boolean {
+  return (
+    process.env.VITEST === "true" &&
+    process.env.OPENCLAW_TEST_FILE_LOG !== "1" &&
+    !envLevel &&
+    !loggingState.overrideSettings
+  );
+}
+
 function resolveSettings(): ResolvedSettings {
+  if (!canUseNodeFs()) {
+    return {
+      level: "silent",
+      file: DEFAULT_LOG_FILE,
+      maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
+    };
+  }
+
+  const envLevel = resolveEnvLogLevelOverride();
+  // Test runs default file logs to silent. Skip config reads and fallback load in the
+  // common case to avoid pulling heavy config/schema stacks on startup.
+  if (canUseSilentVitestFileLogFastPath(envLevel)) {
+    return {
+      level: "silent",
+      file: defaultRollingPathForToday(),
+      maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
+    };
+  }
+
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg) {
+  if (!cfg && !shouldSkipLoadConfigFallback()) {
     try {
       const loaded = requireConfig?.("../config/config.js") as
         | {
@@ -87,16 +135,18 @@ function resolveSettings(): ResolvedSettings {
   }
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
-  const level = normalizeLogLevel(cfg?.level, defaultLevel);
+  const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
+  const level = envLevel ?? fromConfig;
   const file = cfg?.file ?? defaultRollingPathForToday();
-  return { level, file };
+  const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
+  return { level, file, maxFileBytes };
 }
 
 function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
   if (!a) {
     return true;
   }
-  return a.level !== b.level || a.file !== b.file;
+  return a.level !== b.level || a.file !== b.file || a.maxFileBytes !== b.maxFileBytes;
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
@@ -111,22 +161,54 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
 }
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
-  fs.mkdirSync(path.dirname(settings.file), { recursive: true });
-  // Clean up stale rolling logs when using a dated log filename.
-  if (isRollingPath(settings.file)) {
-    pruneOldRollingLogs(path.dirname(settings.file));
-  }
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
     minLevel: levelToMinLevel(settings.level),
     type: "hidden", // no ansi formatting
   });
 
+  // Silent logging does not write files; skip all filesystem setup in this path.
+  if (settings.level === "silent") {
+    for (const transport of externalTransports) {
+      attachExternalTransport(logger, transport);
+    }
+    return logger;
+  }
+
+  fs.mkdirSync(path.dirname(settings.file), { recursive: true });
+  // Clean up stale rolling logs when using a dated log filename.
+  if (isRollingPath(settings.file)) {
+    pruneOldRollingLogs(path.dirname(settings.file));
+  }
+  let currentFileBytes = getCurrentLogFileBytes(settings.file);
+  let warnedAboutSizeCap = false;
+
   logger.attachTransport((logObj: LogObj) => {
     try {
-      const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
+      const time = formatLocalIsoWithOffset(logObj.date ?? new Date());
       const line = JSON.stringify({ ...logObj, time });
-      fs.appendFileSync(settings.file, `${line}\n`, { encoding: "utf8" });
+      const payload = `${line}\n`;
+      const payloadBytes = Buffer.byteLength(payload, "utf8");
+      const nextBytes = currentFileBytes + payloadBytes;
+      if (nextBytes > settings.maxFileBytes) {
+        if (!warnedAboutSizeCap) {
+          warnedAboutSizeCap = true;
+          const warningLine = JSON.stringify({
+            time: formatLocalIsoWithOffset(new Date()),
+            level: "warn",
+            subsystem: "logging",
+            message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
+          });
+          appendLogLine(settings.file, `${warningLine}\n`);
+          process.stderr.write(
+            `[openclaw] log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
+          );
+        }
+        return;
+      }
+      if (appendLogLine(settings.file, payload)) {
+        currentFileBytes = nextBytes;
+      }
     } catch {
       // never block on logging failures
     }
@@ -136,6 +218,30 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   }
 
   return logger;
+}
+
+function resolveMaxLogFileBytes(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_MAX_LOG_FILE_BYTES;
+}
+
+function getCurrentLogFileBytes(file: string): number {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
+function appendLogLine(file: string, line: string): boolean {
+  try {
+    fs.appendFileSync(file, line, { encoding: "utf8" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function getLogger(): TsLogger<LogObj> {
@@ -225,6 +331,10 @@ export function registerLogTransport(transport: LogTransport): () => void {
     externalTransports.delete(transport);
   };
 }
+
+export const __test__ = {
+  shouldSkipLoadConfigFallback,
+};
 
 function formatLocalDate(date: Date): string {
   const year = date.getFullYear();

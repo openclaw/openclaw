@@ -78,6 +78,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const result = await compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
+    allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
     groupId: params.sessionEntry.groupId,
     groupChannel: params.sessionEntry.groupChannel,
@@ -92,6 +93,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       }),
     ),
     workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
     config: params.cfg,
     skillsSnapshot: params.sessionEntry.skillsSnapshot,
     provider: params.provider,

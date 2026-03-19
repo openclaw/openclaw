@@ -1,11 +1,12 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
 import type { Request, Response, NextFunction } from "express";
+import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveLineAccount } from "./accounts.js";
-import { handleLineWebhookEvents } from "./bot-handlers.js";
+import { createLineWebhookReplayCache, handleLineWebhookEvents } from "./bot-handlers.js";
 import type { LineInboundContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
 import { startLineWebhook } from "./webhook.js";
@@ -26,13 +27,7 @@ export interface LineBot {
 }
 
 export function createLineBot(opts: LineBotOptions): LineBot {
-  const runtime: RuntimeEnv = opts.runtime ?? {
-    log: console.log,
-    error: console.error,
-    exit: (code: number): never => {
-      throw new Error(`exit ${code}`);
-    },
-  };
+  const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const cfg = opts.config ?? loadConfig();
   const account = resolveLineAccount({
@@ -47,6 +42,8 @@ export function createLineBot(opts: LineBotOptions): LineBot {
     (async () => {
       logVerbose("line: no message handler configured");
     });
+  const replayCache = createLineWebhookReplayCache();
+  const groupHistories = new Map<string, HistoryEntry[]>();
 
   const handleWebhook = async (body: WebhookRequestBody): Promise<void> => {
     if (!body.events || body.events.length === 0) {
@@ -59,6 +56,9 @@ export function createLineBot(opts: LineBotOptions): LineBot {
       runtime,
       mediaMaxBytes,
       processMessage,
+      replayCache,
+      groupHistories,
+      historyLimit: cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
     });
   };
 

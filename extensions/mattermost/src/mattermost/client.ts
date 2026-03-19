@@ -58,7 +58,7 @@ function buildMattermostApiUrl(baseUrl: string, path: string): string {
   return `${normalized}/api/v4${suffix}`;
 }
 
-async function readMattermostError(res: Response): Promise<string> {
+export async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
     const data = (await res.json()) as { message?: string } | undefined;
@@ -138,6 +138,16 @@ export async function fetchMattermostChannel(
   return await client.request<MattermostChannel>(`/channels/${channelId}`);
 }
 
+export async function fetchMattermostChannelByName(
+  client: MattermostClient,
+  teamId: string,
+  channelName: string,
+): Promise<MattermostChannel> {
+  return await client.request<MattermostChannel>(
+    `/teams/${teamId}/channels/name/${encodeURIComponent(channelName)}`,
+  );
+}
+
 export async function sendMattermostTyping(
   client: MattermostClient,
   params: { channelId: string; parentId?: string },
@@ -158,11 +168,268 @@ export async function sendMattermostTyping(
 export async function createMattermostDirectChannel(
   client: MattermostClient,
   userIds: string[],
+  signal?: AbortSignal,
 ): Promise<MattermostChannel> {
   return await client.request<MattermostChannel>("/channels/direct", {
     method: "POST",
     body: JSON.stringify(userIds),
+    signal,
   });
+}
+
+export type CreateDmChannelRetryOptions = {
+  /** Maximum number of retry attempts (default: 3) */
+  maxRetries?: number;
+  /** Initial delay in milliseconds (default: 1000) */
+  initialDelayMs?: number;
+  /** Maximum delay in milliseconds (default: 10000) */
+  maxDelayMs?: number;
+  /** Timeout for each individual request in milliseconds (default: 30000) */
+  timeoutMs?: number;
+  /** Optional logger for retry events */
+  onRetry?: (attempt: number, delayMs: number, error: Error) => void;
+};
+
+const RETRYABLE_NETWORK_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "ECONNABORTED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_DNS_RESOLVE_FAILED",
+  "UND_ERR_CONNECT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+]);
+
+const RETRYABLE_NETWORK_ERROR_NAMES = new Set([
+  "AbortError",
+  "TimeoutError",
+  "ConnectTimeoutError",
+  "HeadersTimeoutError",
+  "BodyTimeoutError",
+]);
+
+const RETRYABLE_NETWORK_MESSAGE_SNIPPETS = [
+  "network error",
+  "timeout",
+  "timed out",
+  "abort",
+  "connection refused",
+  "econnreset",
+  "econnrefused",
+  "etimedout",
+  "enotfound",
+  "socket hang up",
+  "getaddrinfo",
+];
+
+/**
+ * Creates a Mattermost DM channel with exponential backoff retry logic.
+ * Retries on transient errors (429, 5xx, network errors) but not on
+ * client errors (4xx except 429) or permanent failures.
+ */
+export async function createMattermostDirectChannelWithRetry(
+  client: MattermostClient,
+  userIds: string[],
+  options: CreateDmChannelRetryOptions = {},
+): Promise<MattermostChannel> {
+  const {
+    maxRetries = 3,
+    initialDelayMs = 1000,
+    maxDelayMs = 10000,
+    timeoutMs = 30000,
+    onRetry,
+  } = options;
+
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      // Use AbortController for per-request timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const result = await createMattermostDirectChannel(client, userIds, controller.signal);
+        return result;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+
+      // Don't retry on the last attempt
+      if (attempt >= maxRetries) {
+        break;
+      }
+
+      // Check if error is retryable
+      if (!isRetryableError(lastError)) {
+        throw lastError;
+      }
+
+      // Calculate exponential backoff delay with full-jitter
+      // Jitter is proportional to the exponential delay, not a fixed 1000ms
+      // This ensures backoff behaves correctly for small delay configurations
+      const exponentialDelay = initialDelayMs * Math.pow(2, attempt);
+      const jitter = Math.random() * exponentialDelay;
+      const delayMs = Math.min(exponentialDelay + jitter, maxDelayMs);
+
+      if (onRetry) {
+        onRetry(attempt + 1, delayMs, lastError);
+      }
+
+      // Wait before retrying
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError ?? new Error("Failed to create DM channel after retries");
+}
+
+function isRetryableError(error: Error): boolean {
+  const candidates = collectErrorCandidates(error);
+  const messages = candidates
+    .map((candidate) => readErrorMessage(candidate)?.toLowerCase())
+    .filter((message): message is string => Boolean(message));
+
+  // Retry on 5xx server errors FIRST (before checking 4xx)
+  // Use "mattermost api" prefix to avoid matching port numbers (e.g., :443) or IP octets
+  // This prevents misclassification when a 5xx error detail contains a 4xx substring
+  // e.g., "Mattermost API 503: upstream returned 404"
+  if (messages.some((message) => /mattermost api 5\d{2}\b/.test(message))) {
+    return true;
+  }
+
+  // Check for explicit 429 rate limiting FIRST (before generic "429" text match)
+  // This avoids retrying when error detail contains "429" but it's not the status code
+  if (
+    messages.some(
+      (message) => /mattermost api 429\b/.test(message) || message.includes("too many requests"),
+    )
+  ) {
+    return true;
+  }
+
+  // Check for explicit 4xx status codes - these are client errors and should NOT be retried
+  // (except 429 which is handled above)
+  // Use "mattermost api" prefix to avoid matching port numbers like :443
+  for (const message of messages) {
+    const clientErrorMatch = message.match(/mattermost api (4\d{2})\b/);
+    if (!clientErrorMatch) {
+      continue;
+    }
+    const statusCode = parseInt(clientErrorMatch[1], 10);
+    if (statusCode >= 400 && statusCode < 500) {
+      return false;
+    }
+  }
+
+  // Retry on network/transient errors only if no explicit Mattermost API status code is present
+  // This avoids false positives like:
+  // - "400 Bad Request: connection timed out" (has status code)
+  // - "connect ECONNRESET 104.18.32.10:443" (has port number, not status)
+  const hasMattermostApiStatusCode = messages.some((message) =>
+    /mattermost api \d{3}\b/.test(message),
+  );
+  if (hasMattermostApiStatusCode) {
+    return false;
+  }
+
+  const codes = candidates
+    .map((candidate) => readErrorCode(candidate))
+    .filter((code): code is string => Boolean(code));
+  if (codes.some((code) => RETRYABLE_NETWORK_ERROR_CODES.has(code))) {
+    return true;
+  }
+
+  const names = candidates
+    .map((candidate) => readErrorName(candidate))
+    .filter((name): name is string => Boolean(name));
+  if (names.some((name) => RETRYABLE_NETWORK_ERROR_NAMES.has(name))) {
+    return true;
+  }
+
+  return messages.some((message) =>
+    RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern)),
+  );
+}
+
+function collectErrorCandidates(error: unknown): unknown[] {
+  const queue: unknown[] = [error];
+  const seen = new Set<unknown>();
+  const candidates: unknown[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    candidates.push(current);
+
+    if (typeof current !== "object") {
+      continue;
+    }
+
+    const nested = current as {
+      cause?: unknown;
+      reason?: unknown;
+      errors?: unknown;
+    };
+    queue.push(nested.cause, nested.reason);
+    if (Array.isArray(nested.errors)) {
+      queue.push(...nested.errors);
+    }
+  }
+
+  return candidates;
+}
+
+function readErrorMessage(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const message = (error as { message?: unknown }).message;
+  return typeof message === "string" && message.trim() ? message : undefined;
+}
+
+function readErrorName(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const name = (error as { name?: unknown }).name;
+  return typeof name === "string" && name.trim() ? name : undefined;
+}
+
+function readErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const { code, errno } = error as {
+    code?: unknown;
+    errno?: unknown;
+  };
+  const raw = typeof code === "string" && code.trim() ? code : errno;
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.trim().toUpperCase();
+  }
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return String(raw);
+  }
+  return undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function createMattermostPost(
@@ -172,9 +439,10 @@ export async function createMattermostPost(
     message: string;
     rootId?: string;
     fileIds?: string[];
+    props?: Record<string, unknown>;
   },
 ): Promise<MattermostPost> {
-  const payload: Record<string, string> = {
+  const payload: Record<string, unknown> = {
     channel_id: params.channelId,
     message: params.message,
   };
@@ -182,10 +450,47 @@ export async function createMattermostPost(
     payload.root_id = params.rootId;
   }
   if (params.fileIds?.length) {
-    (payload as Record<string, unknown>).file_ids = params.fileIds;
+    payload.file_ids = params.fileIds;
+  }
+  if (params.props) {
+    payload.props = params.props;
   }
   return await client.request<MattermostPost>("/posts", {
     method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export type MattermostTeam = {
+  id: string;
+  name?: string | null;
+  display_name?: string | null;
+};
+
+export async function fetchMattermostUserTeams(
+  client: MattermostClient,
+  userId: string,
+): Promise<MattermostTeam[]> {
+  return await client.request<MattermostTeam[]>(`/users/${userId}/teams`);
+}
+
+export async function updateMattermostPost(
+  client: MattermostClient,
+  postId: string,
+  params: {
+    message?: string;
+    props?: Record<string, unknown>;
+  },
+): Promise<MattermostPost> {
+  const payload: Record<string, unknown> = { id: postId };
+  if (params.message !== undefined) {
+    payload.message = params.message;
+  }
+  if (params.props !== undefined) {
+    payload.props = params.props;
+  }
+  return await client.request<MattermostPost>(`/posts/${postId}`, {
+    method: "PUT",
     body: JSON.stringify(payload),
   });
 }

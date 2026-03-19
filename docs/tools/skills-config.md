@@ -24,9 +24,9 @@ All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.j
       nodeManager: "npm", // npm | pnpm | yarn | bun (Gateway runtime still Node; bun not recommended)
     },
     entries: {
-      "nano-banana-pro": {
+      "image-lab": {
         enabled: true,
-        apiKey: "GEMINI_KEY_HERE",
+        apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
         env: {
           GEMINI_API_KEY: "GEMINI_KEY_HERE",
         },
@@ -37,6 +37,15 @@ All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.j
   },
 }
 ```
+
+For built-in image generation/editing, prefer `agents.defaults.imageGenerationModel`
+plus the core `image_generate` tool. `skills.entries.*` is only for custom or
+third-party skill workflows.
+
+Examples:
+
+- Native Nano Banana-style setup: `agents.defaults.imageGenerationModel.primary: "google/gemini-3-pro-image-preview"`
+- Native fal setup: `agents.defaults.imageGenerationModel.primary: "fal/fal-ai/flux/dev"`
 
 ## Fields
 
@@ -56,6 +65,7 @@ Per-skill fields:
 - `enabled`: set `false` to disable a skill even if it’s bundled/installed.
 - `env`: environment variables injected for the agent run (only if not already set).
 - `apiKey`: optional convenience for skills that declare a primary env var.
+  Supports plaintext string or SecretRef object (`{ source, provider, id }`).
 
 ## Notes
 

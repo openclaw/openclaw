@@ -1,13 +1,15 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
+import type { OutboundMirror } from "./mirror.js";
 import { extractToolPayload } from "./tool-payload.js";
 
 export type OutboundGatewayContext = {
@@ -30,12 +32,7 @@ export type OutboundSendContext = {
   toolContext?: ChannelThreadingToolContext;
   deps?: OutboundSendDeps;
   dryRun: boolean;
-  mirror?: {
-    sessionKey: string;
-    agentId?: string;
-    text?: string;
-    mediaUrls?: string[];
-  };
+  mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
 };
@@ -54,11 +51,16 @@ async function tryHandleWithPluginAction(params: {
   if (params.ctx.dryRun) {
     return null;
   }
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+    params.ctx.cfg,
+    params.ctx.agentId ?? params.ctx.mirror?.agentId,
+  );
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,
     action: params.action,
     cfg: params.ctx.cfg,
     params: params.ctx.params,
+    mediaLocalRoots,
     accountId: params.ctx.accountId ?? undefined,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
@@ -82,6 +84,7 @@ export async function executeSendAction(params: {
   mediaUrl?: string;
   mediaUrls?: string[];
   gifPlayback?: boolean;
+  forceDocument?: boolean;
   bestEffort?: boolean;
   replyToId?: string;
   threadId?: string | number;
@@ -109,6 +112,7 @@ export async function executeSendAction(params: {
         sessionKey: params.ctx.mirror.sessionKey,
         text: mirrorText,
         mediaUrls: mirrorMediaUrls,
+        idempotencyKey: params.ctx.mirror.idempotencyKey,
       });
     },
   });
@@ -129,6 +133,7 @@ export async function executeSendAction(params: {
     replyToId: params.replyToId,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
     dryRun: params.ctx.dryRun,
     bestEffort: params.bestEffort ?? undefined,
     deps: params.ctx.deps,
@@ -147,14 +152,16 @@ export async function executeSendAction(params: {
 
 export async function executePollAction(params: {
   ctx: OutboundSendContext;
-  to: string;
-  question: string;
-  options: string[];
-  maxSelections: number;
-  durationSeconds?: number;
-  durationHours?: number;
-  threadId?: string;
-  isAnonymous?: boolean;
+  resolveCorePoll: () => {
+    to: string;
+    question: string;
+    options: string[];
+    maxSelections: number;
+    durationSeconds?: number;
+    durationHours?: number;
+    threadId?: string;
+    isAnonymous?: boolean;
+  };
 }): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
@@ -169,19 +176,20 @@ export async function executePollAction(params: {
     return pluginHandled;
   }
 
+  const corePoll = params.resolveCorePoll();
   const result: MessagePollResult = await sendPoll({
     cfg: params.ctx.cfg,
-    to: params.to,
-    question: params.question,
-    options: params.options,
-    maxSelections: params.maxSelections,
-    durationSeconds: params.durationSeconds ?? undefined,
-    durationHours: params.durationHours ?? undefined,
+    to: corePoll.to,
+    question: corePoll.question,
+    options: corePoll.options,
+    maxSelections: corePoll.maxSelections,
+    durationSeconds: corePoll.durationSeconds ?? undefined,
+    durationHours: corePoll.durationHours ?? undefined,
     channel: params.ctx.channel,
     accountId: params.ctx.accountId ?? undefined,
-    threadId: params.threadId ?? undefined,
+    threadId: corePoll.threadId ?? undefined,
     silent: params.ctx.silent ?? undefined,
-    isAnonymous: params.isAnonymous ?? undefined,
+    isAnonymous: corePoll.isAnonymous ?? undefined,
     dryRun: params.ctx.dryRun,
     gateway: params.ctx.gateway,
   });

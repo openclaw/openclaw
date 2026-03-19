@@ -5,6 +5,7 @@
  * error handling, priority ordering, and async support.
  */
 
+import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAfterCompactionEvent,
@@ -18,6 +19,9 @@ import type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
+  PluginHookInboundClaimContext,
+  PluginHookInboundClaimEvent,
+  PluginHookInboundClaimResult,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
@@ -36,6 +40,13 @@ import type {
   PluginHookSessionContext,
   PluginHookSessionEndEvent,
   PluginHookSessionStartEvent,
+  PluginHookSubagentContext,
+  PluginHookSubagentDeliveryTargetEvent,
+  PluginHookSubagentDeliveryTargetResult,
+  PluginHookSubagentSpawningEvent,
+  PluginHookSubagentSpawningResult,
+  PluginHookSubagentEndedEvent,
+  PluginHookSubagentSpawnedEvent,
   PluginHookToolContext,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
@@ -58,6 +69,9 @@ export type {
   PluginHookAgentEndEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
+  PluginHookInboundClaimContext,
+  PluginHookInboundClaimEvent,
+  PluginHookInboundClaimResult,
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
@@ -76,6 +90,13 @@ export type {
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
+  PluginHookSubagentContext,
+  PluginHookSubagentDeliveryTargetEvent,
+  PluginHookSubagentDeliveryTargetResult,
+  PluginHookSubagentSpawningEvent,
+  PluginHookSubagentSpawningResult,
+  PluginHookSubagentSpawnedEvent,
+  PluginHookSubagentEndedEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -93,6 +114,25 @@ export type HookRunnerOptions = {
   catchErrors?: boolean;
 };
 
+export type PluginTargetedInboundClaimOutcome =
+  | {
+      status: "handled";
+      result: PluginHookInboundClaimResult;
+    }
+  | {
+      status: "missing_plugin";
+    }
+  | {
+      status: "no_handler";
+    }
+  | {
+      status: "declined";
+    }
+  | {
+      status: "error";
+      error: string;
+    };
+
 /**
  * Get hooks for a specific hook name, sorted by priority (higher first).
  */
@@ -103,6 +143,14 @@ function getHooksForName<K extends PluginHookName>(
   return (registry.typedHooks as PluginHookRegistration<K>[])
     .filter((h) => h.hookName === hookName)
     .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+}
+
+function getHooksForNameAndPlugin<K extends PluginHookName>(
+  registry: PluginRegistry,
+  hookName: K,
+  pluginId: string,
+): PluginHookRegistration<K>[] {
+  return getHooksForName(registry, hookName).filter((hook) => hook.pluginId === pluginId);
 }
 
 /**
@@ -126,11 +174,66 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     next: PluginHookBeforePromptBuildResult,
   ): PluginHookBeforePromptBuildResult => ({
     systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
-    prependContext:
-      acc?.prependContext && next.prependContext
-        ? `${acc.prependContext}\n\n${next.prependContext}`
-        : (next.prependContext ?? acc?.prependContext),
+    prependContext: concatOptionalTextSegments({
+      left: acc?.prependContext,
+      right: next.prependContext,
+    }),
+    prependSystemContext: concatOptionalTextSegments({
+      left: acc?.prependSystemContext,
+      right: next.prependSystemContext,
+    }),
+    appendSystemContext: concatOptionalTextSegments({
+      left: acc?.appendSystemContext,
+      right: next.appendSystemContext,
+    }),
   });
+
+  const mergeSubagentSpawningResult = (
+    acc: PluginHookSubagentSpawningResult | undefined,
+    next: PluginHookSubagentSpawningResult,
+  ): PluginHookSubagentSpawningResult => {
+    if (acc?.status === "error") {
+      return acc;
+    }
+    if (next.status === "error") {
+      return next;
+    }
+    return {
+      status: "ok",
+      threadBindingReady: Boolean(acc?.threadBindingReady || next.threadBindingReady),
+    };
+  };
+
+  const mergeSubagentDeliveryTargetResult = (
+    acc: PluginHookSubagentDeliveryTargetResult | undefined,
+    next: PluginHookSubagentDeliveryTargetResult,
+  ): PluginHookSubagentDeliveryTargetResult => {
+    if (acc?.origin) {
+      return acc;
+    }
+    return next;
+  };
+
+  const handleHookError = (params: {
+    hookName: PluginHookName;
+    pluginId: string;
+    error: unknown;
+  }): never | void => {
+    const msg = `[hooks] ${params.hookName} handler from ${params.pluginId} failed: ${String(
+      params.error,
+    )}`;
+    if (catchErrors) {
+      logger?.error(msg);
+      return;
+    }
+    throw new Error(msg, { cause: params.error });
+  };
+
+  const sanitizeHookError = (error: unknown): string => {
+    const raw = error instanceof Error ? error.message : String(error);
+    const firstLine = raw.split("\n")[0]?.trim();
+    return firstLine || "unknown error";
+  };
 
   /**
    * Run a hook that doesn't return a value (fire-and-forget style).
@@ -152,12 +255,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       try {
         await (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx);
       } catch (err) {
-        const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
-        if (catchErrors) {
-          logger?.error(msg);
-        } else {
-          throw new Error(msg, { cause: err });
-        }
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
     });
 
@@ -197,16 +295,127 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           }
         }
       } catch (err) {
-        const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
-        if (catchErrors) {
-          logger?.error(msg);
-        } else {
-          throw new Error(msg, { cause: err });
-        }
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
     }
 
     return result;
+  }
+
+  /**
+   * Run a sequential claim hook where the first `{ handled: true }` result wins.
+   */
+  async function runClaimingHook<K extends PluginHookName, TResult extends { handled: boolean }>(
+    hookName: K,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<TResult | undefined> {
+    const hooks = getHooksForName(registry, hookName);
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, first-claim wins)`);
+
+    return await runClaimingHooksList(hooks, hookName, event, ctx);
+  }
+
+  async function runClaimingHookForPlugin<
+    K extends PluginHookName,
+    TResult extends { handled: boolean },
+  >(
+    hookName: K,
+    pluginId: string,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<TResult | undefined> {
+    const hooks = getHooksForNameAndPlugin(registry, hookName, pluginId);
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(
+      `[hooks] running ${hookName} for ${pluginId} (${hooks.length} handlers, targeted)`,
+    );
+
+    return await runClaimingHooksList(hooks, hookName, event, ctx);
+  }
+
+  async function runClaimingHooksList<
+    K extends PluginHookName,
+    TResult extends { handled: boolean },
+  >(
+    hooks: Array<PluginHookRegistration<K> & { pluginId: string }>,
+    hookName: K,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<TResult | undefined> {
+    for (const hook of hooks) {
+      try {
+        const handlerResult = await (
+          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>
+        )(event, ctx);
+        if (handlerResult?.handled) {
+          return handlerResult;
+        }
+      } catch (err) {
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+    }
+
+    return undefined;
+  }
+
+  async function runClaimingHookForPluginOutcome<
+    K extends PluginHookName,
+    TResult extends { handled: boolean },
+  >(
+    hookName: K,
+    pluginId: string,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<
+    | { status: "handled"; result: TResult }
+    | { status: "missing_plugin" }
+    | { status: "no_handler" }
+    | { status: "declined" }
+    | { status: "error"; error: string }
+  > {
+    const pluginLoaded = registry.plugins.some(
+      (plugin) => plugin.id === pluginId && plugin.status === "loaded",
+    );
+    if (!pluginLoaded) {
+      return { status: "missing_plugin" };
+    }
+
+    const hooks = getHooksForNameAndPlugin(registry, hookName, pluginId);
+    if (hooks.length === 0) {
+      return { status: "no_handler" };
+    }
+
+    logger?.debug?.(
+      `[hooks] running ${hookName} for ${pluginId} (${hooks.length} handlers, targeted outcome)`,
+    );
+
+    let firstError: string | null = null;
+    for (const hook of hooks) {
+      try {
+        const handlerResult = await (
+          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>
+        )(event, ctx);
+        if (handlerResult?.handled) {
+          return { status: "handled", result: handlerResult };
+        }
+      } catch (err) {
+        firstError ??= sanitizeHookError(err);
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+    }
+
+    if (firstError) {
+      return { status: "error", error: firstError };
+    }
+    return { status: "declined" };
   }
 
   // =========================================================================
@@ -329,6 +538,47 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   // =========================================================================
   // Message Hooks
   // =========================================================================
+
+  /**
+   * Run inbound_claim hook.
+   * Allows plugins to claim an inbound event before commands/agent dispatch.
+   */
+  async function runInboundClaim(
+    event: PluginHookInboundClaimEvent,
+    ctx: PluginHookInboundClaimContext,
+  ): Promise<PluginHookInboundClaimResult | undefined> {
+    return runClaimingHook<"inbound_claim", PluginHookInboundClaimResult>(
+      "inbound_claim",
+      event,
+      ctx,
+    );
+  }
+
+  async function runInboundClaimForPlugin(
+    pluginId: string,
+    event: PluginHookInboundClaimEvent,
+    ctx: PluginHookInboundClaimContext,
+  ): Promise<PluginHookInboundClaimResult | undefined> {
+    return runClaimingHookForPlugin<"inbound_claim", PluginHookInboundClaimResult>(
+      "inbound_claim",
+      pluginId,
+      event,
+      ctx,
+    );
+  }
+
+  async function runInboundClaimForPluginOutcome(
+    pluginId: string,
+    event: PluginHookInboundClaimEvent,
+    ctx: PluginHookInboundClaimContext,
+  ): Promise<PluginTargetedInboundClaimOutcome> {
+    return runClaimingHookForPluginOutcome<"inbound_claim", PluginHookInboundClaimResult>(
+      "inbound_claim",
+      pluginId,
+      event,
+      ctx,
+    );
+  }
 
   /**
    * Run message_received hook.
@@ -570,6 +820,60 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return runVoidHook("session_end", event, ctx);
   }
 
+  /**
+   * Run subagent_spawning hook.
+   * Runs sequentially so channel plugins can deterministically provision session bindings.
+   */
+  async function runSubagentSpawning(
+    event: PluginHookSubagentSpawningEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<PluginHookSubagentSpawningResult | undefined> {
+    return runModifyingHook<"subagent_spawning", PluginHookSubagentSpawningResult>(
+      "subagent_spawning",
+      event,
+      ctx,
+      mergeSubagentSpawningResult,
+    );
+  }
+
+  /**
+   * Run subagent_delivery_target hook.
+   * Runs sequentially so channel plugins can deterministically resolve routing.
+   */
+  async function runSubagentDeliveryTarget(
+    event: PluginHookSubagentDeliveryTargetEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<PluginHookSubagentDeliveryTargetResult | undefined> {
+    return runModifyingHook<"subagent_delivery_target", PluginHookSubagentDeliveryTargetResult>(
+      "subagent_delivery_target",
+      event,
+      ctx,
+      mergeSubagentDeliveryTargetResult,
+    );
+  }
+
+  /**
+   * Run subagent_spawned hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runSubagentSpawned(
+    event: PluginHookSubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<void> {
+    return runVoidHook("subagent_spawned", event, ctx);
+  }
+
+  /**
+   * Run subagent_ended hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runSubagentEnded(
+    event: PluginHookSubagentEndedEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<void> {
+    return runVoidHook("subagent_ended", event, ctx);
+  }
+
   // =========================================================================
   // Gateway Hooks
   // =========================================================================
@@ -626,6 +930,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runAfterCompaction,
     runBeforeReset,
     // Message hooks
+    runInboundClaim,
+    runInboundClaimForPlugin,
+    runInboundClaimForPluginOutcome,
     runMessageReceived,
     runMessageSending,
     runMessageSent,
@@ -638,6 +945,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Session hooks
     runSessionStart,
     runSessionEnd,
+    runSubagentSpawning,
+    runSubagentDeliveryTarget,
+    runSubagentSpawned,
+    runSubagentEnded,
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,

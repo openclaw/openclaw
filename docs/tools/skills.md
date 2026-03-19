@@ -70,6 +70,7 @@ that up as `<workspace>/skills` on the next session.
 
 - Treat third-party skills as **untrusted code**. Read them before enabling.
 - Prefer sandboxed runs for untrusted inputs and risky tools. See [Sandboxing](/gateway/sandboxing).
+- Workspace and extra-dir skill discovery only accepts skill roots and `SKILL.md` files whose resolved realpath stays inside the configured root.
 - `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process
   for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
 - For a broader threat model and checklists, see [Security](/gateway/security).
@@ -80,8 +81,8 @@ that up as `<workspace>/skills` on the next session.
 
 ```markdown
 ---
-name: nano-banana-pro
-description: Generate or edit images via Gemini 3 Pro Image
+name: image-lab
+description: Generate or edit images via a provider-backed image workflow
 ---
 ```
 
@@ -108,8 +109,8 @@ OpenClaw **filters skills at load time** using `metadata` (single-line JSON):
 
 ```markdown
 ---
-name: nano-banana-pro
-description: Generate or edit images via Gemini 3 Pro Image
+name: image-lab
+description: Generate or edit images via a provider-backed image workflow
 metadata:
   {
     "openclaw":
@@ -193,9 +194,9 @@ Bundled/managed skills can be toggled and supplied with env values:
 {
   skills: {
     entries: {
-      "nano-banana-pro": {
+      "image-lab": {
         enabled: true,
-        apiKey: "GEMINI_KEY_HERE",
+        apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
         env: {
           GEMINI_API_KEY: "GEMINI_KEY_HERE",
         },
@@ -213,6 +214,10 @@ Bundled/managed skills can be toggled and supplied with env values:
 
 Note: if the skill name contains hyphens, quote the key (JSON5 allows quoted keys).
 
+If you want stock image generation/editing inside OpenClaw itself, use the core
+`image_generate` tool with `agents.defaults.imageGenerationModel` instead of a
+bundled skill. Skill examples here are for custom or third-party workflows.
+
 Config keys match the **skill name** by default. If a skill defines
 `metadata.openclaw.skillKey`, use that key under `skills.entries`.
 
@@ -221,6 +226,7 @@ Rules:
 - `enabled: false` disables the skill even if it’s bundled/installed.
 - `env`: injected **only if** the variable isn’t already set in the process.
 - `apiKey`: convenience for skills that declare `metadata.openclaw.primaryEnv`.
+  Supports plaintext string or SecretRef object (`{ source, provider, id }`).
 - `config`: optional bag for custom per-skill fields; custom keys must live here.
 - `allowBundled`: optional allowlist for **bundled** skills only. If set, only
   bundled skills in the list are eligible (managed/workspace skills unaffected).

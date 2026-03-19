@@ -1,5 +1,5 @@
-import type { ChannelAccountSnapshot, RuntimeEnv } from "openclaw/plugin-sdk";
 import WebSocket from "ws";
+import type { ChannelAccountSnapshot, RuntimeEnv } from "../runtime-api.js";
 import type { MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
 

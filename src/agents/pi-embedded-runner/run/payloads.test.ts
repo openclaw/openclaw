@@ -1,30 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { buildEmbeddedRunPayloads } from "./payloads.js";
-
-type BuildPayloadParams = Parameters<typeof buildEmbeddedRunPayloads>[0];
-
-function buildPayloads(overrides: Partial<BuildPayloadParams> = {}) {
-  return buildEmbeddedRunPayloads({
-    assistantTexts: [],
-    toolMetas: [],
-    lastAssistant: undefined,
-    sessionKey: "session:telegram",
-    inlineToolResultsAllowed: false,
-    verboseLevel: "off",
-    reasoningLevel: "off",
-    toolResultFormat: "plain",
-    ...overrides,
-  });
-}
+import { buildPayloads, expectSingleToolErrorPayload } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
+  function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
+    const payloads = buildPayloads(params);
+    expect(payloads).toHaveLength(0);
+  }
+
   it("suppresses exec tool errors when verbose mode is off", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
       verboseLevel: "off",
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("shows exec tool errors when verbose mode is on", () => {
@@ -33,10 +20,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       verboseLevel: "on",
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("Exec");
-    expect(payloads[0]?.text).toContain("command failed");
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+      detail: "command failed",
+    });
   });
 
   it("keeps non-exec mutating tool failures visible", () => {
@@ -45,8 +32,62 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       verboseLevel: "off",
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("Write");
+    expectSingleToolErrorPayload(payloads, {
+      title: "Write",
+      absentDetail: "permission denied",
+    });
+  });
+
+  it.each([
+    {
+      name: "includes details for mutating tool failures when verbose is on",
+      verboseLevel: "on" as const,
+      detail: "permission denied",
+      absentDetail: undefined,
+    },
+    {
+      name: "includes details for mutating tool failures when verbose is full",
+      verboseLevel: "full" as const,
+      detail: "permission denied",
+      absentDetail: undefined,
+    },
+  ])("$name", ({ verboseLevel, detail, absentDetail }) => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "write", error: "permission denied" },
+      verboseLevel,
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Write",
+      detail,
+      absentDetail,
+    });
+  });
+
+  it.each([
+    {
+      name: "default relay failure",
+      lastToolError: { toolName: "sessions_send", error: "delivery timeout" },
+    },
+    {
+      name: "mutating relay failure",
+      lastToolError: {
+        toolName: "sessions_send",
+        error: "delivery timeout",
+        mutatingAction: true,
+      },
+    },
+  ])("suppresses sessions_send errors for $name", ({ lastToolError }) => {
+    expectNoPayloads({
+      lastToolError,
+      verboseLevel: "on",
+    });
+  });
+
+  it("suppresses assistant text when a deterministic exec approval prompt was already delivered", () => {
+    expectNoPayloads({
+      assistantTexts: ["Approval is needed. Please run /approve abc allow-once"],
+      didSendDeterministicApprovalPrompt: true,
+    });
   });
 });

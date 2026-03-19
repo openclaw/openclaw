@@ -67,24 +67,30 @@ Semantic memory search uses **embedding APIs** when configured for remote provid
 - `memorySearch.provider = "openai"` → OpenAI embeddings
 - `memorySearch.provider = "gemini"` → Gemini embeddings
 - `memorySearch.provider = "voyage"` → Voyage embeddings
+- `memorySearch.provider = "mistral"` → Mistral embeddings
+- `memorySearch.provider = "ollama"` → Ollama embeddings (local/self-hosted; typically no hosted API billing)
 - Optional fallback to a remote provider if local embeddings fail
 
 You can keep it local with `memorySearch.provider = "local"` (no API usage).
 
 See [Memory](/concepts/memory).
 
-### 4) Web search tool (Brave / Perplexity via OpenRouter)
+### 4) Web search tool
 
-`web_search` uses API keys and may incur usage charges:
+`web_search` uses API keys and may incur usage charges depending on your provider:
 
-- **Brave Search API**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
-- **Perplexity** (via OpenRouter): `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
+- **Brave Search API**: `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
+- **Gemini (Google Search)**: `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
+- **Grok (xAI)**: `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
+- **Kimi (Moonshot)**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `plugins.entries.moonshot.config.webSearch.apiKey`
+- **Perplexity Search API**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
 
-**Brave free tier (generous):**
+Legacy `tools.web.search.*` provider paths still load through the temporary compatibility shim, but they are no longer the recommended config surface.
 
-- **2,000 requests/month**
-- **1 request/second**
-- **Credit card required** for verification (no charge unless you upgrade)
+**Brave Search free credit:** Each Brave plan includes \$5/month in renewing
+free credit. The Search plan costs \$5 per 1,000 requests, so the credit covers
+1,000 requests/month at no charge. Set your usage limit in the Brave dashboard
+to avoid unexpected charges.
 
 See [Web tools](/tools/web).
 

@@ -6,6 +6,10 @@ type IsMainModuleOptions = {
   argv?: string[];
   env?: NodeJS.ProcessEnv;
   cwd?: string;
+  wrapperEntryPairs?: Array<{
+    wrapperBasename: string;
+    entryBasename: string;
+  }>;
 };
 
 function normalizePathCandidate(candidate: string | undefined, cwd: string): string | undefined {
@@ -26,6 +30,7 @@ export function isMainModule({
   argv = process.argv,
   env = process.env,
   cwd = process.cwd(),
+  wrapperEntryPairs = [],
 }: IsMainModuleOptions): boolean {
   const normalizedCurrent = normalizePathCandidate(currentFile, cwd);
   const normalizedArgv1 = normalizePathCandidate(argv[1], cwd);
@@ -41,13 +46,17 @@ export function isMainModule({
     return true;
   }
 
-  // Fallback: basename match (relative paths, symlinked bins).
-  if (
-    normalizedCurrent &&
-    normalizedArgv1 &&
-    path.basename(normalizedCurrent) === path.basename(normalizedArgv1)
-  ) {
-    return true;
+  // Optional wrapper->entry mapping for wrapper launchers that import the real entry.
+  if (normalizedCurrent && normalizedArgv1 && wrapperEntryPairs.length > 0) {
+    const currentBase = path.basename(normalizedCurrent);
+    const argvBase = path.basename(normalizedArgv1);
+    const matched = wrapperEntryPairs.some(
+      ({ wrapperBasename, entryBasename }) =>
+        currentBase === entryBasename && argvBase === wrapperBasename,
+    );
+    if (matched) {
+      return true;
+    }
   }
 
   return false;

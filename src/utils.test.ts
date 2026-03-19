@@ -8,7 +8,6 @@ import {
   ensureDir,
   jidToE164,
   normalizeE164,
-  normalizePath,
   resolveConfigDir,
   resolveHomeDir,
   resolveJidToE164,
@@ -17,35 +16,27 @@ import {
   shortenHomePath,
   sleep,
   toWhatsappJid,
-  withWhatsAppPrefix,
 } from "./utils.js";
 
-describe("normalizePath", () => {
-  it("adds leading slash when missing", () => {
-    expect(normalizePath("foo")).toBe("/foo");
-  });
-
-  it("keeps existing slash", () => {
-    expect(normalizePath("/bar")).toBe("/bar");
-  });
-});
-
-describe("withWhatsAppPrefix", () => {
-  it("adds whatsapp prefix", () => {
-    expect(withWhatsAppPrefix("+1555")).toBe("whatsapp:+1555");
-  });
-
-  it("leaves prefixed intact", () => {
-    expect(withWhatsAppPrefix("whatsapp:+1555")).toBe("whatsapp:+1555");
-  });
-});
+async function withTempDir<T>(
+  prefix: string,
+  run: (dir: string) => T | Promise<T>,
+): Promise<Awaited<T>> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  try {
+    return await run(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 describe("ensureDir", () => {
   it("creates nested directory", async () => {
-    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
-    const target = path.join(tmp, "nested", "dir");
-    await ensureDir(target);
-    expect(fs.existsSync(target)).toBe(true);
+    await withTempDir("openclaw-test-", async (tmp) => {
+      const target = path.join(tmp, "nested", "dir");
+      await ensureDir(target);
+      expect(fs.existsSync(target)).toBe(true);
+    });
   });
 });
 
@@ -96,34 +87,34 @@ describe("jidToE164", () => {
     spy.mockRestore();
   });
 
-  it("maps @lid from authDir mapping files", () => {
-    const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
-    const mappingPath = path.join(authDir, "lid-mapping-456_reverse.json");
-    fs.writeFileSync(mappingPath, JSON.stringify("5559876"));
-    expect(jidToE164("456@lid", { authDir })).toBe("+5559876");
-    fs.rmSync(authDir, { recursive: true, force: true });
+  it("maps @lid from authDir mapping files", async () => {
+    await withTempDir("openclaw-auth-", (authDir) => {
+      const mappingPath = path.join(authDir, "lid-mapping-456_reverse.json");
+      fs.writeFileSync(mappingPath, JSON.stringify("5559876"));
+      expect(jidToE164("456@lid", { authDir })).toBe("+5559876");
+    });
   });
 
-  it("maps @hosted.lid from authDir mapping files", () => {
-    const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
-    const mappingPath = path.join(authDir, "lid-mapping-789_reverse.json");
-    fs.writeFileSync(mappingPath, JSON.stringify(4440001));
-    expect(jidToE164("789@hosted.lid", { authDir })).toBe("+4440001");
-    fs.rmSync(authDir, { recursive: true, force: true });
+  it("maps @hosted.lid from authDir mapping files", async () => {
+    await withTempDir("openclaw-auth-", (authDir) => {
+      const mappingPath = path.join(authDir, "lid-mapping-789_reverse.json");
+      fs.writeFileSync(mappingPath, JSON.stringify(4440001));
+      expect(jidToE164("789@hosted.lid", { authDir })).toBe("+4440001");
+    });
   });
 
   it("accepts hosted PN JIDs", () => {
     expect(jidToE164("1555000:2@hosted")).toBe("+1555000");
   });
 
-  it("falls back through lidMappingDirs in order", () => {
-    const first = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-lid-a-"));
-    const second = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-lid-b-"));
-    const mappingPath = path.join(second, "lid-mapping-321_reverse.json");
-    fs.writeFileSync(mappingPath, JSON.stringify("123321"));
-    expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe("+123321");
-    fs.rmSync(first, { recursive: true, force: true });
-    fs.rmSync(second, { recursive: true, force: true });
+  it("falls back through lidMappingDirs in order", async () => {
+    await withTempDir("openclaw-lid-a-", async (first) => {
+      await withTempDir("openclaw-lid-b-", (second) => {
+        const mappingPath = path.join(second, "lid-mapping-321_reverse.json");
+        fs.writeFileSync(mappingPath, JSON.stringify("123321"));
+        expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe("+123321");
+      });
+    });
   });
 });
 
@@ -138,6 +129,15 @@ describe("resolveConfigDir", () => {
     } finally {
       await fs.promises.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("expands OPENCLAW_STATE_DIR using the provided env", () => {
+    const env = {
+      HOME: "/tmp/openclaw-home",
+      OPENCLAW_STATE_DIR: "~/state",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "state"));
   });
 });
 
@@ -194,15 +194,25 @@ describe("resolveJidToE164", () => {
     await expect(resolveJidToE164("888@s.whatsapp.net", { lidLookup })).resolves.toBe("+888");
     expect(lidLookup.getPNForLID).not.toHaveBeenCalled();
   });
+
+  it("returns null when lidLookup throws", async () => {
+    const lidLookup = {
+      getPNForLID: vi.fn().mockRejectedValue(new Error("lookup failed")),
+    };
+    await expect(resolveJidToE164("777@lid", { lidLookup })).resolves.toBeNull();
+    expect(lidLookup.getPNForLID).toHaveBeenCalledWith("777@lid");
+  });
 });
 
 describe("resolveUserPath", () => {
   it("expands ~ to home dir", () => {
-    expect(resolveUserPath("~")).toBe(path.resolve(os.homedir()));
+    expect(resolveUserPath("~", {}, () => "/Users/thoffman")).toBe(path.resolve("/Users/thoffman"));
   });
 
   it("expands ~/ to home dir", () => {
-    expect(resolveUserPath("~/openclaw")).toBe(path.resolve(os.homedir(), "openclaw"));
+    expect(resolveUserPath("~/openclaw", {}, () => "/Users/thoffman")).toBe(
+      path.resolve("/Users/thoffman", "openclaw"),
+    );
   });
 
   it("resolves relative paths", () => {
@@ -218,8 +228,22 @@ describe("resolveUserPath", () => {
     vi.unstubAllEnvs();
   });
 
+  it("uses the provided env for tilde expansion", () => {
+    const env = {
+      HOME: "/tmp/openclaw-home",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveUserPath("~/openclaw", env)).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
+  });
+
   it("keeps blank paths blank", () => {
     expect(resolveUserPath("")).toBe("");
     expect(resolveUserPath("   ")).toBe("");
+  });
+
+  it("returns empty string for undefined/null input", () => {
+    expect(resolveUserPath(undefined as unknown as string)).toBe("");
+    expect(resolveUserPath(null as unknown as string)).toBe("");
   });
 });

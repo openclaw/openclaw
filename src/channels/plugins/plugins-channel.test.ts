@@ -1,10 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import { normalizeSignalAccountInput } from "../../../extensions/signal/src/setup-surface.js";
+import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeIMessageMessagingTarget } from "./normalize/imessage.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize/signal.js";
-import { normalizeSignalAccountInput } from "./onboarding/signal.js";
-import { telegramOutbound } from "./outbound/telegram.js";
-import { whatsappOutbound } from "./outbound/whatsapp.js";
+
+function expectWhatsAppTargetResolutionError(result: unknown) {
+  expect(result).toEqual({
+    ok: false,
+    error: expect.any(Error),
+  });
+}
 
 describe("imessage target normalization", () => {
   it("preserves service prefixes for handles", () => {
@@ -80,7 +86,7 @@ describe("telegramOutbound.sendPayload", () => {
           },
         },
       },
-      deps: { sendTelegram },
+      deps: { telegram: sendTelegram },
     });
 
     expect(sendTelegram).toHaveBeenCalledTimes(1);
@@ -114,7 +120,7 @@ describe("telegramOutbound.sendPayload", () => {
           },
         },
       },
-      deps: { sendTelegram },
+      deps: { telegram: sendTelegram },
     });
 
     expect(sendTelegram).toHaveBeenCalledTimes(2);
@@ -149,10 +155,7 @@ describe("whatsappOutbound.resolveTarget", () => {
       mode: "implicit",
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.any(Error),
-    });
+    expectWhatsAppTargetResolutionError(result);
   });
 
   it("returns error when implicit target is not in allowFrom", () => {
@@ -162,10 +165,7 @@ describe("whatsappOutbound.resolveTarget", () => {
       mode: "implicit",
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.any(Error),
-    });
+    expectWhatsAppTargetResolutionError(result);
   });
 
   it("keeps group JID targets even when allowFrom does not contain them", () => {

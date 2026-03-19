@@ -1,4 +1,4 @@
-import { listChannelDocks } from "../channels/dock.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
@@ -46,14 +46,14 @@ function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefiniti
   };
 }
 
-type ChannelDock = ReturnType<typeof listChannelDocks>[number];
+type ChannelPlugin = ReturnType<typeof listChannelPlugins>[number];
 
-function defineDockCommand(dock: ChannelDock): ChatCommandDefinition {
+function defineDockCommand(plugin: ChannelPlugin): ChatCommandDefinition {
   return defineChatCommand({
-    key: `dock:${dock.id}`,
-    nativeName: `dock_${dock.id}`,
-    description: `Switch to ${dock.id} for replies.`,
-    textAliases: [`/dock-${dock.id}`, `/dock_${dock.id}`],
+    key: `dock:${plugin.id}`,
+    nativeName: `dock_${plugin.id}`,
+    description: `Switch to ${plugin.id} for replies.`,
+    textAliases: [`/dock-${plugin.id}`, `/dock_${plugin.id}`],
     category: "docks",
   });
 }
@@ -197,6 +197,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "btw",
+      nativeName: "btw",
+      description: "Ask a side question without changing future session context.",
+      textAlias: "/btw",
+      acceptsArgs: true,
+      category: "tools",
+    }),
+    defineChatCommand({
       key: "export-session",
       nativeName: "export-session",
       description: "Export current session to HTML file with full system prompt.",
@@ -263,6 +271,28 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "session",
+      nativeName: "session",
+      description: "Manage session-level settings (for example /session idle).",
+      textAlias: "/session",
+      category: "session",
+      args: [
+        {
+          name: "action",
+          description: "idle | max-age",
+          type: "string",
+          choices: ["idle", "max-age"],
+        },
+        {
+          name: "value",
+          description: "Duration (24h, 90m) or off",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "subagents",
       nativeName: "subagents",
       description: "List, kill, log, spawn, or steer subagent runs for this session.",
@@ -288,6 +318,76 @@ function buildChatCommands(): ChatCommandDefinition[] {
         },
       ],
       argsMenu: "auto",
+    }),
+    defineChatCommand({
+      key: "acp",
+      nativeName: "acp",
+      description: "Manage ACP sessions and runtime options.",
+      textAlias: "/acp",
+      category: "management",
+      args: [
+        {
+          name: "action",
+          description: "Action to run",
+          type: "string",
+          preferAutocomplete: true,
+          choices: [
+            "spawn",
+            "cancel",
+            "steer",
+            "close",
+            "sessions",
+            "status",
+            "set-mode",
+            "set",
+            "cwd",
+            "permissions",
+            "timeout",
+            "model",
+            "reset-options",
+            "doctor",
+            "install",
+            "help",
+          ],
+        },
+        {
+          name: "value",
+          description: "Action arguments",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
+      key: "focus",
+      nativeName: "focus",
+      description:
+        "Bind this thread (Discord) or topic/conversation (Telegram) to a session target.",
+      textAlias: "/focus",
+      category: "management",
+      args: [
+        {
+          name: "target",
+          description: "Subagent label/index or session key/id/label",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "unfocus",
+      nativeName: "unfocus",
+      description: "Remove the current thread (Discord) or topic/conversation (Telegram) binding.",
+      textAlias: "/unfocus",
+      category: "management",
+    }),
+    defineChatCommand({
+      key: "agents",
+      nativeName: "agents",
+      description: "List thread-bound agents for this session.",
+      textAlias: "/agents",
+      category: "management",
     }),
     defineChatCommand({
       key: "kill",
@@ -351,6 +451,56 @@ function buildChatCommands(): ChatCommandDefinition[] {
       ],
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.config,
+    }),
+    defineChatCommand({
+      key: "mcp",
+      nativeName: "mcp",
+      description: "Show or set OpenClaw MCP servers.",
+      textAlias: "/mcp",
+      category: "management",
+      args: [
+        {
+          name: "action",
+          description: "show | get | set | unset",
+          type: "string",
+          choices: ["show", "get", "set", "unset"],
+        },
+        {
+          name: "path",
+          description: "MCP server name",
+          type: "string",
+        },
+        {
+          name: "value",
+          description: "JSON config for set",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsParsing: "none",
+      formatArgs: COMMAND_ARG_FORMATTERS.mcp,
+    }),
+    defineChatCommand({
+      key: "plugins",
+      nativeName: "plugins",
+      description: "List, show, enable, or disable plugins.",
+      textAliases: ["/plugins", "/plugin"],
+      category: "management",
+      args: [
+        {
+          name: "action",
+          description: "list | show | get | enable | disable",
+          type: "string",
+          choices: ["list", "show", "get", "enable", "disable"],
+        },
+        {
+          name: "path",
+          description: "Plugin id or name",
+          type: "string",
+        },
+      ],
+      argsParsing: "none",
+      formatArgs: COMMAND_ARG_FORMATTERS.plugins,
     }),
     defineChatCommand({
       key: "debug",
@@ -506,6 +656,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "fast",
+      nativeName: "fast",
+      description: "Toggle fast mode.",
+      textAlias: "/fast",
+      category: "options",
+      args: [
+        {
+          name: "mode",
+          description: "status, on, or off",
+          type: "string",
+          choices: ["status", "on", "off"],
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "reasoning",
       nativeName: "reasoning",
       description: "Toggle reasoning visibility.",
@@ -642,9 +808,9 @@ function buildChatCommands(): ChatCommandDefinition[] {
         },
       ],
     }),
-    ...listChannelDocks()
-      .filter((dock) => dock.capabilities.nativeCommands)
-      .map((dock) => defineDockCommand(dock)),
+    ...listChannelPlugins()
+      .filter((plugin) => plugin.capabilities.nativeCommands)
+      .map((plugin) => defineDockCommand(plugin)),
   ];
 
   registerAlias(commands, "whoami", "/id");
@@ -676,9 +842,9 @@ export function getNativeCommandSurfaces(): Set<string> {
     return cachedNativeCommandSurfaces;
   }
   cachedNativeCommandSurfaces = new Set(
-    listChannelDocks()
-      .filter((dock) => dock.capabilities.nativeCommands)
-      .map((dock) => dock.id),
+    listChannelPlugins()
+      .filter((plugin) => plugin.capabilities.nativeCommands)
+      .map((plugin) => plugin.id),
   );
   cachedNativeRegistry = registry;
   return cachedNativeCommandSurfaces;

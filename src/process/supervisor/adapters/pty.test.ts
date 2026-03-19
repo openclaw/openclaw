@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnMock, ptyKillMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -31,17 +31,20 @@ function createStubPty(pid = 1234) {
   };
 }
 
+function expectSpawnEnv() {
+  const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
+  return spawnOptions?.env;
+}
+
 describe("createPtyAdapter", () => {
   let createPtyAdapter: typeof import("./pty.js").createPtyAdapter;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ createPtyAdapter } = await import("./pty.js"));
-  });
-
-  beforeEach(() => {
-    spawnMock.mockReset();
-    ptyKillMock.mockReset();
-    killProcessTreeMock.mockReset();
+    spawnMock.mockClear();
+    ptyKillMock.mockClear();
+    killProcessTreeMock.mockClear();
     vi.useRealTimers();
   });
 
@@ -152,8 +155,7 @@ describe("createPtyAdapter", () => {
       args: ["-lc", "env"],
     });
 
-    const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
-    expect(spawnOptions?.env).toBeUndefined();
+    expect(expectSpawnEnv()).toBeUndefined();
   });
 
   it("passes explicit env overrides as strings", async () => {
@@ -166,8 +168,7 @@ describe("createPtyAdapter", () => {
       env: { FOO: "bar", COUNT: "12", DROP_ME: undefined },
     });
 
-    const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
-    expect(spawnOptions?.env).toEqual({ FOO: "bar", COUNT: "12" });
+    expect(expectSpawnEnv()).toEqual({ FOO: "bar", COUNT: "12" });
   });
 
   it("does not pass a signal to node-pty on Windows", async () => {

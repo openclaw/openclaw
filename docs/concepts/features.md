@@ -5,6 +5,8 @@ read_when:
 title: "Features"
 ---
 
+# Features
+
 ## Highlights
 
 <Columns>
@@ -24,7 +26,7 @@ title: "Features"
     Web Control UI and macOS companion app.
   </Card>
   <Card title="Mobile nodes" icon="smartphone">
-    iOS and Android nodes with Canvas support.
+    iOS and Android nodes with pairing, voice/chat, and rich device commands.
   </Card>
 </Columns>
 
@@ -44,8 +46,8 @@ title: "Features"
 - Media support for images, audio, and documents
 - Optional voice note transcription hook
 - WebChat and macOS menu bar app
-- iOS node with pairing and Canvas surface
-- Android node with pairing, Canvas, chat, and camera
+- iOS node with pairing, Canvas, camera, screen recording, location, and voice features
+- Android node with pairing, Connect tab, chat sessions, voice tab, Canvas/camera, plus device, notifications, contacts/calendar, motion, photos, and SMS commands
 
 <Note>
 Legacy Claude, Codex, Gemini, and Opencode paths have been removed. Pi is the only

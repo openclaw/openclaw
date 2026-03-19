@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import type { LegacyStateDetection } from "./doctor-state-migrations.js";
 
 let originalIsTTY: boolean | undefined;
 let originalStateDir: string | undefined;
@@ -113,7 +114,7 @@ export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
 function createLegacyStateMigrationDetectionResult(params?: {
   hasLegacySessions?: boolean;
   preview?: string[];
-}) {
+}): LegacyStateDetection {
   return {
     targetAgentId: "main",
     targetMainKey: "main",
@@ -139,9 +140,8 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
     },
     pairingAllowFrom: {
-      legacyTelegramPath: "/tmp/oauth/telegram-allowFrom.json",
-      targetTelegramPath: "/tmp/oauth/telegram-default-allowFrom.json",
       hasLegacyTelegram: false,
+      copyPlans: [],
     },
     preview: params?.preview ?? [],
   };
@@ -258,7 +258,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
 }));
 
-vi.mock("../telegram/token.js", () => ({
+vi.mock("../../extensions/telegram/api.js", () => ({
   resolveTelegramToken: vi.fn(() => ({ token: "", source: "none" })),
 }));
 
