@@ -186,6 +186,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
           cfg: params.cfg,
         }),
     },
+    services: new Map<string, unknown>(),
   } satisfies PluginRuntime;
 
   return runtime;
