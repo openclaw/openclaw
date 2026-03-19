@@ -15,8 +15,8 @@ import {
   createTextPairingAdapter,
   listResolvedDirectoryEntriesFromSources,
 } from "openclaw/plugin-sdk/channel-runtime";
+import { buildTrafficStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { buildTrafficStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,

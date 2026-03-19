@@ -73,6 +73,7 @@
   "device-pair",
   "diagnostics-otel",
   "diffs",
+  "extension-shared",
   "channel-config-helpers",
   "channel-config-schema",
   "channel-lifecycle",

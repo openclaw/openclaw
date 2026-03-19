@@ -4,9 +4,9 @@ import {
   resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/channel-runtime";
 import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { type RoutePeer } from "openclaw/plugin-sdk/routing";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,

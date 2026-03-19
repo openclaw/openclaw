@@ -1,5 +1,5 @@
+import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
-import { installCommonResolveTargetErrorCases } from "../../shared/resolve-target-test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk/whatsapp", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/whatsapp")>(
