@@ -26,6 +26,31 @@ Use these documents in this order when there is any ambiguity:
 - Benchmark output path is `docs/consumer/browser-spike-results.md`.
 - Benchmark protocol is 2 runs per approach/task, using median time.
 
+## Workstream registry (single source)
+
+This file is the only master tracker. Do not create per-worktree tracker copies.
+
+- All delegated branches should start from `origin/codex/consumer-openclaw-project`.
+- Each delegated workstream owns one scoped branch and one PR.
+- Workstreams should not edit files owned by another active workstream.
+- Only merge-validated work should update this master tracker status.
+
+### Active workstreams
+
+| WS-ID                | Phase focus | Owner | Branch                             | Status      | No-touch files                                                                                                                                        | PR  |
+| -------------------- | ----------- | ----- | ---------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
+| WS-B-CORE            | Phase B     | codex | `codex/consumer-openclaw-smoke`    | in-progress | `src/agents/models-config.ts`, `src/agents/models-config.providers.ts`, `src/plugins/provider-discovery.ts`, `docs/consumer/browser-spike-results.md` | -   |
+| WS-C-PREP            | Phase C     | open  | `codex/consumer-phase-c-prep`      | unassigned  | `src/agents/models-config.ts`, `src/agents/models-config.providers.ts`, `src/plugins/provider-discovery.ts`, `docs/consumer/browser-spike-results.md` | -   |
+| WS-D-PREP            | Phase D     | open  | `codex/consumer-phase-d-prep`      | unassigned  | `src/agents/models-config.ts`, `src/agents/models-config.providers.ts`, `src/plugins/provider-discovery.ts`, `docs/consumer/browser-spike-results.md` | -   |
+| WS-B-SIDE (optional) | Phase B     | open  | `codex/consumer-phase-b-side-lane` | parked      | `src/agents/models-config.ts`, `src/agents/models-config.providers.ts`, `src/plugins/provider-discovery.ts`, `docs/consumer/browser-spike-results.md` | -   |
+
+### Delegation protocol
+
+1. Assign WS-ID -> owner -> branch before coding.
+2. If a needed file appears in another WS `No-touch files`, pause and coordinate before editing.
+3. Open a scoped PR into `origin/codex/consumer-openclaw-project`.
+4. Update this table after PR merge (status, PR link, notes).
+
 ## Current baseline snapshot
 
 - Branch: `codex/consumer-openclaw-project`
