@@ -1791,6 +1791,10 @@
   border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
+.data-table-wrapper:only-child {
+  border-radius: var(--radius-md);
+}
+
 .data-table-toolbar {
   display: flex;
   align-items: center;
