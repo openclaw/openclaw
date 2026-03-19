@@ -286,7 +286,7 @@ openclaw plugins install ./plugin.zip           # install from a local zip
 openclaw plugins install -l ./extensions/voice-call # link (no copy) for dev
 openclaw plugins install @openclaw/voice-call   # install from npm
 openclaw plugins install @openclaw/voice-call --pin # store exact resolved name@version
-openclaw plugins update <id>
+openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins enable <id>
 openclaw plugins disable <id>

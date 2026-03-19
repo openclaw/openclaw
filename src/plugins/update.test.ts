@@ -161,6 +161,129 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("reuses a recorded npm dist-tag spec for id-based updates", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "openclaw-codex-app-server",
+      targetDir: "/tmp/openclaw-codex-app-server",
+      version: "0.2.0-beta.4",
+      extensions: ["index.ts"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "openclaw-codex-app-server": {
+              source: "npm",
+              spec: "openclaw-codex-app-server@beta",
+              installPath: "/tmp/openclaw-codex-app-server",
+              resolvedName: "openclaw-codex-app-server",
+              resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.3",
+            },
+          },
+        },
+      },
+      pluginIds: ["openclaw-codex-app-server"],
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@beta",
+        expectedPluginId: "openclaw-codex-app-server",
+      }),
+    );
+    expect(result.config.plugins?.installs?.["openclaw-codex-app-server"]).toMatchObject({
+      source: "npm",
+      spec: "openclaw-codex-app-server@beta",
+      installPath: "/tmp/openclaw-codex-app-server",
+      version: "0.2.0-beta.4",
+    });
+  });
+
+  it("uses and persists an explicit npm spec override during updates", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "openclaw-codex-app-server",
+      targetDir: "/tmp/openclaw-codex-app-server",
+      version: "0.2.0-beta.4",
+      extensions: ["index.ts"],
+      npmResolution: {
+        name: "openclaw-codex-app-server",
+        version: "0.2.0-beta.4",
+        resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
+      },
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "openclaw-codex-app-server": {
+              source: "npm",
+              spec: "openclaw-codex-app-server",
+              installPath: "/tmp/openclaw-codex-app-server",
+            },
+          },
+        },
+      },
+      pluginIds: ["openclaw-codex-app-server"],
+      specOverrides: {
+        "openclaw-codex-app-server": "openclaw-codex-app-server@beta",
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@beta",
+        expectedPluginId: "openclaw-codex-app-server",
+      }),
+    );
+    expect(result.config.plugins?.installs?.["openclaw-codex-app-server"]).toMatchObject({
+      source: "npm",
+      spec: "openclaw-codex-app-server@beta",
+      installPath: "/tmp/openclaw-codex-app-server",
+      version: "0.2.0-beta.4",
+      resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
+    });
+  });
+
+  it("skips recorded integrity checks when an explicit npm version override changes the spec", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "openclaw-codex-app-server",
+      targetDir: "/tmp/openclaw-codex-app-server",
+      version: "0.2.0-beta.4",
+      extensions: ["index.ts"],
+    });
+
+    await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "openclaw-codex-app-server": {
+              source: "npm",
+              spec: "openclaw-codex-app-server@0.2.0-beta.3",
+              integrity: "sha512-old",
+              installPath: "/tmp/openclaw-codex-app-server",
+            },
+          },
+        },
+      },
+      pluginIds: ["openclaw-codex-app-server"],
+      specOverrides: {
+        "openclaw-codex-app-server": "openclaw-codex-app-server@0.2.0-beta.4",
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@0.2.0-beta.4",
+        expectedIntegrity: undefined,
+      }),
+    );
+  });
+
   it("migrates legacy unscoped install keys when a scoped npm package updates", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,
