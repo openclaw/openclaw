@@ -6,7 +6,7 @@
       "url": "https://github.com/openclaw/openclaw",
       "daily_max_commits": 10,
       "daily_max_prs": 1,
-      "max_open_prs": 3,
+      "max_open_prs": 5,
       "scan_per_round": 20,
       "github_user": "extrasmall0",
       "branch_prefix": "raymond",

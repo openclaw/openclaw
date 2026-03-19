@@ -1,6 +1,6 @@
 {
   "agent": "raymond",
-  "ran_at": "2026-03-16T12:18:00-07:00",
+  "ran_at": "2026-03-17T12:26:00-07:00",
   "timezone": "America/Los_Angeles",
   "mode": "pr-ops",
   "repos_processed": [
@@ -9,12 +9,12 @@
   ],
   "quotas": {
     "openclaw/openclaw": {
-      "prs_today": 1,
+      "prs_today": 0,
       "daily_max_prs": 1,
-      "commits_today": 1,
+      "commits_today": 0,
       "daily_max_commits": 10,
-      "open_prs": 1,
-      "max_open_prs": 3
+      "open_prs": 0,
+      "max_open_prs": 5
     },
     "block/goose": {
       "prs_today": 0,
@@ -26,27 +26,29 @@
     }
   },
   "inflight_prs_advanced": 0,
-  "new_prs_opened": 1,
+  "new_prs_opened": 0,
   "inflight_prs": [
+    {
+      "repo": "openclaw/openclaw",
+      "pr_number": 48455,
+      "url": "https://github.com/openclaw/openclaw/pull/48455",
+      "status": "review_feedback_addressed_awaiting_merge",
+      "notes": "CI green. xkonjin review positive (COMMENTED, not CHANGES_REQUESTED). extrasmall0 answered all 3 questions. Still needs dead-code cleanup commit (Knuth). No new maintainer activity since last run."
+    },
     {
       "repo": "block/goose",
       "pr_number": 7888,
       "url": "https://github.com/block/goose/pull/7888",
       "status": "ci_green_awaiting_review",
-      "notes": "CI green, only bot review (codex-connector). No human review since Mar 14. Day 2 of waiting, no action needed yet."
-    },
-    {
-      "repo": "openclaw/openclaw",
-      "pr_number": 48455,
-      "url": "https://github.com/openclaw/openclaw/pull/48455",
-      "status": "just_opened",
-      "notes": "Fix gateway stop/start lifecycle - uses disable+kill instead of bootout. Issue #48311, maintainer-endorsed fix direction."
+      "notes": "CI green. Day 4 awaiting human review. Only bot review (codex-connector). No intervention needed."
     }
   ],
   "issues_scanned": {
     "openclaw/openclaw": 20,
-    "block/goose": 0
+    "block/goose": 15
   },
-  "blockers": [],
-  "notes": "Opened PR #48455 for openclaw/openclaw issue #48311 (gateway stop/start asymmetry). Maintainer gave explicit fix direction in comments. Clean 1-file change. block/goose #7888 still awaiting human review."
+  "blockers": [
+    "openclaw/openclaw #48455: Still needs Knuth to push dead-code cleanup (simplify inner no-such-process check)"
+  ],
+  "notes": "No high-confidence new opportunities found. openclaw issues mostly Windows-specific or complex auth/model issues. block/goose issues are model behavior (not code-fixable) or enhancement requests. Both in-flight PRs stable, no action required from Raymond this round."
 }
