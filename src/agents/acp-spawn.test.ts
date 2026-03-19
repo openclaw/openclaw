@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as acpSessionManager from "../acp/control-plane/manager.js";
+import type {
+  AcpCloseSessionInput,
+  AcpInitializeSessionInput,
+} from "../acp/control-plane/manager.types.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -180,16 +184,12 @@ describe("spawnAcpDirect", () => {
       metaCleared: false,
     });
     getAcpSessionManagerSpy.mockReset().mockReturnValue({
-      initializeSession: async (params: unknown) => await hoisted.initializeSessionMock(params),
-      closeSession: async (params: unknown) => await hoisted.closeSessionMock(params),
+      initializeSession: async (params: AcpInitializeSessionInput) =>
+        await hoisted.initializeSessionMock(params),
+      closeSession: async (params: AcpCloseSessionInput) => await hoisted.closeSessionMock(params),
     } as unknown as ReturnType<typeof acpSessionManager.getAcpSessionManager>);
     hoisted.initializeSessionMock.mockReset().mockImplementation(async (argsUnknown: unknown) => {
-      const args = argsUnknown as {
-        sessionKey: string;
-        agent: string;
-        mode: "persistent" | "oneshot";
-        cwd?: string;
-      };
+      const args = argsUnknown as AcpInitializeSessionInput;
       const runtimeSessionName = `${args.sessionKey}:runtime`;
       const cwd = typeof args.cwd === "string" ? args.cwd : undefined;
       return {
@@ -386,7 +386,6 @@ describe("spawnAcpDirect", () => {
         matrix: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: true,
           },
         },
       },

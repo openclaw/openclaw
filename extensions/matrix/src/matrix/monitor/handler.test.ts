@@ -177,6 +177,8 @@ describe("matrix monitor handler pairing account scope", () => {
       dmPolicy: "pairing",
       isDirectMessage: true,
       getMemberDisplayName: async () => "sender",
+      dropPreStartupMessages: true,
+      needsRoomAliasesForConfig: false,
     });
 
     await handler(
