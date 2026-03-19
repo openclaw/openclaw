@@ -29,20 +29,28 @@ function normalizeContextWindowForCustomModel(value: unknown): number {
   return parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS ? parsed : CONTEXT_WINDOW_HARD_MIN_TOKENS;
 }
 
-/**
- * Detects if a URL is from Azure AI Foundry or Azure OpenAI.
- * Matches both:
- * - https://*.services.ai.azure.com (Azure AI Foundry)
- * - https://*.openai.azure.com (classic Azure OpenAI)
- */
-function isAzureUrl(baseUrl: string): boolean {
+function isAzureFoundryUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
     const host = url.hostname.toLowerCase();
-    return host.endsWith(".services.ai.azure.com") || host.endsWith(".openai.azure.com");
+    return host.endsWith(".services.ai.azure.com");
   } catch {
     return false;
   }
+}
+
+function isAzureOpenAiUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    const host = url.hostname.toLowerCase();
+    return host.endsWith(".openai.azure.com");
+  } catch {
+    return false;
+  }
+}
+
+function isAzureUrl(baseUrl: string): boolean {
+  return isAzureFoundryUrl(baseUrl) || isAzureOpenAiUrl(baseUrl);
 }
 
 /**
@@ -357,7 +365,7 @@ async function requestOpenAiVerification(params: {
   const headers = isBaseUrlAzureUrl
     ? buildAzureOpenAiHeaders(params.apiKey)
     : buildOpenAiHeaders(params.apiKey);
-  if (isBaseUrlAzureUrl) {
+  if (isAzureOpenAiUrl(params.baseUrl)) {
     const endpoint = new URL(
       "responses",
       transformAzureConfigUrl(params.baseUrl).replace(/\/?$/, "/"),
@@ -611,7 +619,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   }
 
   const isAzure = isAzureUrl(baseUrl);
-  // Transform Azure URLs to include the deployment path for API calls
+  const isAzureOpenAi = isAzureOpenAiUrl(baseUrl);
   const resolvedBaseUrl = isAzure ? transformAzureConfigUrl(baseUrl) : baseUrl;
 
   const providerIdResult = resolveCustomProviderId({
@@ -678,7 +686,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     normalizeOptionalProviderApiKey(params.apiKey) ??
     normalizeOptionalProviderApiKey(existingApiKey);
 
-  const providerApi = isAzure
+  const providerApi = isAzureOpenAi
     ? ("openai-responses" as const)
     : resolveProviderApi(params.compatibility);
   const azureHeaders = isAzure && normalizedApiKey ? { "api-key": normalizedApiKey } : undefined;
