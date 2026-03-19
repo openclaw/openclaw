@@ -42,8 +42,30 @@ const discoveryCache = new Map<string, { expiresAt: number; result: PluginDiscov
 // Keep a short cache window to collapse bursty reloads during startup flows.
 const DEFAULT_DISCOVERY_CACHE_MS = 1000;
 
+function tracePluginDiscoveryStage(env: NodeJS.ProcessEnv, stage: string): void {
+  const stageLogPath = env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    fs.appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only. Never let debug logging change runtime behavior.
+  }
+}
+
 export function clearPluginDiscoveryCache(): void {
   discoveryCache.clear();
+}
+
+function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return undefined;
+  }
+  const normalized = [...new Set(ids.map((id) => id.trim()).filter(Boolean))].toSorted((a, b) =>
+    a.localeCompare(b),
+  );
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function resolveDiscoveryCacheMs(env: NodeJS.ProcessEnv): number {
@@ -74,6 +96,7 @@ function buildDiscoveryCacheKey(params: {
   extraPaths?: string[];
   ownershipUid?: number | null;
   repairBundledPermissions: boolean;
+  onlyPluginIds?: string[];
   env: NodeJS.ProcessEnv;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
@@ -85,7 +108,7 @@ function buildDiscoveryCacheKey(params: {
   const configExtensionsRoot = roots.global ?? "";
   const bundledRoot = roots.stock ?? "";
   const ownershipUid = params.ownershipUid ?? currentUid();
-  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${params.repairBundledPermissions ? "repair" : "no-repair"}::${JSON.stringify(loadPaths)}`;
+  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${params.repairBundledPermissions ? "repair" : "no-repair"}::${JSON.stringify(loadPaths)}::${JSON.stringify(params.onlyPluginIds ?? [])}`;
 }
 
 function currentUid(overrideUid?: number | null): number | null {
@@ -772,6 +795,60 @@ function discoverFromPath(params: {
   }
 }
 
+function discoverScopedPluginCandidates(params: {
+  onlyPluginIds: string[];
+  roots: Array<{
+    dir?: string;
+    origin: PluginOrigin;
+    workspaceDir?: string;
+  }>;
+  ownershipUid?: number | null;
+  repairBundledPermissions?: boolean;
+  env: NodeJS.ProcessEnv;
+  candidates: PluginCandidate[];
+  diagnostics: PluginDiagnostic[];
+  seen: Set<string>;
+}): string[] {
+  const unresolved = new Set(params.onlyPluginIds);
+  tracePluginDiscoveryStage(
+    params.env,
+    `plugin-discovery-scoped-start count=${params.onlyPluginIds.length}`,
+  );
+
+  for (const pluginId of params.onlyPluginIds) {
+    for (const root of params.roots) {
+      if (!root.dir) {
+        continue;
+      }
+      const candidateDir = path.join(root.dir, pluginId);
+      if (!fs.existsSync(candidateDir)) {
+        continue;
+      }
+      const beforeCount = params.candidates.length;
+      discoverFromPath({
+        rawPath: candidateDir,
+        origin: root.origin,
+        ownershipUid: params.ownershipUid,
+        repairBundledPermissions: params.repairBundledPermissions,
+        workspaceDir: root.workspaceDir,
+        env: params.env,
+        candidates: params.candidates,
+        diagnostics: params.diagnostics,
+        seen: params.seen,
+      });
+      if (params.candidates.length > beforeCount) {
+        unresolved.delete(pluginId);
+      }
+    }
+  }
+
+  tracePluginDiscoveryStage(
+    params.env,
+    `plugin-discovery-scoped-complete unresolved=${unresolved.size}`,
+  );
+  return [...unresolved].toSorted((a, b) => a.localeCompare(b));
+}
+
 export function discoverOpenClawPlugins(params: {
   workspaceDir?: string;
   extraPaths?: string[];
@@ -779,15 +856,18 @@ export function discoverOpenClawPlugins(params: {
   repairBundledPermissions?: boolean;
   cache?: boolean;
   env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
 }): PluginDiscoveryResult {
   const env = params.env ?? process.env;
   const repairBundledPermissions = params.repairBundledPermissions !== false;
+  const onlyPluginIds = normalizeScopedPluginIds(params.onlyPluginIds);
   const cacheEnabled = params.cache !== false && shouldUseDiscoveryCache(env);
   const cacheKey = buildDiscoveryCacheKey({
     workspaceDir: params.workspaceDir,
     extraPaths: params.extraPaths,
     ownershipUid: params.ownershipUid,
     repairBundledPermissions,
+    onlyPluginIds,
     env,
   });
   if (cacheEnabled) {
@@ -825,7 +905,42 @@ export function discoverOpenClawPlugins(params: {
       seen,
     });
   }
-  if (roots.workspace && workspaceRoot) {
+
+  const unresolvedScopedPluginIds =
+    onlyPluginIds && onlyPluginIds.length > 0
+      ? discoverScopedPluginCandidates({
+          onlyPluginIds,
+          roots: [
+            {
+              dir: roots.workspace,
+              origin: "workspace",
+              workspaceDir: workspaceRoot,
+            },
+            {
+              dir: roots.stock,
+              origin: "bundled",
+            },
+            {
+              dir: roots.global,
+              origin: "global",
+            },
+          ],
+          ownershipUid: params.ownershipUid,
+          repairBundledPermissions,
+          env,
+          candidates,
+          diagnostics,
+          seen,
+        })
+      : [];
+  const shouldFallbackToFullScan = unresolvedScopedPluginIds.length > 0;
+  if (shouldFallbackToFullScan) {
+    tracePluginDiscoveryStage(
+      env,
+      `plugin-discovery-scoped-fallback unresolved=${unresolvedScopedPluginIds.join(",")}`,
+    );
+  }
+  if ((!onlyPluginIds || shouldFallbackToFullScan) && roots.workspace && workspaceRoot) {
     discoverInDirectory({
       dir: roots.workspace,
       origin: "workspace",
@@ -838,7 +953,7 @@ export function discoverOpenClawPlugins(params: {
     });
   }
 
-  if (roots.stock) {
+  if ((!onlyPluginIds || shouldFallbackToFullScan) && roots.stock) {
     discoverInDirectory({
       dir: roots.stock,
       origin: "bundled",
@@ -852,15 +967,17 @@ export function discoverOpenClawPlugins(params: {
 
   // Keep auto-discovered global extensions behind bundled plugins.
   // Users can still intentionally override via plugins.load.paths (origin=config).
-  discoverInDirectory({
-    dir: roots.global,
-    origin: "global",
-    ownershipUid: params.ownershipUid,
-    repairBundledPermissions,
-    candidates,
-    diagnostics,
-    seen,
-  });
+  if (!onlyPluginIds || shouldFallbackToFullScan) {
+    discoverInDirectory({
+      dir: roots.global,
+      origin: "global",
+      ownershipUid: params.ownershipUid,
+      repairBundledPermissions,
+      candidates,
+      diagnostics,
+      seen,
+    });
+  }
 
   const result = { candidates, diagnostics };
   if (cacheEnabled) {

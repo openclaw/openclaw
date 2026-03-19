@@ -24,6 +24,7 @@ describe("resolvePluginProviders", () => {
         { id: "google", providers: ["google"], origin: "bundled" },
         { id: "kilocode", providers: ["kilocode"], origin: "bundled" },
         { id: "moonshot", providers: ["moonshot"], origin: "bundled" },
+        { id: "openai", providers: ["openai", "openai-codex"], origin: "bundled" },
         { id: "google-gemini-cli-auth", providers: [], origin: "bundled" },
         { id: "workspace-provider", providers: ["workspace-provider"], origin: "workspace" },
       ],
@@ -137,5 +138,37 @@ describe("resolvePluginProviders", () => {
     expect(resolveOwningPluginIdsForProvider({ provider: "minimax-portal" })).toEqual(["minimax"]);
     expect(resolveOwningPluginIdsForProvider({ provider: "openai-codex" })).toEqual(["openai"]);
     expect(resolveOwningPluginIdsForProvider({ provider: "gemini-cli" })).toBeUndefined();
+  });
+
+  it("limits bundled provider compat allowlists to scoped plugin ids", () => {
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      bundledProviderAllowlistCompat: true,
+      onlyPluginIds: ["google"],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["google"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: expect.arrayContaining(["openrouter", "google"]),
+          }),
+        }),
+      }),
+    );
+
+    expect(loadPluginManifestRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["google"],
+      }),
+    );
+
+    const call = loadOpenClawPluginsMock.mock.calls.at(-1)?.[0];
+    expect(call?.onlyPluginIds).toEqual(["google"]);
   });
 });

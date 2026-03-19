@@ -62,11 +62,13 @@ function resolveBundledProviderCompatPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  onlyPluginIds?: string[];
 }): string[] {
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    onlyPluginIds: params.onlyPluginIds,
   });
   return registry.plugins
     .filter((plugin) => plugin.origin === "bundled" && plugin.providers.length > 0)
@@ -116,6 +118,7 @@ export function resolvePluginProviders(params: {
           config: params.config,
           workspaceDir: params.workspaceDir,
           env: params.env,
+          onlyPluginIds: params.onlyPluginIds,
         })
       : [];
   const maybeAllowlistCompat = params.bundledProviderAllowlistCompat

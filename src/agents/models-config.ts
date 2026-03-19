@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -11,6 +12,18 @@ import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 
 const MODELS_JSON_WRITE_LOCKS = new Map<string, Promise<void>>();
+
+function traceModelsConfigStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only. Never let debug logging change runtime behavior.
+  }
+}
 
 async function readExistingModelsFile(pathname: string): Promise<{
   raw: string;
@@ -100,8 +113,13 @@ export async function ensureOpenClawModelsJson(
   return await withModelsJsonWriteLock(targetPath, async () => {
     // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
     // are available to provider discovery without mutating process.env.
+    traceModelsConfigStage("models-config-pre-create-runtime-env");
     const env = createConfigRuntimeEnv(cfg);
+    traceModelsConfigStage("models-config-post-create-runtime-env");
+    traceModelsConfigStage("models-config-pre-read-existing");
     const existingModelsFile = await readExistingModelsFile(targetPath);
+    traceModelsConfigStage("models-config-post-read-existing");
+    traceModelsConfigStage("models-config-pre-plan");
     const plan = await planOpenClawModelsJson({
       cfg,
       sourceConfigForSecrets: resolved.sourceConfigForSecrets,
@@ -110,6 +128,7 @@ export async function ensureOpenClawModelsJson(
       existingRaw: existingModelsFile.raw,
       existingParsed: existingModelsFile.parsed,
     });
+    traceModelsConfigStage(`models-config-post-plan action=${plan.action}`);
 
     if (plan.action === "skip") {
       return { agentDir, wrote: false };

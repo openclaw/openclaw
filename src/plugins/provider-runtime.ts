@@ -33,7 +33,7 @@ function matchesProviderId(provider: ProviderPlugin, providerId: string): boolea
   return (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === normalized);
 }
 
-function resolveProviderPluginsForHooks(params: {
+export function resolveProviderPluginsForHooks(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -46,6 +46,20 @@ function resolveProviderPluginsForHooks(params: {
     bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
   });
+}
+
+type ProviderRuntimeHookParams = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
+  plugins?: ProviderPlugin[];
+};
+
+function resolveProviderPluginsForHookCall(params: ProviderRuntimeHookParams): ProviderPlugin[] {
+  // Hot callers such as model catalog suppression can reuse a single resolved provider-plugin
+  // list across hundreds of rows instead of rediscovering plugins for every model entry.
+  return params.plugins ?? resolveProviderPluginsForHooks(params);
 }
 
 export function resolveProviderRuntimePlugin(params: {
@@ -259,9 +273,10 @@ export function resolveProviderBuiltInModelSuppression(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  plugins?: ProviderPlugin[];
   context: ProviderBuiltInModelSuppressionContext;
 }) {
-  for (const plugin of resolveProviderPluginsForHooks(params)) {
+  for (const plugin of resolveProviderPluginsForHookCall(params)) {
     const result = plugin.suppressBuiltInModel?.(params.context);
     if (result?.suppress) {
       return result;
@@ -274,10 +289,11 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  plugins?: ProviderPlugin[];
   context: ProviderAugmentModelCatalogContext;
 }) {
   const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
-  for (const plugin of resolveProviderPluginsForHooks(params)) {
+  for (const plugin of resolveProviderPluginsForHookCall(params)) {
     const next = await plugin.augmentModelCatalog?.(params.context);
     if (!next || next.length === 0) {
       continue;

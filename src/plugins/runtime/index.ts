@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import {
   getApiKeyForModel as getApiKeyForModelRaw,
@@ -16,6 +17,18 @@ import { createRuntimeTools } from "./runtime-tools.js";
 import type { PluginRuntime } from "./types.js";
 
 let cachedVersion: string | null = null;
+
+function tracePluginRuntimeStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only.
+  }
+}
 
 function resolveVersion(): string {
   if (cachedVersion) {
@@ -50,18 +63,37 @@ export type CreatePluginRuntimeOptions = {
 };
 
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
+  tracePluginRuntimeStage("plugin-runtime-create-start");
+  const version = resolveVersion();
+  tracePluginRuntimeStage("plugin-runtime-post-version");
+  const config = createRuntimeConfig();
+  tracePluginRuntimeStage("plugin-runtime-post-config");
+  const subagent = _options.subagent ?? createUnavailableSubagentRuntime();
+  tracePluginRuntimeStage("plugin-runtime-post-subagent");
+  const system = createRuntimeSystem();
+  tracePluginRuntimeStage("plugin-runtime-post-system");
+  const media = createRuntimeMedia();
+  tracePluginRuntimeStage("plugin-runtime-post-media");
+  const tools = createRuntimeTools();
+  tracePluginRuntimeStage("plugin-runtime-post-tools");
+  const channel = createRuntimeChannel();
+  tracePluginRuntimeStage("plugin-runtime-post-channel");
+  const events = createRuntimeEvents();
+  tracePluginRuntimeStage("plugin-runtime-post-events");
+  const logging = createRuntimeLogging();
+  tracePluginRuntimeStage("plugin-runtime-post-logging");
   const runtime = {
-    version: resolveVersion(),
-    config: createRuntimeConfig(),
-    subagent: _options.subagent ?? createUnavailableSubagentRuntime(),
-    system: createRuntimeSystem(),
-    media: createRuntimeMedia(),
+    version,
+    config,
+    subagent,
+    system,
+    media,
     tts: { textToSpeechTelephony },
     stt: { transcribeAudioFile },
-    tools: createRuntimeTools(),
-    channel: createRuntimeChannel(),
-    events: createRuntimeEvents(),
-    logging: createRuntimeLogging(),
+    tools,
+    channel,
+    events,
+    logging,
     state: { resolveStateDir },
     modelAuth: {
       // Wrap model-auth helpers so plugins cannot steer credential lookups:
@@ -83,6 +115,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     },
   } satisfies PluginRuntime;
 
+  tracePluginRuntimeStage("plugin-runtime-create-done");
   return runtime;
 }
 

@@ -643,6 +643,51 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
+  it("scopes discovery to requested plugin ids when the fast path resolves them", () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const openaiDir = path.join(bundledDir, "openai");
+    const anthropicDir = path.join(bundledDir, "anthropic");
+    mkdirSafe(openaiDir);
+    mkdirSafe(anthropicDir);
+    fs.writeFileSync(path.join(openaiDir, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(anthropicDir, "index.ts"), "export default {}", "utf-8");
+
+    const result = discoverOpenClawPlugins({
+      onlyPluginIds: ["openai"],
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      },
+    });
+
+    expect(result.candidates.map((candidate) => candidate.idHint)).toEqual(["openai"]);
+  });
+
+  it("falls back to full discovery when scoped plugin resolution is incomplete", () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const openaiDir = path.join(bundledDir, "openai");
+    const anthropicDir = path.join(bundledDir, "anthropic");
+    mkdirSafe(openaiDir);
+    mkdirSafe(anthropicDir);
+    fs.writeFileSync(path.join(openaiDir, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(anthropicDir, "index.ts"), "export default {}", "utf-8");
+
+    const result = discoverOpenClawPlugins({
+      onlyPluginIds: ["openai", "missing-plugin"],
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      },
+    });
+
+    const ids = result.candidates
+      .map((candidate) => candidate.idHint)
+      .toSorted((a, b) => a.localeCompare(b));
+    expect(ids).toEqual(["anthropic", "openai"]);
+  });
+
   it("treats configured load-path order as cache-significant", () => {
     const stateDir = makeTempDir();
     const pluginA = path.join(stateDir, "plugins", "alpha.ts");

@@ -427,4 +427,59 @@ describe("provider-runtime", () => {
     expect(resolveUsageAuth).toHaveBeenCalledTimes(1);
     expect(fetchUsageSnapshot).toHaveBeenCalledTimes(1);
   });
+
+  it("reuses pre-resolved plugins for built-in model suppression", () => {
+    const plugins: ProviderPlugin[] = [
+      {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        suppressBuiltInModel: ({ provider, modelId }) =>
+          provider === "azure-openai-responses" && modelId === "gpt-5.3-codex-spark"
+            ? { suppress: true, errorMessage: "openai-codex/gpt-5.3-codex-spark" }
+            : undefined,
+      },
+    ];
+
+    expect(
+      resolveProviderBuiltInModelSuppression({
+        env: process.env,
+        plugins,
+        context: {
+          env: process.env,
+          provider: "azure-openai-responses",
+          modelId: "gpt-5.3-codex-spark",
+        },
+      }),
+    ).toMatchObject({
+      suppress: true,
+      errorMessage: expect.stringContaining("openai-codex/gpt-5.3-codex-spark"),
+    });
+
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses pre-resolved plugins for model catalog augmentation", async () => {
+    const plugins: ProviderPlugin[] = [
+      {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        augmentModelCatalog: () => [{ provider: "openai", id: "gpt-5.4", name: "gpt-5.4" }],
+      },
+    ];
+
+    await expect(
+      augmentModelCatalogWithProviderPlugins({
+        env: process.env,
+        plugins,
+        context: {
+          env: process.env,
+          entries: [{ provider: "openai", id: "gpt-5.2", name: "GPT-5.2" }],
+        },
+      }),
+    ).resolves.toEqual([{ provider: "openai", id: "gpt-5.4", name: "gpt-5.4" }]);
+
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
 });

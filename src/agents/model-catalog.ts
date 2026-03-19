@@ -1,6 +1,11 @@
 import { appendFileSync } from "node:fs";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  augmentModelCatalogWithProviderPlugins,
+  resolveProviderBuiltInModelSuppression,
+  resolveProviderPluginsForHooks,
+} from "../plugins/provider-runtime.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
@@ -32,10 +37,6 @@ let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
-let providerRuntimePromise:
-  | Promise<typeof import("../plugins/provider-runtime.runtime.js")>
-  | undefined;
-let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
 
 const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
 
@@ -49,16 +50,6 @@ function traceModelCatalogStage(stage: string): void {
   } catch {
     // Best-effort tracing only. Never let debug logging change runtime behavior.
   }
-}
-
-function loadProviderRuntime() {
-  providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");
-  return providerRuntimePromise;
-}
-
-function loadModelSuppression() {
-  modelSuppressionPromise ??= import("./model-suppression.runtime.js");
-  return modelSuppressionPromise;
 }
 
 function normalizeConfiguredModelInput(input: unknown): ModelInputType[] | undefined {
@@ -190,8 +181,6 @@ export async function loadModelCatalog(params?: {
       const piSdk = await importPiSdk();
       traceModelCatalogStage("model-catalog-post-import-pi-sdk");
       const agentDir = resolveOpenClawAgentDir();
-      const [{ shouldSuppressBuiltInModel }, { augmentModelCatalogWithProviderPlugins }] =
-        await Promise.all([loadModelSuppression(), loadProviderRuntime()]);
       traceModelCatalogStage("model-catalog-post-runtime-imports");
       const { join } = await import("node:path");
       const authStorage = piSdk.discoverAuthStorage(agentDir);
@@ -209,6 +198,15 @@ export async function loadModelCatalog(params?: {
       traceModelCatalogStage("model-catalog-post-model-registry");
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       traceModelCatalogStage(`model-catalog-post-registry-getall count=${entries.length}`);
+      // Built-in suppression and provider-driven catalog augmentation share the same provider hook
+      // surface. Resolve it once here so we do not rediscover provider plugins for every row.
+      const providerPlugins = resolveProviderPluginsForHooks({
+        config: cfg,
+        env: process.env,
+      });
+      traceModelCatalogStage(
+        `model-catalog-post-provider-hook-resolve count=${providerPlugins.length}`,
+      );
       for (const entry of entries) {
         const id = String(entry?.id ?? "").trim();
         if (!id) {
@@ -218,7 +216,19 @@ export async function loadModelCatalog(params?: {
         if (!provider) {
           continue;
         }
-        if (shouldSuppressBuiltInModel({ provider, id })) {
+        if (
+          resolveProviderBuiltInModelSuppression({
+            config: cfg,
+            env: process.env,
+            plugins: providerPlugins,
+            context: {
+              env: process.env,
+              provider,
+              modelId: id,
+            },
+          })?.suppress ??
+          false
+        ) {
           continue;
         }
         const name = String(entry?.name ?? id).trim() || id;
@@ -230,11 +240,13 @@ export async function loadModelCatalog(params?: {
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
+      traceModelCatalogStage(`model-catalog-post-built-in-filter count=${models.length}`);
       mergeConfiguredOptInProviderModels({ config: cfg, models });
       traceModelCatalogStage(`model-catalog-post-merge-configured count=${models.length}`);
       const supplemental = await augmentModelCatalogWithProviderPlugins({
         config: cfg,
         env: process.env,
+        plugins: providerPlugins,
         context: {
           config: cfg,
           agentDir,

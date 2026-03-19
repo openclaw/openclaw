@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
@@ -27,7 +28,10 @@ import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import { setActivePluginRegistry } from "./runtime.js";
-import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
+import {
+  createPluginRuntime as createPluginRuntimeDirect,
+  type CreatePluginRuntimeOptions,
+} from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import type {
@@ -60,6 +64,18 @@ export type PluginLoadOptions = {
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 const registryCache = new Map<string, PluginRegistry>();
 const openAllowlistWarningCache = new Set<string>();
+
+function tracePluginLoaderStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only.
+  }
+}
 
 export function clearPluginLoaderCache(): void {
   registryCache.clear();
@@ -849,17 +865,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (createPluginRuntimeFactory) {
       return createPluginRuntimeFactory;
     }
-    const runtimeModulePath = resolvePluginRuntimeModulePath();
-    if (!runtimeModulePath) {
-      throw new Error("Unable to resolve plugin runtime module");
-    }
-    const runtimeModule = getJiti()(runtimeModulePath) as {
-      createPluginRuntime?: (options?: CreatePluginRuntimeOptions) => PluginRuntime;
-    };
-    if (typeof runtimeModule.createPluginRuntime !== "function") {
-      throw new Error("Plugin runtime module missing createPluginRuntime export");
-    }
-    createPluginRuntimeFactory = runtimeModule.createPluginRuntime;
+    tracePluginLoaderStage("plugin-loader-runtime-factory-direct");
+    createPluginRuntimeFactory = createPluginRuntimeDirect;
+    tracePluginLoaderStage("plugin-loader-runtime-factory-ready");
     return createPluginRuntimeFactory;
   };
 
@@ -867,7 +875,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   // not eagerly load every channel/runtime dependency tree.
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
-    resolvedRuntime ??= resolveCreatePluginRuntime()(options.runtimeOptions);
+    if (!resolvedRuntime) {
+      tracePluginLoaderStage("plugin-loader-runtime-resolve-start");
+      resolvedRuntime = resolveCreatePluginRuntime()(options.runtimeOptions);
+      tracePluginLoaderStage("plugin-loader-runtime-resolve-done");
+    }
     return resolvedRuntime;
   };
   const runtime = new Proxy({} as PluginRuntime, {
@@ -909,6 +921,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     extraPaths: normalized.loadPaths,
     cache: options.cache,
     env,
+    onlyPluginIds,
   });
   const manifestRegistry = loadPluginManifestRegistry({
     config: cfg,
@@ -917,6 +930,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     env,
     candidates: discovery.candidates,
     diagnostics: discovery.diagnostics,
+    onlyPluginIds,
   });
   pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({

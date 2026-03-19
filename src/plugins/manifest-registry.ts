@@ -98,6 +98,7 @@ function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
   repairBundledPermissions: boolean;
+  onlyPluginIds?: string[];
   env: NodeJS.ProcessEnv;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
@@ -110,7 +111,7 @@ function buildCacheKey(params: {
   const bundledRoot = roots.stock ?? "";
   // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
   // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
-  return `${workspaceKey}::${configExtensionsRoot}::${bundledRoot}::${params.repairBundledPermissions ? "repair" : "no-repair"}::${JSON.stringify(loadPaths)}`;
+  return `${workspaceKey}::${configExtensionsRoot}::${bundledRoot}::${params.repairBundledPermissions ? "repair" : "no-repair"}::${JSON.stringify(loadPaths)}::${JSON.stringify(params.onlyPluginIds ?? [])}`;
 }
 
 function safeStatMtimeMs(filePath: string): number | null {
@@ -277,6 +278,7 @@ export function loadPluginManifestRegistry(params: {
   env?: NodeJS.ProcessEnv;
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
+  onlyPluginIds?: string[];
 }): PluginManifestRegistry {
   const config = params.config ?? {};
   const normalized = normalizePluginsConfig(config.plugins);
@@ -286,6 +288,7 @@ export function loadPluginManifestRegistry(params: {
     workspaceDir: params.workspaceDir,
     plugins: normalized,
     repairBundledPermissions,
+    onlyPluginIds: params.onlyPluginIds,
     env,
   });
   const cacheEnabled = params.cache !== false && shouldUseManifestCache(env);
@@ -306,6 +309,7 @@ export function loadPluginManifestRegistry(params: {
         extraPaths: normalized.loadPaths,
         repairBundledPermissions,
         env,
+        onlyPluginIds: params.onlyPluginIds,
       });
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;

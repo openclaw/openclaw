@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
@@ -26,18 +27,36 @@ const MemoryGetSchema = Type.Object({
   lines: Type.Optional(Type.Number()),
 });
 
+function traceMemoryToolStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only.
+  }
+}
+
 function resolveMemoryToolContext(options: { config?: OpenClawConfig; agentSessionKey?: string }) {
+  traceMemoryToolStage("memory-tool-context-pre-config");
   const cfg = options.config;
   if (!cfg) {
+    traceMemoryToolStage("memory-tool-context-missing-config");
     return null;
   }
+  traceMemoryToolStage("memory-tool-context-pre-agent-id");
   const agentId = resolveSessionAgentId({
     sessionKey: options.agentSessionKey,
     config: cfg,
   });
+  traceMemoryToolStage(`memory-tool-context-post-agent-id agent=${agentId}`);
   if (!resolveMemorySearchConfig(cfg, agentId)) {
+    traceMemoryToolStage("memory-tool-context-disabled");
     return null;
   }
+  traceMemoryToolStage("memory-tool-context-ready");
   return { cfg, agentId };
 }
 
@@ -67,10 +86,13 @@ function createMemoryTool(params: {
   parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
   execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
+  traceMemoryToolStage(`memory-tool-create-start name=${params.name}`);
   const ctx = resolveMemoryToolContext(params.options);
   if (!ctx) {
+    traceMemoryToolStage(`memory-tool-create-skip name=${params.name}`);
     return null;
   }
+  traceMemoryToolStage(`memory-tool-create-ready name=${params.name}`);
   return {
     label: params.label,
     name: params.name,

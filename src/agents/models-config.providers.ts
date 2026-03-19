@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
@@ -30,6 +31,7 @@ import {
   resolvePluginDiscoveryProviders,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
+import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import {
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
@@ -59,10 +61,62 @@ const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
+function traceImplicitProviderStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only. Never let debug logging change runtime behavior.
+  }
+}
+
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
   const match = /^\$\{([A-Z0-9_]+)\}$/.exec(trimmed);
   return match?.[1] ?? trimmed;
+}
+
+function resolveCandidateProviderPluginIds(params: {
+  authStore: ReturnType<typeof ensureAuthProfileStore>;
+  explicitProviders?: ModelsConfig["providers"] | null;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string[] | undefined {
+  const providerIds = new Set<string>();
+  for (const providerId of Object.keys(params.explicitProviders ?? {})) {
+    const trimmed = providerId.trim();
+    if (trimmed) {
+      providerIds.add(trimmed);
+    }
+  }
+  for (const profile of Object.values(params.authStore.profiles)) {
+    const trimmed = profile.provider?.trim();
+    if (trimmed) {
+      providerIds.add(trimmed);
+    }
+  }
+  if (providerIds.size === 0) {
+    return undefined;
+  }
+  const pluginIds = new Set<string>();
+  for (const providerId of providerIds) {
+    const owners = resolveOwningPluginIdsForProvider({
+      provider: providerId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    });
+    for (const pluginId of owners ?? []) {
+      pluginIds.add(pluginId);
+    }
+  }
+  return pluginIds.size > 0
+    ? [...pluginIds].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
 }
 
 function normalizeProviderBaseUrl(baseUrl: string | undefined): string {
@@ -633,14 +687,9 @@ function mergeImplicitProviderSet(
 
 async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
+  groupedProviders: ReturnType<typeof groupPluginDiscoveryProvidersByOrder>,
   order: import("../plugins/types.js").ProviderDiscoveryOrder,
 ): Promise<Record<string, ProviderConfig> | undefined> {
-  const providers = resolvePluginDiscoveryProviders({
-    config: ctx.config,
-    workspaceDir: ctx.workspaceDir,
-    env: ctx.env,
-  });
-  const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
   const catalogConfig =
     ctx.explicitProviders && Object.keys(ctx.explicitProviders).length > 0
@@ -655,7 +704,10 @@ async function resolvePluginImplicitProviders(
           },
         }
       : (ctx.config ?? {});
-  for (const provider of byOrder[order]) {
+  for (const provider of groupedProviders[order]) {
+    traceImplicitProviderStage(
+      `implicit-providers-pre-plugin-catalog order=${order} plugin=${provider.id}`,
+    );
     const result = await runProviderCatalog({
       provider,
       config: catalogConfig,
@@ -665,6 +717,9 @@ async function resolvePluginImplicitProviders(
       resolveProviderApiKey: (providerId) =>
         ctx.resolveProviderApiKey(providerId?.trim() || provider.id),
     });
+    traceImplicitProviderStage(
+      `implicit-providers-post-plugin-catalog order=${order} plugin=${provider.id}`,
+    );
     mergeImplicitProviderSet(
       discovered,
       normalizePluginDiscoveryResult({
@@ -679,11 +734,13 @@ async function resolvePluginImplicitProviders(
 export async function resolveImplicitProviders(
   params: ImplicitProviderParams,
 ): Promise<ModelsConfig["providers"]> {
+  traceImplicitProviderStage("implicit-providers-start");
   const providers: Record<string, ProviderConfig> = {};
   const env = params.env ?? process.env;
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
+  traceImplicitProviderStage("implicit-providers-post-auth-store");
   const resolveProviderApiKey: ProviderApiKeyResolver = (
     provider: string,
   ): { apiKey: string | undefined; discoveryApiKey?: string } => {
@@ -707,16 +764,57 @@ export async function resolveImplicitProviders(
     resolveProviderApiKey,
   };
 
-  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "simple"));
-  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "profile"));
-  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "paired"));
-  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "late"));
+  traceImplicitProviderStage("implicit-providers-pre-candidate-plugin-ids");
+  const candidatePluginIds = resolveCandidateProviderPluginIds({
+    authStore,
+    explicitProviders: params.explicitProviders,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
+  traceImplicitProviderStage(
+    `implicit-providers-post-candidate-plugin-ids count=${candidatePluginIds?.length ?? 0}`,
+  );
+  // Resolve provider discovery plugins once per models.json planning pass.
+  // Rebuilding the plugin registry for each discovery order burns startup time
+  // and can dominate trivial local agent turns.
+  traceImplicitProviderStage("implicit-providers-pre-resolve-plugin-discovery-providers");
+  const groupedPluginProviders = groupPluginDiscoveryProvidersByOrder(
+    resolvePluginDiscoveryProviders({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env,
+      onlyPluginIds: candidatePluginIds,
+    }),
+  );
+  traceImplicitProviderStage("implicit-providers-post-resolve-plugin-discovery-providers");
+  traceImplicitProviderStage(
+    `implicit-providers-post-discovery-groups simple=${groupedPluginProviders.simple.length} profile=${groupedPluginProviders.profile.length} paired=${groupedPluginProviders.paired.length} late=${groupedPluginProviders.late.length}`,
+  );
+
+  mergeImplicitProviderSet(
+    providers,
+    await resolvePluginImplicitProviders(context, groupedPluginProviders, "simple"),
+  );
+  mergeImplicitProviderSet(
+    providers,
+    await resolvePluginImplicitProviders(context, groupedPluginProviders, "profile"),
+  );
+  mergeImplicitProviderSet(
+    providers,
+    await resolvePluginImplicitProviders(context, groupedPluginProviders, "paired"),
+  );
+  mergeImplicitProviderSet(
+    providers,
+    await resolvePluginImplicitProviders(context, groupedPluginProviders, "late"),
+  );
 
   const implicitBedrock = await resolveImplicitBedrockProvider({
     agentDir: params.agentDir,
     config: params.config,
     env,
   });
+  traceImplicitProviderStage("implicit-providers-post-bedrock");
   if (implicitBedrock) {
     const existing = providers["amazon-bedrock"];
     providers["amazon-bedrock"] = existing
@@ -731,6 +829,7 @@ export async function resolveImplicitProviders(
       : implicitBedrock;
   }
 
+  traceImplicitProviderStage(`implicit-providers-complete count=${Object.keys(providers).length}`);
   return providers;
 }
 
