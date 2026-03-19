@@ -1,6 +1,6 @@
 ---
 summary: "Operator1 is a multi-agent system built on OpenClaw, organizing 4 core AI agents and a 147+ persona library for autonomous task execution."
-updated: "2026-03-18"
+updated: "2026-03-19"
 title: "Operator1"
 ---
 

@@ -1,6 +1,6 @@
 ---
 summary: "Sub-agent spawning in Operator1 — sessions_spawn flow, context passing, ACP integration, and session lifecycle."
-updated: "2026-03-18"
+updated: "2026-03-19"
 title: "Sub-Agent Spawning"
 ---
 
