@@ -1,3 +1,10 @@
+/**
+ * Runtime helpers for native channel plugins.
+ *
+ * This surface exposes core and channel-specific helpers used by bundled
+ * plugins. Prefer hooks unless you need tight in-process coupling with the
+ * OpenClaw messaging/runtime stack.
+ */
 type ReadChannelAllowFromStore =
   typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
 type UpsertChannelPairingRequest =
@@ -137,7 +144,7 @@ export type PluginRuntimeChannel = {
     resolveUserAllowlist: typeof import("../../../extensions/slack/runtime-api.js").resolveSlackUserAllowlist;
     sendMessageSlack: typeof import("../../../extensions/slack/runtime-api.js").sendMessageSlack;
     monitorSlackProvider: typeof import("../../../extensions/slack/runtime-api.js").monitorSlackProvider;
-    handleSlackAction: typeof import("../../agents/tools/slack-actions.js").handleSlackAction;
+    handleSlackAction: typeof import("../../../extensions/slack/runtime-api.js").handleSlackAction;
   };
   telegram: {
     auditGroupMembership: typeof import("../../../extensions/telegram/runtime-api.js").auditTelegramGroupMembership;
@@ -190,7 +197,7 @@ export type PluginRuntimeChannel = {
     probeSignal: typeof import("../../../extensions/signal/runtime-api.js").probeSignal;
     sendMessageSignal: typeof import("../../../extensions/signal/runtime-api.js").sendMessageSignal;
     monitorSignalProvider: typeof import("../../../extensions/signal/runtime-api.js").monitorSignalProvider;
-    messageActions: typeof import("../../channels/plugins/actions/signal.js").signalMessageActions;
+    messageActions: typeof import("../../../extensions/signal/runtime-api.js").signalMessageActions;
   };
   imessage: {
     monitorIMessageProvider: typeof import("../../../extensions/imessage/runtime-api.js").monitorIMessageProvider;
@@ -198,19 +205,19 @@ export type PluginRuntimeChannel = {
     sendMessageIMessage: typeof import("../../../extensions/imessage/runtime-api.js").sendMessageIMessage;
   };
   whatsapp: {
-    getActiveWebListener: typeof import("../../../extensions/whatsapp/runtime-api.js").getActiveWebListener;
-    getWebAuthAgeMs: typeof import("../../../extensions/whatsapp/runtime-api.js").getWebAuthAgeMs;
-    logoutWeb: typeof import("../../../extensions/whatsapp/runtime-api.js").logoutWeb;
-    logWebSelfId: typeof import("../../../extensions/whatsapp/runtime-api.js").logWebSelfId;
-    readWebSelfId: typeof import("../../../extensions/whatsapp/runtime-api.js").readWebSelfId;
-    webAuthExists: typeof import("../../../extensions/whatsapp/runtime-api.js").webAuthExists;
-    sendMessageWhatsApp: typeof import("../../../extensions/whatsapp/runtime-api.js").sendMessageWhatsApp;
-    sendPollWhatsApp: typeof import("../../../extensions/whatsapp/runtime-api.js").sendPollWhatsApp;
-    loginWeb: typeof import("../../../extensions/whatsapp/runtime-api.js").loginWeb;
-    startWebLoginWithQr: typeof import("../../../extensions/whatsapp/login-qr-api.js").startWebLoginWithQr;
-    waitForWebLogin: typeof import("../../../extensions/whatsapp/login-qr-api.js").waitForWebLogin;
+    getActiveWebListener: typeof import("openclaw/plugin-sdk/whatsapp").getActiveWebListener;
+    getWebAuthAgeMs: typeof import("openclaw/plugin-sdk/whatsapp").getWebAuthAgeMs;
+    logoutWeb: typeof import("openclaw/plugin-sdk/whatsapp").logoutWeb;
+    logWebSelfId: typeof import("openclaw/plugin-sdk/whatsapp").logWebSelfId;
+    readWebSelfId: typeof import("openclaw/plugin-sdk/whatsapp").readWebSelfId;
+    webAuthExists: typeof import("openclaw/plugin-sdk/whatsapp").webAuthExists;
+    sendMessageWhatsApp: typeof import("openclaw/plugin-sdk/whatsapp").sendMessageWhatsApp;
+    sendPollWhatsApp: typeof import("openclaw/plugin-sdk/whatsapp").sendPollWhatsApp;
+    loginWeb: typeof import("openclaw/plugin-sdk/whatsapp").loginWeb;
+    startWebLoginWithQr: typeof import("openclaw/plugin-sdk/whatsapp-login-qr").startWebLoginWithQr;
+    waitForWebLogin: typeof import("openclaw/plugin-sdk/whatsapp-login-qr").waitForWebLogin;
     monitorWebChannel: typeof import("../../channels/web/index.js").monitorWebChannel;
-    handleWhatsAppAction: typeof import("../../agents/tools/whatsapp-actions.js").handleWhatsAppAction;
+    handleWhatsAppAction: typeof import("openclaw/plugin-sdk/whatsapp-action-runtime").handleWhatsAppAction;
     createLoginTool: typeof import("./runtime-whatsapp-login-tool.js").createRuntimeWhatsAppLoginTool;
   };
   line: {

@@ -197,8 +197,65 @@ describe("Google image-generation provider", () => {
           generationConfig: {
             responseModalities: ["TEXT", "IMAGE"],
             imageConfig: {
-              aspectRatio: "1:1",
               imageSize: "4K",
+            },
+          },
+        }),
+      }),
+    );
+  });
+
+  it("forwards explicit aspect ratio without forcing a default when size is omitted", async () => {
+    vi.spyOn(modelAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: "image/png",
+                    data: Buffer.from("png-data").toString("base64"),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3-pro-image-preview",
+      prompt: "portrait photo",
+      cfg: {},
+      aspectRatio: "9:16",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: "portrait photo" }],
+            },
+          ],
+          generationConfig: {
+            responseModalities: ["TEXT", "IMAGE"],
+            imageConfig: {
+              aspectRatio: "9:16",
             },
           },
         }),

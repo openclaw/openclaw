@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { lookupContextTokens } from "../../agents/context.js";
@@ -81,13 +85,12 @@ export function createFollowupRunner(params: {
     }
 
     for (const payload of payloads) {
-      if (!payload?.text && !payload?.mediaUrl && !payload?.mediaUrls?.length) {
+      if (!payload || !hasOutboundReplyContent(payload)) {
         continue;
       }
       if (
         isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) &&
-        !payload.mediaUrl &&
-        !payload.mediaUrls?.length
+        !resolveSendableOutboundReplyParts(payload).hasMedia
       ) {
         continue;
       }
@@ -289,7 +292,7 @@ export function createFollowupRunner(params: {
           return [payload];
         }
         const stripped = stripHeartbeatToken(text, { mode: "message" });
-        const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
         if (stripped.shouldSkip && !hasMedia) {
           return [];
         }

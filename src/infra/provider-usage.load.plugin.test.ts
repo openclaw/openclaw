@@ -16,7 +16,7 @@ let loadProviderUsageSummary: typeof import("./provider-usage.load.js").loadProv
 
 const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
 
-describe("provider-usage.load plugin seam", () => {
+describe("provider-usage.load plugin boundary", () => {
   beforeEach(async () => {
     vi.resetModules();
     resolveProviderUsageSnapshotWithPluginMock.mockReset();

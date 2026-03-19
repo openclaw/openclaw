@@ -4,11 +4,15 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const ALLOWED_EXTENSION_PUBLIC_SEAMS = new Set([
+const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set([
+  "action-runtime.runtime.js",
+  "action-runtime-api.js",
   "api.js",
   "index.js",
   "login-qr-api.js",
   "runtime-api.js",
+  "session-key-api.js",
+  "setup-api.js",
   "setup-entry.js",
 ]);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
@@ -22,8 +26,8 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "matrix",
   "mattermost",
   "msteams",
-  "nextcloud-talk",
   "nostr",
+  "nextcloud-talk",
   "signal",
   "slack",
   "synology-chat",
@@ -115,6 +119,49 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
   },
 ];
 
+const LOCAL_EXTENSION_API_BARREL_GUARDS = [
+  "acpx",
+  "bluebubbles",
+  "device-pair",
+  "diagnostics-otel",
+  "discord",
+  "diffs",
+  "feishu",
+  "google",
+  "irc",
+  "llm-task",
+  "line",
+  "lobster",
+  "matrix",
+  "mattermost",
+  "memory-lancedb",
+  "msteams",
+  "nextcloud-talk",
+  "nostr",
+  "open-prose",
+  "phone-control",
+  "copilot-proxy",
+  "zai",
+  "qwen-portal-auth",
+  "signal",
+  "synology-chat",
+  "talk-voice",
+  "telegram",
+  "thread-ownership",
+  "tlon",
+  "voice-call",
+  "whatsapp",
+  "twitch",
+  "zalo",
+  "zalouser",
+] as const;
+
+const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
+  // Direct import avoids a circular init path:
+  // accounts.ts -> runtime-api.ts -> src/plugin-sdk/matrix -> extensions/matrix/api.ts -> accounts.ts
+  "extensions/matrix/src/matrix/accounts.ts",
+] as const;
+
 function readSource(path: string): string {
   return readFileSync(resolve(ROOT_DIR, "..", path), "utf8");
 }
@@ -164,11 +211,12 @@ function collectExtensionSourceFiles(): string[] {
       }
       if (
         fullPath.includes(".test.") ||
+        fullPath.includes(".test-") ||
         fullPath.includes(".fixture.") ||
         fullPath.includes(".snap") ||
         fullPath.includes("test-support") ||
-        fullPath.endsWith("/api.ts") ||
-        fullPath.endsWith("/runtime-api.ts")
+        entry.name === "api.ts" ||
+        entry.name === "runtime-api.ts"
       ) {
         continue;
       }
@@ -206,7 +254,50 @@ function collectCoreSourceFiles(): string[] {
         fullPath.includes(".test.") ||
         fullPath.includes(".spec.") ||
         fullPath.includes(".fixture.") ||
-        fullPath.includes(".snap")
+        fullPath.includes(".snap") ||
+        // src/plugin-sdk is the curated bridge layer; validate its contracts with dedicated
+        // plugin-sdk guardrails instead of the generic "core should not touch extensions" rule.
+        fullPath.includes(`${resolve(ROOT_DIR, "plugin-sdk")}/`)
+      ) {
+        continue;
+      }
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function collectExtensionFiles(extensionId: string): string[] {
+  const extensionDir = resolve(ROOT_DIR, "..", "extensions", extensionId);
+  const files: string[] = [];
+  const stack = [extensionDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const fullPath = resolve(current, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
+          continue;
+        }
+        stack.push(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
+        continue;
+      }
+      if (entry.name.endsWith(".d.ts")) {
+        continue;
+      }
+      if (
+        fullPath.includes(".test.") ||
+        fullPath.includes(".test-") ||
+        fullPath.includes(".spec.") ||
+        fullPath.includes(".fixture.") ||
+        fullPath.includes(".snap") ||
+        entry.name === "runtime-api.ts"
       ) {
         continue;
       }
@@ -222,6 +313,10 @@ function collectExtensionImports(text: string): string[] {
   );
 }
 
+function collectImportSpecifiers(text: string): string[] {
+  return [...text.matchAll(/["']([^"']+\.(?:[cm]?[jt]sx?))["']/g)].map((match) => match[1] ?? "");
+}
+
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
   for (const specifier of imports) {
     const normalized = specifier.replaceAll("\\", "/");
@@ -231,9 +326,28 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
     }
     const basename = normalized.split("/").at(-1) ?? "";
     expect(
-      ALLOWED_EXTENSION_PUBLIC_SEAMS.has(basename),
-      `${file} should only import approved extension seams, got ${specifier}`,
+      ALLOWED_EXTENSION_PUBLIC_SURFACES.has(basename),
+      `${file} should only import approved extension surfaces, got ${specifier}`,
     ).toBe(true);
+  }
+}
+
+function expectNoSiblingExtensionPrivateSrcImports(file: string, imports: string[]): void {
+  const normalizedFile = file.replaceAll("\\", "/");
+  const currentExtensionId = normalizedFile.match(/\/extensions\/([^/]+)\//)?.[1] ?? null;
+  if (!currentExtensionId) {
+    return;
+  }
+  for (const specifier of imports) {
+    if (!specifier.startsWith(".")) {
+      continue;
+    }
+    const resolvedImport = resolve(dirname(file), specifier).replaceAll("\\", "/");
+    const targetExtensionId = resolvedImport.match(/\/extensions\/([^/]+)\/src\//)?.[1] ?? null;
+    if (!targetExtensionId || targetExtensionId === currentExtensionId) {
+      continue;
+    }
+    expect.fail(`${file} should not import another extension's private src, got ${specifier}`);
   }
 }
 
@@ -282,21 +396,43 @@ describe("channel import guardrails", () => {
   it("keeps extension production files off other extensions' private src imports", () => {
     for (const file of collectExtensionSourceFiles()) {
       const text = readFileSync(file, "utf8");
-      expect(text, `${file} should not import another extension's src`).not.toMatch(
-        /["'][^"']*\.\.\/(?:\.\.\/)?(?!src\/)[^/"']+\/src\//,
-      );
+      expectNoSiblingExtensionPrivateSrcImports(file, collectImportSpecifiers(text));
     }
   });
 
-  it("keeps core extension imports limited to approved public seams", () => {
+  it("keeps core extension imports limited to approved public surfaces", () => {
     for (const file of collectCoreSourceFiles()) {
       expectOnlyApprovedExtensionSeams(file, collectExtensionImports(readFileSync(file, "utf8")));
     }
   });
 
-  it("keeps extension-to-extension imports limited to approved public seams", () => {
+  it("keeps extension-to-extension imports limited to approved public surfaces", () => {
     for (const file of collectExtensionSourceFiles()) {
       expectOnlyApprovedExtensionSeams(file, collectExtensionImports(readFileSync(file, "utf8")));
+    }
+  });
+
+  it("keeps internalized extension helper surfaces behind local api barrels", () => {
+    for (const extensionId of LOCAL_EXTENSION_API_BARREL_GUARDS) {
+      for (const file of collectExtensionFiles(extensionId)) {
+        const normalized = file.replaceAll("\\", "/");
+        if (
+          LOCAL_EXTENSION_API_BARREL_EXCEPTIONS.some((suffix) => normalized.endsWith(suffix)) ||
+          normalized.endsWith("/api.ts") ||
+          normalized.endsWith("/test-runtime.ts") ||
+          normalized.includes(".test.") ||
+          normalized.includes(".spec.") ||
+          normalized.includes(".fixture.") ||
+          normalized.includes(".snap")
+        ) {
+          continue;
+        }
+        const text = readFileSync(file, "utf8");
+        expect(
+          text,
+          `${normalized} should import ${extensionId} helpers via the local api barrel`,
+        ).not.toMatch(new RegExp(`["']openclaw/plugin-sdk/${extensionId}["']`, "u"));
+      }
     }
   });
 });
