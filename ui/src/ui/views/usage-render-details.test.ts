@@ -141,8 +141,16 @@ describe("usage cost formatting", () => {
     expect(formatCost(0.0047)).toBe("$0.0047");
   });
 
+  it("renders exactly zero as $0.00", () => {
+    expect(formatCost(0)).toBe("$0.00");
+  });
+
   it("keeps three decimals for costs below one dollar by default", () => {
     expect(formatCost(0.125)).toBe("$0.125");
+  });
+
+  it("uses two decimals for costs at or above one dollar", () => {
+    expect(formatCost(1.5)).toBe("$1.50");
   });
 
   it("allows explicit precision overrides for derived metrics", () => {
