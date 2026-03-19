@@ -1,1 +1,1 @@
-export * from "../../src/plugin-sdk/device-pair.js";
+export * from "openclaw/plugin-sdk/device-pair";

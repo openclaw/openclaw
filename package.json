@@ -182,6 +182,10 @@
       "types": "./dist/plugin-sdk/discord-core.d.ts",
       "default": "./dist/plugin-sdk/discord-core.js"
     },
+    "./plugin-sdk/feishu": {
+      "types": "./dist/plugin-sdk/feishu.d.ts",
+      "default": "./dist/plugin-sdk/feishu.js"
+    },
     "./plugin-sdk/slack": {
       "types": "./dist/plugin-sdk/slack.d.ts",
       "default": "./dist/plugin-sdk/slack.js"
@@ -250,6 +254,18 @@
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
     },
+    "./plugin-sdk/device-pair": {
+      "types": "./dist/plugin-sdk/device-pair.d.ts",
+      "default": "./dist/plugin-sdk/device-pair.js"
+    },
+    "./plugin-sdk/diagnostics-otel": {
+      "types": "./dist/plugin-sdk/diagnostics-otel.d.ts",
+      "default": "./dist/plugin-sdk/diagnostics-otel.js"
+    },
+    "./plugin-sdk/diffs": {
+      "types": "./dist/plugin-sdk/diffs.d.ts",
+      "default": "./dist/plugin-sdk/diffs.js"
+    },
     "./plugin-sdk/channel-config-helpers": {
       "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
       "default": "./dist/plugin-sdk/channel-config-helpers.js"
@@ -289,6 +305,22 @@
     "./plugin-sdk/keyed-async-queue": {
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
+    },
+    "./plugin-sdk/line": {
+      "types": "./dist/plugin-sdk/line.d.ts",
+      "default": "./dist/plugin-sdk/line.js"
+    },
+    "./plugin-sdk/llm-task": {
+      "types": "./dist/plugin-sdk/llm-task.d.ts",
+      "default": "./dist/plugin-sdk/llm-task.js"
+    },
+    "./plugin-sdk/memory-lancedb": {
+      "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
+      "default": "./dist/plugin-sdk/memory-lancedb.js"
+    },
+    "./plugin-sdk/minimax-portal-auth": {
+      "types": "./dist/plugin-sdk/minimax-portal-auth.d.ts",
+      "default": "./dist/plugin-sdk/minimax-portal-auth.js"
     },
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
@@ -334,6 +366,10 @@
       "types": "./dist/plugin-sdk/image-generation.d.ts",
       "default": "./dist/plugin-sdk/image-generation.js"
     },
+    "./plugin-sdk/nostr": {
+      "types": "./dist/plugin-sdk/nostr.d.ts",
+      "default": "./dist/plugin-sdk/nostr.js"
+    },
     "./plugin-sdk/reply-history": {
       "types": "./dist/plugin-sdk/reply-history.d.ts",
       "default": "./dist/plugin-sdk/reply-history.js"
@@ -341,6 +377,14 @@
     "./plugin-sdk/media-understanding": {
       "types": "./dist/plugin-sdk/media-understanding.d.ts",
       "default": "./dist/plugin-sdk/media-understanding.js"
+    },
+    "./plugin-sdk/secret-input-runtime": {
+      "types": "./dist/plugin-sdk/secret-input-runtime.d.ts",
+      "default": "./dist/plugin-sdk/secret-input-runtime.js"
+    },
+    "./plugin-sdk/secret-input-schema": {
+      "types": "./dist/plugin-sdk/secret-input-schema.d.ts",
+      "default": "./dist/plugin-sdk/secret-input-schema.js"
     },
     "./plugin-sdk/request-url": {
       "types": "./dist/plugin-sdk/request-url.d.ts",
@@ -361,6 +405,34 @@
     "./plugin-sdk/secret-input": {
       "types": "./dist/plugin-sdk/secret-input.d.ts",
       "default": "./dist/plugin-sdk/secret-input.js"
+    },
+    "./plugin-sdk/signal-core": {
+      "types": "./dist/plugin-sdk/signal-core.d.ts",
+      "default": "./dist/plugin-sdk/signal-core.js"
+    },
+    "./plugin-sdk/synology-chat": {
+      "types": "./dist/plugin-sdk/synology-chat.d.ts",
+      "default": "./dist/plugin-sdk/synology-chat.js"
+    },
+    "./plugin-sdk/talk-voice": {
+      "types": "./dist/plugin-sdk/talk-voice.d.ts",
+      "default": "./dist/plugin-sdk/talk-voice.js"
+    },
+    "./plugin-sdk/thread-ownership": {
+      "types": "./dist/plugin-sdk/thread-ownership.d.ts",
+      "default": "./dist/plugin-sdk/thread-ownership.js"
+    },
+    "./plugin-sdk/tlon": {
+      "types": "./dist/plugin-sdk/tlon.d.ts",
+      "default": "./dist/plugin-sdk/tlon.js"
+    },
+    "./plugin-sdk/twitch": {
+      "types": "./dist/plugin-sdk/twitch.d.ts",
+      "default": "./dist/plugin-sdk/twitch.js"
+    },
+    "./plugin-sdk/voice-call": {
+      "types": "./dist/plugin-sdk/voice-call.d.ts",
+      "default": "./dist/plugin-sdk/voice-call.js"
     },
     "./plugin-sdk/web-media": {
       "types": "./dist/plugin-sdk/web-media.d.ts",
