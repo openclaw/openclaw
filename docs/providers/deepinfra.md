@@ -57,6 +57,6 @@ deepinfra/moonshotai/Kimi-K2.5
 
 ## Notes
 
-- Model refs are `deepinfra/<provider>/<model>` (e.g., `deepinfra/qwen/qwen3-max`).
+- Model refs are `deepinfra/<provider>/<model>` (e.g., `deepinfra/Qwen/Qwen3-Max`).
 - Default model: `deepinfra/openai/gpt-oss-120b`
 - Base URL: `https://api.deepinfra.com/v1/openai/`
