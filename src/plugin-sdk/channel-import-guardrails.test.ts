@@ -170,6 +170,10 @@ function readSource(path: string): string {
   return readFileSync(resolve(ROOT_DIR, "..", path), "utf8");
 }
 
+function normalizePath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
 function readSetupBarrelImportBlock(path: string): string {
   const lines = readSource(path).split("\n");
   const targetLineIndex = lines.findIndex((line) =>
@@ -186,10 +190,10 @@ function readSetupBarrelImportBlock(path: string): string {
 }
 
 function collectExtensionSourceFiles(): string[] {
-  const extensionsDir = resolve(ROOT_DIR, "..", "extensions");
-  const sharedExtensionsDir = resolve(extensionsDir, "shared");
+  const extensionsDir = normalizePath(resolve(ROOT_DIR, "..", "extensions"));
+  const sharedExtensionsDir = normalizePath(resolve(extensionsDir, "shared"));
   const files: string[] = [];
-  const stack = [extensionsDir];
+  const stack = [resolve(ROOT_DIR, "..", "extensions")];
   while (stack.length > 0) {
     const current = stack.pop();
     if (!current) {
@@ -197,6 +201,7 @@ function collectExtensionSourceFiles(): string[] {
     }
     for (const entry of readdirSync(current, { withFileTypes: true })) {
       const fullPath = resolve(current, entry.name);
+      const normalizedFullPath = normalizePath(fullPath);
       if (entry.isDirectory()) {
         if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
           continue;
@@ -207,18 +212,18 @@ function collectExtensionSourceFiles(): string[] {
       if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
         continue;
       }
-      if (entry.name.endsWith(".d.ts") || fullPath.includes(sharedExtensionsDir)) {
+      if (entry.name.endsWith(".d.ts") || normalizedFullPath.includes(sharedExtensionsDir)) {
         continue;
       }
-      if (fullPath.includes(`${resolve(ROOT_DIR, "..", "extensions")}/shared/`)) {
+      if (normalizedFullPath.includes(`${extensionsDir}/shared/`)) {
         continue;
       }
       if (
-        fullPath.includes(".test.") ||
-        fullPath.includes(".test-") ||
-        fullPath.includes(".fixture.") ||
-        fullPath.includes(".snap") ||
-        fullPath.includes("test-support") ||
+        normalizedFullPath.includes(".test.") ||
+        normalizedFullPath.includes(".test-") ||
+        normalizedFullPath.includes(".fixture.") ||
+        normalizedFullPath.includes(".snap") ||
+        normalizedFullPath.includes("test-support") ||
         entry.name === "api.ts" ||
         entry.name === "runtime-api.ts"
       ) {
@@ -232,6 +237,7 @@ function collectExtensionSourceFiles(): string[] {
 
 function collectCoreSourceFiles(): string[] {
   const srcDir = resolve(ROOT_DIR, "..", "src");
+  const normalizedPluginSdkDir = normalizePath(resolve(ROOT_DIR, "plugin-sdk"));
   const files: string[] = [];
   const stack = [srcDir];
   while (stack.length > 0) {
@@ -241,6 +247,7 @@ function collectCoreSourceFiles(): string[] {
     }
     for (const entry of readdirSync(current, { withFileTypes: true })) {
       const fullPath = resolve(current, entry.name);
+      const normalizedFullPath = normalizePath(fullPath);
       if (entry.isDirectory()) {
         if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
           continue;
@@ -255,14 +262,14 @@ function collectCoreSourceFiles(): string[] {
         continue;
       }
       if (
-        fullPath.includes(".test.") ||
-        fullPath.includes(".mock-harness.") ||
-        fullPath.includes(".spec.") ||
-        fullPath.includes(".fixture.") ||
-        fullPath.includes(".snap") ||
+        normalizedFullPath.includes(".test.") ||
+        normalizedFullPath.includes(".mock-harness.") ||
+        normalizedFullPath.includes(".spec.") ||
+        normalizedFullPath.includes(".fixture.") ||
+        normalizedFullPath.includes(".snap") ||
         // src/plugin-sdk is the curated bridge layer; validate its contracts with dedicated
         // plugin-sdk guardrails instead of the generic "core should not touch extensions" rule.
-        fullPath.includes(`${resolve(ROOT_DIR, "plugin-sdk")}/`)
+        normalizedFullPath.includes(`${normalizedPluginSdkDir}/`)
       ) {
         continue;
       }
@@ -283,6 +290,7 @@ function collectExtensionFiles(extensionId: string): string[] {
     }
     for (const entry of readdirSync(current, { withFileTypes: true })) {
       const fullPath = resolve(current, entry.name);
+      const normalizedFullPath = normalizePath(fullPath);
       if (entry.isDirectory()) {
         if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
           continue;
@@ -297,11 +305,11 @@ function collectExtensionFiles(extensionId: string): string[] {
         continue;
       }
       if (
-        fullPath.includes(".test.") ||
-        fullPath.includes(".test-") ||
-        fullPath.includes(".spec.") ||
-        fullPath.includes(".fixture.") ||
-        fullPath.includes(".snap") ||
+        normalizedFullPath.includes(".test.") ||
+        normalizedFullPath.includes(".test-") ||
+        normalizedFullPath.includes(".spec.") ||
+        normalizedFullPath.includes(".fixture.") ||
+        normalizedFullPath.includes(".snap") ||
         entry.name === "runtime-api.ts"
       ) {
         continue;
@@ -388,6 +396,16 @@ describe("channel import guardrails", () => {
       );
       expect(text, `${file} should not import openclaw/plugin-sdk/compat`).not.toMatch(
         /["']openclaw\/plugin-sdk\/compat["']/,
+      );
+    }
+  });
+
+  it("keeps bundled extension source files off legacy core send-deps src imports", () => {
+    const legacyCoreSendDepsImport = /["'][^"']*src\/infra\/outbound\/send-deps\.[cm]?[jt]s["']/;
+    for (const file of collectExtensionSourceFiles()) {
+      const text = readFileSync(file, "utf8");
+      expect(text, `${file} should not import src/infra/outbound/send-deps.*`).not.toMatch(
+        legacyCoreSendDepsImport,
       );
     }
   });
