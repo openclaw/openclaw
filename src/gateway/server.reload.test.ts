@@ -569,12 +569,12 @@ describe("gateway hot reload", () => {
     });
   });
 
-  it("keeps fallback gateway context aligned with hot-reloaded cron state", async () => {
+  it("replaces the fallback gateway context when hot reload swaps cron state", async () => {
     await withGatewayServer(async () => {
-      const fallbackContext = hoisted.setFallbackGatewayContext.mock.calls.at(-1)?.[0] as
+      const startupFallbackContext = hoisted.setFallbackGatewayContext.mock.calls.at(-1)?.[0] as
         | { cron?: unknown; cronStorePath?: unknown }
         | undefined;
-      expect(fallbackContext).toBeDefined();
+      expect(startupFallbackContext).toBeDefined();
       const startupCronCount = hoisted.cronInstances.length;
       const startupCron = hoisted.cronInstances.at(-1);
       expect(startupCron).toBeDefined();
@@ -603,8 +603,18 @@ describe("gateway hot reload", () => {
 
       expect(hoisted.cronInstances.length).toBe(startupCronCount + 1);
       expect(hoisted.cronInstances.at(-1)).not.toBe(startupCron);
-      expect(fallbackContext?.cron).toBe(hoisted.cronInstances.at(-1));
-      expect(fallbackContext?.cronStorePath).toBe("/tmp/cron-hot-reload.json");
+      expect(hoisted.setFallbackGatewayContext).toHaveBeenCalledTimes(2);
+
+      const nextFallbackContext = hoisted.setFallbackGatewayContext.mock.calls.at(-1)?.[0] as
+        | { cron?: unknown; cronStorePath?: unknown }
+        | undefined;
+      expect(nextFallbackContext).toBeDefined();
+      expect(nextFallbackContext).not.toBe(startupFallbackContext);
+      expect(nextFallbackContext?.cron).toBe(hoisted.cronInstances.at(-1));
+      expect(nextFallbackContext?.cronStorePath).toBe("/tmp/cron-hot-reload.json");
+
+      expect(startupFallbackContext?.cron).toBe(startupCron);
+      expect(startupFallbackContext?.cronStorePath).not.toBe("/tmp/cron-hot-reload.json");
     });
   });
 

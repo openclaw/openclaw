@@ -1097,10 +1097,17 @@ export async function startGatewayServer(
     broadcastVoiceWakeChanged,
   };
 
+  const buildFallbackGatewayContext =
+    (): import("./server-methods/types.js").GatewayRequestContext => ({
+      ...gatewayRequestContext,
+      cron,
+      cronStorePath,
+    });
+
   // Store the gateway context as a fallback for plugin subagent dispatch
   // in non-WS paths (Telegram polling, WhatsApp, etc.) where no per-request
   // scope is set via AsyncLocalStorage.
-  setFallbackGatewayContext(gatewayRequestContext);
+  setFallbackGatewayContext(buildFallbackGatewayContext());
 
   attachGatewayWsHandlers({
     wss,
@@ -1211,10 +1218,9 @@ export async function startGatewayServer(
             cronState = nextState.cronState;
             cron = cronState.cron;
             cronStorePath = cronState.storePath;
-            // Keep the shared fallback context live for non-request-scoped
-            // plugin subagent dispatch after hot reload swaps cron state.
-            gatewayRequestContext.cron = cron;
-            gatewayRequestContext.cronStorePath = cronStorePath;
+            // Refresh the plugin fallback context without mutating the
+            // long-lived WS request context object.
+            setFallbackGatewayContext(buildFallbackGatewayContext());
             browserControl = nextState.browserControl;
             channelHealthMonitor = nextState.channelHealthMonitor;
           },

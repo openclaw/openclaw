@@ -46,8 +46,8 @@ const fallbackGatewayContextState = (() => {
 })();
 
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
-  // Keep a shared live reference so existing runtimes survive module reloads;
-  // callers can update hot-swapped fields in place when server state changes.
+  // Existing runtimes read this shared pointer at dispatch time, so callers
+  // can replace the fallback context when gateway state is hot-swapped.
   fallbackGatewayContextState.context = ctx;
 }
 
