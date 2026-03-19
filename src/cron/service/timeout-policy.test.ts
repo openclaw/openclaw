@@ -40,6 +40,21 @@ describe("timeout-policy", () => {
     expect(timeout).toBeUndefined();
   });
 
+  it("uses agent-turn safety timeout for main systemEvent jobs with wakeMode=now", () => {
+    const job = makeJob({ kind: "systemEvent", text: "hello" });
+    const mainNowJob = { ...job, sessionTarget: "main" as const, wakeMode: "now" as const };
+    const timeout = resolveCronJobTimeoutMs(mainNowJob);
+    expect(timeout).toBe(AGENT_TURN_SAFETY_TIMEOUT_MS);
+  });
+
+  it("keeps default timeout for main systemEvent jobs without wakeMode=now", () => {
+    const job = makeJob({ kind: "systemEvent", text: "hello" });
+    // sessionTarget is already "main" from makeJob for systemEvent
+    expect(job.wakeMode).toBe("next-heartbeat");
+    const timeout = resolveCronJobTimeoutMs(job);
+    expect(timeout).toBe(DEFAULT_JOB_TIMEOUT_MS);
+  });
+
   it("applies explicit timeoutSeconds when positive", () => {
     const timeout = resolveCronJobTimeoutMs(
       makeJob({ kind: "agentTurn", message: "hi", timeoutSeconds: 1.9 }),

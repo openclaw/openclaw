@@ -19,7 +19,16 @@ export function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
       ? Math.floor(job.payload.timeoutSeconds * 1_000)
       : undefined;
   if (configuredTimeoutMs === undefined) {
-    return job.payload.kind === "agentTurn" ? AGENT_TURN_SAFETY_TIMEOUT_MS : DEFAULT_JOB_TIMEOUT_MS;
+    if (job.payload.kind === "agentTurn") {
+      return AGENT_TURN_SAFETY_TIMEOUT_MS;
+    }
+    // systemEvent jobs targeting main with wakeMode=now block while the
+    // heartbeat (agent turn) completes.  Apply the agent-turn ceiling so
+    // long-running turns are not killed by the 10-min generic cap.
+    if (job.sessionTarget === "main" && job.wakeMode === "now") {
+      return AGENT_TURN_SAFETY_TIMEOUT_MS;
+    }
+    return DEFAULT_JOB_TIMEOUT_MS;
   }
   return configuredTimeoutMs <= 0 ? undefined : configuredTimeoutMs;
 }
