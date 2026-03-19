@@ -485,7 +485,7 @@ export function installSessionBindingContractSuite(params: {
   expectedCapabilities: SessionBindingCapabilities;
 }) {
   it("registers the expected session binding capabilities", async () => {
-    expect(await params.getCapabilities()).toEqual(params.expectedCapabilities);
+    expect(await Promise.resolve(params.getCapabilities())).toEqual(params.expectedCapabilities);
   });
 
   it("binds and resolves a session binding through the shared service", async () => {
