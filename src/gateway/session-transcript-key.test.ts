@@ -29,6 +29,8 @@ import {
 } from "./session-transcript-key.js";
 
 describe("resolveSessionKeyForTranscriptFile", () => {
+  const now = 1_700_000_000_000;
+
   beforeEach(() => {
     clearSessionTranscriptKeyCacheForTests();
     loadConfigMock.mockClear();
@@ -45,8 +47,8 @@ describe("resolveSessionKeyForTranscriptFile", () => {
 
   it("reuses the cached session key for repeat transcript lookups", () => {
     const store = {
-      "agent:main:one": { sessionId: "sess-1" },
-      "agent:main:two": { sessionId: "sess-2" },
+      "agent:main:one": { sessionId: "sess-1", updatedAt: now },
+      "agent:main:two": { sessionId: "sess-2", updatedAt: now },
     } satisfies Record<string, SessionEntry>;
     loadCombinedSessionStoreForGatewayMock.mockReturnValue({
       storePath: "(multiple)",
@@ -71,8 +73,8 @@ describe("resolveSessionKeyForTranscriptFile", () => {
 
   it("drops stale cached mappings and falls back to the current store contents", () => {
     let store: Record<string, SessionEntry> = {
-      "agent:main:alpha": { sessionId: "sess-alpha" },
-      "agent:main:beta": { sessionId: "sess-beta" },
+      "agent:main:alpha": { sessionId: "sess-alpha", updatedAt: now },
+      "agent:main:beta": { sessionId: "sess-beta", updatedAt: now },
     };
     loadCombinedSessionStoreForGatewayMock.mockImplementation(() => ({
       storePath: "(multiple)",
@@ -96,8 +98,12 @@ describe("resolveSessionKeyForTranscriptFile", () => {
     expect(resolveSessionKeyForTranscriptFile("/tmp/shared.jsonl")).toBe("agent:main:beta");
 
     store = {
-      "agent:main:alpha": { sessionId: "sess-alpha-2" },
-      "agent:main:beta": { sessionId: "sess-beta", sessionFile: "/tmp/beta.jsonl" },
+      "agent:main:alpha": { sessionId: "sess-alpha-2", updatedAt: now + 1 },
+      "agent:main:beta": {
+        sessionId: "sess-beta",
+        updatedAt: now + 1,
+        sessionFile: "/tmp/beta.jsonl",
+      },
     };
 
     expect(resolveSessionKeyForTranscriptFile("/tmp/shared.jsonl")).toBe("agent:main:alpha");
