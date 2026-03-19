@@ -526,6 +526,33 @@ export async function runAgentTurnWithFallback(params: {
           }))
         : [];
 
+      // Fire afterResponse shell hook fire-and-forget after a successful response.
+      // Skipped on aborts and errors (e.g. KV cache save).
+      {
+        const run = params.followupRun.run;
+        const aborted = runResult?.meta?.aborted;
+        const hasError = !!runResult?.meta?.error;
+        if (!aborted && !hasError) {
+          const agentCfg = run.config.agents?.defaults;
+          const activeProvider = fallbackProvider ?? run.provider;
+          const activeModel = fallbackModel ?? run.model;
+          const activeModelKey = modelKey(activeProvider, activeModel);
+          const targetModelCfg = agentCfg?.models?.[activeModelKey];
+          const hookCfg = targetModelCfg?.afterResponse ?? agentCfg?.afterResponse;
+          if (hookCfg?.command) {
+            void runBeforeModelChangeHook({
+              hookCfg,
+              previousProvider: activeProvider,
+              previousModel: activeModel,
+              nextProvider: activeProvider,
+              nextModel: activeModel,
+              sessionId: run.sessionId,
+              agentId: run.agentId,
+            }).catch(() => {});
+          }
+        }
+      }
+
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
       const embeddedError = runResult.meta?.error;

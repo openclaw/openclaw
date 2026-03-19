@@ -109,6 +109,8 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     // Anthropic API and OpenAI-compatible providers (e.g. ZhipuAI/GLM) return this stop reason
     // when the context window is exceeded. pi-ai surfaces it as "Unhandled stop reason: model_context_window_exceeded".
     lower.includes("context_window_exceeded") ||
+    // llama.cpp error: "request (N tokens) exceeds the available context size (M tokens)"
+    lower.includes("exceeds the available context size") ||
     // Chinese proxy error messages for context overflow
     errorMessage.includes("上下文过长") ||
     errorMessage.includes("上下文超出") ||
