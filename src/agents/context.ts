@@ -140,6 +140,13 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
 ]);
 
 function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boolean {
+  // Keep this gate tied to the real OpenClaw CLI entrypoints.
+  //
+  // This module can also land inside shared dist chunks that are imported from
+  // plugin-sdk/library surfaces during smoke tests and plugin loading. If we do
+  // eager warmup for those generic Node script imports, merely importing the
+  // built plugin-sdk can call ensureOpenClawModelsJson(), which cascades into
+  // plugin discovery and breaks dist/source singleton assumptions.
   if (!isLikelyOpenClawCliProcess(argv)) {
     return false;
   }
