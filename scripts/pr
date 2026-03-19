@@ -283,18 +283,28 @@ resolve_head_push_url() {
   return 1
 }
 
-# Push to a fork PR branch via GitHub GraphQL createCommitOnBranch.
-# This uses the same permission model as the GitHub web editor, bypassing
-# the git-protocol 403 that occurs even when maintainer_can_modify is true.
-# Usage: graphql_push_to_fork <owner/repo> <branch> <expected_head_oid>
+# Push to a PR head branch via GitHub GraphQL createCommitOnBranch.
+# This uses the same permission model as the GitHub web editor and produces
+# GitHub-signed commits when executed by GitHub Apps/bots with proper permissions.
+# Can bypass git-protocol permission failures for maintainer/bot access.
+# Usage: graphql_push_to_branch <owner/repo> <branch> <expected_head_oid>
 # Pushes the diff between expected_head_oid and local HEAD as file additions/deletions.
 # File bytes are read from git objects (not the working tree) to avoid
 # symlink/special-file dereference risks from untrusted fork content.
-graphql_push_to_fork() {
+graphql_push_to_branch() {
   local repo_nwo="$1"   # e.g. Oncomatic/openclaw
   local branch="$2"     # e.g. fix/memory-flush-not-executing
   local expected_oid="$3"
-  local max_blob_bytes=$((5 * 1024 * 1024))
+  local max_blob_bytes="${OPENCLAW_PR_GRAPHQL_MAX_BLOB_BYTES:-$((5 * 1024 * 1024))}"
+  local max_allowed_blob_bytes=$((100 * 1024 * 1024))
+  if ! valid_positive_int "$max_blob_bytes"; then
+    echo "Invalid OPENCLAW_PR_GRAPHQL_MAX_BLOB_BYTES=$max_blob_bytes (expected positive integer bytes)." >&2
+    return 1
+  fi
+  if [ "$max_blob_bytes" -gt "$max_allowed_blob_bytes" ]; then
+    echo "Invalid OPENCLAW_PR_GRAPHQL_MAX_BLOB_BYTES=$max_blob_bytes (max ${max_allowed_blob_bytes} bytes)." >&2
+    return 1
+  fi
 
   # Build file changes JSON from the diff between expected_oid and HEAD.
   local additions="[]"
@@ -402,6 +412,195 @@ GRAPHQL
   printf '%s\n' "$new_oid"
 }
 
+# Resolve push mode from environment variable OPENCLAW_PR_PUSH_MODE.
+# auto: try GraphQL first, fallback to git push if GraphQL fails.
+# git: only use git push and skip GraphQL entirely.
+# graphql: require GraphQL and fail if it is unavailable or unsuccessful.
+resolve_pr_push_mode() {
+  local mode="${OPENCLAW_PR_PUSH_MODE:-auto}"
+  case "$mode" in
+    auto|git|graphql)
+      printf '%s\n' "$mode"
+      ;;
+    *)
+      echo "Invalid OPENCLAW_PR_PUSH_MODE=$mode." >&2
+      echo "Use auto (try GraphQL first, then git push), git (skip GraphQL), or graphql (require GraphQL success)." >&2
+      exit 1
+      ;;
+  esac
+}
+
+# GitHub owner names in this context:
+# - 1..39 chars
+# - ASCII alnum plus `_` / `-`
+# - must start/end with alnum so repo identifiers stay well-formed
+valid_github_owner_name() {
+  local name="$1"
+  [ "${#name}" -le 39 ] || return 1
+  [[ "$name" =~ ^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$ ]]
+}
+
+# GitHub repo names in this context:
+# - 1..100 chars
+# - ASCII alnum plus `.`, `_`, `-`
+# - must start/end with alnum so owner/repo stays canonical
+valid_github_repo_name() {
+  local name="$1"
+  [ "${#name}" -le 100 ] || return 1
+  [[ "$name" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$ ]]
+}
+
+valid_raw_diff_oid() {
+  local oid="$1"
+  [[ "$oid" =~ ^0{7,64}$ || "$oid" =~ ^[0-9a-f]{7,64}$ ]]
+}
+
+valid_positive_int() {
+  local value="$1"
+  [[ "$value" =~ ^[1-9][0-9]*$ ]]
+}
+
+valid_git_remote_name() {
+  local name="$1"
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+}
+
+valid_git_branch_name() {
+  local name="$1"
+  git check-ref-format --branch "$name" >/dev/null 2>&1
+}
+
+# Check if GraphQL push is available by verifying required PR metadata exists.
+can_graphql_push_pr_head() {
+  if [ -z "${PR_HEAD_OWNER:-}" ] || [ -z "${PR_HEAD_REPO_NAME:-}" ]; then
+    return 1
+  fi
+
+  valid_github_owner_name "${PR_HEAD_OWNER}" || return 1
+  valid_github_repo_name "${PR_HEAD_REPO_NAME}" || return 1
+  return 0
+}
+
+graphql_push_pr_head() {
+  local pr_head="$1"
+  local lease_sha="$2"
+
+  if [ -z "${PR_HEAD_OWNER:-}" ] || [ -z "${PR_HEAD_REPO_NAME:-}" ]; then
+    echo "GraphQL push unavailable: missing PR head owner/repo metadata." >&2
+    return 1
+  fi
+  if ! can_graphql_push_pr_head; then
+    echo "GraphQL push unavailable: invalid PR head owner/repo metadata." >&2
+    return 1
+  fi
+
+  graphql_push_to_branch "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$pr_head" "$lease_sha"
+}
+
+graphql_push_preflight() {
+  local expected_oid="$1"
+  local meta path
+  local saw_changes=false
+
+  while IFS= read -r -d '' meta && IFS= read -r -d '' path; do
+    saw_changes=true
+    meta="${meta#:}"
+
+    # `git diff --raw -z` emits metadata and path as separate NUL-delimited
+    # records, so path whitespace never participates in metadata parsing here.
+    local old_mode new_mode old_oid new_oid status remainder
+    read -r old_mode new_mode old_oid new_oid status remainder <<<"$meta" || {
+      echo "Failed to parse git diff metadata: $meta" >&2
+      return 1
+    }
+    if [ -n "${remainder:-}" ] || [ -z "$old_mode" ] || [ -z "$new_mode" ] || [ -z "$old_oid" ] || [ -z "$new_oid" ] || [ -z "$status" ]; then
+      echo "Unexpected git diff metadata: $meta" >&2
+      return 1
+    fi
+    if ! valid_raw_diff_oid "$old_oid"; then
+      echo "Invalid old OID in git diff metadata: $old_oid" >&2
+      return 1
+    fi
+    if ! valid_raw_diff_oid "$new_oid"; then
+      echo "Invalid new OID in git diff metadata: $new_oid" >&2
+      return 1
+    fi
+
+    # createCommitOnBranch only supports regular blob additions/deletions, so
+    # git object kinds or mode transitions that require git-tree semantics stay
+    # on the git-push path instead.
+    if [ "$new_mode" = "160000" ]; then
+      echo "GraphQL push unsupported for submodule path $path." >&2
+      return 1
+    fi
+
+    if [ "$new_mode" = "120000" ]; then
+      echo "GraphQL push unsupported for symlink path $path." >&2
+      return 1
+    fi
+
+    if [ "$status" = "T" ]; then
+      echo "GraphQL push unsupported for type change $path ($old_mode -> $new_mode)." >&2
+      return 1
+    fi
+
+    if [ "$old_mode" != "$new_mode" ] && [ "$old_mode" != "000000" ] && [ "$new_mode" != "000000" ]; then
+      echo "GraphQL push unsupported for mode change $path ($old_mode -> $new_mode)." >&2
+      return 1
+    fi
+
+    if [ "$new_mode" = "100755" ]; then
+      echo "GraphQL push unsupported for executable file operation $path." >&2
+      return 1
+    fi
+  done < <(git diff --raw --no-renames -z "$expected_oid" HEAD)
+
+  if [ "$saw_changes" != true ]; then
+    echo "GraphQL push unavailable: no file changes to represent with createCommitOnBranch." >&2
+    return 2
+  fi
+
+  return 0
+}
+
+attempt_graphql_push_pr_head() {
+  local pr_head="$1"
+  local lease_sha="$2"
+  GRAPHQL_PUSH_LAST_FAILURE_KIND=""
+  GRAPHQL_PUSH_LAST_OID=""
+
+  local preflight_status=0
+  graphql_push_preflight "$lease_sha" || preflight_status=$?
+  if [ "$preflight_status" -ne 0 ]; then
+    if [ "$preflight_status" -eq 2 ]; then
+      GRAPHQL_PUSH_LAST_FAILURE_KIND="not-applicable"
+    else
+      GRAPHQL_PUSH_LAST_FAILURE_KIND="deterministic"
+    fi
+    return "$preflight_status"
+  fi
+
+  local graphql_oid
+  graphql_oid=$(graphql_push_pr_head "$pr_head" "$lease_sha") || {
+    GRAPHQL_PUSH_LAST_FAILURE_KIND="transient"
+    return 1
+  }
+  if [ "$graphql_oid" = "$lease_sha" ]; then
+    GRAPHQL_PUSH_LAST_FAILURE_KIND="transient"
+    echo "GraphQL push returned unchanged PR head SHA: $graphql_oid (expected to advance from $lease_sha)." >&2
+    return 1
+  fi
+
+  if ! sync_current_branch_to_remote_pr_head prhead "$pr_head" "$graphql_oid"; then
+    GRAPHQL_PUSH_LAST_FAILURE_KIND="transient"
+    echo "GraphQL push succeeded but local prep branch sync failed." >&2
+    return 1
+  fi
+
+  GRAPHQL_PUSH_LAST_OID="$graphql_oid"
+  return 0
+}
+
 # Resolve HTTPS fallback URL for prhead push (used if SSH fails).
 resolve_head_push_url_https() {
   # shellcheck disable=SC1091
@@ -474,6 +673,88 @@ resolve_prhead_remote_sha() {
   printf '%s\n' "$remote_sha"
 }
 
+sync_current_branch_to_remote_pr_head() {
+  local remote_name="$1"
+  local remote_branch="$2"
+  local expected_sha="$3"
+  local max_attempts="${OPENCLAW_PR_SYNC_MAX_ATTEMPTS:-3}"
+  local attempt
+
+  if ! valid_positive_int "$max_attempts"; then
+    echo "Invalid OPENCLAW_PR_SYNC_MAX_ATTEMPTS=$max_attempts (expected positive integer)." >&2
+    return 1
+  fi
+  if ! valid_git_remote_name "$remote_name"; then
+    echo "Invalid git remote name for PR head sync: $remote_name" >&2
+    return 1
+  fi
+  if ! valid_git_branch_name "$remote_branch"; then
+    echo "Invalid git branch name for PR head sync: $remote_branch" >&2
+    return 1
+  fi
+
+  local current_branch
+  current_branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+  if [ -z "$current_branch" ]; then
+    echo "Current HEAD is detached; cannot sync local branch to remote PR head." >&2
+    return 1
+  fi
+
+  local fetched_sha=""
+  for attempt in $(seq 1 "$max_attempts"); do
+    git fetch "$remote_name" "refs/heads/$remote_branch" || return 1
+    fetched_sha=$(git rev-parse FETCH_HEAD) || return 1
+    echo "Fetch attempt $attempt/$max_attempts: expected=$expected_sha fetched=$fetched_sha" >&2
+    if [ "$fetched_sha" = "$expected_sha" ]; then
+      break
+    fi
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      sleep "$attempt"
+    fi
+  done
+  if [ "$fetched_sha" != "$expected_sha" ]; then
+    echo "Fetched PR head SHA mismatch after GraphQL push. expected=$expected_sha fetched=$fetched_sha" >&2
+    return 1
+  fi
+
+  # Tree equality is sufficient here: the goal is to ensure the fetched commit
+  # materializes the same checkout contents as the local prep branch, not to
+  # require identical commit metadata between local git and GitHub-created commits.
+  local local_tree_sha
+  local_tree_sha=$(git rev-parse HEAD^{tree})
+  local fetched_tree_sha
+  fetched_tree_sha=$(git rev-parse "${fetched_sha}^{tree}")
+  if [ "$local_tree_sha" != "$fetched_tree_sha" ]; then
+    echo "Fetched PR head tree differs from local prep branch tree after GraphQL push." >&2
+    echo "Local tree: $local_tree_sha" >&2
+    echo "Fetched tree: $fetched_tree_sha" >&2
+    return 1
+  fi
+
+  git update-ref "refs/heads/$current_branch" "$fetched_sha" || return 1
+  git read-tree --reset -u "$fetched_sha" || return 1
+}
+
+graphql_retry_allowed() {
+  local push_mode="$1"
+  local graphql_push_attempted="$2"
+  local graphql_failure_kind="${3:-}"
+
+  if [ "$push_mode" = "git" ]; then
+    echo "GraphQL retry blocked: push mode is git." >&2
+    return 1
+  fi
+
+  if [ "$graphql_push_attempted" != true ]; then
+    return 0
+  fi
+
+  if [ "$graphql_failure_kind" != "transient" ]; then
+    echo "GraphQL retry blocked: prior failure kind was ${graphql_failure_kind:-unknown}." >&2
+  fi
+  [ "$graphql_failure_kind" = "transient" ]
+}
+
 run_prepare_push_retry_gates() {
   local docs_only="${1:-false}"
 
@@ -508,46 +789,90 @@ push_prep_head_to_pr_branch() {
       lease_sha="$remote_sha"
     fi
     pushed_from_sha="$lease_sha"
-    local push_output
-    if ! push_output=$(
-      git push --force-with-lease=refs/heads/$pr_head:$lease_sha prhead HEAD:$pr_head 2>&1
-    ); then
-      echo "Push failed: $push_output"
-
-      if printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)'; then
-        echo "Permission denied on git push; trying GraphQL createCommitOnBranch fallback..."
-        if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
-          local graphql_oid
-          graphql_oid=$(graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$pr_head" "$lease_sha")
-          prep_head_sha="$graphql_oid"
+    local push_mode
+    local graphql_push_attempted=false
+    local graphql_push_succeeded=false
+    local graphql_failure_kind=""
+    push_mode=$(resolve_pr_push_mode)
+    if [ "$push_mode" != "git" ]; then
+      if can_graphql_push_pr_head; then
+        echo "Trying GraphQL createCommitOnBranch push..."
+        graphql_push_attempted=true
+        if attempt_graphql_push_pr_head "$pr_head" "$lease_sha"; then
+          prep_head_sha="$GRAPHQL_PUSH_LAST_OID"
+          graphql_push_succeeded=true
         else
-          echo "Git push permission denied and no fork owner/repo info for GraphQL fallback."
-          exit 1
+          local graphql_status=$?
+          graphql_failure_kind="${GRAPHQL_PUSH_LAST_FAILURE_KIND:-}"
+          echo "GraphQL push failed with status $graphql_status." >&2
+          if [ "$push_mode" = "graphql" ]; then
+            echo "GraphQL push required and failed."
+            exit "$graphql_status"
+          fi
+          echo "GraphQL push failed; falling back to git push."
         fi
-      else
-        echo "Lease push failed, retrying once with fresh PR head..."
-        lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
-        pushed_from_sha="$lease_sha"
+      elif [ "$push_mode" = "graphql" ]; then
+        echo "GraphQL push required but PR head owner/repo metadata is missing."
+        exit 1
+      fi
+    fi
 
-        if [ "$rerun_gates_on_lease_retry" = "true" ]; then
-          git fetch origin "pull/$pr/head:pr-$pr-latest" --force
-          git rebase "pr-$pr-latest"
-          prep_head_sha=$(git rev-parse HEAD)
-          run_prepare_push_retry_gates "$docs_only"
-        fi
+    if [ "$graphql_push_succeeded" != true ]; then
+      local push_output
+      if ! push_output=$(
+        git push --force-with-lease=refs/heads/$pr_head:$lease_sha prhead HEAD:$pr_head 2>&1
+      ); then
+        echo "Push failed: $push_output"
 
-        if ! push_output=$(
-          git push --force-with-lease=refs/heads/$pr_head:$lease_sha prhead HEAD:$pr_head 2>&1
-        ); then
-          echo "Retry push failed: $push_output"
-          if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
-            echo "Retry failed; trying GraphQL createCommitOnBranch fallback..."
-            local graphql_oid
-            graphql_oid=$(graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$pr_head" "$lease_sha")
-            prep_head_sha="$graphql_oid"
-          else
-            echo "Git push failed and no fork owner/repo info for GraphQL fallback."
+        if printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)'; then
+          echo "Permission denied on git push; trying GraphQL createCommitOnBranch fallback..."
+          if ! graphql_retry_allowed "$push_mode" "$graphql_push_attempted" "$graphql_failure_kind"; then
+            echo "GraphQL was already attempted earlier in this push cycle; no fallback available."
             exit 1
+          fi
+          if ! can_graphql_push_pr_head; then
+            echo "GraphQL fallback unavailable: missing or invalid PR head owner/repo metadata."
+            exit 1
+          fi
+          graphql_push_attempted=true
+          if attempt_graphql_push_pr_head "$pr_head" "$lease_sha"; then
+            prep_head_sha="$GRAPHQL_PUSH_LAST_OID"
+          else
+            echo "Git push permission denied and GraphQL fallback failed."
+            exit 1
+          fi
+        else
+          echo "Lease push failed, retrying once with fresh PR head..."
+          lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+          pushed_from_sha="$lease_sha"
+
+          if [ "$rerun_gates_on_lease_retry" = "true" ]; then
+            git fetch origin "pull/$pr/head:pr-$pr-latest" --force
+            git rebase "pr-$pr-latest"
+            prep_head_sha=$(git rev-parse HEAD)
+            run_prepare_push_retry_gates "$docs_only"
+          fi
+
+          if ! push_output=$(
+            git push --force-with-lease=refs/heads/$pr_head:$lease_sha prhead HEAD:$pr_head 2>&1
+          ); then
+            echo "Retry push failed: $push_output"
+            echo "Retry failed; trying GraphQL createCommitOnBranch fallback..."
+            if ! graphql_retry_allowed "$push_mode" "$graphql_push_attempted" "$graphql_failure_kind"; then
+              echo "GraphQL was already attempted earlier in this push cycle; no fallback available."
+              exit 1
+            fi
+            if ! can_graphql_push_pr_head; then
+              echo "GraphQL fallback unavailable: missing or invalid PR head owner/repo metadata."
+              exit 1
+            fi
+            graphql_push_attempted=true
+            if attempt_graphql_push_pr_head "$pr_head" "$lease_sha"; then
+              prep_head_sha="$GRAPHQL_PUSH_LAST_OID"
+            else
+              echo "Git push failed and GraphQL fallback failed."
+              exit 1
+            fi
           fi
         fi
       fi
