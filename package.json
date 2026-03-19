@@ -241,6 +241,10 @@
       "types": "./dist/plugin-sdk/imessage.d.ts",
       "default": "./dist/plugin-sdk/imessage.js"
     },
+    "./plugin-sdk/imessage-core": {
+      "types": "./dist/plugin-sdk/imessage-core.d.ts",
+      "default": "./dist/plugin-sdk/imessage-core.js"
+    },
     "./plugin-sdk/open-prose": {
       "types": "./dist/plugin-sdk/open-prose.d.ts",
       "default": "./dist/plugin-sdk/open-prose.js"
