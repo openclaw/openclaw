@@ -7,8 +7,8 @@ import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
-import type { MessagePollResult, MessageSendResult } from "./message.js";
-import { sendMessage, sendPoll } from "./message.js";
+import type { MessageLocationResult, MessagePollResult, MessageSendResult } from "./message.js";
+import { sendLocation, sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 import { extractToolPayload } from "./tool-payload.js";
 
@@ -45,7 +45,7 @@ type PluginHandledResult = {
 
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
-  action: "send" | "poll";
+  action: "send" | "poll" | "location";
   onHandled?: () => Promise<void> | void;
 }): Promise<PluginHandledResult | null> {
   if (params.ctx.dryRun) {
@@ -198,5 +198,47 @@ export async function executePollAction(params: {
     handledBy: "core",
     payload: result,
     pollResult: result,
+  };
+}
+
+export async function executeLocationAction(params: {
+  ctx: OutboundSendContext;
+  to: string;
+  latitude: number;
+  longitude: number;
+  name?: string;
+  address?: string;
+}): Promise<{
+  handledBy: "plugin" | "core";
+  payload: unknown;
+  toolResult?: AgentToolResult<unknown>;
+  locationResult?: MessageLocationResult;
+}> {
+  throwIfAborted(params.ctx.abortSignal);
+  const pluginHandled = await tryHandleWithPluginAction({
+    ctx: params.ctx,
+    action: "location",
+  });
+  if (pluginHandled) {
+    return pluginHandled;
+  }
+
+  const result: MessageLocationResult = await sendLocation({
+    cfg: params.ctx.cfg,
+    to: params.to,
+    latitude: params.latitude,
+    longitude: params.longitude,
+    name: params.name,
+    address: params.address,
+    channel: params.ctx.channel,
+    accountId: params.ctx.accountId ?? undefined,
+    dryRun: params.ctx.dryRun,
+    gateway: params.ctx.gateway,
+  });
+
+  return {
+    handledBy: "core",
+    payload: result,
+    locationResult: result,
   };
 }

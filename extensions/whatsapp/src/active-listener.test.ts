@@ -22,6 +22,7 @@ describe("active WhatsApp listener singleton", () => {
       sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
       sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
       sendReaction: vi.fn(async () => {}),
+      sendLocation: vi.fn(async () => ({ messageId: "loc-1" })),
       sendComposingTo: vi.fn(async () => {}),
     };
 

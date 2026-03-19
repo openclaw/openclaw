@@ -360,3 +360,90 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     result,
   });
 }
+
+type MessageLocationParams = {
+  to: string;
+  latitude: number;
+  longitude: number;
+  name?: string;
+  address?: string;
+  accuracyInMeters?: number;
+  channel?: string;
+  accountId?: string;
+  dryRun?: boolean;
+  cfg?: OpenClawConfig;
+  gateway?: MessageGatewayOptions;
+};
+
+export type MessageLocationResult = {
+  channel: string;
+  to: string;
+  latitude: number;
+  longitude: number;
+  name?: string;
+  address?: string;
+  via: "gateway";
+  result?: {
+    messageId: string;
+    toJid?: string;
+    channelId?: string;
+    conversationId?: string;
+  };
+  dryRun?: boolean;
+};
+
+export async function sendLocation(params: MessageLocationParams): Promise<MessageLocationResult> {
+  const cfg = params.cfg ?? loadConfig();
+  const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
+
+  const plugin = resolveRequiredPlugin(channel, cfg);
+  const outbound = plugin?.outbound;
+  if (!outbound?.sendLocation) {
+    throw new Error(`Unsupported location channel: ${channel}`);
+  }
+
+  if (params.dryRun) {
+    return {
+      channel,
+      to: params.to,
+      latitude: params.latitude,
+      longitude: params.longitude,
+      name: params.name,
+      address: params.address,
+      via: "gateway",
+      dryRun: true,
+    };
+  }
+
+  const result = await callMessageGateway<{
+    messageId: string;
+    toJid?: string;
+    channelId?: string;
+    conversationId?: string;
+  }>({
+    gateway: params.gateway,
+    method: "location",
+    params: {
+      to: params.to,
+      latitude: params.latitude,
+      longitude: params.longitude,
+      name: params.name,
+      address: params.address,
+      accuracyInMeters: params.accuracyInMeters,
+      channel,
+      accountId: params.accountId,
+      idempotencyKey: randomIdempotencyKey(),
+    },
+  });
+
+  return {
+    channel,
+    to: params.to,
+    latitude: params.latitude,
+    longitude: params.longitude,
+    name: params.name,
+    address: params.address,
+    via: "gateway",
+    result,
+  };
+}

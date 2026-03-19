@@ -24,6 +24,12 @@ export type ActiveWebListener = {
     fromMe: boolean,
     participant?: string,
   ) => Promise<void>;
+  sendLocation: (
+    to: string,
+    latitude: number,
+    longitude: number,
+    options?: { name?: string; address?: string; accuracyInMeters?: number },
+  ) => Promise<{ messageId: string }>;
   sendComposingTo: (to: string) => Promise<void>;
   close?: () => Promise<void>;
 };

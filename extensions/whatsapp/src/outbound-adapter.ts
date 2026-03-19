@@ -9,7 +9,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppOutboundTarget } from "./runtime-api.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
+import { sendLocationWhatsApp, sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
 function trimLeadingWhitespace(text: string | undefined): string {
   return text?.trimStart() ?? "";
@@ -88,4 +88,23 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
         cfg,
       }),
   }),
+  sendLocation: async ({
+    cfg,
+    to,
+    latitude,
+    longitude,
+    name,
+    address,
+    accuracyInMeters,
+    accountId,
+  }) =>
+    await sendLocationWhatsApp(
+      to,
+      { latitude, longitude, name, address, accuracyInMeters },
+      {
+        verbose: shouldLogVerbose(),
+        accountId: accountId ?? undefined,
+        cfg,
+      },
+    ),
 };

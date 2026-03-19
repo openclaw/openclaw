@@ -122,6 +122,18 @@ function buildSendSchema(options: { includeInteractive: boolean }) {
         description: "Send image/GIF as document to avoid Telegram compression (Telegram only).",
       }),
     ),
+    latitude: Type.Optional(
+      Type.Number({ description: "Latitude for location messages (-90 to 90)." }),
+    ),
+    longitude: Type.Optional(
+      Type.Number({ description: "Longitude for location messages (-180 to 180)." }),
+    ),
+    locationName: Type.Optional(
+      Type.String({ description: "Place name shown on the location pin." }),
+    ),
+    locationAddress: Type.Optional(
+      Type.String({ description: "Address text shown below the location pin." }),
+    ),
     interactive: Type.Optional(interactiveMessageSchema),
   };
   if (!options.includeInteractive) {

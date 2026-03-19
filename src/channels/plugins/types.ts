@@ -63,6 +63,8 @@ export type {
   ChannelMeta,
   ChannelMessageToolSchemaContribution,
   ChannelOutboundTargetMode,
+  ChannelLocationContext,
+  ChannelLocationResult,
   ChannelPollContext,
   ChannelPollResult,
   ChannelSecurityContext,
