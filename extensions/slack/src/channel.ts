@@ -418,6 +418,17 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     targetResolver: {
       looksLikeId: looksLikeSlackTargetId,
       hint: "<channelId|user:ID|channel:ID>",
+      resolveTarget: async ({ input }) => {
+        const parsed = parseSlackExplicitTarget(input);
+        if (!parsed) {
+          return null;
+        }
+        return {
+          to: parsed.to,
+          kind: parsed.chatType === "direct" ? "user" : "group",
+          source: "normalized",
+        };
+      },
     },
   },
   directory: createChannelDirectoryAdapter({

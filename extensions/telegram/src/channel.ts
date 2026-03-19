@@ -369,6 +369,24 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     normalizeTarget: normalizeTelegramMessagingTarget,
     parseExplicitTarget: ({ raw }) => parseTelegramExplicitTarget(raw),
     inferTargetChatType: ({ to }) => parseTelegramExplicitTarget(to).chatType,
+    formatTargetDisplay: ({ target, display, kind }) => {
+      const formatted = display?.trim();
+      if (formatted) {
+        return formatted;
+      }
+      const trimmedTarget = target.trim();
+      if (!trimmedTarget) {
+        return trimmedTarget;
+      }
+      const withoutProvider = trimmedTarget.replace(/^(telegram|tg):/i, "");
+      if (kind === "user" || /^user:/i.test(withoutProvider)) {
+        return `@${withoutProvider.replace(/^user:/i, "")}`;
+      }
+      if (/^channel:/i.test(withoutProvider)) {
+        return `#${withoutProvider.replace(/^channel:/i, "")}`;
+      }
+      return withoutProvider;
+    },
     resolveOutboundSessionRoute: (params) => resolveTelegramOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: looksLikeTelegramTargetId,
