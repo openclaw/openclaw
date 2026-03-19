@@ -134,6 +134,8 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /outbound not configured for channel/i,
 ];
 
+const STALE_CRON_DELIVERY_MAX_AGE_MS = 3 * 60 * 60_000;
+
 type CompletedDirectCronDelivery = {
   ts: number;
   results: OutboundDeliveryResult[];
@@ -172,6 +174,23 @@ function pruneCompletedDirectCronDeliveries(now: number) {
     }
     COMPLETED_DIRECT_CRON_DELIVERIES.delete(oldest[0]);
   }
+}
+
+function resolveCronDeliveryScheduledAtMs(params: { job: CronJob; runStartedAt: number }): number {
+  const scheduledAt = params.job.state?.nextRunAtMs;
+  return typeof scheduledAt === "number" && Number.isFinite(scheduledAt)
+    ? scheduledAt
+    : params.runStartedAt;
+}
+
+function isStaleCronDelivery(params: {
+  job: CronJob;
+  runStartedAt: number;
+  nowMs?: number;
+}): boolean {
+  const nowMs = params.nowMs ?? Date.now();
+  const scheduledAtMs = resolveCronDeliveryScheduledAtMs(params);
+  return nowMs - scheduledAtMs > STALE_CRON_DELIVERY_MAX_AGE_MS;
 }
 
 function rememberCompletedDirectCronDelivery(
@@ -328,6 +347,30 @@ export async function dispatchCronDelivery(
           status: "error",
           error: params.abortReason(),
           deliveryAttempted,
+          ...params.telemetry,
+        });
+      }
+      if (
+        params.deliveryRequested &&
+        isStaleCronDelivery({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        })
+      ) {
+        deliveryAttempted = true;
+        const scheduledAtMs = resolveCronDeliveryScheduledAtMs({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        });
+        logWarn(
+          `[cron:${params.job.id}] skipping stale delivery scheduled at ${new Date(scheduledAtMs).toISOString()}, age ${Math.round((Date.now() - scheduledAtMs) / 60_000)}m`,
+        );
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          deliveryAttempted,
+          delivered: false,
           ...params.telemetry,
         });
       }
