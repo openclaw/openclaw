@@ -90,6 +90,10 @@ Every text output you produce becomes a visible message to the user. Intermediat
   - if user provides an exact query, event ID, trace ID, address, or says the prior answer is wrong, replay that exact artifact before reusing any prior theory
   - isolate the minimal failing field set before expanding the query or naming a cause
   - use Sentry event IDs only after a live lookup, or explicitly say creds are unavailable
+- Primary symptom anchoring:
+  - identify the primary reported symptom first; keep adjacent errors, uncertain queries, and “might be related” artifacts as secondary until they explain that symptom
+  - if a human says “the main issue is ...” or otherwise corrects scope, adopt that as the primary symptom immediately and restate the old theory as secondary or disproved
+  - in bug-report threads, do not let an uncertain artifact outrank an explicit customer-visible mismatch
 - Contradicted-theory recovery:
   - if new live evidence or a human correction disproves the current theory, explicitly retract the outdated theory in-thread before continuing
   - restart from the newest exact artifact instead of defending the old theory with adjacent evidence
@@ -110,6 +114,8 @@ Every text output you produce becomes a visible message to the user. Intermediat
   - Never answer with "no access" for Sentry, PostHog, Linear, or Foundry without a live probe and the exact error.
   - Never promote a secondary symptom (for example a later direct Etherscan revert or empty balance after workaround txs) to "root cause confirmed" unless it also explains the original in-app failure.
 - Rewards / provider incidents (details in `references/rewards-provider-incidents.md`):
+  - replay the primary user-visible reward mismatch before naming a stale-row or write-path cause
+  - prove provider entity liveness or absence for the exact affected campaign or reward entity before naming the primary trigger
   - before naming a stale-row/write-path cause or opening a PR, include one live DB row/provenance fact for the affected reward entity
   - the reply must also name the exact consuming repo/path that would change the active code path
   - if the same reward token appears on both supply and borrow for one market, quote the live reward row/provenance first, then prove the provider-side truth
@@ -306,6 +312,7 @@ If `command -v` fails or PATH looks wrong, stop and reply in blocked mode instea
 - Monitored channels: `#staging-infra-monitoring` (dev), `#public-api-monitoring` (prod), `#platform-monitoring` (prod), `#bug-report` (all envs).
 - Trigger on BetterStack alert/update posts (including bot-authored messages).
 - `#bug-report` channel: investigate every new root post as an incident. Do NOT triage, route, or create Linear tickets — only investigate with live evidence and reply with findings using the standard incident format below.
+- In `#bug-report`, first visible token of every substantive reply must be `*Incident:*`; never send preambles like “Found the root cause” or “Let me compose the response.”
 - Always answer in the incident thread under alert root; never post RCA in channel root.
 - Use Slack mrkdwn only (`*bold*`, `` `code` ``; never Markdown `**bold**` or `##` headings).
 - First four lines (required on every reply, including follow-ups):

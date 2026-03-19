@@ -93,6 +93,9 @@ rewards_provider_has_disproved_theory_signal() {
 
 collect_phase2_rewards_provider_context() {
   rewards_provider_mode=0
+  rewards_provider_live_probe_expected=0
+  primary_symptom_replay=0
+  provider_entity_liveness=0
   db_row_provenance=0
   provider_api_check=0
   provider_side_mismatch=0
@@ -103,6 +106,8 @@ collect_phase2_rewards_provider_context() {
   disproved_theory_expected=0
   same_token_both_sides_expected=0
   rewards_provider_context_note=""
+  primary_symptom_replay_evidence_output=""
+  provider_entity_liveness_evidence_output=""
   db_row_provenance_evidence_output=""
   provider_api_evidence_output=""
   provider_side_mismatch_evidence_output=""
@@ -112,6 +117,7 @@ collect_phase2_rewards_provider_context() {
   disproved_theory_evidence_output=""
 
   local raw_combined combined
+  local primary_symptom_replay_evidence_output_local provider_entity_liveness_evidence_output_local
   local db_row_provenance_evidence_output_local provider_api_evidence_output_local
   local provider_side_mismatch_evidence_output_local artifact_evidence_output_local
   local code_path_evidence_output_local code_path_reconciled_evidence_output_local
@@ -152,9 +158,15 @@ collect_phase2_rewards_provider_context() {
   if [[ -z "$db_row_provenance_evidence_output_local" ]]; then
     db_row_provenance_evidence_output_local="$(
       printf '%s\n' "$raw_combined" \
-        | grep -Eim1 '(market_historical_state_rewards|reward row|supply_apr|borrow_apr|yearly_supply_tokens|yearly_borrow_tokens|asset_id|market_historical_state_id)' \
+        | grep -Eim1 '(market_historical_state_rewards|vault_v2_reward_programs|reward row|program_key|supply_apr|borrow_apr|yearly_supply_tokens|yearly_borrow_tokens|asset_id|market_historical_state_id)' \
         || true
     )"
+  fi
+
+  primary_symptom_replay_evidence_output_local="$(printf '%s' "${primary_symptom_replay_evidence_input:-}" | awk 'NF > 0 { print; exit }')"
+  provider_entity_liveness_evidence_output_local="$(printf '%s' "${provider_entity_liveness_evidence_input:-}" | awk 'NF > 0 { print; exit }')"
+  if [[ -n "$primary_symptom_replay_evidence_output_local" || -n "$provider_entity_liveness_evidence_output_local" ]]; then
+    rewards_provider_live_probe_expected=1
   fi
 
   if [[ -z "$provider_api_evidence_output_local" ]]; then
@@ -198,9 +210,25 @@ collect_phase2_rewards_provider_context() {
     db_row_provenance=1
   fi
 
+  # These gates stay closed until a dedicated live probe records explicit
+  # evidence for the exact user-visible mismatch and provider entity state.
+  if [[ -n "$primary_symptom_replay_evidence_output_local" ]]; then
+    primary_symptom_replay_evidence_output_local="$(rewards_provider_sanitize_signal_line "$primary_symptom_replay_evidence_output_local")"
+    primary_symptom_replay=1
+  elif [[ "$rewards_provider_mode" == "1" && "${DEBUG:-0}" == "1" ]]; then
+    printf 'collect_phase2_rewards_provider_context: primary_symptom_replay missing explicit evidence input; gate remains closed\n' >&2
+  fi
+
   if [[ -n "$provider_api_evidence_output_local" ]]; then
     provider_api_evidence_output_local="$(rewards_provider_sanitize_signal_line "$provider_api_evidence_output_local")"
     provider_api_check=1
+  fi
+
+  if [[ -n "$provider_entity_liveness_evidence_output_local" ]]; then
+    provider_entity_liveness_evidence_output_local="$(rewards_provider_sanitize_signal_line "$provider_entity_liveness_evidence_output_local")"
+    provider_entity_liveness=1
+  elif [[ "$rewards_provider_mode" == "1" && "${DEBUG:-0}" == "1" ]]; then
+    printf 'collect_phase2_rewards_provider_context: provider_entity_liveness missing explicit evidence input; gate remains closed\n' >&2
   fi
 
   if [[ -n "$provider_side_mismatch_evidence_output_local" ]]; then
@@ -240,6 +268,8 @@ collect_phase2_rewards_provider_context() {
     disproved_theory_recorded=1
     disproved_theory_expected=1
   fi
+  primary_symptom_replay_evidence_output="$primary_symptom_replay_evidence_output_local"
+  provider_entity_liveness_evidence_output="$provider_entity_liveness_evidence_output_local"
   db_row_provenance_evidence_output="$db_row_provenance_evidence_output_local"
   provider_api_evidence_output="$provider_api_evidence_output_local"
   provider_side_mismatch_evidence_output="$provider_side_mismatch_evidence_output_local"
@@ -249,6 +279,9 @@ collect_phase2_rewards_provider_context() {
   disproved_theory_evidence_output="$disproved_theory_evidence_output_local"
 
   if [[ "$db_row_provenance" -eq 0 || "$provider_api_check" -eq 0 || "$artifact_check" -eq 0 || "$code_path_check" -eq 0 ]]; then
+    base_evidence_incomplete=1
+  fi
+  if [[ "$rewards_provider_live_probe_expected" -eq 1 && ( "$primary_symptom_replay" -eq 0 || "$provider_entity_liveness" -eq 0 ) ]]; then
     base_evidence_incomplete=1
   fi
   if [[ "$same_token_both_sides_expected" -eq 1 && ( "$provider_side_mismatch" -eq 0 || "$code_path_reconciled" -eq 0 ) ]]; then

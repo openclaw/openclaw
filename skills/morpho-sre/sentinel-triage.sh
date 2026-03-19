@@ -2357,7 +2357,18 @@ collect_phase2_indexer_freshness_context() {
 
 build_phase3_gap_input_file() {
   local target_file="$1"
+  local primary_reported_symptom explains_primary_symptom
+  primary_reported_symptom="$(printf '%s\n' "${rca_result_json:-{}}" | jq -r '.primary_reported_symptom // empty' 2>/dev/null || true)"
+  primary_reported_symptom="$(printf '%s' "$primary_reported_symptom" | tr '\r\n\t' '   ' | tr -s ' ' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | cut -c1-240)"
+  explains_primary_symptom="$(printf '%s\n' "${rca_result_json:-{}}" | jq -r '.explains_primary_symptom // false' 2>/dev/null || true)"
+  explains_primary_symptom="$(printf '%s' "$explains_primary_symptom" | tr '\r\n\t' '   ' | tr -s ' ' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | cut -c1-32)"
+  [[ -n "$explains_primary_symptom" ]] || explains_primary_symptom="false"
+  if [[ -z "$primary_reported_symptom" && "${DEBUG:-0}" == "1" ]]; then
+    printf 'build_phase3_gap_input_file: primary_reported_symptom extraction empty\n' >&2
+  fi
   cat >"$target_file" <<EOF
+primary_reported_symptom=${primary_reported_symptom}
+explains_primary_symptom=${explains_primary_symptom}
 pod_issues=${pod_issue_count:-0}
 deploy_gaps=${deploy_gap_count:-0}
 critical_alerts=${critical_alert_count:-0}
@@ -2388,6 +2399,9 @@ public_surface_split=${public_surface_split:-0}
 direct_rpc_check=${direct_rpc_check:-0}
 job_path_simulation=${job_path_simulation:-0}
 rewards_provider_mode=${rewards_provider_mode:-0}
+rewards_provider_live_probe_expected=${rewards_provider_live_probe_expected:-0}
+primary_symptom_replay=${primary_symptom_replay:-0}
+provider_entity_liveness=${provider_entity_liveness:-0}
 db_row_provenance=${db_row_provenance:-0}
 provider_api_check=${provider_api_check:-0}
 provider_side_mismatch=${provider_side_mismatch:-0}
@@ -2431,7 +2445,7 @@ run_phase3_recollection_loop() {
     gap_json="$(evidence_gaps_assess "$category" "$gap_file" 2>/dev/null || true)"
     current_ms="$(now_ms)"
     elapsed_ms=$((current_ms - start_ms))
-    if ! hypothesis_recollect_should_run "${rca_confidence:-0}" "${gap_json:-{}}" "$attempts" "$elapsed_ms"; then
+    if ! hypothesis_recollect_should_run "${rca_confidence:-0}" "${gap_json:-{}}" "$attempts" "$elapsed_ms" "$category"; then
       evidence_gap_json="${gap_json:-}"
       evidence_gap_status="final"
       return 0
@@ -2440,7 +2454,7 @@ run_phase3_recollection_loop() {
     attempts=$((attempts + 1))
     evidence_gap_json="${gap_json:-}"
     evidence_gap_status="recollecting"
-    collectors="$(hypothesis_recollect_collectors "${gap_json:-{}}" 2>/dev/null || true)"
+    collectors="$(hypothesis_recollect_collectors "${gap_json:-{}}" "$category" 2>/dev/null || true)"
     recollect_note="$(hypothesis_recollect_note "$category" "${gap_json:-{}}" "$attempts" 2>/dev/null || true)"
     recollect_events="${recollect_events:-}${recollect_note}"$'\n'
 
@@ -2479,6 +2493,9 @@ run_phase3_recollection_loop() {
           ;;
         collect_phase2_drift_and_lineage)
           collect_phase2_drift_and_lineage
+          ;;
+        collect_phase2_rewards_provider_context | collect_phase2_rewards_provider_context_if_available)
+          collect_phase2_rewards_provider_context_if_available
           ;;
       esac
     done <<<"$collectors"
@@ -3618,8 +3635,12 @@ if [[ "$incident" -eq 1 && "$HAS_LIB_RCA_LLM" -eq 1 ]] && declare -F run_step_11
       printf 'signal\targocd_critical\t%s\n' "$argocd_critical_count"
       printf 'signal\tcert_critical\t%s\n' "$cert_health_critical_count"
       printf 'signal\taws_critical\t%s\n' "$aws_signal_critical_count"
+      # Keep these section headers in sync with lib-rca-prompt.sh:_rca_extract_bundle_section.
       if [[ -n "${changes_in_window_summary:-}" ]]; then
         printf 'changes_in_window_summary\n%s\n' "$changes_in_window_summary"
+      fi
+      if [[ -n "${BETTERSTACK_CONTEXT:-}" ]]; then
+        printf 'reported_context\n%s\n' "${BETTERSTACK_CONTEXT:-}"
       fi
       if [[ -n "${config_drift_output:-}" ]]; then
         printf 'config_drift\n%s\n' "$config_drift_output"
@@ -3993,6 +4014,9 @@ printf 'pg_statements_signal\t%s\n' "$pg_statements"
 printf 'pg_conflicts_signal\t%s\n' "$pg_conflicts"
 printf 'db_topology_signal\t%s\n' "$db_topology"
 printf 'rewards_provider_mode\t%s\n' "${rewards_provider_mode:-0}"
+printf 'rewards_provider_live_probe_expected\t%s\n' "${rewards_provider_live_probe_expected:-0}"
+printf 'primary_symptom_replay\t%s\n' "${primary_symptom_replay:-0}"
+printf 'provider_entity_liveness\t%s\n' "${provider_entity_liveness:-0}"
 printf 'db_row_provenance\t%s\n' "${db_row_provenance:-0}"
 printf 'provider_api_check\t%s\n' "${provider_api_check:-0}"
 printf 'provider_side_mismatch\t%s\n' "${provider_side_mismatch:-0}"
@@ -4103,6 +4127,9 @@ fi
 
 section "rewards_provider_context"
 printf 'mode\t%s\n' "${rewards_provider_mode:-0}"
+printf 'live_probe_expected\t%s\n' "${rewards_provider_live_probe_expected:-0}"
+printf 'primary_symptom_replay\t%s\n' "${primary_symptom_replay:-0}"
+printf 'provider_entity_liveness\t%s\n' "${provider_entity_liveness:-0}"
 printf 'db_row_provenance\t%s\n' "${db_row_provenance:-0}"
 printf 'provider_api_check\t%s\n' "${provider_api_check:-0}"
 printf 'provider_side_mismatch\t%s\n' "${provider_side_mismatch:-0}"
@@ -4114,6 +4141,12 @@ printf 'disproved_theory_expected\t%s\n' "${disproved_theory_expected:-0}"
 printf 'same_token_both_sides_expected\t%s\n' "${same_token_both_sides_expected:-0}"
 if [[ -n "${rewards_provider_context_note:-}" ]]; then
   printf 'note\t%s\n' "$rewards_provider_context_note"
+fi
+if [[ -n "${primary_symptom_replay_evidence_output:-}" ]]; then
+  printf 'primary_symptom_replay_evidence_output\t%s\n' "$primary_symptom_replay_evidence_output"
+fi
+if [[ -n "${provider_entity_liveness_evidence_output:-}" ]]; then
+  printf 'provider_entity_liveness_evidence_output\t%s\n' "$provider_entity_liveness_evidence_output"
 fi
 if [[ -n "${db_row_provenance_evidence_output:-}" ]]; then
   printf 'db_row_provenance_evidence_output\t%s\n' "$db_row_provenance_evidence_output"

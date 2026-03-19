@@ -8,6 +8,7 @@ hypothesis_recollect_should_run() {
   local gap_json="${2-}"
   local attempts="${3:-0}"
   local elapsed_ms="${4:-0}"
+  local category="${5:-unknown}"
   local missing_critical_count=0
   local collectors=""
   [[ -n "$gap_json" ]] || gap_json='{}'
@@ -33,34 +34,89 @@ hypothesis_recollect_should_run() {
   if (( missing_critical_count == 0 )); then
     return 1
   fi
-  collectors="$(hypothesis_recollect_collectors "$gap_json" 2>/dev/null || true)"
+  collectors="$(hypothesis_recollect_collectors "$gap_json" "$category" 2>/dev/null || true)"
   [[ -n "$collectors" ]]
+}
+
+hypothesis_recollect_collectors_for_category() {
+  local category="${1:-unknown}"
+  case "$category" in
+    bad_deploy)
+      printf '%s\n' step_01_pod_deploy collect_change_window_context collect_phase2_drift_and_lineage
+      ;;
+    config_drift)
+      printf '%s\n' collect_phase2_drift_and_lineage collect_change_window_context
+      ;;
+    resource_exhaustion)
+      printf '%s\n' step_01_pod_deploy step_03_prometheus_trends collect_change_window_context
+      ;;
+    network_connectivity | dependency_failure)
+      printf '%s\n' step_02_events_alerts step_07_aws_resource_signals collect_change_window_context
+      ;;
+    cert_or_secret_expiry)
+      printf '%s\n' step_06_cert_secret_health collect_phase2_drift_and_lineage
+      ;;
+    scaling_issue)
+      printf '%s\n' step_01_pod_deploy step_03_prometheus_trends collect_change_window_context
+      ;;
+    data_issue)
+      printf '%s\n' step_02_events_alerts collect_phase2_db_evidence collect_change_window_context collect_phase2_rewards_provider_context_if_available
+      ;;
+    *)
+      printf '%s\n' collect_change_window_context
+      ;;
+  esac
 }
 
 hypothesis_recollect_collectors() {
   local gap_json="${1-}"
+  local category="${2:-unknown}"
+  local missing_gap collector_lines=""
   [[ -n "$gap_json" ]] || gap_json='{}'
-  printf '%s\n' "$gap_json" \
-    | jq -r '
-        (.missing_critical // [])
-        | map(
-            if . == "pod_issues" or . == "deploy_gaps" then "step_01_pod_deploy"
-            elif . == "critical_alerts" or . == "log_signals" then "step_02_events_alerts"
-            elif . == "prom_critical" then "step_03_prometheus_trends"
-            elif . == "argocd_sync" then "step_04_argocd_sync"
-            elif . == "cert_critical" then "step_06_cert_secret_health"
-            elif . == "aws_critical" then "step_07_aws_resource_signals"
-            elif . == "changes_in_window" then "collect_change_window_context"
-            elif . == "config_drift" or . == "config_lineage" then "collect_phase2_drift_and_lineage"
-            elif . == "db_schema_check" or . == "db_data_check" or . == "pg_internal_check" or . == "replica_lag" or . == "pg_activity" or . == "pg_statements" or . == "pg_conflicts" or . == "db_topology" then "collect_phase2_db_evidence"
-            elif . == "image_revision" then "step_09_revisions"
-            elif . == "ci_signal" then "step_10_ci_signals"
-            else empty
-            end
-          )
-        | unique
-        | .[]
-      ' 2>/dev/null
+
+  while IFS= read -r missing_gap; do
+    [[ -n "$missing_gap" ]] || continue
+    case "$missing_gap" in
+      primary_symptom_unexplained)
+        collector_lines="${collector_lines}$(hypothesis_recollect_collectors_for_category "$category")"$'\n'
+        ;;
+      pod_issues | deploy_gaps)
+        collector_lines="${collector_lines}step_01_pod_deploy"$'\n'
+        ;;
+      critical_alerts | log_signals)
+        collector_lines="${collector_lines}step_02_events_alerts"$'\n'
+        ;;
+      prom_critical)
+        collector_lines="${collector_lines}step_03_prometheus_trends"$'\n'
+        ;;
+      argocd_sync)
+        collector_lines="${collector_lines}step_04_argocd_sync"$'\n'
+        ;;
+      cert_critical)
+        collector_lines="${collector_lines}step_06_cert_secret_health"$'\n'
+        ;;
+      aws_critical)
+        collector_lines="${collector_lines}step_07_aws_resource_signals"$'\n'
+        ;;
+      changes_in_window)
+        collector_lines="${collector_lines}collect_change_window_context"$'\n'
+        ;;
+      config_drift | config_lineage)
+        collector_lines="${collector_lines}collect_phase2_drift_and_lineage"$'\n'
+        ;;
+      db_schema_check | db_data_check | pg_internal_check | replica_lag | pg_activity | pg_statements | pg_conflicts | db_topology)
+        collector_lines="${collector_lines}collect_phase2_db_evidence"$'\n'
+        ;;
+      image_revision)
+        collector_lines="${collector_lines}step_09_revisions"$'\n'
+        ;;
+      ci_signal)
+        collector_lines="${collector_lines}step_10_ci_signals"$'\n'
+        ;;
+    esac
+  done < <(printf '%s\n' "$gap_json" | jq -r '(.missing_critical // [])[]?' 2>/dev/null || true)
+
+  printf '%s' "$collector_lines" | awk 'NF > 0 && !seen[$0]++ { print }'
 }
 
 hypothesis_recollect_note() {

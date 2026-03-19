@@ -414,8 +414,8 @@ _chain_stage_a() {
   local service_ctx="$2"
   _chain_call_llm \
     "A" \
-    "You are an SRE evidence triage agent." \
-    "Evidence:\n${evidence}\n\nService context:\n${service_ctx}\n\nReturn JSON: signals, noise, signal_count." \
+    "You are an SRE evidence triage agent. Extract the primary reported symptom first, keep uncertain clues separate, and note explicit human corrections." \
+    "Evidence:\n${evidence}\n\nService context:\n${service_ctx}\n\nReturn JSON: primary_reported_symptom, secondary_clues, uncertain_clues, explicit_human_corrections, signals, noise, signal_count, explains_primary_symptom." \
     "fast"
 }
 
@@ -425,8 +425,8 @@ _chain_stage_b() {
   local incident_memory="$3"
   _chain_call_llm \
     "B" \
-    "You are an SRE hypothesis generation agent." \
-    "Signals:\n${stage_a}\n\nService context:\n${service_ctx}\n\nIncident memory:\n${incident_memory}\n\nReturn JSON with hypotheses and top_hypothesis_id." \
+    "You are an SRE hypothesis generation agent. Generate hypotheses that explain the primary reported symptom before any secondary clue." \
+    "Signals:\n${stage_a}\n\nService context:\n${service_ctx}\n\nIncident memory:\n${incident_memory}\n\nReturn JSON with hypotheses, top_hypothesis_id, explains_primary_symptom." \
     "fast"
 }
 
@@ -458,8 +458,8 @@ _chain_stage_e() {
   local stage_d="$4"
   _chain_call_llm \
     "E" \
-    "You are an SRE cross-review agent. Validate chain completeness and action safety." \
-    "Evidence triage:\n${stage_a}\n\nHypotheses:\n${stage_b}\n\nCausal chain:\n${stage_c}\n\nAction plan:\n${stage_d}\n\nReturn JSON validated/review_pass/revision_notes." \
+    "You are an SRE cross-review agent. Validate chain completeness, action safety, and whether the final theory actually explains the primary reported symptom." \
+    "Evidence triage:\n${stage_a}\n\nHypotheses:\n${stage_b}\n\nCausal chain:\n${stage_c}\n\nAction plan:\n${stage_d}\n\nReturn JSON validated/review_pass/revision_notes/explains_primary_symptom." \
     "strong"
 }
 
@@ -534,6 +534,21 @@ _chain_assemble_output() {
         else
           {}
         end;
+      def from_stage_a($field; $default):
+        if ($stage_a|type) == "object" then
+          ($stage_a[$field] // $default)
+        else
+          $default
+        end;
+      def norm_bool($v):
+        if $v == true then true
+        elif $v == false or $v == null then false
+        elif ($v|type) == "string" then
+          (($v | ascii_downcase) as $s | ($s == "true" or $s == "yes" or $s == "1"))
+        elif ($v|type) == "number" then
+          ($v != 0)
+        else false
+        end;
 
       (top_hypothesis($stage_b)) as $top
       | {
@@ -552,6 +567,21 @@ _chain_assemble_output() {
               $stage_b.hypotheses
             else
               [fallback_hypothesis]
+            end
+          ),
+          primary_reported_symptom: from_stage_a("primary_reported_symptom"; ""),
+          secondary_clues: from_stage_a("secondary_clues"; []),
+          uncertain_clues: from_stage_a("uncertain_clues"; []),
+          explicit_human_corrections: from_stage_a("explicit_human_corrections"; []),
+          explains_primary_symptom: norm_bool(
+            if ($stage_e|type) == "object" and ($stage_e.explains_primary_symptom != null) then
+              $stage_e.explains_primary_symptom
+            elif ($stage_b|type) == "object" and ($stage_b.explains_primary_symptom != null) then
+              $stage_b.explains_primary_symptom
+            elif ($stage_a|type) == "object" and ($stage_a.explains_primary_symptom != null) then
+              $stage_a.explains_primary_symptom
+            else
+              false
             end
           ),
           rca_confidence: (($top.confidence // 0) | tonumber? // 0),

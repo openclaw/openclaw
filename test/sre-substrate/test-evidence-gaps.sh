@@ -71,6 +71,31 @@ printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["file_truncation_signatur
 printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 51' >/dev/null
 
 cat >"$TMP" <<'EOF'
+critical_alerts=0
+log_signals=0
+db_schema_check=0
+db_data_check=0
+pg_internal_check=0
+incident_memory=0
+changes_in_window=0
+config_lineage=0
+file_truncation_signature=0
+replica_lag=0
+pg_activity=0
+pg_statements=0
+pg_conflicts=0
+db_topology=0
+primary_reported_symptom=Rewards APR shows 0%
+explains_primary_symptom=false
+EOF
+
+OUTPUT="$(evidence_gaps_assess data_issue "$TMP")"
+
+printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '(.missing_critical | index("primary_symptom_unexplained")) != null' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 78' >/dev/null
+
+cat >"$TMP" <<'EOF'
 critical_alerts=1
 log_signals=1
 db_schema_check=1
@@ -270,6 +295,40 @@ printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["artifact_check","code_path_reconciled","disproved_theory_recorded"]' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["file_truncation_signature"]' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 59' >/dev/null
+
+cat >"$TMP" <<'EOF'
+critical_alerts=1
+log_signals=1
+db_schema_check=1
+db_data_check=1
+pg_internal_check=1
+incident_memory=1
+changes_in_window=1
+config_lineage=1
+file_truncation_signature=1
+replica_lag=1
+pg_activity=1
+pg_statements=1
+pg_conflicts=1
+db_topology=1
+rewards_provider_mode=1
+rewards_provider_live_probe_expected=1
+primary_symptom_replay=1
+provider_entity_liveness=0
+db_row_provenance=1
+provider_api_check=1
+artifact_check=1
+code_path_check=1
+same_token_both_sides_expected=0
+disproved_theory_expected=0
+EOF
+
+OUTPUT="$(evidence_gaps_assess data_issue "$TMP")"
+
+printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["provider_entity_liveness"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == []' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 18' >/dev/null
 
 cat >"$TMP" <<'EOF'
 sentry_event_trace=1

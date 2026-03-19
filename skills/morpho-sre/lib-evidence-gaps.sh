@@ -66,11 +66,11 @@ evidence_gaps_assess() {
   local source_file="${2:-/dev/stdin}"
   local manifest_file critical_keys optional_keys
   local single_vault_graphql_keys single_vault_graphql_optional_keys single_vault_graphql_mode
-  local rewards_provider_keys rewards_provider_optional_keys
+  local rewards_provider_keys rewards_provider_optional_keys rewards_provider_live_probe_keys
   local rewards_provider_same_token_keys rewards_provider_reversal_keys
-  local rewards_provider_mode rewards_provider_same_token_required rewards_provider_reversal_required
+  local rewards_provider_mode rewards_provider_live_probe_required rewards_provider_same_token_required rewards_provider_reversal_required
   local total_keys=0 present_keys=0 missing_critical_count=0 missing_optional_count=0
-  local confidence_penalty=0 key value
+  local confidence_penalty=0 confidence_cap=60 key value
   local missing_critical_json missing_optional_json completeness_percent
   local missing_critical_lines="" missing_optional_lines=""
 
@@ -107,6 +107,14 @@ evidence_gaps_assess() {
       printf '%s\n%s\n' "$optional_keys" "$rewards_provider_optional_keys" \
         | awk 'NF > 0 && !seen[$0]++ { print }'
     )"
+    rewards_provider_live_probe_required="$(_evidence_gap_lookup_value "$source_file" "rewards_provider_live_probe_expected")"
+    if _evidence_gap_value_present "${rewards_provider_live_probe_required:-}"; then
+      rewards_provider_live_probe_keys="$(_evidence_gap_section_keys "$manifest_file" rewards_provider_live_probe_critical)"
+      critical_keys="$(
+        printf '%s\n%s\n' "$critical_keys" "$rewards_provider_live_probe_keys" \
+          | awk 'NF > 0 && !seen[$0]++ { print }'
+      )"
+    fi
     rewards_provider_same_token_required="$(_evidence_gap_lookup_value "$source_file" "same_token_both_sides_expected")"
     if _evidence_gap_value_present "${rewards_provider_same_token_required:-}"; then
       rewards_provider_same_token_keys="$(_evidence_gap_section_keys "$manifest_file" rewards_provider_same_token_critical)"
@@ -158,6 +166,20 @@ evidence_gaps_assess() {
   missing_critical_json="$(printf '%s' "$missing_critical_lines" | awk 'NF > 0 { print }' | jq -R . | jq -s .)"
   missing_optional_json="$(printf '%s' "$missing_optional_lines" | awk 'NF > 0 { print }' | jq -R . | jq -s .)"
 
+  if _evidence_gap_value_present "$(_evidence_gap_lookup_value "$source_file" "primary_reported_symptom")"; then
+    if ! _evidence_gap_value_present "$(_evidence_gap_lookup_value "$source_file" "explains_primary_symptom")"; then
+      if missing_critical_json_next="$(printf '%s\n' "$missing_critical_json" | jq -c '. + ["primary_symptom_unexplained"]' 2>/dev/null)"; then
+        missing_critical_json="$missing_critical_json_next"
+        missing_critical_count=$((missing_critical_count + 1))
+        total_keys=$((total_keys + 1))
+        # 78 = default 60 cap + one 18-point critical-gap unit for the synthetic anchor check.
+        confidence_cap=78
+      elif [[ "${DEBUG:-0}" == "1" ]]; then
+        printf 'evidence_gaps_assess: primary_symptom_unexplained jq append failed\n' >&2
+      fi
+    fi
+  fi
+
   if [[ "$total_keys" -gt 0 ]]; then
     completeness_percent="$(awk -v present="$present_keys" -v total="$total_keys" 'BEGIN { printf "%.1f", (present * 100.0) / total }')"
   else
@@ -165,8 +187,8 @@ evidence_gaps_assess() {
   fi
 
   confidence_penalty=$((missing_critical_count * 18 + missing_optional_count * 5))
-  if [[ "$confidence_penalty" -gt 60 ]]; then
-    confidence_penalty=60
+  if [[ "$confidence_penalty" -gt "$confidence_cap" ]]; then
+    confidence_penalty="$confidence_cap"
   fi
 
   jq -cn \

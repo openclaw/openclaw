@@ -76,6 +76,7 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - Reply in the same incident thread (never channel root).
 - Continue answering operator follow-ups in that incident thread after the first reply; rerun live checks instead of going silent.
 - Keep response tight (8-12 lines). Prioritize direct evidence + next action.
+- In `#bug-report` and incident threads, the first visible token of every substantive reply must be `*Incident:*`; never emit preambles such as `Found the root cause` or `Let me compose the response`.
 - Use Slack mrkdwn only:
   - bold = `*text*`, inline code = `` `text` ``
   - never use Markdown bold `**text**` or Markdown headings
@@ -94,14 +95,18 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - Keep unrelated warnings under `*Also watching:*`.
 - Never lead with routing hints, fingerprint changes, raw section names, signal counts, or `primary/supporting` namespace jargon.
 - Never stream drafts, progress chatter, tool JSON, exec-approval warnings, or command-construction failures into any Slack thread.
-- Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.
-- Content gate: before posting any message to an incident thread, verify it contains at least one `*Evidence:*` fact or `*Mitigation:*` action. If it doesn't, do not send it — buffer all content into a single reply. Exception: the single non-incident acknowledgment with ETA/next step allowed by the progress-chatter rule above is exempt from this gate.
+- Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread.
+- Content gate: before posting any message to an incident thread, verify it starts with the 4-line header and contains at least one `*Evidence:*` fact or `*Mitigation:*` action. If it doesn't, do not send it — buffer all content into a single reply.
 - For recurring indexer freshness alerts on the same workload, answer as one ongoing RCA instead of a fresh transient update.
 - Keep the same 4-line incident header on every follow-up update, not just the first reply in a thread.
 - If new evidence disproves an earlier theory, retract that theory explicitly in the next update and continue from the new evidence.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
 - Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run `gh repo view <owner/repo>` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement.
+- Primary symptom anchoring:
+  - identify the primary reported symptom first; keep adjacent errors, uncertain artifacts, and “might be related” clues as secondary until they explain that symptom
+  - if a human says “the main issue is ...” or otherwise corrects scope, adopt that as the primary symptom immediately and restate the old theory as secondary or disproved
 - For one-address GraphQL / `sentryEventId` / `traceId` incidents, replay the exact query, compare one healthy same-chain control, compare `vaultV2ByAddress` / `vaultV2s` / `vaultV2transactions`, and verify direct RPC before naming a chain-wide cause.
+- For rewards/provider incidents, replay the primary user-visible mismatch and prove provider entity liveness or absence for the exact campaign before naming the primary trigger.
 - For rewards/provider incidents, do not name a stale-row/write-path cause or open a PR without one live DB row/provenance fact and one exact consuming code-path fact.
 - For rewards/provider incidents where the same reward token appears on both supply and borrow, prove the provider-side truth for that token, quote the live reward row/provenance, and reconcile `_fetchMerklSingleRates()` / the merged reward row before stale-row theories or PRs.
 - Until dedicated collectors exist, satisfy those rewards/provider gates only from explicit live probe outputs; if those outputs are absent, keep the gate closed and say so.

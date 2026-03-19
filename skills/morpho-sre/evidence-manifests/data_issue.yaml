@@ -25,11 +25,15 @@ single_vault_graphql_optional:
   - db_row_provenance
   - job_path_simulation
 rewards_provider_critical:
-  # Always required for rewards/provider incidents.
+  # Always required for rewards/provider incidents with current runtime evidence.
   - db_row_provenance
   - provider_api_check
   - artifact_check
   - code_path_check
+rewards_provider_live_probe_critical:
+  # Only required once dedicated live-probe evidence is explicitly expected.
+  - primary_symptom_replay
+  - provider_entity_liveness
 rewards_provider_same_token_critical:
   # Only required when one reward token appears on both supply and borrow.
   - provider_side_mismatch

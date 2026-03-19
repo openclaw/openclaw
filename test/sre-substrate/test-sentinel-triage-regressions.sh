@@ -10,7 +10,7 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 PARTIAL_SCRIPT="$TMP_ROOT/sentinel-triage.partial.sh"
 END_LINE="$(grep -n '^emit_abort_output' "$TARGET_SCRIPT" | head -1 | cut -d: -f1)"
 DB_EVIDENCE_START_LINE="$(grep -n '^db_evidence_should_collect' "$TARGET_SCRIPT" | head -1 | cut -d: -f1)"
-DB_EVIDENCE_END_LINE="$(grep -n '^build_phase3_gap_input_file' "$TARGET_SCRIPT" | head -1 | cut -d: -f1)"
+DB_EVIDENCE_END_LINE="$(grep -n '^run_phase3_recollection_loop' "$TARGET_SCRIPT" | head -1 | cut -d: -f1)"
 test -n "$END_LINE"
 test -n "$DB_EVIDENCE_START_LINE"
 test -n "$DB_EVIDENCE_END_LINE"
@@ -152,6 +152,21 @@ test "$(normalize_json_number_or 'oops' 0)" = '0'
 test "$(normalize_json_number_or '' 0)" = '0'
 test "$(normalize_json_number_or '-3' 0)" = '-3'
 
+gap_file="$TMP_ROOT/phase3-gap-input.txt"
+gap_stderr="$TMP_ROOT/phase3-gap-input.stderr"
+rca_result_json='{"primary_reported_symptom":"Rewards APR shows 0%\nsecondary\tcontext","explains_primary_symptom":true}'
+build_phase3_gap_input_file "$gap_file" 2>"$gap_stderr"
+rg '^primary_reported_symptom=Rewards APR shows 0% secondary context$' "$gap_file" >/dev/null
+rg '^explains_primary_symptom=true$' "$gap_file" >/dev/null
+
+DEBUG=1
+rca_result_json='not-json'
+build_phase3_gap_input_file "$gap_file" 2>"$gap_stderr"
+rg 'primary_reported_symptom extraction empty' "$gap_stderr" >/dev/null
+rg '^primary_reported_symptom=$' "$gap_file" >/dev/null
+rg '^explains_primary_symptom=false$' "$gap_file" >/dev/null
+DEBUG=0
+
 BETTERSTACK_CONTEXT='Merkl reward campaign mismatch with phantom supplyApr'
 alert_rows=""
 event_rows=""
@@ -192,15 +207,35 @@ test "${provider_api_check:-0}" = '0'
 BETTERSTACK_CONTEXT='GET /v4/opportunities/campaigns?chainId=8453 and apps/api/src/rewards/read-market-rewards.ts:41'
 artifact_evidence_input=""
 provider_api_evidence_input=""
+primary_symptom_replay_evidence_input=""
+provider_entity_liveness_evidence_input=""
 code_path_evidence_input=""
 provider_side_mismatch_evidence_input=""
 code_path_reconciled_evidence_input=""
 disproved_theory_evidence_input=""
 collect_phase2_rewards_provider_context
 test "${provider_api_check:-0}" = '1'
+test "${rewards_provider_live_probe_expected:-0}" = '0'
+test "${primary_symptom_replay:-0}" = '0'
+test "${provider_entity_liveness:-0}" = '0'
 test "${code_path_check:-0}" = '1'
 test "${code_path_reconciled:-0}" = '0'
 test "${same_token_both_sides_expected:-0}" = '0'
+
+BETTERSTACK_CONTEXT='Rewards APR shows 0%; please check live api'
+provider_api_evidence_input='GET /v4/opportunities/campaigns chainId=8453 returned one MORPHOBORROW campaign'
+primary_symptom_replay_evidence_input=$'Rewards APR shows 0% while it should be 5%\nsecondary probe detail should not leak into tab row'
+provider_entity_liveness_evidence_input=$'live api says campaign status=live\nsecond line should be dropped'
+code_path_evidence_input='apps/api/src/rewards/read-market-rewards.ts:41 consumes market_historical_state_rewards'
+provider_side_mismatch_evidence_input=""
+code_path_reconciled_evidence_input=""
+disproved_theory_evidence_input=""
+collect_phase2_rewards_provider_context
+test "${rewards_provider_live_probe_expected:-0}" = '1'
+test "${primary_symptom_replay:-0}" = '1'
+test "${provider_entity_liveness:-0}" = '1'
+test "${primary_symptom_replay_evidence_output:-}" = 'Rewards APR shows 0% while it should be 5%'
+test "${provider_entity_liveness_evidence_output:-}" = 'live api says campaign status=live'
 
 BETTERSTACK_CONTEXT='See example.com/foo/bar.ts and not-a-repo path only'
 artifact_evidence_input=""

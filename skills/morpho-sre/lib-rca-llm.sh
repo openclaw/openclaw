@@ -57,11 +57,38 @@ call_claude_rca() {
 fallback_heuristic_rca() {
   local evidence_bundle="${1:-}"
   local summary
+  local escaped_summary
   summary="$(printf '%s\n' "$evidence_bundle" | head -n 3 | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g')"
   [[ -z "$summary" ]] && summary="heuristic fallback"
 
+  if command -v jq >/dev/null 2>&1; then
+    jq -cn --arg summary "$summary" '{
+      mode: "heuristic",
+      severity: "medium",
+      canonical_category: "unknown",
+      summary: $summary,
+      root_cause: "[NEEDS REVIEW]",
+      primary_reported_symptom: "",
+      secondary_clues: [],
+      uncertain_clues: [],
+      explicit_human_corrections: [],
+      explains_primary_symptom: false,
+      hypotheses: [{
+        canonical_category: "unknown",
+        hypothesis_id: "unknown:insufficient_evidence",
+        confidence: 40,
+        description: "heuristic fallback due to llm unavailability",
+        evidence_keys: []
+      }],
+      degradation_note: "RCA generated via heuristic fallback"
+    }'
+    return 0
+  fi
+
+  escaped_summary="${summary//\\/\\\\}"
+  escaped_summary="${escaped_summary//\"/\\\"}"
   cat <<EOF_JSON
-{"mode":"heuristic","severity":"medium","canonical_category":"unknown","summary":"${summary}","root_cause":"[NEEDS REVIEW]","hypotheses":[{"canonical_category":"unknown","hypothesis_id":"unknown:insufficient_evidence","confidence":40,"description":"heuristic fallback due to llm unavailability","evidence_keys":[]}],"degradation_note":"RCA generated via heuristic fallback"}
+{"mode":"heuristic","severity":"medium","canonical_category":"unknown","summary":"${escaped_summary}","root_cause":"[NEEDS REVIEW]","primary_reported_symptom":"","secondary_clues":[],"uncertain_clues":[],"explicit_human_corrections":[],"explains_primary_symptom":false,"hypotheses":[{"canonical_category":"unknown","hypothesis_id":"unknown:insufficient_evidence","confidence":40,"description":"heuristic fallback due to llm unavailability","evidence_keys":[]}],"degradation_note":"RCA generated via heuristic fallback"}
 EOF_JSON
 }
 
