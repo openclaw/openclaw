@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import {
   ClientEvent,
   MatrixEventEvent,
+  Preset,
   createClient as createMatrixJsClient,
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
@@ -349,7 +350,9 @@ export class MatrixClient {
   }
 
   hasPersistedSyncState(): boolean {
-    return this.syncStore?.hasSavedSync() === true;
+    // Only trust restart replay when the previous process completed a final
+    // sync-store persist. A stale cursor can make Matrix re-surface old events.
+    return this.syncStore?.hasSavedSyncFromCleanShutdown() === true;
   }
 
   private async ensureStartedForCryptoControlPlane(): Promise<void> {
@@ -366,6 +369,7 @@ export class MatrixClient {
     }
     this.decryptBridge.stop();
     // Final persist on shutdown
+    this.syncStore?.markCleanShutdown();
     this.stopPersistPromise = Promise.all([
       persistIdbToDisk({
         snapshotPath: this.idbSnapshotPath,
@@ -547,7 +551,7 @@ export class MatrixClient {
     const result = await this.client.createRoom({
       invite: [remoteUserId],
       is_direct: true,
-      preset: "trusted_private_chat",
+      preset: Preset.TrustedPrivateChat,
       initial_state: initialState,
     });
     return result.room_id;
