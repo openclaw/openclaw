@@ -348,6 +348,28 @@ describe("config cli", () => {
         denyCommands: ["custom.mycommand"],
       });
     });
+
+    it("rejects allowCommands-only updates that invalidate existing denyCommands", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          port: 18789,
+          nodes: {
+            allowCommands: ["custom.mycommand"],
+            denyCommands: ["custom.mycommand"],
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "gateway.nodes.allowCommands", "[]"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining('Unknown command "custom.mycommand"'),
+      );
+    });
   });
 
   describe("config get", () => {
@@ -1198,6 +1220,38 @@ describe("config cli", () => {
       expect(payload.errors?.some((entry) => entry.kind === "resolvability")).toBe(true);
       expect(
         payload.errors?.some((entry) => entry.ref?.includes("default:DISCORD_BOT_TOKEN")),
+      ).toBe(true);
+    });
+
+    it("emits structured JSON for denyCommands validation failure in --dry-run --json mode", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "gateway.nodes.denyCommands",
+          '["sendd"]',
+          "--dry-run",
+          "--json",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      const raw = mockLog.mock.calls.at(-1)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        ok: boolean;
+        checks: { schema: boolean };
+        errors?: Array<{ kind: string; message: string }>;
+      };
+      expect(payload.ok).toBe(false);
+      expect(payload.checks.schema).toBe(true);
+      expect(payload.errors?.some((entry) => entry.kind === "schema")).toBe(true);
+      expect(
+        payload.errors?.some((entry) => entry.message.includes('Unknown command "sendd"')),
       ).toBe(true);
     });
 
