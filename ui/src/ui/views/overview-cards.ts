@@ -147,7 +147,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
             ${sessions.map(
               (s) => html`
                 <li class="ov-recent__row">
-                  <span class="ov-recent__key">${blurDigits(s.displayName || s.label || s.key)}</span>
+                  <span class="ov-recent__key">${blurDigits(s.label && s.label !== s.key ? s.label : s.displayName || s.key)}</span>
                   <span class="ov-recent__model">${s.model ?? ""}</span>
                   <span class="ov-recent__time">${s.updatedAt ? formatRelativeTimestamp(s.updatedAt) : ""}</span>
                 </li>
