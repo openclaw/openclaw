@@ -22,7 +22,7 @@ vi.mock("../../../src/infra/net/fetch-guard.js", () => ({
   }),
 }));
 
-vi.mock("../../whatsapp/src/media.js", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: vi.fn(async () => ({
     buffer: Buffer.from("fake-image"),
     contentType: "image/png",

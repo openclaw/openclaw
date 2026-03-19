@@ -28,7 +28,7 @@ const mockState = vi.hoisted(() => ({
   uploadMattermostFile: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/mattermost", () => ({
+vi.mock("../../runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 

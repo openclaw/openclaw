@@ -1,13 +1,14 @@
 import { RequestClient } from "@buape/carbon";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { createDiscordRetryRunner, type RetryRunner } from "openclaw/plugin-sdk/infra-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/infra-runtime";
+import type { RetryRunner } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   mergeDiscordAccountConfig,
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { createDiscordRetryRunner } from "./retry.js";
 import { normalizeDiscordToken } from "./token.js";
 
 export type DiscordClientOpts = {
