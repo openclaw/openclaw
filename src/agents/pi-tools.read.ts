@@ -16,7 +16,7 @@ import {
   wrapToolParamNormalization,
 } from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
+import { assertSandboxPath, resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
@@ -559,6 +559,22 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   };
 }
 
+function normalizeWrappedToolPathForExecution(filePath: string, root: string): string {
+  const trimmed = filePath.trim();
+  if (!trimmed) {
+    return filePath;
+  }
+  if (
+    trimmed === "~" ||
+    trimmed.startsWith("~/") ||
+    trimmed.startsWith("~\\") ||
+    trimmed.startsWith("@")
+  ) {
+    return resolveSandboxInputPath(trimmed, root);
+  }
+  return filePath;
+}
+
 export function wrapToolWorkspaceRootGuardWithOptions(
   tool: AnyAgentTool,
   root: string,
@@ -574,6 +590,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
       const record =
         normalized ??
         (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      let executionArgs = normalized ?? args;
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
         const sandboxPath = mapContainerPathToWorkspaceRoot({
@@ -582,8 +599,12 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           containerWorkdir: options?.containerWorkdir,
         });
         await assertSandboxPath({ filePath: sandboxPath, cwd: root, root, additionalRoots });
+        const normalizedPath = normalizeWrappedToolPathForExecution(sandboxPath, root);
+        if (normalizedPath !== filePath && record) {
+          executionArgs = { ...record, path: normalizedPath };
+        }
       }
-      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+      return tool.execute(toolCallId, executionArgs, signal, onUpdate);
     },
   };
 }
