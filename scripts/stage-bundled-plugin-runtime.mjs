@@ -28,6 +28,9 @@ function copyPathFallback(sourcePath, targetPath) {
   const sourceStat = fs.statSync(sourcePath);
   if (sourceStat.isDirectory()) {
     fs.cpSync(sourcePath, targetPath, { recursive: true, force: true, dereference: true });
+    if (path.basename(sourcePath) === "node_modules") {
+      fs.writeFileSync(path.join(targetPath, ".openclaw-fallback-copy"), "do not edit — created by runtime-postbuild when symlink creation failed on this platform");
+    }
     return;
   }
   fs.copyFileSync(sourcePath, targetPath);

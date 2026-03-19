@@ -10,6 +10,14 @@ const INEFFECTIVE_DYNAMIC_IMPORT_RE = /\[INEFFECTIVE_DYNAMIC_IMPORT\]/;
 const UNRESOLVED_IMPORT_RE = /\[UNRESOLVED_IMPORT\]/;
 const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
 
+function isNodeModulesFallbackCopy(nodeModulesPath) {
+  try {
+    return fs.statSync(path.join(nodeModulesPath, ".openclaw-fallback-copy")).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function removeDistPluginNodeModulesSymlinks(rootDir) {
   const extensionsDir = path.join(rootDir, "extensions");
   if (!fs.existsSync(extensionsDir)) {
@@ -22,7 +30,7 @@ function removeDistPluginNodeModulesSymlinks(rootDir) {
     }
     const nodeModulesPath = path.join(extensionsDir, dirent.name, "node_modules");
     try {
-      if (fs.lstatSync(nodeModulesPath).isSymbolicLink()) {
+      if (fs.lstatSync(nodeModulesPath).isSymbolicLink() || isNodeModulesFallbackCopy(nodeModulesPath)) {
         fs.rmSync(nodeModulesPath, { force: true, recursive: true });
       }
     } catch {
