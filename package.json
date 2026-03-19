@@ -265,6 +265,10 @@
       "types": "./dist/plugin-sdk/whatsapp.d.ts",
       "default": "./dist/plugin-sdk/whatsapp.js"
     },
+    "./plugin-sdk/whatsapp-shared": {
+      "types": "./dist/plugin-sdk/whatsapp-shared.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-shared.js"
+    },
     "./plugin-sdk/whatsapp-action-runtime": {
       "types": "./dist/plugin-sdk/whatsapp-action-runtime.d.ts",
       "default": "./dist/plugin-sdk/whatsapp-action-runtime.js"
