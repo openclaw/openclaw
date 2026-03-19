@@ -1,7 +1,0 @@
-{
-  "id": "fin-market-data",
-  "name": "fin-market-data (deprecated)",
-  "description": "Legacy extension — functionality merged into findoo-datahub-plugin.",
-  "kind": "financial",
-  "configSchema": { "type": "object", "properties": {} }
-}

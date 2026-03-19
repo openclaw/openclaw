@@ -1,7 +1,0 @@
-{
-  "id": "fin-info-feed",
-  "name": "fin-info-feed (deprecated)",
-  "description": "Legacy extension — functionality merged into findoo-trader-plugin. Kept for backward compatibility.",
-  "kind": "financial",
-  "configSchema": { "type": "object", "properties": {} }
-}
