@@ -1,13 +1,12 @@
 import {
+  applyProviderConfigWithModelCatalogPreset,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
+import {
   buildZaiModelDefinition,
   resolveZaiBaseUrl,
   ZAI_DEFAULT_MODEL_ID,
-} from "openclaw/plugin-sdk/provider-models";
-import {
-  applyAgentDefaultModelPrimary,
-  applyProviderConfigWithModelCatalog,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-onboard";
+} from "./model-definitions.js";
 
 export const ZAI_DEFAULT_MODEL_REF = `zai/${ZAI_DEFAULT_MODEL_ID}`;
 
@@ -19,32 +18,35 @@ const ZAI_DEFAULT_MODELS = [
   buildZaiModelDefinition({ id: "glm-4.7-flashx" }),
 ];
 
+function resolveZaiPresetBaseUrl(cfg: OpenClawConfig, endpoint?: string): string {
+  const existingProvider = cfg.models?.providers?.zai;
+  const existingBaseUrl =
+    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
+  return endpoint ? resolveZaiBaseUrl(endpoint) : existingBaseUrl || resolveZaiBaseUrl();
+}
+
+function applyZaiPreset(
+  cfg: OpenClawConfig,
+  params?: { endpoint?: string; modelId?: string },
+  primaryModelRef?: string,
+): OpenClawConfig {
+  const modelId = params?.modelId?.trim() || ZAI_DEFAULT_MODEL_ID;
+  const modelRef = `zai/${modelId}`;
+  return applyProviderConfigWithModelCatalogPreset(cfg, {
+    providerId: "zai",
+    api: "openai-completions",
+    baseUrl: resolveZaiPresetBaseUrl(cfg, params?.endpoint),
+    catalogModels: ZAI_DEFAULT_MODELS,
+    aliases: [{ modelRef, alias: "GLM" }],
+    primaryModelRef,
+  });
+}
+
 export function applyZaiProviderConfig(
   cfg: OpenClawConfig,
   params?: { endpoint?: string; modelId?: string },
 ): OpenClawConfig {
-  const modelId = params?.modelId?.trim() || ZAI_DEFAULT_MODEL_ID;
-  const modelRef = `zai/${modelId}`;
-  const existingProvider = cfg.models?.providers?.zai;
-  const models = { ...cfg.agents?.defaults?.models };
-  models[modelRef] = {
-    ...models[modelRef],
-    alias: models[modelRef]?.alias ?? "GLM",
-  };
-
-  const existingBaseUrl =
-    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
-  const baseUrl = params?.endpoint
-    ? resolveZaiBaseUrl(params.endpoint)
-    : existingBaseUrl || resolveZaiBaseUrl();
-
-  return applyProviderConfigWithModelCatalog(cfg, {
-    agentModels: models,
-    providerId: "zai",
-    api: "openai-completions",
-    baseUrl,
-    catalogModels: ZAI_DEFAULT_MODELS,
-  });
+  return applyZaiPreset(cfg, params);
 }
 
 export function applyZaiConfig(
@@ -53,5 +55,5 @@ export function applyZaiConfig(
 ): OpenClawConfig {
   const modelId = params?.modelId?.trim() || ZAI_DEFAULT_MODEL_ID;
   const modelRef = modelId === ZAI_DEFAULT_MODEL_ID ? ZAI_DEFAULT_MODEL_REF : `zai/${modelId}`;
-  return applyAgentDefaultModelPrimary(applyZaiProviderConfig(cfg, params), modelRef);
+  return applyZaiPreset(cfg, params, modelRef);
 }

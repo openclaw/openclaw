@@ -25,9 +25,9 @@ vi.mock("../../../../extensions/slack/src/action-runtime.js", () => ({
   handleSlackAction,
 }));
 
-let discordMessageActions: typeof import("../../../../extensions/discord/src/channel-actions.js").discordMessageActions;
-let handleDiscordMessageAction: typeof import("../../../../extensions/discord/src/actions/handle-action.js").handleDiscordMessageAction;
-let telegramMessageActions: typeof import("../../../../extensions/telegram/src/channel-actions.js").telegramMessageActions;
+let discordMessageActions: typeof import("../../../../extensions/discord/runtime-api.js").discordMessageActions;
+let handleDiscordMessageAction: typeof import("./discord/handle-action.js").handleDiscordMessageAction;
+let telegramMessageActions: typeof import("../../../../extensions/telegram/runtime-api.js").telegramMessageActions;
 let signalMessageActions: typeof import("../../../../extensions/signal/src/message-actions.js").signalMessageActions;
 let createSlackActions: typeof import("../../../../extensions/slack/src/channel-actions.js").createSlackActions;
 
@@ -201,12 +201,9 @@ async function expectSlackSendRejected(params: Record<string, unknown>, error: R
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ discordMessageActions } =
-    await import("../../../../extensions/discord/src/channel-actions.js"));
-  ({ handleDiscordMessageAction } =
-    await import("../../../../extensions/discord/src/actions/handle-action.js"));
-  ({ telegramMessageActions } =
-    await import("../../../../extensions/telegram/src/channel-actions.js"));
+  ({ discordMessageActions } = await import("../../../../extensions/discord/runtime-api.js"));
+  ({ handleDiscordMessageAction } = await import("./discord/handle-action.js"));
+  ({ telegramMessageActions } = await import("../../../../extensions/telegram/runtime-api.js"));
   ({ signalMessageActions } = await import("../../../../extensions/signal/src/message-actions.js"));
   ({ createSlackActions } = await import("../../../../extensions/slack/src/channel-actions.js"));
   vi.clearAllMocks();

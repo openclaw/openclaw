@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getMediaUnderstandingProvider } from "../../media-understanding/providers/index.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
-import { loadWebMedia } from "../../plugin-sdk/web-media.js";
+import { loadWebMedia } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {

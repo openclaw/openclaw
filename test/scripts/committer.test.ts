@@ -1,0 +1,89 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+
+const scriptPath = path.join(process.cwd(), "scripts", "committer");
+const tempRepos: string[] = [];
+
+function run(cwd: string, command: string, args: string[]) {
+  return execFileSync(command, args, {
+    cwd,
+    encoding: "utf8",
+  }).trim();
+}
+
+function git(cwd: string, ...args: string[]) {
+  return run(cwd, "git", args);
+}
+
+function createRepo() {
+  const repo = mkdtempSync(path.join(tmpdir(), "committer-test-"));
+  tempRepos.push(repo);
+
+  git(repo, "init", "-q");
+  git(repo, "config", "user.email", "test@example.com");
+  git(repo, "config", "user.name", "Test User");
+  writeFileSync(path.join(repo, "seed.txt"), "seed\n");
+  git(repo, "add", "seed.txt");
+  git(repo, "commit", "-qm", "seed");
+
+  return repo;
+}
+
+function writeRepoFile(repo: string, relativePath: string, contents: string) {
+  const fullPath = path.join(repo, relativePath);
+  mkdirSync(path.dirname(fullPath), { recursive: true });
+  writeFileSync(fullPath, contents);
+}
+
+function commitWithHelper(repo: string, commitMessage: string, ...args: string[]) {
+  return run(repo, "bash", [scriptPath, commitMessage, ...args]);
+}
+
+function committedPaths(repo: string) {
+  const output = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD");
+  return output.split("\n").filter(Boolean).toSorted();
+}
+
+afterEach(() => {
+  while (tempRepos.length > 0) {
+    const repo = tempRepos.pop();
+    if (repo) {
+      rmSync(repo, { force: true, recursive: true });
+    }
+  }
+});
+
+describe("scripts/committer", () => {
+  it("keeps plain argv paths working", () => {
+    const repo = createRepo();
+    writeRepoFile(repo, "alpha.txt", "alpha\n");
+    writeRepoFile(repo, "nested/file with spaces.txt", "beta\n");
+
+    commitWithHelper(repo, "test: plain argv", "alpha.txt", "nested/file with spaces.txt");
+
+    expect(committedPaths(repo)).toEqual(["alpha.txt", "nested/file with spaces.txt"]);
+  });
+
+  it("accepts a single space-delimited path blob", () => {
+    const repo = createRepo();
+    writeRepoFile(repo, "alpha.txt", "alpha\n");
+    writeRepoFile(repo, "beta.txt", "beta\n");
+
+    commitWithHelper(repo, "test: space blob", "alpha.txt beta.txt");
+
+    expect(committedPaths(repo)).toEqual(["alpha.txt", "beta.txt"]);
+  });
+
+  it("accepts a single newline-delimited path blob", () => {
+    const repo = createRepo();
+    writeRepoFile(repo, "alpha.txt", "alpha\n");
+    writeRepoFile(repo, "nested/file with spaces.txt", "beta\n");
+
+    commitWithHelper(repo, "test: newline blob", "alpha.txt\nnested/file with spaces.txt");
+
+    expect(committedPaths(repo)).toEqual(["alpha.txt", "nested/file with spaces.txt"]);
+  });
+});

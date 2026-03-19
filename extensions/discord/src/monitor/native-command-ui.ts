@@ -38,6 +38,7 @@ import {
   type DiscordModelPickerPreferenceScope,
 } from "./model-picker-preferences.js";
 import {
+  DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   loadDiscordModelPickerData,
   parseDiscordModelPickerData,
   renderDiscordModelPickerModelsView,
@@ -949,7 +950,7 @@ class DiscordCommandArgFallbackButton extends Button {
 
 class DiscordModelPickerFallbackButton extends Button {
   label = "modelpick";
-  customId = "modelpick:seed=btn";
+  customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=btn`;
   private ctx: DiscordModelPickerContext;
   private safeInteractionCall: SafeDiscordInteractionCall;
   private dispatchCommandInteraction: DispatchDiscordCommandInteraction;
@@ -977,7 +978,7 @@ class DiscordModelPickerFallbackButton extends Button {
 }
 
 class DiscordModelPickerFallbackSelect extends StringSelectMenu {
-  customId = "modelpick:seed=sel";
+  customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=sel`;
   options = [];
   private ctx: DiscordModelPickerContext;
   private safeInteractionCall: SafeDiscordInteractionCall;
