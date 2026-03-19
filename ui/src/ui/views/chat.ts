@@ -952,6 +952,16 @@ export function renderChat(props: ChatProps) {
     </div>
   `;
 
+  /** After arrow-key navigation, scroll the active slash-menu item into view. */
+  const scrollSlashMenuActiveIntoView = () => {
+    requestAnimationFrame(() => {
+      const active = document.querySelector(".slash-menu-item--active");
+      if (active) {
+        active.scrollIntoView({ block: "nearest" });
+      }
+    });
+  };
+
   const handleKeyDown = (e: KeyboardEvent) => {
     // Slash menu navigation — arg mode
     if (vs.slashMenuOpen && vs.slashMenuMode === "args" && vs.slashMenuArgItems.length > 0) {
@@ -961,11 +971,13 @@ export function renderChat(props: ChatProps) {
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex + 1) % len;
           requestUpdate();
+          scrollSlashMenuActiveIntoView();
           return;
         case "ArrowUp":
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex - 1 + len) % len;
           requestUpdate();
+          scrollSlashMenuActiveIntoView();
           return;
         case "Tab":
           e.preventDefault();
@@ -992,11 +1004,13 @@ export function renderChat(props: ChatProps) {
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex + 1) % len;
           requestUpdate();
+          scrollSlashMenuActiveIntoView();
           return;
         case "ArrowUp":
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex - 1 + len) % len;
           requestUpdate();
+          scrollSlashMenuActiveIntoView();
           return;
         case "Tab":
           e.preventDefault();
