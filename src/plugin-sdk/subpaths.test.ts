@@ -13,6 +13,7 @@ import type {
 import * as directoryRuntimeSdk from "openclaw/plugin-sdk/directory-runtime";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
+import * as imessageCoreSdk from "openclaw/plugin-sdk/imessage-core";
 import * as lazyRuntimeSdk from "openclaw/plugin-sdk/lazy-runtime";
 import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
 import * as providerModelsSdk from "openclaw/plugin-sdk/provider-models";
@@ -235,6 +236,13 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof imessageSdk.resolveIMessageConfigAllowFrom).toBe("function");
     expect(typeof imessageSdk.looksLikeIMessageTargetId).toBe("function");
     expect("resolveIMessageAccount" in asExports(imessageSdk)).toBe(false);
+  });
+
+  it("exports iMessage core helpers", () => {
+    expect(typeof imessageCoreSdk.buildChannelConfigSchema).toBe("function");
+    expect(typeof imessageCoreSdk.parseChatTargetPrefixesOrThrow).toBe("function");
+    expect(typeof imessageCoreSdk.resolveServicePrefixedTarget).toBe("function");
+    expect(typeof imessageCoreSdk.IMessageConfigSchema).toBe("object");
   });
 
   it("exports WhatsApp helpers", () => {
