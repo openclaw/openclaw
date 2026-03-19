@@ -454,6 +454,23 @@ describe("resolveSessionModelRef", () => {
     expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
   });
 
+  test("prefers stored override over stale runtime fields", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "openai-codex/gpt-5.4",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "override-wins",
+      updatedAt: Date.now(),
+      model: "gpt-5.4",
+      modelProvider: "openai-codex",
+      modelOverride: "gpt-4.1-mini",
+      providerOverride: "openai",
+    });
+
+    expect(resolved).toEqual({ provider: "openai", model: "gpt-4.1-mini" });
+  });
+
   test("falls back to resolved provider for unprefixed legacy runtime model", () => {
     const cfg = createModelDefaultsConfig({
       primary: "google-gemini-cli/gemini-3-pro-preview",
@@ -537,6 +554,23 @@ describe("resolveSessionModelIdentityRef", () => {
     const resolved = resolveLegacyIdentityRef(cfg);
 
     expect(resolved).toEqual({ model: "claude-sonnet-4-6" });
+  });
+
+  test("prefers stored override over stale runtime fields", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "openai-codex/gpt-5.4",
+    });
+
+    const resolved = resolveSessionModelIdentityRef(cfg, {
+      sessionId: "override-wins",
+      updatedAt: Date.now(),
+      model: "gpt-5.4",
+      modelProvider: "openai-codex",
+      modelOverride: "gpt-4.1-mini",
+      providerOverride: "openai",
+    });
+
+    expect(resolved).toEqual({ provider: "openai", model: "gpt-4.1-mini" });
   });
 
   test("preserves provider from slash-prefixed runtime model", () => {

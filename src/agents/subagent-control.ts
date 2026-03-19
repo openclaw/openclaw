@@ -191,20 +191,6 @@ function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendan
 }
 
 function resolveModelRef(entry?: SessionEntry) {
-  const model = typeof entry?.model === "string" ? entry.model.trim() : "";
-  const provider = typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
-  if (model.includes("/")) {
-    return model;
-  }
-  if (model && provider) {
-    return `${provider}/${model}`;
-  }
-  if (model) {
-    return model;
-  }
-  if (provider) {
-    return provider;
-  }
   const overrideModel = typeof entry?.modelOverride === "string" ? entry.modelOverride.trim() : "";
   const overrideProvider =
     typeof entry?.providerOverride === "string" ? entry.providerOverride.trim() : "";
@@ -217,7 +203,22 @@ function resolveModelRef(entry?: SessionEntry) {
   if (overrideModel) {
     return overrideModel;
   }
-  return overrideProvider || undefined;
+  if (overrideProvider) {
+    return overrideProvider;
+  }
+
+  const model = typeof entry?.model === "string" ? entry.model.trim() : "";
+  const provider = typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
+  if (model.includes("/")) {
+    return model;
+  }
+  if (model && provider) {
+    return `${provider}/${model}`;
+  }
+  if (model) {
+    return model;
+  }
+  return provider || undefined;
 }
 
 function resolveModelDisplay(entry?: SessionEntry, fallbackModel?: string) {
