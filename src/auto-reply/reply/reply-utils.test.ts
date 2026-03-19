@@ -675,6 +675,39 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
+  it("keeps buffering newline-style chunks until minChars is reached", async () => {
+    vi.useFakeTimers();
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 25,
+      maxChars: 2000,
+      idleMs: 50,
+      joiner: "\n\n",
+    });
+
+    coalescer.enqueue({ text: "First paragraph" });
+    coalescer.enqueue({ text: "Second paragraph" });
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
+    coalescer.stop();
+  });
+
+  it("force flushes buffered newline-style chunks even below minChars", async () => {
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 100,
+      maxChars: 2000,
+      idleMs: 50,
+      joiner: "\n\n",
+    });
+
+    coalescer.enqueue({ text: "First paragraph" });
+    coalescer.enqueue({ text: "Second paragraph" });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
+    coalescer.stop();
+  });
+
   it("flushes immediately per enqueue when flushOnEnqueue is set", async () => {
     const cases = [
       {
