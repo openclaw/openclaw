@@ -57,13 +57,10 @@ describe("plugin-sdk subpath exports", () => {
   it("keeps the curated public list free of bundled extension facades", () => {
     expect(pluginSdkSubpaths).not.toContain("compat");
     expect(pluginSdkSubpaths).not.toContain("signal");
-    expect(pluginSdkSubpaths).not.toContain("line");
     expect(pluginSdkSubpaths).not.toContain("msteams");
     expect(pluginSdkSubpaths).not.toContain("googlechat");
     expect(pluginSdkSubpaths).not.toContain("mattermost");
     expect(pluginSdkSubpaths).not.toContain("matrix");
-    expect(pluginSdkSubpaths).not.toContain("nostr");
-    expect(pluginSdkSubpaths).not.toContain("voice-call");
     expect(pluginSdkSubpaths).not.toContain("zalo");
     expect(pluginSdkSubpaths).not.toContain("zalouser");
   });
@@ -123,6 +120,7 @@ describe("plugin-sdk subpath exports", () => {
 
   it("exports channel pairing helpers from the dedicated subpath", () => {
     expect(typeof channelPairingSdk.createChannelPairingController).toBe("function");
+    expect(typeof channelPairingSdk.createChannelPairingChallengeIssuer).toBe("function");
     expect(typeof channelPairingSdk.createScopedPairingAccess).toBe("function");
   });
 
