@@ -204,13 +204,14 @@ describe("deliverWebReply", () => {
       }),
     ).rejects.toThrow("socket disconnected");
 
-    expect(msg.reply).toHaveBeenCalledTimes(6);
-    expect(sleep).toHaveBeenCalledTimes(5);
+    expect(msg.reply).toHaveBeenCalledTimes(7);
+    expect(sleep).toHaveBeenCalledTimes(6);
     expect(sleep).toHaveBeenNthCalledWith(1, 500);
     expect(sleep).toHaveBeenNthCalledWith(2, 2000);
     expect(sleep).toHaveBeenNthCalledWith(3, 4000);
     expect(sleep).toHaveBeenNthCalledWith(4, 8000);
     expect(sleep).toHaveBeenNthCalledWith(5, 16000);
+    expect(sleep).toHaveBeenNthCalledWith(6, 32000);
   });
 
   it("sends image media with caption and then remaining text", async () => {
@@ -288,6 +289,48 @@ describe("deliverWebReply", () => {
       expect.objectContaining({ mediaUrl: "http://example.com/img.jpg" }),
       "failed to send web media reply",
     );
+  });
+
+  it("retries fallback text when reconnect gap happens after media failure", async () => {
+    const msg = makeMsg();
+    mockLoadedImageMedia();
+    mockFirstSendMediaFailure(msg, "boom");
+    mockFirstReplyFailure(msg, "no active socket - reconnection in progress");
+    mockSecondReplySuccess(msg);
+
+    await deliverWebReply({
+      replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 20,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(500);
+  });
+
+  it("retries remaining text chunks after media when reconnect gap happens", async () => {
+    const msg = makeMsg();
+    mockLoadedImageMedia();
+    mockFirstReplyFailure(msg, "socket closed");
+    mockSecondReplySuccess(msg);
+
+    await deliverWebReply({
+      replyResult: { text: "aaaaaa", mediaUrl: "http://example.com/img.jpg" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 3,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledTimes(1);
+    expect(msg.reply).toHaveBeenCalledTimes(2);
+    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa");
+    expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa");
+    expect(sleep).toHaveBeenCalledWith(500);
   });
 
   it("sends audio media as ptt voice note", async () => {

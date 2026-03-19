@@ -62,20 +62,21 @@ export async function deliverWebReply(params: {
   // If disconnect-class errors appear, escalate to longer retries so reconnect
   // has enough time to provide a live socket.
   const STANDARD = { maxAttempts: 3, baseMs: 500, factor: 1 };
-  const DISCONNECT = { maxAttempts: 6, baseMs: 1_000, factor: 2 };
+  const DISCONNECT = { maxAttempts: 7, baseMs: 2_000, factor: 2 };
 
   const sendWithRetry = async (fn: () => Promise<unknown>, label: string) => {
     let lastErr: unknown;
     let strategy = STANDARD;
+    let maxAttempts = strategy.maxAttempts;
 
-    for (let attempt = 1; attempt <= strategy.maxAttempts; attempt++) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         return await fn();
       } catch (err) {
         lastErr = err;
         const errText = formatError(err);
         const isDisconnect = /closed|reset|timed\s*out|disconnect|no active socket/i.test(errText);
-        const isLast = attempt >= strategy.maxAttempts;
+        const isLast = attempt >= maxAttempts;
         if (!isDisconnect || isLast) {
           throw err;
         }
@@ -83,14 +84,15 @@ export async function deliverWebReply(params: {
         const backoffMs =
           strategy.factor === 1
             ? strategy.baseMs * attempt
-            : strategy.baseMs * Math.pow(strategy.factor, attempt - 1);
+            : strategy.baseMs * Math.pow(strategy.factor, attempt - 2);
 
         if (strategy === STANDARD) {
           strategy = DISCONNECT;
+          maxAttempts = DISCONNECT.maxAttempts;
         }
 
         logVerbose(
-          `Retrying ${label} to ${msg.from} after failure (${attempt}/${strategy.maxAttempts}) in ${backoffMs}ms: ${errText}`,
+          `Retrying ${label} to ${msg.from} after failure (${attempt}/${maxAttempts}) in ${backoffMs}ms: ${errText}`,
         );
         await sleep(backoffMs);
       }
@@ -223,12 +225,12 @@ export async function deliverWebReply(params: {
         return;
       }
       whatsappOutboundLog.warn(`Media skipped; sent text-only to ${msg.from}`);
-      await msg.reply(fallbackText);
+      await sendWithRetry(() => msg.reply(fallbackText), "text:fallback");
     },
   });
 
   // Remaining text chunks after media
   for (const chunk of remainingText) {
-    await msg.reply(chunk);
+    await sendWithRetry(() => msg.reply(chunk), "text:remaining");
   }
 }
