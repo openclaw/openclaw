@@ -114,6 +114,7 @@ export { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export { maybeCreateMatrixMigrationSnapshot } from "../infra/matrix-migration-snapshot.js";
 export {
+  __testing,
   getSessionBindingService,
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,

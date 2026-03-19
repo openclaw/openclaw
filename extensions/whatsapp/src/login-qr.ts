@@ -22,6 +22,7 @@ type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
 type ActiveLogin = {
   accountId: string;
   authDir: string;
+  proxy?: string;
   isLegacyAuthDir: boolean;
   id: string;
   sock: WaSocket;
@@ -93,6 +94,7 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
   try {
     const sock = await createWaSocket(false, login.verbose, {
       authDir: login.authDir,
+      proxy: login.proxy,
     });
     login.sock = sock;
     login.connected = false;
@@ -157,6 +159,7 @@ export async function startWebLoginWithQr(
   try {
     sock = await createWaSocket(false, Boolean(opts.verbose), {
       authDir: account.authDir,
+      proxy: account.proxy,
       onQr: (qr: string) => {
         if (pendingQr) {
           return;
@@ -181,6 +184,7 @@ export async function startWebLoginWithQr(
   const login: ActiveLogin = {
     accountId: account.accountId,
     authDir: account.authDir,
+    proxy: account.proxy,
     isLegacyAuthDir: account.isLegacyAuthDir,
     id: randomUUID(),
     sock,

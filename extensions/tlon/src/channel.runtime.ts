@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { configureClient } from "@tloncorp/api";
 import type {
   ChannelAccountSnapshot,
   ChannelOutboundAdapter,
@@ -163,13 +162,6 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId, threadId }) => {
     const { account, parsed } = resolveOutboundContext({ cfg, accountId, to });
-
-    configureClient({
-      shipUrl: account.url,
-      shipName: account.ship.replace(/^~/, ""),
-      verbose: false,
-      getCode: async () => account.code,
-    });
 
     const uploadedUrl = mediaUrl ? await uploadImageFromUrl(mediaUrl) : undefined;
     return withHttpPokeAccountApi(account, async (api) => {

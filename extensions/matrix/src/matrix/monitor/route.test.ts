@@ -1,13 +1,10 @@
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as sessionBindingTesting,
-  createTestRegistry,
   registerSessionBindingAdapter,
-  resolveAgentRoute,
-  setActivePluginRegistry,
   type OpenClawConfig,
-} from "../../../../../test/helpers/extensions/matrix-monitor-route.js";
-import { matrixPlugin } from "../../channel.js";
+} from "../../runtime-api.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 
 const baseCfg = {
@@ -32,9 +29,6 @@ function resolveDmRoute(cfg: OpenClawConfig) {
 describe("resolveMatrixInboundRoute", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "matrix", source: "test", plugin: matrixPlugin }]),
-    );
   });
 
   it("prefers sender-bound DM routing over DM room fallback bindings", () => {
@@ -98,7 +92,7 @@ describe("resolveMatrixInboundRoute", () => {
     expect(route.sessionKey).toBe("agent:room-agent:main");
   });
 
-  it("lets configured ACP room bindings override DM parent-peer routing", () => {
+  it("keeps DM parent-peer routing ahead of configured ACP room bindings", () => {
     const cfg = {
       ...baseCfg,
       bindings: [
@@ -124,10 +118,10 @@ describe("resolveMatrixInboundRoute", () => {
 
     const { route, configuredBinding } = resolveDmRoute(cfg);
 
-    expect(configuredBinding?.spec.agentId).toBe("acp-agent");
-    expect(route.agentId).toBe("acp-agent");
-    expect(route.matchedBy).toBe("binding.channel");
-    expect(route.sessionKey).toContain("agent:acp-agent:acp:binding:matrix:ops:");
+    expect(configuredBinding).toBeNull();
+    expect(route.agentId).toBe("room-agent");
+    expect(route.matchedBy).toBe("binding.peer.parent");
+    expect(route.sessionKey).toBe("agent:room-agent:main");
   });
 
   it("lets runtime conversation bindings override both sender and room route matches", () => {

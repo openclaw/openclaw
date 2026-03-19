@@ -19,9 +19,10 @@ vi.mock("./login.js", () => ({
   loginWeb: loginWebMock,
 }));
 
-vi.mock("../../../src/utils.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../src/utils.js")>("../../../src/utils.js");
+vi.mock("openclaw/plugin-sdk/setup", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/setup")>(
+    "openclaw/plugin-sdk/setup",
+  );
   return {
     ...actual,
     pathExists: pathExistsMock,

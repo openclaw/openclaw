@@ -17,8 +17,8 @@ import {
   resolveMatrixAuth,
   resolveMatrixAuthContext,
   resolveSharedMatrixClient,
+  stopSharedClientInstance,
 } from "../client.js";
-import { releaseSharedClientInstance } from "../client/shared.js";
 import { createMatrixThreadBindingManager } from "../thread-bindings.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { resolveMatrixMonitorConfig } from "./config.js";
@@ -131,7 +131,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   setActiveMatrixClient(client, auth.accountId);
   let cleanedUp = false;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
-  const cleanup = async () => {
+  const cleanup = () => {
     if (cleanedUp) {
       return;
     }
@@ -139,7 +139,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     try {
       threadBindingManager?.stop();
     } finally {
-      await releaseSharedClientInstance(client, "persist");
+      stopSharedClientInstance(client);
       setActiveMatrixClient(null, auth.accountId);
     }
   };
@@ -273,32 +273,19 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     });
 
     await new Promise<void>((resolve) => {
-      const stopAndResolve = async () => {
-        try {
-          logVerboseMessage("matrix: stopping client");
-          await cleanup();
-        } catch (err) {
-          logger.warn("matrix: failed during monitor shutdown cleanup", {
-            error: String(err),
-          });
-        } finally {
-          resolve();
-        }
+      const onAbort = () => {
+        logVerboseMessage("matrix: stopping client");
+        cleanup();
+        resolve();
       };
       if (opts.abortSignal?.aborted) {
-        void stopAndResolve();
+        onAbort();
         return;
       }
-      opts.abortSignal?.addEventListener(
-        "abort",
-        () => {
-          void stopAndResolve();
-        },
-        { once: true },
-      );
+      opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
     });
   } catch (err) {
-    await cleanup();
+    cleanup();
     throw err;
   }
 }

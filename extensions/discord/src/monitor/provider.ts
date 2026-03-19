@@ -89,7 +89,7 @@ import {
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
-import { resolveDiscordRestFetch } from "./rest-fetch.js";
+import { patchDiscordRequestClientFetch, resolveDiscordRestFetch } from "./rest-fetch.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 import {
   createNoopThreadBindingManager,
@@ -775,6 +775,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
       clientPlugins,
     );
+    patchDiscordRequestClientFetch(client.rest, discordRestFetch);
     const earlyGatewayErrorGuard = attachEarlyGatewayErrorGuard(client);
     releaseEarlyGatewayErrorGuard = earlyGatewayErrorGuard.release;
 

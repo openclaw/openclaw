@@ -25,40 +25,52 @@ const normalizeProvider = (value?: string | null) => value?.trim().toLowerCase()
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
-function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
-  const sessionKey =
-    (ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey : undefined)?.trim() ||
-    ctx.SessionKey?.trim() ||
-    "";
-  if (!sessionKey) {
+function resolveInboundDedupeSessionScopeFromKey(sessionKey?: string | null): string {
+  const trimmed = sessionKey?.trim() ?? "";
+  if (!trimmed) {
     return "";
   }
-  const parsed = parseAgentSessionKey(sessionKey);
+  const parsed = parseAgentSessionKey(trimmed);
   if (!parsed) {
-    return sessionKey;
+    return trimmed;
   }
-  // The same physical inbound message should never run twice for the same
-  // agent, even if a routing bug presents it under both main and direct keys.
   return `agent:${parsed.agentId}`;
 }
 
-export function buildInboundDedupeKey(ctx: MsgContext): string | null {
-  const provider = normalizeProvider(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
-  const messageId = ctx.MessageSid?.trim();
+export function buildInboundDedupeKeyFromParts(params: {
+  provider?: string | null;
+  messageId?: string | null;
+  peerId?: string | null;
+  sessionKey?: string | null;
+  accountId?: string | null;
+  threadId?: string | number | null;
+}): string | null {
+  const provider = normalizeProvider(params.provider);
+  const messageId = params.messageId?.trim();
   if (!provider || !messageId) {
     return null;
   }
-  const peerId = resolveInboundPeerId(ctx);
+  const peerId = params.peerId?.trim();
   if (!peerId) {
     return null;
   }
-  const sessionScope = resolveInboundDedupeSessionScope(ctx);
-  const accountId = ctx.AccountId?.trim() ?? "";
+  const sessionKey = resolveInboundDedupeSessionScopeFromKey(params.sessionKey);
+  const accountId = params.accountId?.trim() ?? "";
   const threadId =
-    ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
-      ? String(ctx.MessageThreadId)
-      : "";
-  return [provider, accountId, sessionScope, peerId, threadId, messageId].filter(Boolean).join("|");
+    params.threadId !== undefined && params.threadId !== null ? String(params.threadId) : "";
+  return [provider, accountId, sessionKey, peerId, threadId, messageId].filter(Boolean).join("|");
+}
+
+export function buildInboundDedupeKey(ctx: MsgContext): string | null {
+  return buildInboundDedupeKeyFromParts({
+    provider: ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface,
+    messageId: ctx.MessageSid,
+    peerId: resolveInboundPeerId(ctx),
+    sessionKey:
+      (ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey : undefined) ?? ctx.SessionKey,
+    accountId: ctx.AccountId,
+    threadId: ctx.MessageThreadId,
+  });
 }
 
 export function shouldSkipDuplicateInbound(
@@ -75,6 +87,28 @@ export function shouldSkipDuplicateInbound(
     logVerbose(`inbound dedupe: skipped ${key}`);
   }
   return skipped;
+}
+
+export function markInboundMessageAsSeen(params: {
+  provider?: string | null;
+  messageId?: string | null;
+  peerId?: string | null;
+  sessionKey?: string | null;
+  accountId?: string | null;
+  threadId?: string | number | null;
+  cache?: DedupeCache;
+  now?: number;
+}): boolean {
+  const key = buildInboundDedupeKeyFromParts(params);
+  if (!key) {
+    return false;
+  }
+  const cache = params.cache ?? inboundDedupeCache;
+  cache.mark(key, params.now);
+  if (shouldLogVerbose()) {
+    logVerbose(`inbound dedupe: marked ${key}`);
+  }
+  return true;
 }
 
 export function resetInboundDedupe(): void {

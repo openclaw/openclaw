@@ -9,19 +9,12 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
   };
 });
 
-// Mock @tloncorp/api
-vi.mock("@tloncorp/api", () => ({
-  uploadFile: vi.fn(),
-}));
-
 describe("uploadImageFromUrl", () => {
   async function loadUploadMocks() {
     const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/infra-runtime");
-    const { uploadFile } = await import("@tloncorp/api");
     const { uploadImageFromUrl } = await import("./upload.js");
     return {
       mockFetch: vi.mocked(fetchWithSsrFGuard),
-      mockUploadFile: vi.mocked(uploadFile),
       uploadImageFromUrl,
     };
   }
@@ -45,12 +38,8 @@ describe("uploadImageFromUrl", () => {
     });
   }
 
-  async function setupSuccessfulUpload(params?: {
-    sourceUrl?: string;
-    contentType?: string;
-    uploadedUrl?: string;
-  }) {
-    const { mockFetch, mockUploadFile, uploadImageFromUrl } = await loadUploadMocks();
+  async function setupSuccessfulUpload(params?: { sourceUrl?: string; contentType?: string }) {
+    const { mockFetch, uploadImageFromUrl } = await loadUploadMocks();
     const sourceUrl = params?.sourceUrl ?? "https://example.com/image.png";
     const contentType = params?.contentType ?? "image/png";
     const mockBlob = new Blob(["fake-image"], { type: contentType });
@@ -60,10 +49,7 @@ describe("uploadImageFromUrl", () => {
       finalUrl: sourceUrl,
       contentType,
     });
-    if (params?.uploadedUrl) {
-      mockUploadFile.mockResolvedValue({ url: params.uploadedUrl });
-    }
-    return { mockBlob, mockUploadFile, uploadImageFromUrl };
+    return { mockBlob, uploadImageFromUrl };
   }
 
   beforeEach(() => {
@@ -74,21 +60,15 @@ describe("uploadImageFromUrl", () => {
     vi.restoreAllMocks();
   });
 
-  it("fetches image and calls uploadFile, returns uploaded URL", async () => {
-    const { mockBlob, mockUploadFile, uploadImageFromUrl } = await setupSuccessfulUpload({
-      uploadedUrl: "https://memex.tlon.network/uploaded.png",
+  it("fetches image and returns the resolved URL", async () => {
+    const { mockBlob, uploadImageFromUrl } = await setupSuccessfulUpload({
+      sourceUrl: "https://memex.tlon.network/uploaded.png",
     });
 
     const result = await uploadImageFromUrl("https://example.com/image.png");
 
+    expect(mockBlob.size).toBeGreaterThan(0);
     expect(result).toBe("https://memex.tlon.network/uploaded.png");
-    expect(mockUploadFile).toHaveBeenCalledTimes(1);
-    expect(mockUploadFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        blob: mockBlob,
-        contentType: "image/png",
-      }),
-    );
   });
 
   it("returns original URL if fetch fails", async () => {
@@ -102,15 +82,6 @@ describe("uploadImageFromUrl", () => {
       finalUrl: "https://example.com/image.png",
       release: vi.fn().mockResolvedValue(undefined),
     });
-
-    const result = await uploadImageFromUrl("https://example.com/image.png");
-
-    expect(result).toBe("https://example.com/image.png");
-  });
-
-  it("returns original URL if upload fails", async () => {
-    const { mockUploadFile, uploadImageFromUrl } = await setupSuccessfulUpload();
-    mockUploadFile.mockRejectedValue(new Error("Upload failed"));
 
     const result = await uploadImageFromUrl("https://example.com/image.png");
 
@@ -137,9 +108,8 @@ describe("uploadImageFromUrl", () => {
     expect(result).toBe("not-a-valid-url");
   });
 
-  it("extracts filename from URL path", async () => {
-    const { mockFetch, mockUploadFile, uploadImageFromUrl } = await loadUploadMocks();
-
+  it("preserves a fetched image URL with a path", async () => {
+    const { mockFetch, uploadImageFromUrl } = await loadUploadMocks();
     const mockBlob = new Blob(["fake-image"], { type: "image/jpeg" });
     mockSuccessfulFetch({
       mockFetch,
@@ -148,20 +118,12 @@ describe("uploadImageFromUrl", () => {
       contentType: "image/jpeg",
     });
 
-    mockUploadFile.mockResolvedValue({ url: "https://memex.tlon.network/uploaded.jpg" });
-
-    await uploadImageFromUrl("https://example.com/path/to/my-image.jpg");
-
-    expect(mockUploadFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fileName: "my-image.jpg",
-      }),
-    );
+    const result = await uploadImageFromUrl("https://example.com/path/to/my-image.jpg");
+    expect(result).toBe("https://example.com/path/to/my-image.jpg");
   });
 
-  it("uses default filename when URL has no path", async () => {
-    const { mockFetch, mockUploadFile, uploadImageFromUrl } = await loadUploadMocks();
-
+  it("preserves a fetched image URL when the path is empty", async () => {
+    const { mockFetch, uploadImageFromUrl } = await loadUploadMocks();
     const mockBlob = new Blob(["fake-image"], { type: "image/png" });
     mockSuccessfulFetch({
       mockFetch,
@@ -170,14 +132,7 @@ describe("uploadImageFromUrl", () => {
       contentType: "image/png",
     });
 
-    mockUploadFile.mockResolvedValue({ url: "https://memex.tlon.network/uploaded.png" });
-
-    await uploadImageFromUrl("https://example.com/");
-
-    expect(mockUploadFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fileName: expect.stringMatching(/^upload-\d+\.png$/),
-      }),
-    );
+    const result = await uploadImageFromUrl("https://example.com/");
+    expect(result).toBe("https://example.com/");
   });
 });

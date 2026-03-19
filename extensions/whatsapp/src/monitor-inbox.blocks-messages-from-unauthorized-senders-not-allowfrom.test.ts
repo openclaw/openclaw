@@ -8,6 +8,7 @@ import {
   getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
+  waitForInboxTurn,
 } from "./monitor-inbox.test-harness.js";
 
 const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
@@ -21,7 +22,7 @@ const TIMESTAMP_OFF_MESSAGES_CFG = {
 } as const;
 
 async function flushInboundQueue() {
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await waitForInboxTurn();
 }
 
 const createNotifyUpsert = (message: Record<string, unknown>) => ({

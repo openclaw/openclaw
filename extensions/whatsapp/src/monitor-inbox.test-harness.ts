@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import {
+  loadSessionStoreForTests,
+  recordSessionMetaFromInboundForTests,
+  updateLastRouteForTests,
+  updateSessionStoreForTests,
+} from "./test-session-store-mocks.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -70,6 +76,15 @@ function createMockSock(): MockSock {
   };
 }
 
+function getPairingStoreMocks() {
+  const readChannelAllowFromStore = (...args: unknown[]) => readAllowFromStoreMock(...args);
+  const upsertChannelPairingRequest = (...args: unknown[]) => upsertPairingRequestMock(...args);
+  return {
+    readChannelAllowFromStore,
+    upsertChannelPairingRequest,
+  };
+}
+
 const sock: MockSock = createMockSock();
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
@@ -85,34 +100,27 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
   return {
     ...actual,
+    loadSessionStore: loadSessionStoreForTests,
+    recordSessionMetaFromInbound: recordSessionMetaFromInboundForTests,
+    updateLastRoute: updateLastRouteForTests,
+    updateSessionStore: updateSessionStoreForTests,
     loadConfig: () => mockLoadConfig(),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
   return {
     ...actual,
-    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
-  return {
-    ...actual,
-    readStoreAllowFromForDmPolicy: async (
-      params: Parameters<typeof actual.readStoreAllowFromForDmPolicy>[0],
-    ) =>
-      await actual.readStoreAllowFromForDmPolicy({
-        ...params,
-        readStore: async (provider, accountId) =>
-          (await readAllowFromStoreMock(provider, accountId)) as string[],
-      }),
+    ...getPairingStoreMocks(),
   };
 });
 
@@ -134,6 +142,10 @@ export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164:
   expect(sock.sendMessage).toHaveBeenCalledWith(jid, {
     text: expect.stringContaining("Pairing code: PAIRCODE"),
   });
+}
+
+export async function waitForInboxTurn(delayMs = 100): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 let authDir: string | undefined;

@@ -1,11 +1,9 @@
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import {
-  Category,
   MemoryStore,
   SyncAccumulator,
   type ISyncData,
-  type IRooms,
   type ISyncResponse,
   type IStoredClientOpts,
 } from "matrix-js-sdk";
@@ -43,54 +41,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function normalizeRoomsData(value: unknown): IRooms | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  return {
-    [Category.Join]: isRecord(value[Category.Join]) ? (value[Category.Join] as IRooms["join"]) : {},
-    [Category.Invite]: isRecord(value[Category.Invite])
-      ? (value[Category.Invite] as IRooms["invite"])
-      : {},
-    [Category.Leave]: isRecord(value[Category.Leave])
-      ? (value[Category.Leave] as IRooms["leave"])
-      : {},
-    [Category.Knock]: isRecord(value[Category.Knock])
-      ? (value[Category.Knock] as IRooms["knock"])
-      : {},
-  };
-}
-
 function toPersistedSyncData(value: unknown): ISyncData | null {
   if (!isRecord(value)) {
     return null;
   }
   if (typeof value.nextBatch === "string" && value.nextBatch.trim()) {
-    const roomsData = normalizeRoomsData(value.roomsData);
-    if (!Array.isArray(value.accountData) || !roomsData) {
+    if (!Array.isArray(value.accountData) || !isRecord(value.roomsData)) {
       return null;
     }
     return {
       nextBatch: value.nextBatch,
       accountData: value.accountData,
-      roomsData,
-    };
+      roomsData: value.roomsData,
+    } as unknown as ISyncData;
   }
 
   // Older Matrix state files stored the raw /sync-shaped payload directly.
   if (typeof value.next_batch === "string" && value.next_batch.trim()) {
-    const roomsData = normalizeRoomsData(value.rooms);
-    if (!roomsData) {
-      return null;
-    }
     return {
       nextBatch: value.next_batch,
       accountData:
         isRecord(value.account_data) && Array.isArray(value.account_data.events)
           ? value.account_data.events
           : [],
-      roomsData,
-    };
+      roomsData: isRecord(value.rooms) ? value.rooms : {},
+    } as unknown as ISyncData;
   }
 
   return null;
@@ -148,7 +123,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
   private savedSync: ISyncData | null = null;
   private savedClientOptions: IStoredClientOpts | undefined;
   private readonly hadSavedSyncOnLoad: boolean;
-  private readonly hadCleanShutdownOnLoad: boolean;
+  private readonly cleanShutdownOnLoad: boolean;
   private cleanShutdown = false;
   private dirty = false;
   private persistTimer: NodeJS.Timeout | null = null;
@@ -159,22 +134,22 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
 
     let restoredSavedSync: ISyncData | null = null;
     let restoredClientOptions: IStoredClientOpts | undefined;
-    let restoredCleanShutdown = false;
     try {
       const raw = readFileSync(this.storagePath, "utf8");
       const persisted = readPersistedStore(raw);
       restoredSavedSync = persisted?.savedSync ?? null;
       restoredClientOptions = persisted?.clientOptions;
-      restoredCleanShutdown = persisted?.cleanShutdown === true;
+      this.cleanShutdownOnLoad = persisted?.cleanShutdown === true;
+      this.cleanShutdown = persisted?.cleanShutdown === true;
     } catch {
+      this.cleanShutdownOnLoad = false;
+      this.cleanShutdown = false;
       // Missing or unreadable sync cache should not block startup.
     }
 
     this.savedSync = restoredSavedSync;
     this.savedClientOptions = restoredClientOptions;
     this.hadSavedSyncOnLoad = restoredSavedSync !== null;
-    this.hadCleanShutdownOnLoad = this.hadSavedSyncOnLoad && restoredCleanShutdown;
-    this.cleanShutdown = this.hadCleanShutdownOnLoad;
 
     if (this.savedSync) {
       this.accumulator.accumulate(syncDataToSyncResponse(this.savedSync), true);
@@ -190,7 +165,12 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
   }
 
   hasSavedSyncFromCleanShutdown(): boolean {
-    return this.hadCleanShutdownOnLoad;
+    return this.hadSavedSyncOnLoad && this.cleanShutdownOnLoad;
+  }
+
+  markCleanShutdown(): void {
+    this.cleanShutdown = true;
+    this.dirty = true;
   }
 
   override getSavedSync(): Promise<ISyncData | null> {
@@ -204,6 +184,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
   override setSyncData(syncData: ISyncResponse): Promise<void> {
     this.accumulator.accumulate(syncData);
     this.savedSync = this.accumulator.getJSON();
+    this.cleanShutdown = false;
     this.markDirtyAndSchedulePersist();
     return Promise.resolve();
   }
@@ -217,6 +198,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
   override storeClientOptions(options: IStoredClientOpts) {
     this.savedClientOptions = cloneJson(options);
     void super.storeClientOptions(options);
+    this.cleanShutdown = false;
     this.markDirtyAndSchedulePersist();
     return Promise.resolve();
   }
@@ -244,13 +226,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     await super.deleteAllData();
     this.savedSync = null;
     this.savedClientOptions = undefined;
-    this.cleanShutdown = false;
     await fs.rm(this.storagePath, { force: true }).catch(() => undefined);
-  }
-
-  markCleanShutdown(): void {
-    this.cleanShutdown = true;
-    this.dirty = true;
   }
 
   async flush(): Promise<void> {
@@ -269,7 +245,6 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
   }
 
   private markDirtyAndSchedulePersist(): void {
-    this.cleanShutdown = false;
     this.dirty = true;
     if (this.persistTimer) {
       return;
@@ -288,7 +263,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     const payload: PersistedMatrixSyncStore = {
       version: STORE_VERSION,
       savedSync: this.savedSync ? cloneJson(this.savedSync) : null,
-      cleanShutdown: this.cleanShutdown === true,
+      cleanShutdown: this.cleanShutdown,
       ...(this.savedClientOptions ? { clientOptions: cloneJson(this.savedClientOptions) } : {}),
     };
     try {
