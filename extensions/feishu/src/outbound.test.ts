@@ -180,6 +180,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         to: "chat_1",
         text: "hello",
         replyToMessageId: "om_thread_2",
+        replyInThread: true,
         accountId: "main",
       }),
     );
@@ -344,6 +345,7 @@ describe("feishuOutbound.sendMedia renderMode", () => {
         to: "chat_1",
         mediaUrl: "https://example.com/image.png",
         replyToMessageId: "om_thread_1",
+        replyInThread: true,
         accountId: "main",
       }),
     );
@@ -352,7 +354,31 @@ describe("feishuOutbound.sendMedia renderMode", () => {
         to: "chat_1",
         text: "caption",
         replyToMessageId: "om_thread_1",
+        replyInThread: true,
         accountId: "main",
+      }),
+    );
+  });
+
+  it("passes replyInThread to structured cards when threadId exists", async () => {
+    await sendText({
+      cfg: {
+        channels: {
+          feishu: {
+            renderMode: "card",
+          },
+        },
+      } as any,
+      to: "chat_1",
+      text: "```code```",
+      threadId: "om_thread_card_1",
+      accountId: "main",
+    } as any);
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_thread_card_1",
+        replyInThread: true,
       }),
     );
   });

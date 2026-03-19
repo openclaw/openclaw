@@ -38,6 +38,14 @@ describe("extractDeliveryInfo", () => {
       baseSessionKey: "agent:main:telegram:group:1",
       threadId: "55",
     });
+    expect(
+      parseSessionThreadInfo(
+        "agent:main:feishu:group:oc_chat_123:topic:om_x100abc123:sender:ou_user_1",
+      ),
+    ).toEqual({
+      baseSessionKey: "agent:main:feishu:group:oc_chat_123",
+      threadId: "om_x100abc123",
+    });
     expect(parseSessionThreadInfo("agent:main:slack:channel:C1:thread:123.456")).toEqual({
       baseSessionKey: "agent:main:slack:channel:C1",
       threadId: "123.456",

@@ -1,0 +1,25 @@
+import { describe, expect, it } from "vitest";
+import { resolveAgentRunContext } from "./run-context.js";
+
+describe("resolveAgentRunContext", () => {
+  it("falls back to topic id encoded in the session key", () => {
+    const context = resolveAgentRunContext({
+      message: "status update",
+      sessionKey: "agent:main:feishu:group:oc_chat_123:topic:om_x100abc123:sender:ou_user_1",
+      to: "chat:oc_chat_123",
+    });
+
+    expect(context.currentThreadTs).toBe("om_x100abc123");
+    expect(context.currentChannelId).toBe("chat:oc_chat_123");
+  });
+
+  it("prefers an explicit threadId over session-derived topic id", () => {
+    const context = resolveAgentRunContext({
+      message: "status update",
+      sessionKey: "agent:main:feishu:group:oc_chat_123:topic:om_x100abc123:sender:ou_user_1",
+      threadId: "om_explicit",
+    });
+
+    expect(context.currentThreadTs).toBe("om_explicit");
+  });
+});

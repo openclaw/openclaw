@@ -26,6 +26,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import { callGateway } from "../gateway/call.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
@@ -448,6 +449,8 @@ function resolveAcpSpawnRequesterState(params: {
 }): AcpSpawnRequesterState {
   const bindingService = getSessionBindingService();
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
+  const requesterThreadId =
+    params.ctx.agentThreadId ?? parseSessionThreadInfo(params.ctx.agentSessionKey).threadId;
   const isSubagentSession =
     Boolean(requesterParsedSession) && isSubagentSessionKey(params.parentSessionKey);
   const hasActiveSubagentBinding =
@@ -457,9 +460,9 @@ function resolveAcpSpawnRequesterState(params: {
           .some((record) => record.targetKind === "subagent" && record.status !== "ended")
       : false;
   const hasThreadContext =
-    typeof params.ctx.agentThreadId === "string"
-      ? params.ctx.agentThreadId.trim().length > 0
-      : params.ctx.agentThreadId != null;
+    typeof requesterThreadId === "string"
+      ? requesterThreadId.trim().length > 0
+      : requesterThreadId != null;
   const requesterAgentId = requesterParsedSession?.agentId;
 
   return {
@@ -483,7 +486,7 @@ function resolveAcpSpawnRequesterState(params: {
       channel: params.ctx.agentChannel,
       accountId: params.ctx.agentAccountId,
       to: params.ctx.agentTo,
-      threadId: params.ctx.agentThreadId,
+      threadId: requesterThreadId,
     }),
   };
 }
@@ -778,7 +781,7 @@ export async function spawnAcpDirect(
       channel: ctx.agentChannel,
       accountId: ctx.agentAccountId,
       to: ctx.agentTo,
-      threadId: ctx.agentThreadId,
+      threadId: requesterState.origin?.threadId,
     });
     if (!prepared.ok) {
       return {
