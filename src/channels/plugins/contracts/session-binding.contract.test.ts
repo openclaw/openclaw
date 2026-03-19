@@ -2,7 +2,6 @@ import { beforeEach, describe } from "vitest";
 import { __testing as discordThreadBindingTesting } from "../../../../extensions/discord/src/monitor/thread-bindings.manager.js";
 import { __testing as feishuThreadBindingTesting } from "../../../../extensions/feishu/src/thread-bindings.js";
 import { __testing as telegramThreadBindingTesting } from "../../../../extensions/telegram/src/thread-bindings.js";
-import { resetMatrixThreadBindingsForTests } from "../../../../extensions/matrix/src/matrix/thread-bindings.js";
 import { __testing as sessionBindingTesting } from "../../../infra/outbound/session-binding-service.js";
 import { sessionBindingContractRegistry } from "./registry.js";
 import { installSessionBindingContractSuite } from "./suites.js";
@@ -12,7 +11,6 @@ beforeEach(() => {
   discordThreadBindingTesting.resetThreadBindingsForTests();
   feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
   telegramThreadBindingTesting.resetTelegramThreadBindingsForTests();
-  resetMatrixThreadBindingsForTests();
 });
 
 for (const entry of sessionBindingContractRegistry) {
