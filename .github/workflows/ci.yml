@@ -496,7 +496,9 @@ jobs:
         run: pnpm test
 
       - name: Verify npm pack under Node 22
-        run: pnpm release:check
+        run: |
+          node scripts/stage-bundled-plugin-runtime-deps.mjs
+          node --import tsx scripts/release-check.ts
 
   skills-python:
     needs: [docs-scope, changed-scope]
