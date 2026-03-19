@@ -1,1 +1,1 @@
-export * from "../../src/plugin-sdk/thread-ownership.js";
+export * from "openclaw/plugin-sdk/thread-ownership";

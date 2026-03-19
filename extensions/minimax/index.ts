@@ -1,17 +1,17 @@
 import {
+  buildOauthProviderAuthResult,
+  definePluginEntry,
+  type ProviderAuthContext,
+  type ProviderAuthResult,
+  type ProviderCatalogContext,
+} from "openclaw/plugin-sdk/minimax-portal-auth";
+import {
   MINIMAX_OAUTH_MARKER,
   createProviderApiKeyAuthMethod,
   ensureAuthProfileStore,
   listProfilesForProvider,
 } from "openclaw/plugin-sdk/provider-auth";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
-import {
-  buildOauthProviderAuthResult,
-  definePluginEntry,
-  type ProviderAuthContext,
-  type ProviderAuthResult,
-  type ProviderCatalogContext,
-} from "../../src/plugin-sdk/minimax-portal-auth.js";
 import {
   minimaxMediaUnderstandingProvider,
   minimaxPortalMediaUnderstandingProvider,
