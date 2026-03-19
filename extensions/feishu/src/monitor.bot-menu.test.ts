@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasControlCommand } from "../../../src/auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
@@ -18,6 +18,7 @@ const sendCardFeishuMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "m1"
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 vi.mock("./client.js", () => ({
   createEventDispatcher: createEventDispatcherMock,
@@ -61,6 +62,20 @@ function buildAccount(): ResolvedFeishuAccount {
       connectionMode: "websocket",
     },
   } as ResolvedFeishuAccount;
+}
+
+function createBotMenuEvent(params: { eventKey: string; timestamp: string }) {
+  return {
+    event_key: params.eventKey,
+    timestamp: params.timestamp,
+    operator: {
+      operator_id: {
+        open_id: "ou_user1",
+        user_id: "user_1",
+        union_id: "union_1",
+      },
+    },
+  };
 }
 
 async function registerHandlers() {
@@ -108,22 +123,21 @@ describe("Feishu bot menu handler", () => {
   beforeEach(() => {
     handlers = {};
     vi.clearAllMocks();
+    process.env.OPENCLAW_STATE_DIR = `/tmp/openclaw-feishu-bot-menu-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  });
+
+  afterEach(() => {
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+      return;
+    }
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
   });
 
   it("opens the quick-action launcher card at the webhook/event layer", async () => {
     const onBotMenu = await registerHandlers();
 
-    await onBotMenu({
-      event_key: "quick-actions",
-      timestamp: "1700000000000",
-      operator: {
-        operator_id: {
-          open_id: "ou_user1",
-          user_id: "user_1",
-          union_id: "union_1",
-        },
-      },
-    });
+    await onBotMenu(createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000000" }));
 
     expect(sendCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -148,24 +162,17 @@ describe("Feishu bot menu handler", () => {
         }),
     );
 
-    const pending = onBotMenu({
-      event_key: "quick-actions",
-      timestamp: "1700000000000",
-      operator: {
-        operator_id: {
-          open_id: "ou_user1",
-          user_id: "user_1",
-          union_id: "union_1",
-        },
-      },
-    });
+    const pending = onBotMenu(
+      createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000001" }),
+    );
     let settled = false;
     pending.finally(() => {
       settled = true;
     });
 
-    await Promise.resolve();
-    expect(settled).toBe(true);
+    await vi.waitFor(() => {
+      expect(settled).toBe(true);
+    });
 
     resolveSend?.();
     await pending;
@@ -174,17 +181,7 @@ describe("Feishu bot menu handler", () => {
   it("falls back to the legacy /menu synthetic message path for unrelated bot menu keys", async () => {
     const onBotMenu = await registerHandlers();
 
-    await onBotMenu({
-      event_key: "custom-key",
-      timestamp: "1700000000000",
-      operator: {
-        operator_id: {
-          open_id: "ou_user1",
-          user_id: "user_1",
-          union_id: "union_1",
-        },
-      },
-    });
+    await onBotMenu(createBotMenuEvent({ eventKey: "custom-key", timestamp: "1700000000002" }));
 
     expect(handleFeishuMessageMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -202,17 +199,7 @@ describe("Feishu bot menu handler", () => {
     const onBotMenu = await registerHandlers();
     sendCardFeishuMock.mockRejectedValueOnce(new Error("boom"));
 
-    await onBotMenu({
-      event_key: "quick-actions",
-      timestamp: "1700000000000",
-      operator: {
-        operator_id: {
-          open_id: "ou_user1",
-          user_id: "user_1",
-          union_id: "union_1",
-        },
-      },
-    });
+    await onBotMenu(createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000003" }));
 
     await vi.waitFor(() => {
       expect(handleFeishuMessageMock).toHaveBeenCalledWith(
