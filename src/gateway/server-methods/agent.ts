@@ -68,6 +68,34 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 
+/**
+ * Returns true when a reconnecting client is allowed to receive backfilled
+ * tool/thinking events for an existing run.
+ *
+ * Mirrors the ownership logic in canRequesterAbortChatRun (chat.ts):
+ * - If the run recorded no owner at all, any client on the same session key
+ *   may reattach (operator token / password auth without device identity).
+ * - If owner info was recorded, at least one identifier (connId or deviceId)
+ *   must match the reconnecting client.
+ */
+function isBackfillAuthorized(
+  ownerConnId: string | undefined,
+  ownerDeviceId: string | undefined,
+  connId: string | undefined,
+  deviceId: string | undefined,
+): boolean {
+  if (!ownerConnId && !ownerDeviceId) {
+    return true;
+  }
+  if (ownerConnId && connId && ownerConnId === connId) {
+    return true;
+  }
+  if (ownerDeviceId && deviceId && ownerDeviceId === deviceId) {
+    return true;
+  }
+  return false;
+}
+
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
@@ -528,12 +556,14 @@ export const agentHandlers: GatewayRequestHandlers = {
       // Backfill registration for other active agent runs in the same session
       // (late-joining / page-refresh case). Use getRunIdsBySessionKey so that
       // agent runs — which are tracked in AgentRunContext rather than
-      // chatAbortControllers — are correctly discovered. Restrict to runs
-      // owned by this connection or device to preserve per-run stream privacy.
-      for (const [activeRunId, active] of getRunIdsBySessionKey(requestedSessionKey)) {
+      // chatAbortControllers — are correctly discovered.
+      // Use resolvedSessionKey (the canonical form) because that is what
+      // registerAgentRunContext stores; requestedSessionKey may differ by case
+      // or alias and would silently miss every in-progress run.
+      for (const [activeRunId, active] of getRunIdsBySessionKey(resolvedSessionKey)) {
         if (
           activeRunId !== runId &&
-          (active.ownerConnId === connId || (deviceId && active.ownerDeviceId === deviceId))
+          isBackfillAuthorized(active.ownerConnId, active.ownerDeviceId, connId, deviceId)
         ) {
           context.registerToolEventRecipient(activeRunId, connId);
         }
@@ -547,10 +577,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       context.registerThinkingEventRecipient(runId, connId);
       // Same backfill via AgentRunContext registry — chatAbortControllers only
       // tracks chat.send runs and would silently miss any in-progress agent run.
-      for (const [activeRunId, active] of getRunIdsBySessionKey(requestedSessionKey)) {
+      // Use resolvedSessionKey for the same canonical-form reason as above.
+      for (const [activeRunId, active] of getRunIdsBySessionKey(resolvedSessionKey)) {
         if (
           activeRunId !== runId &&
-          (active.ownerConnId === connId || (deviceId && active.ownerDeviceId === deviceId))
+          isBackfillAuthorized(active.ownerConnId, active.ownerDeviceId, connId, deviceId)
         ) {
           context.registerThinkingEventRecipient(activeRunId, connId);
         }

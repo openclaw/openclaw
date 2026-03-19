@@ -781,6 +781,33 @@ function normalizeOptionalText(value?: string | null): string | undefined {
   return trimmed || undefined;
 }
 
+/**
+ * Returns true when a reconnecting client is allowed to receive backfilled
+ * tool/thinking events for an existing run.
+ *
+ * Mirrors canRequesterAbortChatRun ownership semantics:
+ * - No recorded owner → any client on the same session may reattach
+ *   (operator/password auth without device identity; new connId on refresh).
+ * - Owner recorded → at least one identifier must match.
+ */
+function isBackfillAuthorized(
+  ownerConnId: string | undefined,
+  ownerDeviceId: string | undefined,
+  connId: string | undefined,
+  deviceId: string | undefined,
+): boolean {
+  if (!ownerConnId && !ownerDeviceId) {
+    return true;
+  }
+  if (ownerConnId && connId && ownerConnId === connId) {
+    return true;
+  }
+  if (ownerDeviceId && deviceId && ownerDeviceId === deviceId) {
+    return true;
+  }
+  return false;
+}
+
 function resolveChatAbortRequester(
   client: GatewayRequestHandlerOptions["client"],
 ): ChatAbortRequester {
@@ -1238,6 +1265,27 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     const activeExisting = context.chatAbortControllers.get(clientRunId);
     if (activeExisting) {
+      // Register the reconnecting client as a stream recipient before returning
+      // in_flight, so a page-refresh or reconnect on the same idempotencyKey
+      // still receives in-progress thinking and tool events.
+      const connIdReconnect = normalizeOptionalText(client?.connId);
+      const deviceIdReconnect = normalizeOptionalText(client?.connect?.device?.id);
+      if (
+        connIdReconnect &&
+        isBackfillAuthorized(
+          activeExisting.ownerConnId,
+          activeExisting.ownerDeviceId,
+          connIdReconnect,
+          deviceIdReconnect,
+        )
+      ) {
+        if (hasGatewayClientCap(client?.connect?.caps, GATEWAY_CLIENT_CAPS.THINKING_EVENTS)) {
+          context.registerThinkingEventRecipient(clientRunId, connIdReconnect);
+        }
+        if (hasGatewayClientCap(client?.connect?.caps, GATEWAY_CLIENT_CAPS.TOOL_EVENTS)) {
+          context.registerToolEventRecipient(clientRunId, connIdReconnect);
+        }
+      }
       respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
         cached: true,
         runId: clientRunId,
@@ -1400,16 +1448,16 @@ export const chatHandlers: GatewayRequestHandlers = {
             if (connId && wantsToolEvents) {
               context.registerToolEventRecipient(runId, connId);
               // Backfill registration for other active runs in the same session
-              // (late-joining / page-refresh case). Restrict to runs owned by
-              // this connection or device so a second tab sharing p.sessionKey
-              // cannot receive another client's tool-event stream.
+              // (late-joining / page-refresh case). isBackfillAuthorized allows
+              // reattach when no owner was recorded (operator/compat clients) and
+              // requires at least one matching identifier when owner info exists,
+              // preventing a different client from hijacking another's stream.
               const deviceId = normalizeOptionalText(client?.connect?.device?.id);
               for (const [activeRunId, active] of context.chatAbortControllers) {
                 if (
                   activeRunId !== runId &&
                   active.sessionKey === p.sessionKey &&
-                  (active.ownerConnId === connId ||
-                    (deviceId && active.ownerDeviceId === deviceId))
+                  isBackfillAuthorized(active.ownerConnId, active.ownerDeviceId, connId, deviceId)
                 ) {
                   context.registerToolEventRecipient(activeRunId, connId);
                 }
@@ -1421,15 +1469,15 @@ export const chatHandlers: GatewayRequestHandlers = {
             );
             if (connId && wantsThinkingEvents) {
               // Eager registration above covered clientRunId; backfill other
-              // active runs in the same session, but only for runs this client
-              // owns (same connId or deviceId) to preserve per-run stream privacy.
+              // active runs in the same session using isBackfillAuthorized so
+              // compat clients without device identity can still reattach after
+              // a page refresh while cross-client leakage is still blocked.
               const deviceId = normalizeOptionalText(client?.connect?.device?.id);
               for (const [activeRunId, active] of context.chatAbortControllers) {
                 if (
                   activeRunId !== runId &&
                   active.sessionKey === p.sessionKey &&
-                  (active.ownerConnId === connId ||
-                    (deviceId && active.ownerDeviceId === deviceId))
+                  isBackfillAuthorized(active.ownerConnId, active.ownerDeviceId, connId, deviceId)
                 ) {
                   context.registerThinkingEventRecipient(activeRunId, connId);
                 }

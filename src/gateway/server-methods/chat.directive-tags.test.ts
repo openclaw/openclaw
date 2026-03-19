@@ -165,6 +165,7 @@ function createChatContext(): Pick<
   | "removeChatRun"
   | "dedupe"
   | "registerToolEventRecipient"
+  | "registerThinkingEventRecipient"
   | "logGateway"
 > {
   return {
@@ -178,6 +179,7 @@ function createChatContext(): Pick<
     removeChatRun: vi.fn(),
     dedupe: new Map(),
     registerToolEventRecipient: vi.fn(),
+    registerThinkingEventRecipient: vi.fn(),
     logGateway: {
       warn: vi.fn(),
       debug: vi.fn(),
@@ -338,6 +340,40 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(register).not.toHaveBeenCalledWith("run-other-owner", "conn-1");
   });
 
+  it("backfills tool-event recipients for same-session runs with no recorded owner (compat/operator clients)", async () => {
+    createTranscriptFixture("openclaw-chat-send-tool-events-no-owner-");
+    mockState.finalText = "ok";
+    mockState.triggerAgentRunStart = true;
+    mockState.agentRunId = "run-current";
+    const respond = vi.fn();
+    const context = createChatContext();
+    // Run with no ownerConnId/ownerDeviceId — operator token / compat auth
+    // where no device identity is available.  Any client on the same session
+    // must be allowed to reattach after a page refresh (new connId).
+    context.chatAbortControllers.set("run-no-owner", {
+      controller: new AbortController(),
+      sessionId: "sess-no-owner",
+      sessionKey: "main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 10_000,
+    });
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-tool-events-no-owner",
+      client: {
+        connId: "conn-refresh",
+        connect: { caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS] },
+      },
+      expectBroadcast: false,
+    });
+
+    const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    expect(register).toHaveBeenCalledWith("run-current", "conn-refresh");
+    expect(register).toHaveBeenCalledWith("run-no-owner", "conn-refresh");
+  });
+
   it("does not register tool-event recipients without tool-events capability", async () => {
     createTranscriptFixture("openclaw-chat-send-tool-events-off-");
     mockState.finalText = "ok";
@@ -359,6 +395,93 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
     expect(register).not.toHaveBeenCalled();
+  });
+
+  it("registers thinking and tool recipients when replaying an in-flight idempotencyKey (reconnect)", async () => {
+    // A page-refresh or reconnect replays the same idempotencyKey while the run is
+    // still active.  chat.send returns in_flight early — the reconnecting connId
+    // must still be subscribed to thinking + tool event streams.
+    const respond = vi.fn();
+    const context = createChatContext();
+    const runId = "idem-in-flight-reconnect";
+    context.chatAbortControllers.set(runId, {
+      controller: new AbortController(),
+      sessionId: "sess-in-flight",
+      sessionKey: "main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 30_000,
+      ownerConnId: "conn-original",
+      ownerDeviceId: "dev-1",
+    });
+
+    await chatHandlers["chat.send"]({
+      params: { sessionKey: "main", message: "hello", idempotencyKey: runId },
+      respond,
+      req: {} as never,
+      client: {
+        connId: "conn-refresh",
+        connect: {
+          caps: [GATEWAY_CLIENT_CAPS.THINKING_EVENTS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+          device: { id: "dev-1" },
+        },
+      } as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    // Should have returned in_flight
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "in_flight" }),
+      undefined,
+      expect.objectContaining({ cached: true }),
+    );
+    // And the reconnecting connId must be registered for both stream types.
+    const thinkingReg = context.registerThinkingEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    const toolReg = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    expect(thinkingReg).toHaveBeenCalledWith(runId, "conn-refresh");
+    expect(toolReg).toHaveBeenCalledWith(runId, "conn-refresh");
+  });
+
+  it("does not register a reconnecting client for an in-flight run owned by a different device", async () => {
+    const respond = vi.fn();
+    const context = createChatContext();
+    const runId = "idem-in-flight-blocked";
+    context.chatAbortControllers.set(runId, {
+      controller: new AbortController(),
+      sessionId: "sess-in-flight-blocked",
+      sessionKey: "main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 30_000,
+      ownerConnId: "conn-other",
+      ownerDeviceId: "dev-other",
+    });
+
+    await chatHandlers["chat.send"]({
+      params: { sessionKey: "main", message: "hello", idempotencyKey: runId },
+      respond,
+      req: {} as never,
+      client: {
+        connId: "conn-attacker",
+        connect: {
+          caps: [GATEWAY_CLIENT_CAPS.THINKING_EVENTS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+          device: { id: "dev-attacker" },
+        },
+      } as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "in_flight" }),
+      undefined,
+      expect.objectContaining({ cached: true }),
+    );
+    const thinkingReg = context.registerThinkingEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    const toolReg = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    expect(thinkingReg).not.toHaveBeenCalled();
+    expect(toolReg).not.toHaveBeenCalled();
   });
 
   it("chat.inject keeps message defined when directive tag is the only content", async () => {

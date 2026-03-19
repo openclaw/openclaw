@@ -154,6 +154,30 @@ describe("agent-events sequencing", () => {
     expect([...getRunIdsBySessionKey("sess").keys()]).toEqual(["run-live"]);
   });
 
+  test("getRunIdsBySessionKey requires exact session key match (canonical form)", () => {
+    // Runs are stored under their canonical key; an alias or mixed-case variant
+    // must not accidentally match them, confirming that callers must supply the
+    // canonical key (resolvedSessionKey) rather than the raw requested form.
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-canon", { sessionKey: "agent:main", ownerConnId: "conn-1" });
+    expect(getRunIdsBySessionKey("agent:main").size).toBe(1);
+    expect(getRunIdsBySessionKey("main").size).toBe(0);
+    expect(getRunIdsBySessionKey("AGENT:MAIN").size).toBe(0);
+  });
+
+  test("getRunIdsBySessionKey includes runs with no owner (compat/operator auth)", () => {
+    // Runs started by operator-token or password clients may have no device
+    // identity; they are stored without ownerConnId/ownerDeviceId.  They must
+    // still appear in results so the backfill loop can offer reattach.
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-compat", { sessionKey: "sess-compat" });
+    const result = getRunIdsBySessionKey("sess-compat");
+    expect(result.size).toBe(1);
+    const ctx = result.get("run-compat");
+    expect(ctx?.ownerConnId).toBeUndefined();
+    expect(ctx?.ownerDeviceId).toBeUndefined();
+  });
+
   test("keeps notifying later listeners when one throws", async () => {
     const seen: string[] = [];
     const stopBad = onAgentEvent(() => {
