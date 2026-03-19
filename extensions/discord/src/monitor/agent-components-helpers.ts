@@ -429,6 +429,21 @@ async function ensureDmComponentAuthorized(params: {
   replyOpts: { ephemeral?: boolean };
 }) {
   const { ctx, interaction, user, componentLabel, replyOpts } = params;
+  const allowFromPrefixes = ["discord:", "user:", "pk:"];
+  const resolveAllowMatch = (entries: string[]) => {
+    const allowList = normalizeDiscordAllowList(entries, allowFromPrefixes);
+    return allowList
+      ? resolveDiscordAllowListMatch({
+          allowList,
+          candidate: {
+            id: user.id,
+            name: user.username,
+            tag: formatDiscordUserTag(user),
+          },
+          allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
+        })
+      : { allowed: false };
+  };
   const dmPolicy = ctx.dmPolicy ?? "pairing";
   if (dmPolicy === "disabled") {
     logVerbose(`agent ${componentLabel}: blocked (DM policy disabled)`);
@@ -444,24 +459,27 @@ async function ensureDmComponentAuthorized(params: {
     return true;
   }
 
+  if (dmPolicy === "allowlist") {
+    const allowMatch = resolveAllowMatch(ctx.allowFrom ?? []);
+    if (allowMatch.allowed) {
+      return true;
+    }
+    logVerbose(`agent ${componentLabel}: blocked DM user ${user.id} (not in allowFrom)`);
+    try {
+      await interaction.reply({
+        content: `You are not authorized to use this ${componentLabel}.`,
+        ...replyOpts,
+      });
+    } catch {}
+    return false;
+  }
+
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "discord",
     accountId: ctx.accountId,
     dmPolicy,
   });
-  const effectiveAllowFrom = [...(ctx.allowFrom ?? []), ...storeAllowFrom];
-  const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
-  const allowMatch = allowList
-    ? resolveDiscordAllowListMatch({
-        allowList,
-        candidate: {
-          id: user.id,
-          name: user.username,
-          tag: formatDiscordUserTag(user),
-        },
-        allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
-      })
-    : { allowed: false };
+  const allowMatch = resolveAllowMatch([...(ctx.allowFrom ?? []), ...storeAllowFrom]);
   if (allowMatch.allowed) {
     return true;
   }
