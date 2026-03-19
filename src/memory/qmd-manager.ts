@@ -1300,7 +1300,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       minScore: params.minScore,
     };
     if (params.collection) {
-      callArgs.collection = params.collection;
+      callArgs.collections = [params.collection];
     }
 
     const result = await this.runMcporter(
