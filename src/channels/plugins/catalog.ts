@@ -39,6 +39,7 @@ export type ChannelPluginCatalogEntry = {
 
 type CatalogOptions = {
   workspaceDir?: string;
+  loadPaths?: string[];
   catalogPaths?: string[];
   env?: NodeJS.ProcessEnv;
 };
@@ -338,6 +339,7 @@ export function listChannelPluginCatalogEntries(
 ): ChannelPluginCatalogEntry[] {
   const discovery = discoverOpenClawPlugins({
     workspaceDir: options.workspaceDir,
+    extraPaths: options.loadPaths,
     env: options.env,
   });
   const resolved = new Map<string, { entry: ChannelPluginCatalogEntry; priority: number }>();

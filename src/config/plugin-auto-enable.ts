@@ -11,6 +11,7 @@ import {
   listChatChannels,
   normalizeChatChannelId,
 } from "../channels/registry.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
@@ -314,6 +315,24 @@ function resolvePluginIdForChannel(
   return channelToPluginId.get(channelId) ?? channelId;
 }
 
+function findCatalogEntryForPluginId(
+  pluginId: string,
+  catalogEntries: readonly ChannelPluginCatalogEntry[],
+): ChannelPluginCatalogEntry | undefined {
+  return catalogEntries.find((entry) => entry.id === pluginId || entry.pluginId === pluginId);
+}
+
+function resolveChannelPreferenceKey(
+  pluginId: string,
+  catalogEntries: readonly ChannelPluginCatalogEntry[],
+): string {
+  const builtInId = normalizeChatChannelId(pluginId);
+  if (builtInId) {
+    return builtInId;
+  }
+  return findCatalogEntryForPluginId(pluginId, catalogEntries)?.id ?? pluginId;
+}
+
 function listKnownChannelPluginIds(catalogEntries: readonly ChannelPluginCatalogEntry[]): string[] {
   return Array.from(
     new Set([
@@ -348,7 +367,11 @@ function resolveConfiguredPlugins(
   registry: PluginManifestRegistry,
 ): PluginEnableChange[] {
   const changes: PluginEnableChange[] = [];
-  const catalogEntries = listChannelPluginCatalogEntries({ env });
+  const normalizedPlugins = normalizePluginsConfig(cfg.plugins);
+  const catalogEntries = listChannelPluginCatalogEntries({
+    env,
+    loadPaths: normalizedPlugins.loadPaths,
+  });
   // Build reverse map: channel ID → plugin ID from installed plugin manifests.
   const channelToPluginId = buildChannelToPluginIdMap(registry, catalogEntries);
   for (const channelId of collectCandidateChannelIds(cfg, catalogEntries)) {
@@ -402,12 +425,19 @@ function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
   return Array.isArray(deny) && deny.includes(pluginId);
 }
 
-function resolvePreferredOverIds(pluginId: string, env: NodeJS.ProcessEnv): string[] {
-  const normalized = normalizeChatChannelId(pluginId);
-  if (normalized) {
-    return getChatChannelMeta(normalized).preferOver ?? [];
+function resolvePreferredOverIds(
+  pluginId: string,
+  env: NodeJS.ProcessEnv,
+  catalogEntries: readonly ChannelPluginCatalogEntry[],
+): string[] {
+  const preferenceKey = resolveChannelPreferenceKey(pluginId, catalogEntries);
+  const builtInId = normalizeChatChannelId(preferenceKey);
+  if (builtInId) {
+    return getChatChannelMeta(builtInId).preferOver ?? [];
   }
-  const catalogEntry = getChannelPluginCatalogEntry(pluginId, { env });
+  const catalogEntry =
+    findCatalogEntryForPluginId(pluginId, catalogEntries) ??
+    getChannelPluginCatalogEntry(preferenceKey, { env });
   return catalogEntry?.meta.preferOver ?? [];
 }
 
@@ -416,7 +446,9 @@ function shouldSkipPreferredPluginAutoEnable(
   entry: PluginEnableChange,
   configured: PluginEnableChange[],
   env: NodeJS.ProcessEnv,
+  catalogEntries: readonly ChannelPluginCatalogEntry[],
 ): boolean {
+  const entryPreferenceKey = resolveChannelPreferenceKey(entry.pluginId, catalogEntries);
   for (const other of configured) {
     if (other.pluginId === entry.pluginId) {
       continue;
@@ -427,8 +459,8 @@ function shouldSkipPreferredPluginAutoEnable(
     if (isPluginExplicitlyDisabled(cfg, other.pluginId)) {
       continue;
     }
-    const preferOver = resolvePreferredOverIds(other.pluginId, env);
-    if (preferOver.includes(entry.pluginId)) {
+    const preferOver = resolvePreferredOverIds(other.pluginId, env, catalogEntries);
+    if (preferOver.includes(entryPreferenceKey)) {
       return true;
     }
   }
@@ -496,6 +528,11 @@ export function applyPluginAutoEnable(params: {
   if (configured.length === 0) {
     return { config: params.config, changes: [] };
   }
+  const normalizedPlugins = normalizePluginsConfig(params.config.plugins);
+  const catalogEntries = listChannelPluginCatalogEntries({
+    env,
+    loadPaths: normalizedPlugins.loadPaths,
+  });
 
   let next = params.config;
   const changes: string[] = [];
@@ -512,7 +549,7 @@ export function applyPluginAutoEnable(params: {
     if (isPluginExplicitlyDisabled(next, entry.pluginId)) {
       continue;
     }
-    if (shouldSkipPreferredPluginAutoEnable(next, entry, configured, env)) {
+    if (shouldSkipPreferredPluginAutoEnable(next, entry, configured, env, catalogEntries)) {
       continue;
     }
     const allow = next.plugins?.allow;

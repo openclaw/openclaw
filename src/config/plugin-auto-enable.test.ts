@@ -533,7 +533,7 @@ describe("applyPluginAutoEnable", () => {
       expect(result.config.plugins?.entries?.apn).toBeUndefined();
     });
 
-    it("uses catalog plugin ids when manifest registry channel mappings are missing", () => {
+    it("uses catalog plugin ids when manifest registry channel mappings are stale", () => {
       const stateDir = makeTempDir();
       const pluginDir = path.join(stateDir, "extensions", "wecom-openclaw-plugin");
       writePluginManifestFixture({
@@ -560,6 +560,8 @@ describe("applyPluginAutoEnable", () => {
           channels: { wecom: { corpId: "wx-demo" } },
         },
         env,
+        // Simulate a startup registry snapshot that knows the plugin id but
+        // has not populated its channel->plugin mapping yet.
         manifestRegistry: makeRegistry([{ id: "wecom-openclaw-plugin", channels: [] }]),
       });
 
@@ -569,6 +571,115 @@ describe("applyPluginAutoEnable", () => {
 
       const validated = validateConfigObjectWithPlugins(result.config, { env });
       expect(validated.ok).toBe(true);
+    });
+
+    it("uses catalog plugin ids from plugins.load.paths when registry mappings are missing", () => {
+      const pluginRoot = makeTempDir();
+      writePluginManifestFixture({
+        rootDir: pluginRoot,
+        id: "wecom-openclaw-plugin",
+      });
+      writePackageChannelFixture({
+        rootDir: pluginRoot,
+        packageName: "@wecom/wecom-openclaw-plugin",
+        channelId: "wecom",
+        channelLabel: "WeCom",
+      });
+
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { wecom: { corpId: "wx-demo" } },
+          plugins: {
+            load: {
+              paths: [pluginRoot],
+            },
+          },
+        },
+        env: {
+          ...process.env,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+        manifestRegistry: makeRegistry([{ id: "wecom-openclaw-plugin", channels: [] }]),
+      });
+
+      expect(result.config.plugins?.entries?.["wecom-openclaw-plugin"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.wecom).toBeUndefined();
+    });
+
+    it("applies preferOver using channel ids even when plugin ids differ", () => {
+      const preferredRoot = makeTempDir();
+      writePluginManifestFixture({
+        rootDir: preferredRoot,
+        id: "preferred-plugin",
+      });
+      writePackageChannelFixture({
+        rootDir: preferredRoot,
+        packageName: "@test/preferred-plugin",
+        channelId: "preferred-channel",
+        channelLabel: "Preferred",
+      });
+      const preferredPackageJsonPath = path.join(preferredRoot, "package.json");
+      const preferredPackageJson = JSON.parse(
+        fs.readFileSync(preferredPackageJsonPath, "utf-8"),
+      ) as Record<string, unknown>;
+      fs.writeFileSync(
+        preferredPackageJsonPath,
+        JSON.stringify(
+          {
+            ...preferredPackageJson,
+            openclaw: {
+              ...(preferredPackageJson.openclaw as Record<string, unknown>),
+              channel: {
+                ...((preferredPackageJson.openclaw as Record<string, unknown>).channel as Record<
+                  string,
+                  unknown
+                >),
+                preferOver: ["secondary-channel"],
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const secondaryRoot = makeTempDir();
+      writePluginManifestFixture({
+        rootDir: secondaryRoot,
+        id: "secondary-plugin",
+      });
+      writePackageChannelFixture({
+        rootDir: secondaryRoot,
+        packageName: "@test/secondary-plugin",
+        channelId: "secondary-channel",
+        channelLabel: "Secondary",
+      });
+
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            "preferred-channel": { token: "preferred" },
+            "secondary-channel": { token: "secondary" },
+          },
+          plugins: {
+            load: {
+              paths: [preferredRoot, secondaryRoot],
+            },
+          },
+        },
+        env: {
+          ...process.env,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+        manifestRegistry: makeRegistry([
+          { id: "preferred-plugin", channels: [] },
+          { id: "secondary-plugin", channels: [] },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["preferred-plugin"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["secondary-plugin"]?.enabled).toBeUndefined();
     });
   });
 });
