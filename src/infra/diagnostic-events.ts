@@ -147,6 +147,25 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   pairedToolName?: string;
 };
 
+export type DiagnosticCronFinishedEvent = DiagnosticBaseEvent & {
+  type: "cron.finished";
+  jobId: string;
+  jobName?: string;
+  status: "ok" | "error" | "skipped";
+  error?: string;
+  summary?: string;
+  delivered?: boolean;
+  deliveryStatus?: "delivered" | "not-delivered" | "unknown" | "not-requested";
+  deliveryError?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  runAtMs?: number;
+  durationMs?: number;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -160,7 +179,8 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent
-  | DiagnosticToolLoopEvent;
+  | DiagnosticToolLoopEvent
+  | DiagnosticCronFinishedEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
@@ -201,9 +221,10 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
     return;
   }
 
+  state.seq += 1;
   const enriched = {
     ...event,
-    seq: (state.seq += 1),
+    seq: state.seq,
     ts: Date.now(),
   } satisfies DiagnosticEventPayload;
   state.dispatchDepth += 1;

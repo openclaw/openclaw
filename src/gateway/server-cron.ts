@@ -19,6 +19,7 @@ import {
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
+import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -368,6 +369,24 @@ export function buildGatewayCronService(params: {
         const webhookToken = trimToOptionalString(params.cfg.cron?.webhookToken);
         const legacyWebhook = trimToOptionalString(params.cfg.cron?.webhook);
         const job = cron.getJob(evt.jobId);
+        emitDiagnosticEvent({
+          type: "cron.finished",
+          jobId: evt.jobId,
+          jobName: job?.name,
+          status: evt.status ?? "error",
+          error: evt.error,
+          summary: evt.summary,
+          delivered: evt.delivered,
+          deliveryStatus: evt.deliveryStatus,
+          deliveryError: evt.deliveryError,
+          sessionId: evt.sessionId,
+          sessionKey: evt.sessionKey,
+          runAtMs: evt.runAtMs,
+          durationMs: evt.durationMs,
+          nextRunAtMs: evt.nextRunAtMs,
+          model: evt.model,
+          provider: evt.provider,
+        });
         const legacyNotify = (job as { notify?: unknown } | undefined)?.notify === true;
         const webhookTarget = resolveCronWebhookTarget({
           delivery:
