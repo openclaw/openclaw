@@ -16,7 +16,7 @@ import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { resolveWhatsAppAccount } from "../../plugin-sdk/whatsapp.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
-import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export type DeliveryTargetResolution =
   | {
@@ -178,8 +178,16 @@ export async function resolveDeliveryTarget(
 
     if (toCandidate && mode === "implicit" && effectiveOutboundList.length > 0) {
       const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
-      if (!normalizedCurrentTarget || !effectiveOutboundList.includes(normalizedCurrentTarget)) {
-        toCandidate = allowFromOverride[0];
+      // Group JIDs are always allowed (mirrors resolve-outbound-target.ts:37-38).
+      const isGroup = normalizedCurrentTarget ? isWhatsAppGroupJid(normalizedCurrentTarget) : false;
+      if (
+        !isGroup &&
+        (!normalizedCurrentTarget || !effectiveOutboundList.includes(normalizedCurrentTarget))
+      ) {
+        // Fall back to the first allowed outbound recipient.
+        // When allowTo is configured, prefer its first entry so the fallback also
+        // passes the allowTo check in resolveOutboundTarget downstream.
+        toCandidate = configuredAllowTo != null ? effectiveOutboundList[0] : allowFromOverride[0];
       }
     }
   }
