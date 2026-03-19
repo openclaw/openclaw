@@ -325,6 +325,7 @@ export async function processMessage(params: {
     SenderName: params.msg.senderName,
     SenderId: params.msg.senderJid?.trim() || params.msg.senderE164,
     SenderE164: params.msg.senderE164,
+    Timestamp: params.msg.timestamp,
     CommandAuthorized: commandAuthorized,
     WasMentioned: params.msg.wasMentioned,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
