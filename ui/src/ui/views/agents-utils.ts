@@ -221,7 +221,7 @@ export function agentLogoUrl(basePath: string): string {
   return base ? `${base}/favicon.svg` : "favicon.svg";
 }
 
-const EMOJI_CONTROL_CHARS_RE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+const EMOJI_CONTROL_CHARS_RE = /[\u200B\u200C\u200E\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
 
 function sanitizeEmojiValue(value: string): string {
   const cleaned = value.replaceAll(EMOJI_CONTROL_CHARS_RE, "").trim();

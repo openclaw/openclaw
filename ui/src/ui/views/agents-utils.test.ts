@@ -145,4 +145,8 @@ describe("resolveAgentEmoji", () => {
   it("falls back to empty for control-only emoji strings", () => {
     expect(resolveAgentEmoji({ identity: { emoji: "\u202E\u2066" } })).toBe("");
   });
+
+  it("preserves ZWJ-composed compound emoji intact", () => {
+    expect(resolveAgentEmoji({ identity: { emoji: "👩‍💻" } })).toBe("👩‍💻");
+  });
 });
