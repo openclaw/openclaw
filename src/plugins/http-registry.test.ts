@@ -4,6 +4,7 @@ import { createEmptyPluginRegistry } from "./registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginHttpRouteRegistry,
+  resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
 
@@ -45,7 +46,7 @@ function expectRouteRegistrationDenied(params: {
 describe("registerPluginHttpRoute", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetPluginRuntimeStateForTest();
   });
 
   it("registers route and unregisters it", () => {

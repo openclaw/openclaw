@@ -3,6 +3,7 @@ import { createEmptyPluginRegistry } from "./registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginHttpRouteRegistry,
+  resetPluginRuntimeStateForTest,
   resolveActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -10,7 +11,7 @@ import {
 describe("plugin runtime route registry", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetPluginRuntimeStateForTest();
   });
 
   it("keeps the pinned route registry when the active plugin registry changes", () => {

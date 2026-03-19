@@ -98,3 +98,12 @@ export function getActivePluginRegistryKey(): string | null {
 export function getActivePluginRegistryVersion(): number {
   return state.version;
 }
+
+export function resetPluginRuntimeStateForTest(): void {
+  const emptyRegistry = createEmptyPluginRegistry();
+  state.registry = emptyRegistry;
+  state.httpRouteRegistry = emptyRegistry;
+  state.httpRouteRegistryPinned = false;
+  state.key = null;
+  state.version += 1;
+}
