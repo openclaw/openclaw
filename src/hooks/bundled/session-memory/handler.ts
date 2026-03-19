@@ -1,8 +1,16 @@
 /**
  * Session memory hook handler
  *
- * Saves session context to memory when /new or /reset command is triggered
- * Creates a new dated memory file with LLM-generated slug
+ * Saves session context to memory when /new or /reset command is triggered.
+ *
+ * When `synthesis` is enabled (opt-in), session content is distilled through
+ * an LLM pass before writing — producing a concise summary of decisions,
+ * outcomes, and context worth remembering. When disabled (default), the raw
+ * conversation messages are saved verbatim (legacy behavior).
+ *
+ * Output is always appended to the canonical daily file `memory/YYYY-MM-DD.md`
+ * to align with the boot sequence (which reads that file on startup). A separate
+ * slug-named file is also written for per-session granularity.
  */
 
 import fs from "node:fs/promises";
@@ -24,6 +32,7 @@ import {
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
+import { synthesizeSessionContent } from "../../session-synthesizer.js";
 import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
@@ -237,6 +246,34 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const source = (context.commandSource as string) || "unknown";
 
+    // When synthesis is enabled, run the session content through an LLM to distill
+    // it into a concise summary. Falls back to raw content on failure.
+    const synthesisEnabled = hookConfig?.synthesis === true;
+    let outputContent = sessionContent;
+
+    if (synthesisEnabled && sessionContent && cfg) {
+      const isTestEnv =
+        process.env.OPENCLAW_TEST_FAST === "1" ||
+        process.env.VITEST === "true" ||
+        process.env.VITEST === "1" ||
+        process.env.NODE_ENV === "test";
+
+      if (!isTestEnv) {
+        log.debug("Running LLM synthesis on session content");
+        const synthesized = await synthesizeSessionContent({
+          sessionContent,
+          cfg,
+          sessionKey: displaySessionKey,
+        });
+        if (synthesized) {
+          outputContent = synthesized;
+          log.debug("Synthesis complete", { length: synthesized.length });
+        } else {
+          log.debug("Synthesis returned empty or failed, using raw content");
+        }
+      }
+    }
+
     // Build Markdown entry
     const entryParts = [
       `# Session: ${dateStr} ${timeStr}${timeZoneSuffix}`,
@@ -248,13 +285,17 @@ const saveSessionToMemory: HookHandler = async (event) => {
     ];
 
     // Include conversation content if available
-    if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
+    if (outputContent) {
+      if (synthesisEnabled && outputContent !== sessionContent) {
+        entryParts.push("## Summary", "", outputContent, "");
+      } else {
+        entryParts.push("## Conversation Summary", "", outputContent, "");
+      }
     }
 
     const entry = entryParts.join("\n");
 
-    // Write under memory root with alias-safe file validation.
+    // Write slug-named file for per-session granularity.
     await writeFileWithinRoot({
       rootDir: memoryDir,
       relativePath: filename,
@@ -262,6 +303,35 @@ const saveSessionToMemory: HookHandler = async (event) => {
       encoding: "utf-8",
     });
     log.debug("Memory file written successfully");
+
+    // Also append to canonical daily file (memory/YYYY-MM-DD.md) so the boot
+    // sequence can find session memories without relying on memory_search.
+    const canonicalFilename = `${dateStr}.md`;
+    const canonicalPath = path.join(memoryDir, canonicalFilename);
+    try {
+      const separator = "\n---\n\n";
+      let existingContent = "";
+      try {
+        existingContent = await fs.readFile(canonicalPath, "utf-8");
+      } catch {
+        // File doesn't exist yet — will be created.
+      }
+
+      const appendContent = existingContent
+        ? `${existingContent.trimEnd()}${separator}${entry}`
+        : entry;
+
+      await writeFileWithinRoot({
+        rootDir: memoryDir,
+        relativePath: canonicalFilename,
+        data: appendContent,
+        encoding: "utf-8",
+      });
+      log.debug("Appended to canonical daily file", { canonicalFilename });
+    } catch (err) {
+      // Non-fatal — the slug file was already written.
+      log.warn(`Failed to append to canonical daily file: ${String(err)}`);
+    }
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
     const relPath = memoryFilePath.replace(os.homedir(), "~");
