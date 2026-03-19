@@ -574,14 +574,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     commandSpecs = appendPluginCommandSpecs({ commandSpecs, runtime });
     runtime.log?.(
       warn(
-        `discord: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
+        `discord: ${initialCommandCount} native commands exceed Discord's ${maxDiscordCommands}-command limit; removing per-skill slash commands (keeping /skill fallback). To control this, set commands.nativeSkills: false or channels.discord.commands.nativeSkills: false.`,
       ),
     );
   }
   if (nativeEnabled && commandSpecs.length > maxDiscordCommands) {
     runtime.log?.(
       warn(
-        `discord: ${commandSpecs.length} commands exceeds limit; some commands may fail to deploy.`,
+        `discord: ${commandSpecs.length} base commands still exceed Discord's ${maxDiscordCommands}-command limit after removing skills; some commands may fail to deploy. Reduce plugin/custom commands or set channels.discord.commands.native: false.`,
       ),
     );
   }

@@ -275,7 +275,7 @@ describe("bot-native-command-menu", () => {
       "Telegram rejected 100 commands (BOT_COMMANDS_TOO_MUCH); retrying with 80.",
     );
     expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram accepted 80 commands after BOT_COMMANDS_TOO_MUCH (started with 100; omitted 20). Reduce plugin/skill/custom commands to expose more menu entries.",
+      "Telegram accepted 80 of 100 commands after BOT_COMMANDS_TOO_MUCH (omitted 20). To reduce: set commands.nativeSkills: false or reduce plugin/custom commands.",
     );
     expect(runtimeError).not.toHaveBeenCalled();
   });

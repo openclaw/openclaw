@@ -56,9 +56,9 @@ function formatTelegramCommandRetrySuccessLog(params: {
 }): string {
   const omittedCount = Math.max(0, params.initialCount - params.acceptedCount);
   return (
-    `Telegram accepted ${params.acceptedCount} commands after BOT_COMMANDS_TOO_MUCH ` +
-    `(started with ${params.initialCount}; omitted ${omittedCount}). ` +
-    "Reduce plugin/skill/custom commands to expose more menu entries."
+    `Telegram accepted ${params.acceptedCount} of ${params.initialCount} commands after BOT_COMMANDS_TOO_MUCH ` +
+    `(omitted ${omittedCount}). ` +
+    "To reduce: set commands.nativeSkills: false or reduce plugin/custom commands."
   );
 }
 
@@ -236,7 +236,7 @@ export function syncTelegramMenuCommands(params: {
           nextCount < retryCommands.length ? nextCount : retryCommands.length - 1;
         if (reducedCount <= 0) {
           runtime.error?.(
-            "Telegram rejected native command registration (BOT_COMMANDS_TOO_MUCH); leaving menu empty. Reduce commands or disable channels.telegram.commands.native.",
+            "Telegram rejected all command registration attempts (BOT_COMMANDS_TOO_MUCH); menu left empty. Set commands.nativeSkills: false to disable per-skill commands, or channels.telegram.commands.native: false to disable all native commands.",
           );
           return;
         }
