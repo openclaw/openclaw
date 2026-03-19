@@ -17,6 +17,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { runStartupMatrixMigration } from "../gateway/server-startup-matrix-migration.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -235,6 +236,19 @@ export async function doctorCommand(
   await maybeRepairGatewayServiceConfig(cfg, resolveMode(cfg), runtime, prompter);
   await noteMacLaunchAgentOverrides();
   await noteMacLaunchctlGatewayEnvOverrides(cfg);
+
+  if (prompter.shouldRepair) {
+    await runStartupMatrixMigration({
+      cfg,
+      env: process.env,
+      log: {
+        info: (message) => runtime.log(message),
+        warn: (message) => runtime.error(message),
+      },
+      trigger: "doctor-fix",
+      logPrefix: "doctor",
+    });
+  }
 
   await noteSecurityWarnings(cfg);
   await noteChromeMcpBrowserReadiness(cfg);
