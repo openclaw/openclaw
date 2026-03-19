@@ -241,6 +241,24 @@ export async function monitorWebChannel(
       status.lastEventAt = lastMessageAt;
       emitStatus();
     };
+    // Heuristic: detect transport-level errors that suggest a dead socket.
+    // Application-level send failures (bad JID, content errors) should NOT
+    // trigger a reconnect — only connection/socket issues should.
+    const isTransportError = (err: unknown): boolean => {
+      const msg = String(err).toLowerCase();
+      return (
+        msg.includes("connection") ||
+        msg.includes("socket") ||
+        msg.includes("timed out") ||
+        msg.includes("timeout") ||
+        msg.includes("closed") ||
+        msg.includes("econnreset") ||
+        msg.includes("epipe") ||
+        msg.includes("not open") ||
+        msg.includes("disconnected")
+      );
+    };
+
     const wrapOutbound = <F extends (...args: never[]) => Promise<unknown>>(fn: F): F =>
       (async (...args: Parameters<F>) => {
         try {
@@ -248,18 +266,26 @@ export async function monitorWebChannel(
           updateLastActivity();
           return result;
         } catch (err) {
-          // A failed outbound send may indicate a stale socket. Log it and
-          // trigger a proactive reconnect rather than silently aging the
-          // watchdog timer. The caller still receives the error.
-          reconnectLogger.warn(
-            { connectionId, error: formatError(err) },
-            "outbound send failed — may indicate stale socket",
-          );
-          listener.signalClose?.({
-            status: 499,
-            isLoggedOut: false,
-            error: err,
-          });
+          if (isTransportError(err)) {
+            // Transport-level failure likely means a stale socket.
+            // Trigger proactive reconnect. The caller still receives the error.
+            reconnectLogger.warn(
+              { connectionId, error: formatError(err) },
+              "outbound send failed (transport error) — forcing reconnect",
+            );
+            listener.signalClose?.({
+              status: 499,
+              isLoggedOut: false,
+              error: err,
+            });
+          } else {
+            // Application-level error (bad JID, invalid content, etc.)
+            // — don't tear down a healthy connection.
+            reconnectLogger.info(
+              { connectionId, error: formatError(err) },
+              "outbound send failed (application error) — not reconnecting",
+            );
+          }
           throw err;
         }
       }) as unknown as F;
