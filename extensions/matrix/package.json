@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
+    "@vector-im/matrix-bot-sdk": "0.8.0-element.3",
     "fake-indexeddb": "^6.2.5",
     "markdown-it": "14.1.0",
     "matrix-js-sdk": "^40.1.0",
@@ -37,6 +38,7 @@
     "releaseChecks": {
       "rootDependencyMirrorAllowlist": [
         "@matrix-org/matrix-sdk-crypto-nodejs",
+        "@vector-im/matrix-bot-sdk",
         "matrix-js-sdk",
         "music-metadata"
       ]

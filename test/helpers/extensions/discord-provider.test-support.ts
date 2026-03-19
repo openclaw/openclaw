@@ -379,6 +379,18 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/channel-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-runtime")>(
+    "openclaw/plugin-sdk/channel-runtime",
+  );
+  return {
+    ...actual,
+    resolveThreadBindingIdleTimeoutMs: vi.fn(() => 24 * 60 * 60 * 1000),
+    resolveThreadBindingMaxAgeMs: vi.fn(() => undefined),
+    resolveThreadBindingsEnabled: vi.fn(() => true),
+  };
+});
+
 vi.mock("../../../extensions/discord/src/accounts.js", () => ({
   resolveDiscordAccount: resolveDiscordAccountMock,
 }));
@@ -474,4 +486,5 @@ vi.mock("../../../extensions/discord/src/monitor/thread-bindings.js", () => ({
   createThreadBindingManager: createThreadBindingManagerMock,
   reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
   resolveThreadBindingIdleTimeoutMs: vi.fn(() => 24 * 60 * 60 * 1000),
+  resolveThreadBindingMaxAgeMs: vi.fn(() => undefined),
 }));

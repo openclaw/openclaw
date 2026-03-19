@@ -5,7 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RuntimeEnv } from "../runtime-api.js";
 
-const REQUIRED_MATRIX_PACKAGES = ["matrix-js-sdk", "@matrix-org/matrix-sdk-crypto-nodejs"];
+const REQUIRED_MATRIX_PACKAGES = [
+  "@vector-im/matrix-bot-sdk",
+  "matrix-js-sdk",
+  "@matrix-org/matrix-sdk-crypto-nodejs",
+];
 
 type MatrixCryptoRuntimeDeps = {
   requireFn?: (id: string) => unknown;
@@ -184,11 +188,11 @@ export async function ensureMatrixSdkInstalled(params: {
   const confirm = params.confirm;
   if (confirm) {
     const ok = await confirm(
-      "Matrix requires matrix-js-sdk and @matrix-org/matrix-sdk-crypto-nodejs. Install now?",
+      "Matrix requires @vector-im/matrix-bot-sdk, matrix-js-sdk, and @matrix-org/matrix-sdk-crypto-nodejs. Install now?",
     );
     if (!ok) {
       throw new Error(
-        "Matrix requires matrix-js-sdk and @matrix-org/matrix-sdk-crypto-nodejs (install dependencies first).",
+        "Matrix requires @vector-im/matrix-bot-sdk, matrix-js-sdk, and @matrix-org/matrix-sdk-crypto-nodejs (install dependencies first).",
       );
     }
   }

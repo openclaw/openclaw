@@ -42,8 +42,11 @@ export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-runtime";
-export type { DiscordConfig } from "openclaw/plugin-sdk/discord";
-export type { DiscordAccountConfig, DiscordActionConfig } from "openclaw/plugin-sdk/discord";
+export type {
+  DiscordAccountConfig,
+  DiscordActionConfig,
+  DiscordConfig,
+} from "../../../src/config/types.discord.js";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
