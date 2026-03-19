@@ -48,6 +48,7 @@ Use this format when adding entries:
 - **ContentClaw** — Generate AI-powered content pages at scale from any topic, analyze competitor sitemaps, and serve via REST API for any CMS.
   npm: `contentclaw-openclaw-plugin`
   repo: `https://github.com/metehan777/contentclaw`
+  prerequisite: `npm install -g contentclaw`
   install: `openclaw plugins install contentclaw-openclaw-plugin`
 
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
