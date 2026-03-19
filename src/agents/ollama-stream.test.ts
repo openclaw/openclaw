@@ -434,6 +434,24 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it("sends think: false when reasoning is not set", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+        });
+
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const requestBody = JSON.parse(requestInit.body as string) as { think?: boolean };
+        expect(requestBody.think).toBe(false);
+      },
+    );
+  });
+
   it("preserves an explicit Authorization header when apiKey is a local marker", async () => {
     await withMockNdjsonFetch(
       [
