@@ -16,15 +16,20 @@ describe("parseExecApprovalRequested", () => {
 });
 
 describe("parsePluginApprovalRequested", () => {
+  // Matches the actual gateway broadcast shape: title/description/severity/pluginId
+  // are nested inside payload.request (PluginApprovalRequestPayload)
   const validPayload = {
     id: "plugin-1",
-    title: "Dangerous command detected",
-    description: "chmod 777 script.sh modifies file permissions",
-    severity: "high",
-    pluginId: "sage",
     createdAtMs: 1000,
     expiresAtMs: 120_000,
-    request: { agentId: "agent-1", sessionKey: "sess-1" },
+    request: {
+      title: "Dangerous command detected",
+      description: "chmod 777 script.sh modifies file permissions",
+      severity: "high",
+      pluginId: "sage",
+      agentId: "agent-1",
+      sessionKey: "sess-1",
+    },
   };
 
   it("parses a valid payload", () => {
@@ -42,9 +47,17 @@ describe("parsePluginApprovalRequested", () => {
     expect(result!.expiresAtMs).toBe(120_000);
   });
 
-  it("returns null when title is missing", () => {
-    const { title: _, ...noTitle } = validPayload;
-    expect(parsePluginApprovalRequested(noTitle)).toBeNull();
+  it("returns null when title is missing from request", () => {
+    const {
+      request: { title: _, ...restRequest },
+      ...rest
+    } = validPayload;
+    expect(parsePluginApprovalRequested({ ...rest, request: restRequest })).toBeNull();
+  });
+
+  it("returns null when request is missing entirely", () => {
+    const { request: _, ...noRequest } = validPayload;
+    expect(parsePluginApprovalRequested(noRequest)).toBeNull();
   });
 
   it("returns null when id is missing", () => {
@@ -68,9 +81,9 @@ describe("parsePluginApprovalRequested", () => {
   it("handles missing optional fields gracefully", () => {
     const minimal = {
       id: "plugin-2",
-      title: "Alert",
       createdAtMs: 500,
       expiresAtMs: 60_000,
+      request: { title: "Alert" },
     };
     const result = parsePluginApprovalRequested(minimal);
     expect(result).not.toBeNull();
