@@ -87,8 +87,8 @@ const configAdapter: ChannelConfigAdapter<KudositySmsAccount> = {
    */
   resolveAccount(cfg, _accountId) {
     const section = (cfg as any).channels?.[CHANNEL_KEY];
-    const apiKey = String(section?.apiKey ?? process.env.KUDOSITY_API_KEY ?? "");
-    const sender = String(section?.sender ?? process.env.KUDOSITY_SENDER ?? "");
+    const apiKey = String(section?.apiKey ?? process.env.KUDOSITY_API_KEY ?? "").trim();
+    const sender = String(section?.sender ?? process.env.KUDOSITY_SENDER ?? "").trim();
     const enabled = section?.enabled as boolean | undefined;
     return { accountId: DEFAULT_ACCOUNT_ID, apiKey, sender, enabled };
   },
@@ -161,7 +161,8 @@ const configSchema = {
         description: "Default sender number (E.164 format, e.g. +61400000000)",
       },
     },
-    required: ["apiKey", "sender"],
+    // No `required` — the disable flow removes these fields (keeping only `enabled: false`),
+    // and env-backed setups never populate them. Readiness is enforced by `isConfigured()`.
   },
 };
 
