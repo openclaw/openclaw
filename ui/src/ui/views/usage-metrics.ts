@@ -258,8 +258,20 @@ function renderUsageMosaic(
   `;
 }
 
-function formatCost(n: number, decimals = 2): string {
-  return `$${n.toFixed(decimals)}`;
+function formatCost(n: number, decimals?: number): string {
+  if (decimals != null) {
+    return `$${n.toFixed(decimals)}`;
+  }
+  if (n === 0) {
+    return "$0.00";
+  }
+  if (n > 0 && n < 0.01) {
+    return `$${n.toFixed(4)}`;
+  }
+  if (n < 1) {
+    return `$${n.toFixed(3)}`;
+  }
+  return `$${n.toFixed(2)}`;
 }
 
 function formatIsoDate(date: Date): string {
