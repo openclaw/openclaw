@@ -5,11 +5,26 @@ export class OVSessionBridgeClient {
     private readonly apiKey: string,
     private readonly agentId: string,
     private readonly timeoutMs: number,
+    /**
+     * Optional caller-supplied AbortSignal.  When fired, all in-flight HTTP
+     * requests issued by this client are aborted immediately rather than
+     * waiting for the per-request timeout to expire.  Used by flushWithTimeout
+     * to propagate cancellation so a timed-out /done actually stops work.
+     */
+    private readonly abortSignal?: AbortSignal,
   ) {}
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    // Combine the per-request timeout signal with any caller-supplied signal.
+    // AbortSignal.any fires as soon as the earliest signal fires.
+    const signal =
+      this.abortSignal != null
+        ? AbortSignal.any([controller.signal, this.abortSignal])
+        : controller.signal;
+
     try {
       const headers = new Headers(init.headers ?? {});
       if (this.apiKey) headers.set("X-API-Key", this.apiKey);
@@ -21,7 +36,7 @@ export class OVSessionBridgeClient {
       const res = await fetch(`${this.baseUrl}${path}`, {
         ...init,
         headers,
-        signal: controller.signal,
+        signal,
       });
 
       const payload = (await res.json().catch(() => ({}))) as {

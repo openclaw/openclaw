@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { OVSessionBridgeConfig } from "../src/config.js";
-import { enqueueFlush, flushSessionToOV, flushWithTimeout } from "../src/flush.js";
+import { enqueueFlush, flushSessionToOV, flushWithTimeout, flushWithRetry } from "../src/flush.js";
 import { loadCheckpoint, saveCheckpoint } from "../src/state.js";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -656,5 +656,256 @@ describe("listPendingCheckpoints", () => {
       JSON.stringify({ openclawSessionId: "s-tmp", finalized: false }),
     );
     expect(listPendingCheckpoints(tmpDir)).toHaveLength(0);
+  });
+});
+
+// ── Fix 1: abort/cancellation propagation ────────────────────────────────────
+//
+// Verifies that flushWithTimeout threads an AbortSignal into the HTTP client
+// so in-flight requests are actually cancelled when the timeout fires.
+
+describe("flushWithTimeout abort propagation", () => {
+  let tmpDir: string;
+  let cfg: OVSessionBridgeConfig;
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    cfg = makeConfig({ stateDir: tmpDir });
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.unstubAllGlobals();
+  });
+
+  it("propagates AbortSignal to in-flight fetch and marks it aborted on timeout", async () => {
+    const sessionFile = path.join(tmpDir, "session-abort-sig.jsonl");
+    writeTranscript(sessionFile, [{ role: "user", content: "Abort me" }]);
+
+    // Capture the signal passed to fetch; reject when it fires.
+    let capturedSignal: AbortSignal | null = null;
+    fetchMock.mockImplementation((_url: string, opts: RequestInit) => {
+      capturedSignal = (opts.signal as AbortSignal) ?? null;
+      return new Promise<Response>((_resolve, reject) => {
+        (opts.signal as AbortSignal | undefined)?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted", "AbortError"));
+        });
+        // Never resolves otherwise — simulates a stalled HTTP request.
+      });
+    });
+
+    const result = await flushWithTimeout(
+      {
+        openclawSessionId: "s-abort-sig",
+        sessionKey: "k",
+        agentId: "main",
+        sessionFile,
+        cfg,
+        isFinalFlush: true,
+      },
+      50, // 50ms timeout — fires before the stalled fetch resolves
+    );
+
+    // Caller receives a timeout error immediately.
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/timed out/);
+
+    // The fetch must have received a signal that is now in the aborted state,
+    // confirming that in-flight HTTP work was actually cancelled.
+    // Use a type assertion here: TypeScript narrows capturedSignal to never after
+    // the not.toBeNull() vitest assertion (TS sees the callback as possibly-not-called).
+    expect(capturedSignal).not.toBeNull();
+    expect((capturedSignal as AbortSignal | null)?.aborted).toBe(true);
+  });
+
+  it("does NOT abort the fetch when flush completes before timeout fires", async () => {
+    const sessionFile = path.join(tmpDir, "session-no-abort.jsonl");
+    writeTranscript(sessionFile, [{ role: "user", content: "Fast" }]);
+
+    let capturedSignal: AbortSignal | null = null;
+    fetchMock.mockImplementation((url: string, opts: RequestInit) => {
+      capturedSignal = (opts.signal as AbortSignal) ?? null;
+      const u = String(url);
+      const method = (opts.method ?? "GET") as string;
+      if (u.includes("/health")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ status: "ok" }) });
+      }
+      if (u.endsWith("/api/v1/sessions") && method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: "ok", result: { session_id: "ov-fast" } }),
+        });
+      }
+      if (u.includes("/messages") && method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: "ok", result: { session_id: "ov-fast" } }),
+        });
+      }
+      if (u.includes("/commit") && method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: "ok", result: {} }),
+        });
+      }
+      return Promise.resolve({
+        ok: false,
+        json: () => Promise.resolve({ status: "error", error: { message: "unexpected" } }),
+      });
+    });
+
+    const result = await flushWithTimeout(
+      {
+        openclawSessionId: "s-no-abort",
+        sessionKey: "k",
+        agentId: "main",
+        sessionFile,
+        cfg,
+        isFinalFlush: true,
+      },
+      5_000, // ample timeout — flush completes long before this fires
+    );
+
+    expect(result.ok).toBe(true);
+    // The signal should NOT be aborted since the flush succeeded.
+    // Type assertion: TS narrows capturedSignal in closure-assigned vars.
+    expect((capturedSignal as AbortSignal | null)?.aborted).toBe(false);
+  });
+});
+
+// ── Fix 2: startup replay retry (flushWithRetry) ──────────────────────────────
+//
+// Verifies that flushWithRetry retries on transient failures and eventually
+// returns ok:true when a later attempt succeeds.
+
+describe("flushWithRetry", () => {
+  let tmpDir: string;
+  let cfg: OVSessionBridgeConfig;
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    cfg = makeConfig({ stateDir: tmpDir });
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.unstubAllGlobals();
+  });
+
+  it("succeeds on second attempt after first transient failure", async () => {
+    const sessionFile = path.join(tmpDir, "session-retry-r.jsonl");
+    writeTranscript(sessionFile, [{ role: "user", content: "Retry me" }]);
+
+    let healthCallCount = 0;
+    fetchMock.mockImplementation((url: string, opts: RequestInit) => {
+      const u = String(url);
+      const method = (opts.method ?? "GET") as string;
+
+      if (u.includes("/health")) {
+        healthCallCount++;
+        // First health-check fails; subsequent calls succeed.
+        if (healthCallCount === 1) {
+          return Promise.reject(new Error("OV server not ready yet"));
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ status: "ok" }) });
+      }
+      if (u.endsWith("/api/v1/sessions") && method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: "ok", result: { session_id: "ov-retry-r2" } }),
+        });
+      }
+      if (u.includes("/messages") && method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: "ok", result: { session_id: "ov-retry-r2" } }),
+        });
+      }
+      if (u.includes("/commit") && method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: "ok", result: {} }),
+        });
+      }
+      return Promise.resolve({
+        ok: false,
+        json: () =>
+          Promise.resolve({ status: "error", error: { message: `unexpected: ${method} ${u}` } }),
+      });
+    });
+
+    const result = await flushWithRetry(
+      {
+        openclawSessionId: "s-retry-r2",
+        sessionKey: "k",
+        agentId: "main",
+        sessionFile,
+        cfg,
+        isFinalFlush: true,
+      },
+      { maxRetries: 3, retryBaseDelayMs: 1 }, // 1ms delays for test speed
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.turnsFlushed).toBe(1);
+    // Health was called twice: once for the failing attempt, once for the retry.
+    expect(healthCallCount).toBe(2);
+  });
+
+  it("returns ok:false after all retries exhausted", async () => {
+    const sessionFile = path.join(tmpDir, "session-exhaust.jsonl");
+    writeTranscript(sessionFile, [{ role: "user", content: "Always fails" }]);
+
+    // All fetch calls fail unconditionally.
+    fetchMock.mockRejectedValue(new Error("permanent failure"));
+
+    const result = await flushWithRetry(
+      {
+        openclawSessionId: "s-exhaust",
+        sessionKey: "k",
+        agentId: "main",
+        sessionFile,
+        cfg,
+        isFinalFlush: true,
+      },
+      { maxRetries: 3, retryBaseDelayMs: 1 },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/permanent failure/);
+  });
+
+  it("stops retrying immediately when the session is already finalized (skipped)", async () => {
+    // Pre-seed a finalized checkpoint so the flush returns skipped on first attempt.
+    saveCheckpoint(tmpDir, {
+      openclawSessionId: "s-finalized-r",
+      sessionKey: "k",
+      agentId: "main",
+      ovSessionId: "ov-done",
+      lastFlushedIndex: 3,
+      finalized: true,
+      updatedAt: new Date().toISOString(),
+    });
+
+    const result = await flushWithRetry(
+      {
+        openclawSessionId: "s-finalized-r",
+        sessionKey: "k",
+        agentId: "main",
+        cfg,
+        isFinalFlush: true,
+      },
+      { maxRetries: 5, retryBaseDelayMs: 1 },
+    );
+
+    // Should short-circuit on the first attempt (skipped=true counts as done).
+    expect(result.skipped).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

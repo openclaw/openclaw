@@ -18,7 +18,7 @@
 import { homedir } from "node:os";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { buildOVPluginConfigSchema, parseOVSessionBridgeConfig } from "./src/config.js";
-import { enqueueFlush, flushWithTimeout } from "./src/flush.js";
+import { enqueueFlush, flushWithTimeout, flushWithRetry } from "./src/flush.js";
 import { listPendingCheckpoints, loadCheckpoint } from "./src/state.js";
 import type { SessionCheckpoint } from "./src/types.js";
 
@@ -38,6 +38,13 @@ const SESSION_END_MAX_RETRIES = 3;
 
 // Base delay between session_end retry attempts (multiplied by attempt index).
 const SESSION_END_RETRY_BASE_DELAY_MS = 2_000;
+
+// Maximum retry attempts for startup replay of interrupted sessions.
+const STARTUP_REPLAY_MAX_RETRIES = 4;
+
+// Base delay between startup replay retry attempts (linear back-off).
+// At 5s base: delays are 5s, 10s, 15s across up to 3 retries.
+const STARTUP_REPLAY_RETRY_BASE_DELAY_MS = 5_000;
 
 // ── Module-level session tracking ────────────────────────────────────────────
 
@@ -308,21 +315,33 @@ const sessionBridgePlugin = {
             `openviking-session-bridge: startup replay for session ${cp.openclawSessionId}`,
           );
 
-          void enqueueFlush({
+          const replayParams = {
             openclawSessionId: cp.openclawSessionId,
             sessionKey: cp.sessionKey,
             agentId: cp.agentId,
             sessionFile,
             cfg,
             isFinalFlush: true,
+          };
+
+          // Fire-and-forget with retry/back-off so transient startup failures
+          // (e.g. OV server not yet ready) are retried rather than silently
+          // dropped as they were with the previous single-attempt approach.
+          void flushWithRetry(replayParams, {
+            maxRetries: STARTUP_REPLAY_MAX_RETRIES,
+            retryBaseDelayMs: STARTUP_REPLAY_RETRY_BASE_DELAY_MS,
           }).then((result) => {
             if (result.ok && !result.skipped) {
               api.logger.info(
                 `openviking-session-bridge: startup-replay flushed ${result.turnsFlushed} turn(s) for ${cp.openclawSessionId}`,
               );
-            } else if (!result.ok) {
+            } else if (result.skipped) {
+              api.logger.debug?.(
+                `openviking-session-bridge: startup-replay skipped ${cp.openclawSessionId} (finalized=${result.finalized})`,
+              );
+            } else {
               api.logger.warn(
-                `openviking-session-bridge: startup-replay flush failed for ${cp.openclawSessionId}: ${result.error}`,
+                `openviking-session-bridge: startup-replay flush failed for ${cp.openclawSessionId} after ${STARTUP_REPLAY_MAX_RETRIES} attempt(s): ${result.error}`,
               );
             }
           });

@@ -16,6 +16,22 @@ export type FlushParams = {
   cfg: OVSessionBridgeConfig;
   /** If true, commit the OV session at the end (triggers memory extraction). */
   isFinalFlush: boolean;
+  /**
+   * Optional AbortSignal to propagate cancellation into in-flight HTTP
+   * requests.  When fired, all OV API calls in this flush are aborted
+   * immediately rather than waiting for the per-request timeout.
+   *
+   * Used by flushWithTimeout: the caller-side timer calls abort() so a
+   * timed-out /done actually cancels in-flight work rather than merely
+   * timing out the caller while the work continues in the background.
+   *
+   * Note: with enqueueFlush coalescing, the signal from the *first* caller's
+   * params is the one threaded into the actual HTTP work.  Subsequent callers
+   * that join the in-flight promise share its result but their individual
+   * signals are not retroactively threaded in — the background work is bounded
+   * by cfg.timeoutMs per request and clears the mutex naturally.
+   */
+  signal?: AbortSignal;
 };
 
 export type FlushResult = {
@@ -82,7 +98,7 @@ export function enqueueFlush(params: FlushParams): Promise<FlushResult> {
  * directly bypasses the per-session mutex and risks concurrent flushes.
  */
 export async function flushSessionToOV(params: FlushParams): Promise<FlushResult> {
-  const { openclawSessionId, sessionKey, agentId, sessionFile, cfg, isFinalFlush } = params;
+  const { openclawSessionId, sessionKey, agentId, sessionFile, cfg, isFinalFlush, signal } = params;
 
   // Skip entirely when plugin is disabled (caller should check, but double-guard here).
   if (!cfg.enabled) {
@@ -121,7 +137,15 @@ export async function flushSessionToOV(params: FlushParams): Promise<FlushResult
     };
   }
 
-  const client = new OVSessionBridgeClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+  // Pass the caller-supplied abort signal into the HTTP client so that
+  // in-flight requests can be cancelled (e.g. when flushWithTimeout fires).
+  const client = new OVSessionBridgeClient(
+    cfg.baseUrl,
+    cfg.apiKey,
+    cfg.agentId,
+    cfg.timeoutMs,
+    signal,
+  );
 
   let ovSessionId = existingOvSessionId;
   // Track how many turns have been successfully sent in this flush attempt.
@@ -237,24 +261,31 @@ export async function flushSessionToOV(params: FlushParams): Promise<FlushResult
  * session is already in-flight (e.g. fired by session_end), the caller joins it
  * rather than starting a duplicate.
  *
- * On timeout the caller receives ok:false immediately, but the underlying flush
- * continues running in the background — partial progress is checkpointed per
- * turn, so a subsequent flush for the same session will resume from the correct
- * offset rather than re-sending already-delivered turns.
+ * On timeout the caller receives ok:false immediately.  Cancellation is
+ * propagated via an AbortController whose signal is threaded through the flush
+ * params into the OV HTTP client — so in-flight HTTP requests are aborted
+ * immediately rather than running to their own per-request timeout.
  *
- * Residual risk: HTTP requests in-flight at the time of the timeout cannot be
- * cancelled without threading an AbortController through the client (future
- * work). The background work is bounded: it completes or hits its own per-
- * request timeout (cfg.timeoutMs) and then clears the mutex naturally.
+ * Coalescing note: if a flush was already in-flight when this function is called
+ * (started by another caller without an abort signal), the coalesced join shares
+ * that flush's result but the abort signal is not retroactively threaded in.
+ * The background work is bounded by cfg.timeoutMs per HTTP request and clears
+ * the mutex naturally.  Partial-progress checkpointing is preserved in both
+ * cases.
  */
 export async function flushWithTimeout(
   params: FlushParams,
   timeoutMs: number,
 ): Promise<FlushResult> {
-  const flushPromise = enqueueFlush(params);
+  const controller = new AbortController();
+  // Thread the abort signal into the flush so in-flight HTTP requests are
+  // actually cancelled when the timeout fires, not just the caller unblocked.
+  const paramsWithSignal: FlushParams = { ...params, signal: controller.signal };
+  const flushPromise = enqueueFlush(paramsWithSignal);
 
   return new Promise<FlushResult>((resolve) => {
     const timer = setTimeout(() => {
+      controller.abort("flush timeout");
       resolve({
         ok: false,
         turnsFlushed: 0,
@@ -280,4 +311,52 @@ export async function flushWithTimeout(
         });
       });
   });
+}
+
+/**
+ * Flush with automatic retry and linear back-off on transient failures.
+ *
+ * Suitable for fire-and-forget contexts where the first attempt may fail
+ * transiently (e.g. the OV server not yet available at process startup).
+ * Each attempt is coalesced through the per-session mutex (enqueueFlush),
+ * so concurrent callers for the same session are never doubled up.
+ *
+ * Returns the result of the last attempt — ok:true on any success, ok:false
+ * if all attempts are exhausted.
+ */
+export async function flushWithRetry(
+  params: FlushParams,
+  opts: { maxRetries: number; retryBaseDelayMs: number },
+): Promise<FlushResult> {
+  let lastResult: FlushResult | null = null;
+
+  for (let attempt = 0; attempt < opts.maxRetries; attempt++) {
+    try {
+      lastResult = await enqueueFlush(params);
+      if (lastResult.ok || lastResult.skipped) return lastResult;
+    } catch (err) {
+      lastResult = {
+        ok: false,
+        turnsFlushed: 0,
+        finalized: false,
+        skipped: false,
+        error: String(err),
+      };
+    }
+
+    if (attempt < opts.maxRetries - 1) {
+      // Linear back-off: delay grows by retryBaseDelayMs per attempt.
+      await new Promise<void>((r) => setTimeout(r, opts.retryBaseDelayMs * (attempt + 1)));
+    }
+  }
+
+  return (
+    lastResult ?? {
+      ok: false,
+      turnsFlushed: 0,
+      finalized: false,
+      skipped: false,
+      error: "no attempts made",
+    }
+  );
 }
