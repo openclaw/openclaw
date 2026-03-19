@@ -31,27 +31,16 @@ export type ActiveWebListener = {
 // Use process-global symbol keys to survive bundler code-splitting and loader
 // cache splits without depending on fragile string property names.
 const GLOBAL_LISTENERS_KEY = Symbol.for("openclaw.whatsapp.activeListeners");
-const GLOBAL_CURRENT_KEY = Symbol.for("openclaw.whatsapp.currentListener");
 
 type GlobalWithListeners = typeof globalThis & {
   [GLOBAL_LISTENERS_KEY]?: Map<string, ActiveWebListener>;
-  [GLOBAL_CURRENT_KEY]?: ActiveWebListener | null;
 };
 
 const _global = globalThis as GlobalWithListeners;
 
 _global[GLOBAL_LISTENERS_KEY] ??= new Map<string, ActiveWebListener>();
-_global[GLOBAL_CURRENT_KEY] ??= null;
 
 const listeners = _global[GLOBAL_LISTENERS_KEY];
-
-function getCurrentListener(): ActiveWebListener | null {
-  return _global[GLOBAL_CURRENT_KEY] ?? null;
-}
-
-function setCurrentListener(listener: ActiveWebListener | null): void {
-  _global[GLOBAL_CURRENT_KEY] = listener;
-}
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -93,9 +82,6 @@ export function setActiveWebListener(
     listeners.delete(id);
   } else {
     listeners.set(id, listener);
-  }
-  if (id === DEFAULT_ACCOUNT_ID) {
-    setCurrentListener(listener);
   }
 }
 
