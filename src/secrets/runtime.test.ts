@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
-import { loadConfig, type OpenClawConfig, writeConfigFile } from "../config/config.js";
+import {
+  clearConfigCache,
+  loadConfig,
+  type OpenClawConfig,
+  writeConfigFile,
+} from "../config/config.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import {
@@ -121,6 +126,8 @@ describe("secrets runtime snapshot", () => {
 
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
+    clearConfigCache();
+    resolvePluginWebSearchProvidersMock.mockReset();
   });
 
   const allowInsecureTempSecretFile = process.platform === "win32";
