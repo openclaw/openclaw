@@ -7,8 +7,7 @@ const { execFile } = require('child_process');
 const PORT = 3008;
 const POLL_INTERVAL_MS = 1000;
 const SQLITE_TIMEOUT_MS = 10000;
-const APPLESCRIPT_TIMEOUT_MS = 10000;
-const CONTACTS_APPLESCRIPT_TIMEOUT_MS = 30000;
+const APPLESCRIPT_TIMEOUT_MS = 60000;
 const LOG_PREFIX = '[imessage-service]';
 const RECORD_SEPARATOR = String.fromCharCode(30);
 const FIELD_SEPARATOR = String.fromCharCode(31);
@@ -17,6 +16,8 @@ const DATA_DIR = path.join(HOME_DIR, '.openclaw', 'workspace', 'imessage');
 const REQUEST_FILE = path.join(DATA_DIR, 'imessage-request.json');
 const RESPONSE_FILE = path.join(DATA_DIR, 'imessage-response.json');
 const CHAT_DB = path.join(HOME_DIR, 'Library', 'Messages', 'chat.db');
+const ADDRESS_BOOK_DIR = path.join(HOME_DIR, 'Library', 'Application Support', 'AddressBook');
+const DEFAULT_ADDRESS_BOOK_PATH = path.join(ADDRESS_BOOK_DIR, 'AddressBook-v22.abcddb');
 const PHONE_SQL_NORMALIZER = [
   "replace(",
   "replace(",
@@ -42,6 +43,7 @@ let contactEntries = [];
 let contactsLoadedAt = null;
 let contactsLoadError = null;
 let contactsLoadPromise = null;
+let addressBookPaths = null;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -136,31 +138,63 @@ function queryChatDb(sql) {
   });
 }
 
-function contactReadScript() {
-  return [
-    'on safeText(value)',
-    '  if value is missing value then return ""',
-    '  return value as text',
-    'end safeText',
-    'on run',
-    '  set recordDelimiter to ASCII character 30',
-    '  set fieldDelimiter to ASCII character 31',
-    '  set output to ""',
-    '  tell application "Contacts"',
-    '    repeat with p in every person',
-    '      set fullName to my safeText(name of p)',
-    '      if fullName is "" then set fullName to ((my safeText(first name of p)) & " " & (my safeText(last name of p)))',
-    '      repeat with ph in every phone of p',
-    '        set output to output & recordDelimiter & fullName & fieldDelimiter & (my safeText(value of ph)) & fieldDelimiter & "phone"',
-    '      end repeat',
-    '      repeat with em in every email of p',
-    '        set output to output & recordDelimiter & fullName & fieldDelimiter & (my safeText(value of em)) & fieldDelimiter & "email"',
-    '      end repeat',
-    '    end repeat',
-    '  end tell',
-    '  return output',
-    'end run'
-  ];
+function queryJsonDb(dbPath, sql) {
+  return new Promise((resolve, reject) => {
+    execFile('sqlite3', [dbPath, '-json', sql], { timeout: SQLITE_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error((stderr || err.message || 'sqlite3 failed').trim()));
+        return;
+      }
+
+      try {
+        resolve(stdout.trim() ? JSON.parse(stdout) : []);
+      } catch (parseError) {
+        reject(new Error(`Failed to parse sqlite3 output: ${parseError.message}`));
+      }
+    });
+  });
+}
+
+async function resolveAddressBookPaths() {
+  if (Array.isArray(addressBookPaths) && addressBookPaths.length > 0) {
+    return addressBookPaths;
+  }
+
+  const foundPath = await new Promise((resolve, reject) => {
+    execFile(
+      'find',
+      [ADDRESS_BOOK_DIR, '-name', 'AddressBook-v22.abcddb'],
+      { timeout: SQLITE_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error((stderr || err.message || 'find failed').trim()));
+          return;
+        }
+        const matches = stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
+        resolve(matches);
+      }
+    );
+  });
+
+  const candidates = [];
+  if (fs.existsSync(DEFAULT_ADDRESS_BOOK_PATH)) {
+    candidates.push(DEFAULT_ADDRESS_BOOK_PATH);
+  }
+  for (const match of foundPath) {
+    if (!candidates.includes(match)) {
+      candidates.push(match);
+    }
+  }
+
+  if (candidates.length === 0) {
+    throw new Error('AddressBook-v22.abcddb not found');
+  }
+
+  addressBookPaths = candidates;
+  return addressBookPaths;
 }
 
 function sendMessageScript() {
@@ -287,53 +321,53 @@ async function loadContacts() {
   }
 
   contactsLoadPromise = (async () => {
-    const output = await runAppleScript(contactReadScript(), [], { timeoutMs: CONTACTS_APPLESCRIPT_TIMEOUT_MS });
+    const dbPaths = await resolveAddressBookPaths();
+    const query = [
+      'SELECT',
+      '  ZABCDRECORD.ZFIRSTNAME as first_name,',
+      '  ZABCDRECORD.ZLASTNAME as last_name,',
+      '  ZABCDPHONENUMBER.ZFULLNUMBER as phone',
+      'FROM ZABCDRECORD',
+      'LEFT JOIN ZABCDPHONENUMBER ON ZABCDRECORD.Z_PK = ZABCDPHONENUMBER.ZOWNER',
+      'WHERE ZABCDPHONENUMBER.ZFULLNUMBER IS NOT NULL'
+    ].join(' ');
+    const rowSets = await Promise.all(dbPaths.map((dbPath) => queryJsonDb(dbPath, query)));
     const nextByPhone = new Map();
     const nextByEmail = new Map();
     const nextByName = new Map();
     const nextEntries = [];
     const seenIdentities = new Set();
 
-    for (const record of output.split(RECORD_SEPARATOR).filter(Boolean)) {
-      const parts = record.split(FIELD_SEPARATOR);
-      if (parts.length < 3) continue;
+    for (const rows of rowSets) {
+      for (const row of rows) {
+        const rawName = collapseWhitespace(`${row.first_name || ''} ${row.last_name || ''}`);
+        const rawHandle = collapseWhitespace(row.phone || '');
+        if (!rawHandle) continue;
 
-      const rawName = collapseWhitespace(parts[0]);
-      const rawHandle = collapseWhitespace(parts[1]);
-      const type = parts[2] === 'email' ? 'email' : 'phone';
+        const name = rawName || rawHandle;
+        const canonicalHandle = getPhoneLookupKeys(rawHandle)[0];
 
-      if (!rawHandle) continue;
+        if (!canonicalHandle) continue;
 
-      const name = rawName || rawHandle;
-      const canonicalHandle = type === 'email'
-        ? normalizeEmail(rawHandle)
-        : getPhoneLookupKeys(rawHandle)[0];
+        const entry = {
+          name,
+          phone: rawHandle,
+          type: 'phone',
+          canonicalHandle,
+          identityKey: `phone:${canonicalHandle}:${name.toLowerCase()}`
+        };
 
-      if (!canonicalHandle) continue;
+        if (seenIdentities.has(entry.identityKey)) {
+          continue;
+        }
 
-      const entry = {
-        name,
-        phone: rawHandle,
-        type,
-        canonicalHandle,
-        identityKey: `${type}:${canonicalHandle}:${name.toLowerCase()}`
-      };
+        seenIdentities.add(entry.identityKey);
+        nextEntries.push(entry);
+        addMapEntry(nextByName, name.toLowerCase(), entry);
 
-      if (seenIdentities.has(entry.identityKey)) {
-        continue;
-      }
-
-      seenIdentities.add(entry.identityKey);
-      nextEntries.push(entry);
-      addMapEntry(nextByName, name.toLowerCase(), entry);
-
-      if (type === 'email') {
-        addMapEntry(nextByEmail, canonicalHandle, entry);
-        continue;
-      }
-
-      for (const key of getPhoneLookupKeys(rawHandle)) {
-        addMapEntry(nextByPhone, key, entry);
+        for (const key of getPhoneLookupKeys(rawHandle)) {
+          addMapEntry(nextByPhone, key, entry);
+        }
       }
     }
 
