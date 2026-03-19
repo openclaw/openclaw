@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   isMatrixLegacyCryptoInspectorAvailable,
   loadMatrixLegacyCryptoInspector,
@@ -89,13 +90,13 @@ describe("matrix plugin helper resolution", () => {
           ].join("\n"),
         );
 
-        const cfg = {
+        const cfg: OpenClawConfig = {
           plugins: {
             load: {
               paths: [customRoot],
             },
           },
-        } as const;
+        };
 
         expect(isMatrixLegacyCryptoInspectorAvailable({ cfg, env: process.env })).toBe(true);
         const inspectLegacyStore = await loadMatrixLegacyCryptoInspector({
@@ -160,13 +161,13 @@ describe("matrix plugin helper resolution", () => {
           return;
         }
 
-        const cfg = {
+        const cfg: OpenClawConfig = {
           plugins: {
             load: {
               paths: [customRoot],
             },
           },
-        } as const;
+        };
 
         expect(isMatrixLegacyCryptoInspectorAvailable({ cfg, env: process.env })).toBe(false);
         await expect(

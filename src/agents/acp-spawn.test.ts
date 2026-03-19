@@ -12,6 +12,7 @@ import * as heartbeatWake from "../infra/heartbeat-wake.js";
 import {
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
+  type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import * as acpSpawnParentStream from "./acp-spawn-parent-stream.js";
@@ -104,7 +105,7 @@ function createSessionBindingCapabilities() {
     adapterAvailable: true,
     bindSupported: true,
     unbindSupported: true,
-    placements: ["current", "child"] as const,
+    placements: ["current", "child"] satisfies SessionBindingPlacement[],
   };
 }
 
@@ -179,8 +180,8 @@ describe("spawnAcpDirect", () => {
       metaCleared: false,
     });
     getAcpSessionManagerSpy.mockReset().mockReturnValue({
-      initializeSession: async (params) => await hoisted.initializeSessionMock(params),
-      closeSession: async (params) => await hoisted.closeSessionMock(params),
+      initializeSession: async (params: unknown) => await hoisted.initializeSessionMock(params),
+      closeSession: async (params: unknown) => await hoisted.closeSessionMock(params),
     } as unknown as ReturnType<typeof acpSessionManager.getAcpSessionManager>);
     hoisted.initializeSessionMock.mockReset().mockImplementation(async (argsUnknown: unknown) => {
       const args = argsUnknown as {
@@ -1039,7 +1040,7 @@ describe("spawnAcpDirect", () => {
         ...hoisted.state.cfg.channels,
         telegram: {
           threadBindings: {
-            spawnAcpSessions: true,
+            enabled: true,
           },
         },
       },

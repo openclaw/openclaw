@@ -621,14 +621,6 @@ export async function createMatrixThreadBindingManager(params: {
       });
       return record ? toSessionBindingRecord(record, defaults) : null;
     },
-    setIdleTimeoutBySession: ({ targetSessionKey, idleTimeoutMs }) =>
-      manager
-        .setIdleTimeoutBySessionKey({ targetSessionKey, idleTimeoutMs })
-        .map((record) => toSessionBindingRecord(record, defaults)),
-    setMaxAgeBySession: ({ targetSessionKey, maxAgeMs }) =>
-      manager
-        .setMaxAgeBySessionKey({ targetSessionKey, maxAgeMs })
-        .map((record) => toSessionBindingRecord(record, defaults)),
     touch: (bindingId, at) => {
       manager.touchBinding(bindingId, at);
     },

@@ -521,7 +521,9 @@ describe("matrix CLI verification commands", () => {
 
     expect(matrixRuntimeWriteConfigFileMock).toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
-    const jsonOutput = console.log.mock.calls.at(-1)?.[0];
+    const jsonOutput = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.at(
+      -1,
+    )?.[0];
     expect(typeof jsonOutput).toBe("string");
     expect(JSON.parse(String(jsonOutput))).toEqual(
       expect.objectContaining({

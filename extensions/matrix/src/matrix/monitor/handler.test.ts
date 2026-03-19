@@ -588,11 +588,13 @@ describe("matrix monitor handler pairing account scope", () => {
       mediaMaxBytes: 10_000_000,
       startupMs: 0,
       startupGraceMs: 0,
+      dropPreStartupMessages: false,
       directTracker: {
         isDirectMessage: async () => false,
       },
       getRoomInfo: async () => ({ altAliases: [] }),
       getMemberDisplayName: async () => "sender",
+      needsRoomAliasesForConfig: false,
     });
 
     await handler(
