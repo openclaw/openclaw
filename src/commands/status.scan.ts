@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
@@ -5,6 +6,7 @@ import { getStatusCommandSecretTargetIds } from "../cli/command-secret-targets.j
 import { withProgress } from "../cli/progress.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readBestEffortConfig } from "../config/config.js";
+import { resolveConfigPath } from "../config/paths.js";
 import { callGateway } from "../gateway/call.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
@@ -64,6 +66,13 @@ function unwrapDeferredResult<T>(result: DeferredResult<T>): T {
     throw result.error;
   }
   return result.value;
+}
+
+function shouldCollectPluginCompatibility(cfg: OpenClawConfig): boolean {
+  if (hasPotentialConfiguredChannels(cfg)) {
+    return true;
+  }
+  return existsSync(resolveConfigPath(process.env));
 }
 
 async function resolveChannelsStatus(params: {
@@ -197,7 +206,9 @@ async function scanStatusJsonFast(opts: {
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
   const memoryPromise = resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
   const memory = await memoryPromise;
-  const pluginCompatibility = buildPluginCompatibilityNotices({ config: cfg });
+  const pluginCompatibility = shouldCollectPluginCompatibility(cfg)
+    ? buildPluginCompatibilityNotices({ config: cfg })
+    : [];
 
   return {
     cfg,
