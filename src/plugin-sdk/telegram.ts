@@ -64,6 +64,7 @@ export {
   createTelegramActionGate,
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
   resolveTelegramPollActionGateState,
 } from "../../extensions/telegram/api.js";
 export { inspectTelegramAccount } from "../../extensions/telegram/api.js";

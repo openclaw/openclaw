@@ -312,7 +312,6 @@ export async function preflightDiscordMessage(
     fetchedChannelType ?? fallbackChannelType ?? (!isGuildMessage ? ChannelType.DM : undefined);
   const isDirectMessage = effectiveChannelType === ChannelType.DM;
   const isGroupDm = effectiveChannelType === ChannelType.GroupDM;
-  const data = message === params.data.message ? params.data : { ...params.data, message };
   logDebug(
     `[discord-preflight] channelId=${messageChannelId} guild_id=${params.data.guild_id} channelType=${channelInfo?.type} fallbackType=${fallbackChannelType} effectiveType=${effectiveChannelType} isGuild=${isGuildMessage} isDM=${isDirectMessage} isGroupDm=${isGroupDm}`,
   );

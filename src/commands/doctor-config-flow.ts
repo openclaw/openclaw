@@ -4,6 +4,7 @@ import {
   isNumericTelegramUserId,
   listTelegramAccountIds,
   normalizeTelegramAllowFromEntry,
+  resolveTelegramAccount,
 } from "openclaw/plugin-sdk/telegram";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -44,7 +45,6 @@ import {
   formatPluginInstallPathIssue,
 } from "../infra/plugin-install-path-warnings.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
-import { resolveTelegramAccount } from "../plugin-sdk/account-resolution.js";
 import {
   formatChannelAccountsDefaultPath,
   formatSetExplicitDefaultInstruction,

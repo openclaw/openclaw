@@ -53,6 +53,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
       }
       return DEFAULT_CONFIG;
     },
+    resolveStorePath: actual.resolveStorePath,
   };
 });
 

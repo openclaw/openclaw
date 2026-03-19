@@ -15,7 +15,6 @@ vi.mock("node:os", async (importOriginal) => {
     userInfo: () => ({ username: MOCK_USERNAME }),
   };
 });
-
 let createIcaclsResetCommand: typeof import("./windows-acl.js").createIcaclsResetCommand;
 let formatIcaclsResetCommand: typeof import("./windows-acl.js").formatIcaclsResetCommand;
 let formatWindowsAclSummary: typeof import("./windows-acl.js").formatWindowsAclSummary;

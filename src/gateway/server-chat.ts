@@ -5,13 +5,12 @@ import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { mirrorWebchatTextToTarget } from "./server-methods/webchat-mirror.js";
 import {
   deriveGatewaySessionLifecycleSnapshot,
   persistGatewaySessionLifecycleEvent,
 } from "./session-lifecycle-state.js";
 import { loadGatewaySessionRow, loadSessionEntry } from "./session-utils.js";
-import { mirrorWebchatTextToTarget } from "./server-methods/webchat-mirror.js";
-import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 function resolveHeartbeatAckMaxChars(): number {

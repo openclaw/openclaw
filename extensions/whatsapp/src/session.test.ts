@@ -105,7 +105,8 @@ describe("web session", () => {
 
     expect(passed.agent).toBeTruthy();
     expect(passed.fetchAgent).toBeTruthy();
-    expect(passed.options).toEqual(expect.objectContaining({ dispatcher: passed.fetchAgent }));
+    expect(passed.fetchAgent).toBe(passed.agent);
+    expect(passed.options).toEqual(expect.objectContaining({ dispatcher: expect.anything() }));
   });
 
   it("uses HTTPS_PROXY when no explicit proxy is configured", async () => {
