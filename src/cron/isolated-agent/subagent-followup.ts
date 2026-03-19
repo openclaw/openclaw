@@ -3,11 +3,14 @@ import { readLatestAssistantReply } from "../../agents/tools/agent-step.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { callGateway } from "../../gateway/call.js";
 
-const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
-
-const CRON_SUBAGENT_WAIT_MIN_MS = FAST_TEST_MODE ? 10 : 30_000;
-const CRON_SUBAGENT_FINAL_REPLY_GRACE_MS = FAST_TEST_MODE ? 50 : 5_000;
-const CRON_SUBAGENT_GRACE_POLL_MS = FAST_TEST_MODE ? 8 : 200;
+function resolveCronSubagentTimings() {
+  const fastTestMode = process.env.OPENCLAW_TEST_FAST === "1";
+  return {
+    waitMinMs: fastTestMode ? 10 : 30_000,
+    finalReplyGraceMs: fastTestMode ? 50 : 5_000,
+    gracePollMs: fastTestMode ? 8 : 200,
+  };
+}
 
 const SUBAGENT_FOLLOWUP_HINTS = [
   "subagent spawned",
@@ -42,7 +45,10 @@ function normalizeHintText(value: string): string {
 export function isLikelyInterimCronMessage(value: string): boolean {
   const normalized = normalizeHintText(value);
   if (!normalized) {
-    return true;
+    // Empty text after payload filtering means the agent either returned
+    // NO_REPLY (deliberately silent) or produced no deliverable content.
+    // Do not treat this as an interim acknowledgement that needs a rerun.
+    return false;
   }
   const words = normalized.split(" ").filter(Boolean).length;
   return words <= 45 && INTERIM_CRON_HINTS.some((hint) => normalized.includes(hint));
@@ -118,8 +124,9 @@ export async function waitForDescendantSubagentSummary(params: {
   timeoutMs: number;
   observedActiveDescendants?: boolean;
 }): Promise<string | undefined> {
+  const timings = resolveCronSubagentTimings();
   const initialReply = params.initialReply?.trim();
-  const deadline = Date.now() + Math.max(CRON_SUBAGENT_WAIT_MIN_MS, Math.floor(params.timeoutMs));
+  const deadline = Date.now() + Math.max(timings.waitMinMs, Math.floor(params.timeoutMs));
 
   // Snapshot the currently active descendant run IDs.
   const getActiveRuns = () =>
@@ -163,10 +170,10 @@ export async function waitForDescendantSubagentSummary(params: {
   // --- Grace period: wait for the cron agent's synthesis ---
   // After the subagent announces fire and the cron agent processes them, it
   // produces a new assistant message.  Poll briefly (bounded by
-  // CRON_SUBAGENT_FINAL_REPLY_GRACE_MS) to capture that synthesis.
-  const gracePeriodDeadline = Math.min(Date.now() + CRON_SUBAGENT_FINAL_REPLY_GRACE_MS, deadline);
+  // finalReplyGraceMs) to capture that synthesis.
+  const gracePeriodDeadline = Math.min(Date.now() + timings.finalReplyGraceMs, deadline);
 
-  while (Date.now() < gracePeriodDeadline) {
+  const resolveUsableLatestReply = async () => {
     const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
     if (
       latest &&
@@ -175,16 +182,20 @@ export async function waitForDescendantSubagentSummary(params: {
     ) {
       return latest;
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, CRON_SUBAGENT_GRACE_POLL_MS));
+    return undefined;
+  };
+
+  while (Date.now() < gracePeriodDeadline) {
+    const latest = await resolveUsableLatestReply();
+    if (latest) {
+      return latest;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, timings.gracePollMs));
   }
 
   // Final read after grace period expires.
-  const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
-  if (
-    latest &&
-    latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
-    (latest !== initialReply || !isLikelyInterimCronMessage(latest))
-  ) {
+  const latest = await resolveUsableLatestReply();
+  if (latest) {
     return latest;
   }
 

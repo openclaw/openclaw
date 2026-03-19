@@ -3,9 +3,9 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/zalouser";
+import { resolveStateDir as resolvePluginStateDir } from "openclaw/plugin-sdk/state-paths";
+import { loadOutboundMediaFromUrl } from "../runtime-api.js";
 import { normalizeZaloReactionIcon } from "./reaction.js";
-import { getZalouserRuntime } from "./runtime.js";
 import type {
   ZaloAuthStatus,
   ZaloEventMessage,
@@ -20,6 +20,7 @@ import type {
 } from "./types.js";
 import {
   LoginQRCallbackEventType,
+  TextStyle,
   ThreadType,
   Zalo,
   type API,
@@ -84,7 +85,7 @@ type StoredZaloCredentials = {
 };
 
 function resolveStateDir(env: NodeJS.ProcessEnv = process.env): string {
-  return getZalouserRuntime().state.resolveStateDir(env, os.homedir);
+  return resolvePluginStateDir(env, os.homedir);
 }
 
 function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -134,6 +135,39 @@ function toErrorMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function clampTextStyles(
+  text: string,
+  styles?: ZaloSendOptions["textStyles"],
+): ZaloSendOptions["textStyles"] {
+  if (!styles || styles.length === 0) {
+    return undefined;
+  }
+  const maxLength = text.length;
+  const clamped = styles
+    .map((style) => {
+      const start = Math.max(0, Math.min(style.start, maxLength));
+      const end = Math.min(style.start + style.len, maxLength);
+      if (end <= start) {
+        return null;
+      }
+      if (style.st === TextStyle.Indent) {
+        return {
+          start,
+          len: end - start,
+          st: style.st,
+          indentSize: style.indentSize,
+        };
+      }
+      return {
+        start,
+        len: end - start,
+        st: style.st,
+      };
+    })
+    .filter((style): style is NonNullable<typeof style> => style !== null);
+  return clamped.length > 0 ? clamped : undefined;
 }
 
 function toNumberId(value: unknown): string {
@@ -1018,11 +1052,16 @@ export async function sendZaloTextMessage(
         kind: media.kind,
       });
       const payloadText = (text || options.caption || "").slice(0, 2000);
+      const textStyles = clampTextStyles(payloadText, options.textStyles);
 
       if (media.kind === "audio") {
         let textMessageId: string | undefined;
         if (payloadText) {
-          const textResponse = await api.sendMessage(payloadText, trimmedThreadId, type);
+          const textResponse = await api.sendMessage(
+            textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
+            trimmedThreadId,
+            type,
+          );
           textMessageId = extractSendMessageId(textResponse);
         }
 
@@ -1055,6 +1094,7 @@ export async function sendZaloTextMessage(
       const response = await api.sendMessage(
         {
           msg: payloadText,
+          ...(textStyles ? { styles: textStyles } : {}),
           attachments: [
             {
               data: media.buffer,
@@ -1071,7 +1111,13 @@ export async function sendZaloTextMessage(
       return { ok: true, messageId: extractSendMessageId(response) };
     }
 
-    const response = await api.sendMessage(text.slice(0, 2000), trimmedThreadId, type);
+    const payloadText = text.slice(0, 2000);
+    const textStyles = clampTextStyles(payloadText, options.textStyles);
+    const response = await api.sendMessage(
+      textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
+      trimmedThreadId,
+      type,
+    );
     return { ok: true, messageId: extractSendMessageId(response) };
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };

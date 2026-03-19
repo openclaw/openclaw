@@ -16,7 +16,7 @@ struct RuntimeLocatorTests {
     @Test func `resolve succeeds with valid node`() throws {
         let script = """
         #!/bin/sh
-        echo v22.5.0
+        echo v22.16.0
         """
         let node = try self.makeTempExecutable(contents: script)
         let result = RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
@@ -25,7 +25,23 @@ struct RuntimeLocatorTests {
             return
         }
         #expect(res.path == node.path)
-        #expect(res.version == RuntimeVersion(major: 22, minor: 5, patch: 0))
+        #expect(res.version == RuntimeVersion(major: 22, minor: 16, patch: 0))
+    }
+
+    @Test func `resolve fails on boundary below minimum`() throws {
+        let script = """
+        #!/bin/sh
+        echo v22.15.9
+        """
+        let node = try self.makeTempExecutable(contents: script)
+        let result = RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
+        guard case let .failure(.unsupported(_, found, required, path, _)) = result else {
+            Issue.record("Expected unsupported error, got \(result)")
+            return
+        }
+        #expect(found == RuntimeVersion(major: 22, minor: 15, patch: 9))
+        #expect(required == RuntimeVersion(major: 22, minor: 16, patch: 0))
+        #expect(path == node.path)
     }
 
     @Test func `resolve fails when too old`() throws {
@@ -60,7 +76,17 @@ struct RuntimeLocatorTests {
 
     @Test func `describe failure includes paths`() {
         let msg = RuntimeLocator.describeFailure(.notFound(searchPaths: ["/tmp/a", "/tmp/b"]))
+        #expect(msg.contains("Node >=22.16.0"))
         #expect(msg.contains("PATH searched: /tmp/a:/tmp/b"))
+
+        let parseMsg = RuntimeLocator.describeFailure(
+            .versionParse(
+                kind: .node,
+                raw: "garbage",
+                path: "/usr/local/bin/node",
+                searchPaths: ["/usr/local/bin"],
+            ))
+        #expect(parseMsg.contains("Node >=22.16.0"))
     }
 
     @Test func `runtime version parses with leading V and metadata`() {

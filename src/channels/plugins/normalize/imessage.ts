@@ -1,4 +1,4 @@
-import { normalizeIMessageHandle } from "../../../imessage/targets.js";
+import { normalizeIMessageHandle } from "../../../plugin-sdk/imessage-targets.js";
 import { looksLikeHandleOrPhoneTarget, trimMessagingTarget } from "./shared.js";
 
 // Service prefixes that indicate explicit delivery method; must be preserved during normalization
