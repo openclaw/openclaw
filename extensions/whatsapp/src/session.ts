@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
+import { request as httpsRequest } from "node:https";
 import {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -7,12 +8,15 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
 import qrcode from "qrcode-terminal";
+import { ProxyAgent } from "undici";
+import { resolveEnvHttpProxyUrl } from "../../../src/infra/net/proxy-env.js";
 import {
   maybeRestoreCredsFromBackup,
   readCredsJsonRaw,
@@ -34,6 +38,8 @@ export {
 // Per-authDir queues so multi-account creds saves don't block each other.
 const credsSaveQueues = new Map<string, Promise<void>>();
 const CREDS_SAVE_FLUSH_TIMEOUT_MS = 15_000;
+const WHATSAPP_WEB_SW_URL = "https://web.whatsapp.com/sw.js";
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -90,6 +96,79 @@ async function safeSaveCreds(
   }
 }
 
+function extractWhatsAppWebVersion(source: string): [number, number, number] | null {
+  const match = source.match(/client_revision[^0-9]*(\d+)/);
+  if (!match) {
+    return null;
+  }
+  const revision = Number.parseInt(match[1] ?? "", 10);
+  if (!Number.isFinite(revision) || revision <= 0) {
+    return null;
+  }
+  return [2, 3000, revision];
+}
+
+async function fetchLatestWhatsAppWebVersionViaProxy(
+  proxyUrl: string,
+): Promise<[number, number, number] | null> {
+  return await new Promise((resolve) => {
+    const agent = new HttpsProxyAgent(proxyUrl);
+    const req = httpsRequest(
+      WHATSAPP_WEB_SW_URL,
+      {
+        agent,
+        timeout: 10_000,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: string | Buffer) => {
+          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        });
+        res.on("end", () => {
+          const statusCode = typeof res.statusCode === "number" ? res.statusCode : 0;
+          if (statusCode < 200 || statusCode >= 300) {
+            resolve(null);
+            return;
+          }
+          resolve(extractWhatsAppWebVersion(Buffer.concat(chunks).toString("utf8")));
+        });
+      },
+    );
+    req.on("timeout", () => {
+      req.destroy(new Error("Timed out fetching WhatsApp Web version"));
+    });
+    req.on("error", () => resolve(null));
+    req.end();
+  });
+}
+
+async function resolveWhatsAppWebVersion(
+  sessionLogger: ReturnType<typeof getChildLogger>,
+): Promise<[number, number, number]> {
+  const latest = await fetchLatestBaileysVersion();
+  if (latest.isLatest) {
+    return latest.version;
+  }
+
+  const proxyUrl = resolveEnvHttpProxyUrl("https");
+  if (!proxyUrl) {
+    return latest.version;
+  }
+
+  const proxyVersion = await fetchLatestWhatsAppWebVersionViaProxy(proxyUrl);
+  if (!proxyVersion) {
+    return latest.version;
+  }
+
+  sessionLogger.info(
+    {
+      version: proxyVersion,
+    },
+    "using proxy-refreshed WhatsApp Web version",
+  );
+  return proxyVersion;
+}
+
 /**
  * Create a Baileys socket backed by the multi-file auth store we keep on disk.
  * Consumers can opt into QR printing for interactive login flows.
@@ -111,7 +190,10 @@ export async function createWaSocket(
   const sessionLogger = getChildLogger({ module: "web-session" });
   maybeRestoreCredsFromBackup(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
-  const { version } = await fetchLatestBaileysVersion();
+  const version = await resolveWhatsAppWebVersion(sessionLogger);
+  const proxyUrl = resolveEnvHttpProxyUrl("https");
+  const wsAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
+  const fetchAgent = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
@@ -123,6 +205,8 @@ export async function createWaSocket(
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    ...(wsAgent ? { agent: wsAgent } : {}),
+    ...(fetchAgent ? { fetchAgent } : {}),
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));

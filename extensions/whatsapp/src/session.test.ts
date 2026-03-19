@@ -5,6 +5,41 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
+const { httpsRequestMock, httpsProxyAgentSpy, undiciProxyAgentSpy } = vi.hoisted(() => ({
+  httpsRequestMock: vi.fn(),
+  httpsProxyAgentSpy: vi.fn(),
+  undiciProxyAgentSpy: vi.fn(),
+}));
+
+vi.mock("node:https", () => ({
+  request: httpsRequestMock,
+}));
+
+vi.mock("https-proxy-agent", () => ({
+  HttpsProxyAgent: vi.fn(function MockHttpsProxyAgent(
+    this: { proxyUrl: string },
+    proxyUrl: string,
+  ) {
+    this.proxyUrl = proxyUrl;
+    httpsProxyAgentSpy(proxyUrl);
+  }),
+}));
+
+vi.mock("undici", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("undici")>();
+  class MockProxyAgent {
+    proxyUrl: string;
+    constructor(proxyUrl: string) {
+      this.proxyUrl = proxyUrl;
+      undiciProxyAgentSpy(proxyUrl);
+    }
+  }
+  return {
+    ...actual,
+    ProxyAgent: MockProxyAgent,
+  };
+});
+
 const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
   await import("./session.js");
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
@@ -59,6 +94,10 @@ describe("web session", () => {
     vi.clearAllMocks();
     resetBaileysMocks();
     resetLoadConfigMock();
+    delete process.env.http_proxy;
+    delete process.env.https_proxy;
+    delete process.env.HTTP_PROXY;
+    delete process.env.HTTPS_PROXY;
   });
 
   afterEach(() => {
@@ -83,6 +122,58 @@ describe("web session", () => {
     sock.ev.emit("creds.update", {});
     await flushCredsUpdate();
     expect(saveCreds).toHaveBeenCalled();
+  });
+
+  it("adds explicit proxy agents when https proxy env is configured", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.test:3128";
+
+    await createWaSocket(false, false);
+
+    const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+    const passed = makeWASocket.mock.calls[0]?.[0] as
+      | { agent?: unknown; fetchAgent?: unknown }
+      | undefined;
+
+    expect(passed?.agent).toBeDefined();
+    expect(passed?.fetchAgent).toBeDefined();
+    expect(httpsProxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:3128");
+    expect(undiciProxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:3128");
+  });
+
+  it("refreshes the WhatsApp Web version through the proxy when Baileys falls back", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.test:3128";
+    vi.mocked(baileys.fetchLatestBaileysVersion).mockResolvedValueOnce({
+      version: [2, 3000, 1027934701],
+      isLatest: false,
+    });
+    httpsRequestMock.mockImplementationOnce(
+      (
+        _url: string,
+        _opts: Record<string, unknown>,
+        cb: (res: EventEmitter & { statusCode?: number }) => void,
+      ) => {
+        const res = new EventEmitter() as EventEmitter & { statusCode?: number };
+        res.statusCode = 200;
+        const req = new EventEmitter() as EventEmitter & {
+          end: () => void;
+          destroy: (_err?: Error) => void;
+        };
+        req.end = () => {
+          cb(res);
+          res.emit("data", 'self.client_revision="1035441841";');
+          res.emit("end");
+        };
+        req.destroy = () => {};
+        return req;
+      },
+    );
+
+    await createWaSocket(false, false);
+
+    const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+    const passed = makeWASocket.mock.calls[0]?.[0] as { version?: unknown } | undefined;
+    expect(passed?.version).toEqual([2, 3000, 1035441841]);
+    expect(httpsRequestMock).toHaveBeenCalled();
   });
 
   it("waits for connection open", async () => {
