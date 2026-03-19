@@ -1,7 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
+import {
+  addSubagentRunForTests,
+  listSubagentRunsForRequester,
+  resetSubagentRegistryForTests,
+} from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
@@ -1456,8 +1462,20 @@ describe("/models command", () => {
 });
 
 describe("handleCommands plugin commands", () => {
-  it("dispatches registered plugin commands", async () => {
+  const pluginCfg = {
+    commands: { text: true },
+    channels: { whatsapp: { allowFrom: ["*"] } },
+  } as OpenClawConfig;
+
+  beforeEach(() => {
     clearPluginCommands();
+  });
+
+  afterEach(() => {
+    clearPluginCommands();
+  });
+
+  it("dispatches registered plugin commands", async () => {
     const result = registerPluginCommand("test-plugin", {
       name: "card",
       description: "Test card",
@@ -1465,16 +1483,24 @@ describe("handleCommands plugin commands", () => {
     });
     expect(result.ok).toBe(true);
 
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const params = buildParams("/card", cfg);
-    const commandResult = await handleCommands(params);
+    const commandResult = await handleCommands(buildParams("/card", pluginCfg));
 
     expect(commandResult.shouldContinue).toBe(false);
     expect(commandResult.reply?.text).toBe("from plugin");
-    clearPluginCommands();
+  });
+
+  it("forwards shouldContinue and strips it from the reply payload", async () => {
+    registerPluginCommand("test-plugin", {
+      name: "state-change",
+      description: "Change state and continue to agent",
+      handler: async () => ({ text: "Done.", shouldContinue: true }),
+    });
+
+    const commandResult = await handleCommands(buildParams("/state-change", pluginCfg));
+
+    expect(commandResult.shouldContinue).toBe(true);
+    expect(commandResult.reply?.text).toBe("Done.");
+    expect("shouldContinue" in (commandResult.reply ?? {})).toBe(false);
   });
 });
 
