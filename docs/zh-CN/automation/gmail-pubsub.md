@@ -5,10 +5,10 @@ read_when:
 summary: 通过 gogcli 将 Gmail Pub/Sub 推送接入 OpenClaw webhooks
 title: Gmail PubSub
 x-i18n:
-  generated_at: "2026-02-03T07:43:25Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: dfb92133b69177e4e984b7d072f5dc28aa53a9e0cf984a018145ed811aa96195
+  generated_at: "2026-03-19T09:20:40Z"
+  model: gpt-5.4
+  provider: openai
+  source_hash: 0c8a87516e12091f96209f570012cdba895265af3d48ba848e0260535535bd18
   source_path: automation/gmail-pubsub.md
   workflow: 15
 ---
@@ -21,7 +21,7 @@ x-i18n:
 
 - 已安装并登录 `gcloud`（[安装指南](https://docs.cloud.google.com/sdk/docs/install-sdk)）。
 - 已安装 `gog` (gogcli) 并为 Gmail 账户授权（[gogcli.sh](https://gogcli.sh/)）。
-- 已启用 OpenClaw hooks（参见 [Webhooks](/automation/webhook)）。
+- 已启用 OpenClaw hooks（参见 [Webhooks](/zh-CN/automation/webhook)）。
 - 已登录 `tailscale`（[tailscale.com](https://tailscale.com/)）。支持的设置使用 Tailscale Funnel 作为公共 HTTPS 端点。
   其他隧道服务也可以使用，但需要自行配置/不受支持，需要手动接入。
   目前，我们支持的是 Tailscale。
@@ -90,7 +90,7 @@ x-i18n:
 - Gmail hook 内容默认使用外部内容安全边界包装。
   要禁用（危险），请设置 `hooks.gmail.allowUnsafeExternalContent: true`。
 
-要进一步自定义负载处理，请添加 `hooks.mappings` 或在 `hooks.transformsDir` 下添加 JS/TS 转换模块（参见 [Webhooks](/automation/webhook)）。
+要进一步自定义负载处理，请添加 `hooks.mappings` 或在 `hooks.transformsDir` 下添加 JS/TS 转换模块（参见 [Webhooks](/zh-CN/automation/webhook)）。
 
 ## 向导（推荐）
 
