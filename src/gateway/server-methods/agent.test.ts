@@ -404,6 +404,57 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("re-establishes plugin runtime gateway scope for detached agent runs", async () => {
+    primeMainAgentRun();
+    const context = makeContext();
+    const client = {
+      connect: {
+        scopes: ["operator.write"],
+      },
+    } as AgentHandlerArgs["client"];
+    const isWebchatConnect = vi.fn(() => true);
+    let observedScope:
+      | {
+          context?: GatewayRequestContext;
+          client?: AgentHandlerArgs["client"];
+          isWebchatConnect?: AgentHandlerArgs["isWebchatConnect"];
+        }
+      | undefined;
+
+    mocks.agentCommand.mockImplementation(async () => {
+      const gatewayScopeModule = await import("../../plugins/runtime/gateway-request-scope.js");
+      observedScope = gatewayScopeModule.getPluginRuntimeGatewayRequestScope();
+      return {
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      };
+    });
+
+    await invokeAgent(
+      {
+        message: "test",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-idem-plugin-scope",
+      },
+      {
+        reqId: "test-idem-plugin-scope",
+        context,
+        client,
+        isWebchatConnect,
+      },
+    );
+
+    await vi.waitFor(() => expect(observedScope).toBeDefined());
+    expect(observedScope).toEqual(
+      expect.objectContaining({
+        context,
+        client,
+        isWebchatConnect,
+      }),
+    );
+  });
+
   it("preserves cliSessionIds from existing session entry", async () => {
     const existingCliSessionIds = { "claude-cli": "abc-123-def" };
     const existingClaudeCliSessionId = "abc-123-def";
