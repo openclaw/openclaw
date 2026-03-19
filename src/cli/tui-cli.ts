@@ -3,7 +3,9 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { runTui } from "../tui/tui.js";
+import { resolveCliName } from "./cli-name.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
+import { requireSandboxOrInvoke } from "./sandbox-invoke.js";
 
 export function registerTuiCli(program: Command) {
   program
@@ -23,6 +25,7 @@ export function registerTuiCli(program: Command) {
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/tui", "docs.openclaw.ai/cli/tui")}\n`,
     )
     .action(async (opts) => {
+      requireSandboxOrInvoke(resolveCliName(), process.argv.slice(2));
       try {
         const timeoutMs = parseTimeoutMs(opts.timeoutMs);
         if (opts.timeoutMs !== undefined && timeoutMs === undefined) {

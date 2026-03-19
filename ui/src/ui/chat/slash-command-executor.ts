@@ -130,18 +130,21 @@ async function executeModel(
     try {
       const [sessions, models] = await Promise.all([
         client.request<SessionsListResult>("sessions.list", {}),
-        client.request<{ models: ModelCatalogEntry[] }>("models.list", {}),
+        client.request<{ models: ModelCatalogEntry[] }>("models.list", { all: true }),
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
       const model = session?.model || sessions?.defaults?.model || "default";
       const available = models?.models?.map((m: ModelCatalogEntry) => m.id) ?? [];
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
+        const maxShow = 25;
         lines.push(
           `**Available:** ${available
-            .slice(0, 10)
+            .slice(0, maxShow)
             .map((m: string) => `\`${m}\``)
-            .join(", ")}${available.length > 10 ? ` +${available.length - 10} more` : ""}`,
+            .join(
+              ", ",
+            )}${available.length > maxShow ? ` +${available.length - maxShow} more` : ""}`,
         );
       }
       return { content: lines.join("\n") };
@@ -154,6 +157,7 @@ async function executeModel(
     const patched = await client.request<SessionsPatchResult>("sessions.patch", {
       key: sessionKey,
       model: args.trim(),
+      allowAnyCatalogModel: true,
     });
     const resolvedValue = resolveServerChatModelValue(
       patched.resolved?.model ?? args.trim(),

@@ -539,6 +539,8 @@ export function resolveAllowedModelRef(params: {
   raw: string;
   defaultProvider: string;
   defaultModel?: string;
+  /** When true, accept any model in catalog (bypass allowlist). For user-initiated picks. */
+  allowAnyCatalog?: boolean;
 }):
   | { ref: ModelRef; key: string }
   | {
@@ -569,7 +571,8 @@ export function resolveAllowedModelRef(params: {
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
   });
-  if (!status.allowed) {
+  const allowed = params.allowAnyCatalog && status.inCatalog ? true : status.allowed;
+  if (!allowed) {
     return { error: `model not allowed: ${status.key}` };
   }
 

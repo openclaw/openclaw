@@ -119,4 +119,6 @@ export type TuiStateAccess = {
   activityStatus: string;
   statusTimeout: ReturnType<typeof setTimeout> | null;
   lastCtrlCAt: number;
+  currentProjectId: string | null;
+  currentProjectPath: string | null;
 };

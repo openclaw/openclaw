@@ -326,6 +326,8 @@ export async function runTui(opts: TuiOptions) {
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = {};
   let lastCtrlCAt = 0;
+  let currentProjectId: string | null = null;
+  let currentProjectPath: string | null = null;
   let exitRequested = false;
   let activityStatus = "idle";
   let connectionStatus = "connecting";
@@ -449,6 +451,18 @@ export async function runTui(opts: TuiOptions) {
     set lastCtrlCAt(value) {
       lastCtrlCAt = value;
     },
+    get currentProjectId() {
+      return currentProjectId;
+    },
+    set currentProjectId(value) {
+      currentProjectId = value;
+    },
+    get currentProjectPath() {
+      return currentProjectPath;
+    },
+    set currentProjectPath(value) {
+      currentProjectPath = value;
+    },
   };
 
   const noteLocalRunId = (runId: string) => {
@@ -544,9 +558,10 @@ export async function runTui(opts: TuiOptions) {
   const updateHeader = () => {
     const sessionLabel = formatSessionKey(currentSessionKey);
     const agentLabel = formatAgentLabel(currentAgentId);
+    const projectSuffix = currentProjectId ? ` - project ${currentProjectId}` : "";
     header.setText(
       theme.header(
-        `openclaw tui - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`,
+        `openclaw tui - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}${projectSuffix}`,
       ),
     );
   };
@@ -557,7 +572,7 @@ export async function runTui(opts: TuiOptions) {
     busyStates.has(text) ||
     [...busyStates].some((s) => text.startsWith(`${s} `) || text.startsWith(`${s}(`));
   /** If we stay in a busy state this long without an end/error event, revert to idle so the UI does not hang. */
-  const ACTIVITY_STALE_MS = 60_000;
+  const ACTIVITY_STALE_MS = 5 * 60_000; // 5 minutes — allow long model runs to complete
   let activityStaleTimeout: ReturnType<typeof setTimeout> | null = null;
   let statusText: Text | null = null;
   let statusLoader: Loader | null = null;
@@ -814,9 +829,19 @@ export async function runTui(opts: TuiOptions) {
     return parsed ? normalizeAgentId(parsed.agentId) : null;
   })();
 
+  const btw = {
+    showResult: (params: { question: string; text: string; isError?: boolean }) => {
+      chatLog.showBtw(params);
+    },
+    clear: () => {
+      chatLog.dismissBtw();
+    },
+  };
+
   const sessionActions = createSessionActions({
     client,
     chatLog,
+    btw,
     tui,
     opts,
     state,
@@ -841,6 +866,7 @@ export async function runTui(opts: TuiOptions) {
 
   const { handleChatEvent, handleAgentEvent } = createEventHandlers({
     chatLog,
+    btw,
     tui,
     state,
     setActivityStatus,

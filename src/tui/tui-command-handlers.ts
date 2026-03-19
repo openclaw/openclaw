@@ -22,6 +22,15 @@ import {
   createLocalPromptId,
   matchPromptPivotById,
 } from "./prompt-ids.js";
+import {
+  findProject,
+  loadProjects,
+  registerProject,
+  removeProject,
+  scaffoldProject,
+  syncAllProjects,
+  syncProject,
+} from "./tui-projects.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -106,7 +115,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const openModelSelector = async () => {
     try {
-      const models = await client.listModels();
+      const models = await client.listModels({ all: true });
       const autoItem = {
         value: AUTO_MODEL,
         label: "Auto (Recommended)",
@@ -124,6 +133,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           const result = await client.patchSession({
             key: state.currentSessionKey,
             model: value,
+            allowAnyCatalogModel: true,
           });
           const displayLabel = value === AUTO_MODEL ? "Auto (Recommended)" : value;
           chatLog.addSystem(`model set to ${displayLabel}`);
@@ -202,6 +212,43 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       chatLog.addSystem(`sessions list failed: ${String(err)}`);
       tui.requestRender();
     }
+  };
+
+  const setProject = async (projectId: string | null) => {
+    if (!projectId) {
+      state.currentProjectId = null;
+      state.currentProjectPath = null;
+      chatLog.addSystem("cleared active project");
+      return;
+    }
+    const project = findProject(projectId);
+    if (!project) {
+      chatLog.addSystem(`unknown project: ${projectId}`);
+      return;
+    }
+    state.currentProjectId = project.id;
+    state.currentProjectPath = project.path;
+    const sessionKey = `agent:${project.agentId}:project-${project.id}`;
+    await setSession(sessionKey);
+    chatLog.addSystem(`switched to project: ${project.name} (${project.path})`);
+  };
+
+  const openProjectSelector = () => {
+    const projects = loadProjects();
+    if (projects.length === 0) {
+      chatLog.addSystem("no projects registered — use /project add <path> to register one");
+      tui.requestRender();
+      return;
+    }
+    const items = projects.map((p) => ({
+      value: p.id,
+      label: p.name,
+      description: `${p.description ? p.description + " · " : ""}${p.path}`,
+    }));
+    const selector = createFilterableSelectList(items, 9);
+    openSelector(selector, async (value) => {
+      await setProject(value);
+    });
   };
 
   const openSettings = () => {
@@ -338,6 +385,113 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "sessions":
         await openSessionSelector();
         break;
+      case "project": {
+        if (!args) {
+          openProjectSelector();
+          break;
+        }
+        const projectArgs = args.trim().split(/\s+/);
+        const subCmd = projectArgs[0];
+        const subArgs = projectArgs.slice(1).join(" ");
+        switch (subCmd) {
+          case "new": {
+            if (!subArgs) {
+              chatLog.addSystem("usage: /project new <path>");
+              break;
+            }
+            try {
+              const targetPath = subArgs.trim();
+              const slug = targetPath.split("/").pop() ?? "project";
+              const entry = scaffoldProject({
+                id: slug.toLowerCase(),
+                name: slug,
+                targetPath,
+              });
+              chatLog.addSystem(
+                `scaffolded and registered project: ${entry.name} at ${entry.path}`,
+              );
+              await setProject(entry.id);
+            } catch (err) {
+              chatLog.addSystem(`project new failed: ${String(err)}`);
+            }
+            break;
+          }
+          case "add": {
+            if (!subArgs) {
+              chatLog.addSystem("usage: /project add <path>");
+              break;
+            }
+            try {
+              const addPath = subArgs.trim();
+              const slug = addPath.split("/").pop() ?? "project";
+              const entry = registerProject({
+                id: slug.toLowerCase(),
+                name: slug,
+                path: addPath,
+              });
+              chatLog.addSystem(`registered project: ${entry.name} (${entry.path})`);
+            } catch (err) {
+              chatLog.addSystem(`project add failed: ${String(err)}`);
+            }
+            break;
+          }
+          case "sync": {
+            if (subArgs === "all") {
+              chatLog.addSystem("syncing all projects...");
+              const results = syncAllProjects();
+              for (const { project, result } of results) {
+                if (result.ok) {
+                  chatLog.addSystem(`${project.name}: synced`);
+                } else {
+                  chatLog.addSystem(`${project.name}: sync failed — ${result.error ?? "unknown"}`);
+                }
+              }
+            } else {
+              const pid = subArgs || state.currentProjectId;
+              if (!pid) {
+                chatLog.addSystem("no active project — specify an id or use /project sync all");
+                break;
+              }
+              const proj = findProject(pid);
+              if (!proj) {
+                chatLog.addSystem(`unknown project: ${pid}`);
+                break;
+              }
+              chatLog.addSystem(`syncing ${proj.name}...`);
+              const result = syncProject(proj);
+              if (result.ok) {
+                chatLog.addSystem(`${proj.name}: synced`);
+              } else {
+                chatLog.addSystem(`${proj.name}: sync failed — ${result.error ?? "unknown"}`);
+              }
+            }
+            break;
+          }
+          case "remove": {
+            if (!subArgs) {
+              chatLog.addSystem("usage: /project remove <id>");
+              break;
+            }
+            if (removeProject(subArgs.trim())) {
+              if (state.currentProjectId === subArgs.trim()) {
+                state.currentProjectId = null;
+                state.currentProjectPath = null;
+              }
+              chatLog.addSystem(`removed project: ${subArgs.trim()}`);
+            } else {
+              chatLog.addSystem(`project not found: ${subArgs.trim()}`);
+            }
+            break;
+          }
+          default:
+            await setProject(subCmd);
+            break;
+        }
+        break;
+      }
+      case "projects":
+        openProjectSelector();
+        break;
       case "model":
         if (!args) {
           await openModelSelector();
@@ -347,6 +501,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             const result = await client.patchSession({
               key: state.currentSessionKey,
               model: modelValue,
+              allowAnyCatalogModel: true,
             });
             const displayLabel = modelValue === AUTO_MODEL ? "Auto (Recommended)" : args;
             chatLog.addSystem(`model set to ${displayLabel}`);
@@ -641,7 +796,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     openModelSelector,
     openAgentSelector,
     openSessionSelector,
+    openProjectSelector,
     openSettings,
     setAgent,
+    setProject,
   };
 }

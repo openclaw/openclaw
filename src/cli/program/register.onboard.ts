@@ -16,7 +16,9 @@ import { resolveManifestProviderOnboardAuthFlags } from "../../plugins/provider-
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
+import { resolveCliName } from "../cli-name.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { requireSandboxOrInvoke } from "../sandbox-invoke.js";
 
 function resolveInstallDaemonFlag(
   command: unknown,
@@ -140,6 +142,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--json", "Output JSON summary", false);
 
   command.action(async (opts, commandRuntime) => {
+    requireSandboxOrInvoke(resolveCliName(), process.argv.slice(2));
     await runCommandWithRuntime(defaultRuntime, async () => {
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
         installDaemon: Boolean(opts.installDaemon),

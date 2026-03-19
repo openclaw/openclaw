@@ -358,6 +358,30 @@ describe("gateway server models + voicewake", () => {
     });
   });
 
+  test("models.list with all:true returns full catalog bypassing allowlist", async () => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-z" },
+            models: {
+              "openai/gpt-test-z": {},
+              "anthropic/claude-test-a": {},
+            },
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
+          all: true,
+        });
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual(expectedSortedCatalog());
+      },
+    );
+  });
+
   test("models.list rejects unknown params", async () => {
     piSdkMock.enabled = true;
     piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];

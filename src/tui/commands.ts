@@ -65,6 +65,8 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     { name: "agents", description: "Open agent picker" },
     { name: "session", description: "Switch session (or open picker)" },
     { name: "sessions", description: "Open session picker" },
+    { name: "project", description: "Switch project (or open picker)" },
+    { name: "projects", description: "Open project picker" },
     {
       name: "model",
       description: "Set model (or open picker)",
