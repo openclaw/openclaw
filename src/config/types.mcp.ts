@@ -3,7 +3,7 @@ export type McpServerConfig = {
   command?: string;
   /** Stdio transport: arguments for the command. */
   args?: string[];
-  /** Environment variables passed to the server process (stdio) or as headers (SSE). */
+  /** Environment variables passed to the server process (stdio only). */
   env?: Record<string, string | number | boolean>;
   /** Working directory for stdio server. */
   cwd?: string;
