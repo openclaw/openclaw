@@ -35,6 +35,14 @@ function getHookRunnerGlobalState(): HookRunnerGlobalState {
  */
 export function initializeGlobalHookRunner(registry: PluginRegistry): void {
   const state = getHookRunnerGlobalState();
+  // Preserve an existing hook runner that has registered hooks.
+  // Subsequent ensureRuntimePluginsLoaded calls (e.g. from non-default agent runs)
+  // may build a fresh registry with fewer/no hooks due to cache key divergence;
+  // replacing the working runner would silently drop all plugin hooks.
+  if (state.hookRunner && state.registry && state.registry.typedHooks.length > 0) {
+    log.debug("hook runner already initialized with hooks; skipping re-initialization");
+    return;
+  }
   state.registry = registry;
   state.hookRunner = createHookRunner(registry, {
     logger: {
