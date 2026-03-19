@@ -20,11 +20,11 @@ import {
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "../config/config.js";
-import { getConfigSource, setConfigSource } from "../config/sources/current.js";
-import { resolveConfigSource } from "../config/sources/resolve.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { getConfigSource, setConfigSource } from "../config/sources/current.js";
+import { resolveConfigSource } from "../config/sources/resolve.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -32,8 +32,8 @@ import {
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
-import { loadDotEnv } from "../infra/dotenv.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
+import { loadDotEnv } from "../infra/dotenv.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
@@ -78,8 +78,8 @@ import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { startGatewayConfigReloader } from "./config-reload.js";
 import type { GatewayReloadPlan } from "./config-reload-plan.js";
+import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,

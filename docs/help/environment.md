@@ -113,13 +113,13 @@ Both resolve from process env at activation time. SecretRef details are document
 
 When loading config from Nacos instead of a local file (e.g. in Kubernetes pods with no config file mount):
 
-| Variable                 | Required | Purpose                                                                 |
-| ------------------------ | -------- | ----------------------------------------------------------------------- |
-| `OPENCLAW_CONFIG_SOURCE`  | Yes      | Set to `nacos` to use Nacos; omit or `file` for file-based config.     |
-| `NACOS_SERVER_ADDR`      | Yes      | Nacos server address (e.g. `http://nacos:8848`).                       |
-| `NACOS_DATA_ID`          | Yes      | Data ID of the config (e.g. `openclaw.json`).                           |
-| `NACOS_GROUP`            | No       | Nacos group (default: `DEFAULT_GROUP`).                                |
-| `NACOS_NAMESPACE`        | No       | Nacos namespace (tenant); omit for default namespace.                  |
+| Variable                 | Required | Purpose                                                            |
+| ------------------------ | -------- | ------------------------------------------------------------------ |
+| `OPENCLAW_CONFIG_SOURCE` | Yes      | Set to `nacos` to use Nacos; omit or `file` for file-based config. |
+| `NACOS_SERVER_ADDR`      | Yes      | Nacos server address (e.g. `http://nacos:8848`).                   |
+| `NACOS_DATA_ID`          | Yes      | Data ID of the config (e.g. `openclaw.json`).                      |
+| `NACOS_GROUP`            | No       | Nacos group (default: `DEFAULT_GROUP`).                            |
+| `NACOS_NAMESPACE`        | No       | Nacos namespace (tenant); omit for default namespace.              |
 
 Config is kept only in memory; hot reload is driven by Nacos long-polling. See [Configuration: Config source: Nacos](/gateway/configuration#config-source-nacos).
 

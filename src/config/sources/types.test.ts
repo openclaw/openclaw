@@ -12,7 +12,7 @@ describe("ConfigSource types", () => {
   it("ConfigSource has readSnapshot and optional subscribe", () => {
     const source: ConfigSource = {
       kind: "file",
-      readSnapshot: async () => ({} as never),
+      readSnapshot: async () => ({}) as never,
     };
     expect(source.kind).toBe("file");
     expect(typeof source.readSnapshot).toBe("function");

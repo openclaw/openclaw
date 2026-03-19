@@ -47,8 +47,8 @@ import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
-import { getConfigSource } from "./sources/current.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
+import { getConfigSource } from "./sources/current.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
@@ -1506,8 +1506,8 @@ function buildSnapshotFromRuntimeSnapshots(path: string): ConfigFileSnapshot | n
     path,
     exists: true,
     raw,
-    parsed: config as unknown,
-    resolved: resolved as unknown,
+    parsed: config,
+    resolved,
     valid: true,
     config,
     hash: hashConfigRaw(raw),

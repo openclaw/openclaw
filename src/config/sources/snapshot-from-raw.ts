@@ -17,18 +17,21 @@ import {
   applyTalkApiKey,
   applyTalkConfigNormalization,
 } from "../defaults.js";
-import { applyConfigEnvVars } from "../env-vars.js";
 import type { EnvSubstitutionWarning } from "../env-substitution.js";
 import { resolveConfigEnvVars } from "../env-substitution.js";
+import { applyConfigEnvVars } from "../env-vars.js";
 import { parseConfigJson5 } from "../io.js";
 import { findLegacyConfigIssues } from "../legacy.js";
-import { normalizeConfigPaths } from "../normalize-paths.js";
 import { normalizeExecSafeBinProfilesInConfig } from "../normalize-exec-safe-bin.js";
+import { normalizeConfigPaths } from "../normalize-paths.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "../types.js";
 import { validateConfigObjectWithPlugins } from "../validation.js";
 
 function hashConfigRaw(raw: string | null): string {
-  return crypto.createHash("sha256").update(raw ?? "").digest("hex");
+  return crypto
+    .createHash("sha256")
+    .update(raw ?? "")
+    .digest("hex");
 }
 
 function coerceConfig(value: unknown): OpenClawConfig {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createNacosConfigSource } from "./nacos.js";
 import type { NacosConfigClient } from "./nacos-client.js";
+import { createNacosConfigSource } from "./nacos.js";
 
 describe("createNacosConfigSource", () => {
   it("returns source with kind nacos, watchPath null, subscribe function, and readSnapshot builds snapshot", async () => {

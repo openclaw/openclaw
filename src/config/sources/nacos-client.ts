@@ -67,8 +67,7 @@ export function createNacosConfigClient(opts: NacosConfigClientOptions): NacosCo
         if (stopped) return;
         // Nacos v1 listener expects Listening-Configs=<dataId>%02<group>%02<contentMD5>%02<tenant>%01
         const tenant = opts.tenant ?? "";
-        const listeningConfigs =
-          `${opts.dataId}${STX}${opts.group}${STX}${lastContentMD5}${STX}${tenant}${SOH}`;
+        const listeningConfigs = `${opts.dataId}${STX}${opts.group}${STX}${lastContentMD5}${STX}${tenant}${SOH}`;
         const body = new URLSearchParams({ "Listening-Configs": listeningConfigs });
         try {
           const res = await doFetch(listenerUrl, {
