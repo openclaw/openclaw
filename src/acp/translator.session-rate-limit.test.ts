@@ -303,13 +303,12 @@ describe("acp session UX bridge behavior", () => {
     });
 
     const result = await agent.loadSession(createLoadSessionRequest("robot-session"));
+    const thoughtLevelOption = result.configOptions?.find(
+      (option) => option.id === "thought_level" && "options" in option,
+    );
 
     expect(result.modes?.availableModes.map((mode) => mode.id)).toContain("xhigh");
-    expect(
-      result.configOptions?.find((option) => option.id === "thought_level")?.options.map(
-        (option) => option.value,
-      ),
-    ).toContain("xhigh");
+    expect(thoughtLevelOption?.options.map((option) => option.value)).toContain("xhigh");
 
     sessionStore.clearAllSessionsForTest();
   });
