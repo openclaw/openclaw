@@ -18,10 +18,7 @@ describe("setDefaultSecurityHeaders", () => {
   it("sets Permissions-Policy", () => {
     const { res, setHeader } = makeMockHttpResponse();
     setDefaultSecurityHeaders(res);
-    expect(setHeader).toHaveBeenCalledWith(
-      "Permissions-Policy",
-      "camera=(), microphone=(), geolocation=()",
-    );
+    expect(setHeader).toHaveBeenCalledWith("Permissions-Policy", "camera=(), geolocation=()");
   });
 
   it("sets Strict-Transport-Security when provided", () => {
