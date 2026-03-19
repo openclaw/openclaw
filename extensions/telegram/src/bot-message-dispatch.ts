@@ -6,10 +6,9 @@ import {
   modelSupportsVision,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { removeAckReactionAfterReply } from "openclaw/plugin-sdk/channel-runtime";
 import { logAckFailure, logTypingFailure } from "openclaw/plugin-sdk/channel-runtime";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
-import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
@@ -22,6 +21,7 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -380,12 +380,6 @@ export const dispatchTelegramMessage = async ({
           ? true
           : undefined;
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-    cfg,
-    agentId: route.agentId,
-    channel: "telegram",
-    accountId: route.accountId,
-  });
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 
   // Handle uncached stickers: get a dedicated vision description before dispatch
@@ -523,15 +517,21 @@ export const dispatchTelegramMessage = async ({
     void statusReactionController.setThinking();
   }
 
-  const typingCallbacks = createTypingCallbacks({
-    start: sendTyping,
-    onStartError: (err) => {
-      logTypingFailure({
-        log: logVerbose,
-        channel: "telegram",
-        target: String(chatId),
-        error: err,
-      });
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+    cfg,
+    agentId: route.agentId,
+    channel: "telegram",
+    accountId: route.accountId,
+    typing: {
+      start: sendTyping,
+      onStartError: (err) => {
+        logTypingFailure({
+          log: logVerbose,
+          channel: "telegram",
+          target: String(chatId),
+          error: err,
+        });
+      },
     },
   });
 
@@ -541,8 +541,7 @@ export const dispatchTelegramMessage = async ({
       ctx: ctxPayload,
       cfg,
       dispatcherOptions: {
-        ...prefixOptions,
-        typingCallbacks,
+        ...replyPipeline,
         deliver: async (payload, info) => {
           if (payload.isError === true) {
             hadErrorReplyFailureOrSkip = true;
@@ -567,7 +566,8 @@ export const dispatchTelegramMessage = async ({
           )?.buttons;
           const split = splitTextIntoLaneSegments(payload.text);
           const segments = split.segments;
-          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+          const reply = resolveSendableOutboundReplyParts(payload);
+          const hasMedia = reply.hasMedia;
 
           const flushBufferedFinalAnswer = async () => {
             const buffered = reasoningStepState.takeBufferedFinalAnswer();
@@ -631,7 +631,7 @@ export const dispatchTelegramMessage = async ({
             return;
           }
           if (split.suppressedReasoningOnly) {
-            if (hasMedia) {
+            if (reply.hasMedia) {
               const payloadWithoutSuppressedReasoning =
                 typeof payload.text === "string" ? { ...payload, text: "" } : payload;
               await sendPayload(payloadWithoutSuppressedReasoning);
@@ -647,8 +647,7 @@ export const dispatchTelegramMessage = async ({
             await reasoningLane.stream?.stop();
             reasoningStepState.resetForNextStep();
           }
-          const canSendAsIs =
-            hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
+          const canSendAsIs = reply.hasMedia || reply.text.length > 0;
           if (!canSendAsIs) {
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();

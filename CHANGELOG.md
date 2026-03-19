@@ -42,9 +42,11 @@ Docs: https://docs.openclaw.ai
 - Control UI/appearance: unify theme border radii across Claw, Knot, and Dash, and add a Roundness slider to the Appearance settings so users can adjust corner radius from sharp to fully rounded. Thanks @BunsDev.
 - Control UI/chat: add an expand-to-canvas button on assistant chat bubbles and in-app session navigation from Sessions and Cron views. Thanks @BunsDev.
 - Plugins/context engines: expose `delegateCompactionToRuntime(...)` on the public plugin SDK, refactor the legacy engine to use the shared helper, and clarify `ownsCompaction` delegation semantics for non-owning engines. (#49061) Thanks @jalehman.
+- Plugins/MiniMax: add MiniMax-M2.7 and MiniMax-M2.7-highspeed models and update the default model from M2.5 to M2.7. (#49691) Thanks @liyuan97.
 
 ### Fixes
 
+- CLI/Ollama onboarding: keep the interactive model picker for explicit `openclaw onboard --auth-choice ollama` runs so setup still selects a default model without reintroducing pre-picker auto-pulls. (#49249) Thanks @BruceMacD.
 - Plugins/bundler TDZ: fix `RESERVED_COMMANDS` temporal dead zone error that prevented device-pair, phone-control, and talk-voice plugins from registering when the bundler placed the commands module after call sites in the same output chunk. Thanks @BunsDev.
 - Plugins/imports: fix stale googlechat runtime-api import paths and signal SDK circular re-exports broken by recent plugin-sdk refactors. Thanks @BunsDev.
 - Google auth/Node 25: patch `gaxios` to use native fetch without injecting `globalThis.window`, while translating proxy and mTLS transport settings so Google Vertex and Google Chat auth keep working on Node 25. (#47914) Thanks @pdd-cli.
@@ -129,6 +131,8 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: write minimal boundary summaries for empty preparations while keeping split-turn prefixes on the normal path, so no-summarizable-message sessions stop retriggering the safeguard loop. (#42215) thanks @lml2468.
 - Models/chat commands: keep `/model ...@YYYYMMDD` version suffixes intact by default, but still honor matching stored numeric auth-profile overrides for the same provider. (#48896) Thanks @Alix-007.
 - Gateway/channels: serialize per-account channel startup so overlapping starts do not boot the same provider twice, preventing MS Teams `EADDRINUSE` crash loops during startup and restart. (#49583) Thanks @sudie-codes.
+- Tests/OpenAI Codex auth: align login expectations with the default `gpt-5.4` model so CI coverage stays consistent with the current OpenAI Codex default. (#44367) Thanks @jrrcdev.
+- Discord: enforce strict DM component allowlist auth (#49997) Thanks @joshavant.
 
 ### Fixes
 
@@ -149,6 +153,9 @@ Docs: https://docs.openclaw.ai
 - xAI/web search: add missing Grok credential metadata so the bundled provider registration type-checks again. (#49472) thanks @scoootscooob.
 - Signal/runtime API: re-export `SignalAccountConfig` so Signal account resolution type-checks again. (#49470) Thanks @scoootscooob.
 - Google Chat/runtime API: thin the private runtime barrel onto the curated public SDK surface while keeping public Google Chat exports intact. (#49504) Thanks @scoootscooob.
+- WhatsApp: stabilize inbound monitor and setup tests (#50007) Thanks @joshavant.
+- Matrix: make onboarding status runtime-safe (#49995) Thanks @joshavant.
+- WhatsApp/active-listener: pin the active listener registry to a `globalThis` singleton so split WhatsApp bundle chunks share one listener map and outbound sends stop missing the registered session. (#47433) Thanks @clawdia67.
 
 ### Breaking
 
@@ -236,6 +243,7 @@ Docs: https://docs.openclaw.ai
 - Auth/Codex CLI reuse: sync reused Codex CLI credentials into the supported `openai-codex:default` OAuth profile instead of reviving the deprecated `openai-codex:codex-cli` slot, so doctor cleanup no longer loops. (#45353) thanks @Gugu-sugar.
 - Deps/audit: bump the pinned `fast-xml-parser` override to the first patched release so `pnpm audit --prod --audit-level=high` no longer fails on the AWS Bedrock XML builder path. Thanks @vincentkoc.
 - Hooks/after_compaction: forward `sessionFile` for direct/manual compaction events and add `sessionFile` plus `sessionKey` to wired auto-compaction hook context so plugins receive the session metadata already declared in the hook types. (#40781) Thanks @jarimustonen.
+- Sessions/BlueBubbles/cron: persist outbound session routing and transcript mirroring for new targets, auto-create BlueBubbles chats before attachment sends, and only suppress isolated cron deliveries when the run started hours late instead of merely finishing late. (#50092)
 
 ### Breaking
 

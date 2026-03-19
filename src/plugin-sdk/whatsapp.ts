@@ -52,7 +52,7 @@ export {
 export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-} from "../../extensions/whatsapp/src/group-policy.js";
+} from "../../extensions/whatsapp/api.js";
 export {
   createWhatsAppOutboundBase,
   resolveWhatsAppGroupIntroHint,
@@ -77,10 +77,13 @@ export {
   resolveWhatsAppAccount,
 } from "../../extensions/whatsapp/api.js";
 export {
+  getActiveWebListener,
+  getWebAuthAgeMs,
   WA_WEB_AUTH_DIR,
   logWebSelfId,
   logoutWeb,
   pickWebChannel,
+  readWebSelfId,
   webAuthExists,
 } from "../../extensions/whatsapp/runtime-api.js";
 export {
