@@ -187,6 +187,10 @@ Delivery config:
 Announce delivery suppresses messaging tool sends for the run; use `delivery.channel`/`delivery.to`
 to target the chat instead. When `delivery.mode = "none"`, no summary is posted to the main session.
 
+When writing isolated job prompts, avoid embedding routing text (for example: "send to telegram:...")
+in user-facing output templates. Keep delivery routing in top-level `delivery` config so end-users see
+only the intended report content.
+
 If `delivery` is omitted for isolated jobs, OpenClaw defaults to `announce`.
 
 #### Announce delivery flow
