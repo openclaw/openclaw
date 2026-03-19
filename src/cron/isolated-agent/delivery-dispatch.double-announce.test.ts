@@ -399,6 +399,22 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
+  it("delivers media payloads even when synthesizedText is NO_REPLY (#45909)", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "NO_REPLY" });
+    (params.resolvedDelivery as { threadId?: string }).threadId = "42";
+    (params as Record<string, unknown>).deliveryPayloads = [
+      { text: "", mediaUrl: "https://example.com/image.png", mediaUrls: [] },
+    ];
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(true);
+    // Media payloads must NOT be suppressed even when text is NO_REPLY
+    expect(deliverOutboundPayloads).toHaveBeenCalled();
+  });
+
   it("structured/thread delivery also bypasses the write-ahead queue", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
