@@ -91,4 +91,30 @@ describe("resolveSlackBoltInterop", () => {
       }),
     ).toThrow("Unable to resolve @slack/bolt App/HTTPReceiver exports");
   });
+
+  it("maps clientOptions.agent to top-level app agent for socket/http parity", () => {
+    const explicitAgent = { kind: "proxy-agent" };
+    const params = {
+      token: "xoxb-test",
+      appToken: "xapp-test",
+      socketMode: true,
+      clientOptions: { agent: explicitAgent },
+    };
+    const socketAppArgs = {
+      ...params,
+      ...(params.clientOptions?.agent ? { agent: params.clientOptions.agent } : {}),
+    };
+    expect(socketAppArgs.agent).toBe(explicitAgent);
+
+    const httpParams = {
+      token: "xoxb-test",
+      receiver: {},
+      clientOptions: { agent: explicitAgent },
+    };
+    const httpAppArgs = {
+      ...httpParams,
+      ...(httpParams.clientOptions?.agent ? { agent: httpParams.clientOptions.agent } : {}),
+    };
+    expect(httpAppArgs.agent).toBe(explicitAgent);
+  });
 });

@@ -91,19 +91,28 @@ export function applyToolPolicyPipeline(params: {
     if (step.stripPluginOnlyAllowlist) {
       const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
       if (resolved.unknownAllowlist.length > 0) {
-        const entries = resolved.unknownAllowlist.join(", ");
         const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
           isKnownCoreToolId(entry),
         );
         const otherEntries = resolved.unknownAllowlist.filter((entry) => !isKnownCoreToolId(entry));
+        const subject = describeUnknownAllowlistSubject({
+          gatedCoreEntries,
+          otherEntries,
+        });
+        const entries = [
+          gatedCoreEntries.length > 0
+            ? `unavailable core: ${gatedCoreEntries.join(", ")}`
+            : undefined,
+          otherEntries.length > 0 ? `unknown: ${otherEntries.join(", ")}` : undefined,
+        ]
+          .filter(Boolean)
+          .join("; ");
         const suffix = describeUnknownAllowlistSuffix({
           strippedAllowlist: resolved.strippedAllowlist,
           hasGatedCoreEntries: gatedCoreEntries.length > 0,
           hasOtherEntries: otherEntries.length > 0,
         });
-        params.warn(
-          `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`,
-        );
+        params.warn(`tools: ${step.label} allowlist contains ${subject} (${entries}). ${suffix}`);
       }
       policy = resolved.policy;
     }
@@ -112,6 +121,21 @@ export function applyToolPolicyPipeline(params: {
     filtered = expanded ? filterToolsByPolicy(filtered, expanded) : filtered;
   }
   return filtered;
+}
+
+function describeUnknownAllowlistSubject(params: {
+  gatedCoreEntries: string[];
+  otherEntries: string[];
+}): string {
+  const hasGatedCoreEntries = params.gatedCoreEntries.length > 0;
+  const hasOtherEntries = params.otherEntries.length > 0;
+  if (hasGatedCoreEntries && hasOtherEntries) {
+    return "unavailable core and unknown entries";
+  }
+  if (hasGatedCoreEntries) {
+    return "unavailable core entries";
+  }
+  return "unknown entries";
 }
 
 function describeUnknownAllowlistSuffix(params: {

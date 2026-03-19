@@ -61,5 +61,6 @@ describe("bundled plugin runtime dependencies", () => {
 
   it("keeps bundled proxy-agent deps plugin-local instead of mirroring them into the root package", () => {
     expectPluginOwnsRuntimeDep("extensions/discord/package.json", "https-proxy-agent");
+    expectPluginOwnsRuntimeDep("extensions/slack/package.json", "https-proxy-agent");
   });
 });

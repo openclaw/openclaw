@@ -256,17 +256,20 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         })
       : null;
   const clientOptions = resolveSlackWebClientOptions();
+  const resolvedAgent = clientOptions.agent;
   const app = new App(
     slackMode === "socket"
       ? {
           token: botToken,
           appToken,
           socketMode: true,
+          ...(resolvedAgent ? { agent: resolvedAgent } : {}),
           clientOptions,
         }
       : {
           token: botToken,
           receiver: receiver ?? undefined,
+          ...(resolvedAgent ? { agent: resolvedAgent } : {}),
           clientOptions,
         },
   );
