@@ -1035,10 +1035,15 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("coalesces inflight duplicate mirrored outbound deliveries", async () => {
+    let markSendStarted: (() => void) | undefined;
+    const sendStarted = new Promise<void>((resolve) => {
+      markSendStarted = resolve;
+    });
     let resolveSend: ((value: { messageId: string; chatId: string }) => void) | undefined;
     const sendTelegram = vi.fn(
       () =>
         new Promise<{ messageId: string; chatId: string }>((resolve) => {
+          markSendStarted?.();
           resolveSend = resolve;
         }),
     );
@@ -1059,9 +1064,13 @@ describe("deliverOutboundPayloads", () => {
     const first = deliverOutboundPayloads(params);
     const second = deliverOutboundPayloads(params);
 
-    await vi.waitFor(() => {
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-    });
+    await Promise.race([
+      sendStarted,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("sendTelegram was not invoked")), 5_000);
+      }),
+    ]);
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
 
     resolveSend?.({ messageId: "m1", chatId: "c1" });
 
