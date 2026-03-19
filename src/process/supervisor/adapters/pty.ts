@@ -54,6 +54,7 @@ export async function createPtyAdapter(params: {
     name: params.name ?? process.env.TERM ?? "xterm-256color",
     cols: params.cols ?? 120,
     rows: params.rows ?? 30,
+    detached: true,
   });
 
   let dataListener: PtyDisposable | null = null;
