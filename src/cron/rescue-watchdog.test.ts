@@ -51,7 +51,7 @@ function createDefaultConfig() {
     },
   };
 }
-const restartService = vi.hoisted(() => vi.fn(async () => {}));
+const restartService = vi.hoisted(() => vi.fn(async () => ({ outcome: "completed" as const })));
 const readServiceCommand = vi.hoisted(() =>
   vi.fn<
     () => Promise<{
@@ -684,6 +684,35 @@ describe("runRescueWatchdogJob", () => {
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
+  it("stops after a scheduled service restart handoff", async () => {
+    probeGateway.mockResolvedValueOnce({
+      ok: false,
+      close: { code: 1006, reason: "down" },
+      error: "down",
+    });
+    restartService.mockResolvedValueOnce({ outcome: "scheduled" });
+
+    const result = await runRescueWatchdogJob({
+      job: {
+        id: "job-restart-scheduled",
+        name: "rescue",
+        payload: {
+          kind: "rescueWatchdog",
+          monitoredProfile: "work",
+          timeoutSeconds: 120,
+        },
+      } as never,
+      monitoredProfile: "work",
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("service restart was only scheduled");
+    expect(result.summary).toContain("scheduled a managed gateway restart");
+    expect(restartService).toHaveBeenCalledTimes(1);
+    expect(probeGateway).toHaveBeenCalledTimes(1);
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
   it("runs doctor repair when the monitored config cannot be loaded initially", async () => {
     loadConfig
       .mockImplementationOnce(() => {
@@ -1175,8 +1204,8 @@ describe("runRescueWatchdogJob", () => {
     });
     restartService.mockImplementation(
       () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 700);
+        new Promise<{ outcome: "completed" }>((resolve) => {
+          setTimeout(() => resolve({ outcome: "completed" }), 700);
         }),
     );
 

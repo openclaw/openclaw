@@ -4,7 +4,11 @@ import { createConfigIO } from "../config/io.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { resolveCurrentCliProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import type { GatewayService, GatewayServiceCommandConfig } from "../daemon/service.js";
+import type {
+  GatewayService,
+  GatewayServiceCommandConfig,
+  GatewayServiceRestartResult,
+} from "../daemon/service.js";
 import { resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
@@ -332,14 +336,14 @@ function resolveRemainingJobBudgetMs(params: {
   );
 }
 
-type RunBoundedResult = { ok: true } | { ok: false; error: string; aborted: boolean };
+type RunBoundedResult<T> = { ok: true; value: T } | { ok: false; error: string; aborted: boolean };
 
-async function runBoundedStep(params: {
-  run: (signal: AbortSignal) => Promise<void>;
+async function runBoundedStep<T>(params: {
+  run: (signal: AbortSignal) => Promise<T>;
   timeoutMs: number;
   abortSignal?: AbortSignal;
   label: string;
-}): Promise<RunBoundedResult> {
+}): Promise<RunBoundedResult<T>> {
   if (params.abortSignal?.aborted) {
     return { ok: false, error: `${params.label} aborted`, aborted: true };
   }
@@ -349,7 +353,7 @@ async function runBoundedStep(params: {
   let onAbort: (() => void) | undefined;
   try {
     const runPromise = params.run(stepController.signal).then(
-      () => ({ kind: "done" as const }),
+      (value) => ({ kind: "done" as const, value }),
       (error: unknown) => ({ kind: "error" as const, error }),
     );
     const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
@@ -365,7 +369,7 @@ async function runBoundedStep(params: {
 
     const outcome = await Promise.race([runPromise, timeoutPromise, abortPromise]);
     if (outcome.kind === "done") {
-      return { ok: true };
+      return { ok: true, value: outcome.value };
     }
     // On timeout or abort, cancel in-flight child processes.
     stepController.abort();
@@ -474,15 +478,23 @@ export async function runRescueWatchdogJob(params: {
         typeof remainingBeforeRestartMs === "number"
           ? Math.min(RESTART_TIMEOUT_MS, remainingBeforeRestartMs)
           : RESTART_TIMEOUT_MS;
-      const restartResult = await runBoundedStep({
+      const restartResult = await runBoundedStep<GatewayServiceRestartResult>({
         run: async (signal) => {
-          await service.restart({ env, stdout: process.stdout, signal });
+          return await service.restart({ env, stdout: process.stdout, signal });
         },
         timeoutMs: restartTimeoutMs,
         abortSignal: params.abortSignal,
         label: "service restart",
       });
       if (restartResult.ok) {
+        if (restartResult.value.outcome === "scheduled") {
+          return {
+            status: "error",
+            error:
+              "service restart was only scheduled; skipping immediate probe and doctor fallback until the current managed gateway process exits",
+            summary: `Rescue watchdog scheduled a managed gateway restart for "${monitoredProfile}" and stopped before probing the still-running service.`,
+          };
+        }
         actions.push("restarted managed gateway service");
       } else {
         restartError = restartResult.error;
