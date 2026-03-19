@@ -1,9 +1,10 @@
 const DEFAULT_OUTPUT_CAPTURE_LIMIT = 200_000;
 
 const fatalOutputPatterns = [
-  /FATAL ERROR:.*heap out of memory/i,
-  /Allocation failed - JavaScript heap out of memory/i,
+  /FATAL ERROR:/i,
+  /JavaScript heap out of memory/i,
   /node::OOMErrorHandler/i,
+  /ERR_WORKER_OUT_OF_MEMORY/i,
 ];
 
 export function appendCapturedOutput(current, chunk, limit = DEFAULT_OUTPUT_CAPTURE_LIMIT) {
@@ -21,14 +22,17 @@ export function hasFatalTestRunOutput(output) {
   return fatalOutputPatterns.some((pattern) => pattern.test(output));
 }
 
-export function resolveTestRunExitCode({ code, signal, output }) {
+export function resolveTestRunExitCode({ code, signal, output, fatalSeen = false, childError }) {
   if (typeof code === "number" && code !== 0) {
     return code;
+  }
+  if (childError) {
+    return 1;
   }
   if (signal) {
     return 1;
   }
-  if (hasFatalTestRunOutput(output)) {
+  if (fatalSeen || hasFatalTestRunOutput(output)) {
     return 1;
   }
   return code ?? 0;
