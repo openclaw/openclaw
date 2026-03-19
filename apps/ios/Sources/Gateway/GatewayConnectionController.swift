@@ -246,6 +246,13 @@ final class GatewayConnectionController {
                 bootstrapToken: cfg.bootstrapToken,
                 password: cfg.password,
                 nodeOptions: await self.makeConnectOptions(stableID: cfg.stableID))
+
+            guard appModel.gatewayAutoReconnectEnabled,
+                  let latestConfig = appModel.activeGatewayConnectConfig,
+                  latestConfig.effectiveStableID == cfg.effectiveStableID,
+                  latestConfig.url == cfg.url
+            else { return }
+
             appModel.applyGatewayConnectConfig(refreshedConfig)
         }
     }
