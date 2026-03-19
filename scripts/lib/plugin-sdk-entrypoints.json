@@ -68,6 +68,7 @@
   "boolean-param",
   "device-pair",
   "diagnostics-otel",
+  "diagnostics-sentry",
   "diffs",
   "extension-shared",
   "channel-config-helpers",

@@ -313,6 +313,10 @@
       "types": "./dist/plugin-sdk/diagnostics-otel.d.ts",
       "default": "./dist/plugin-sdk/diagnostics-otel.js"
     },
+    "./plugin-sdk/diagnostics-sentry": {
+      "types": "./dist/plugin-sdk/diagnostics-sentry.d.ts",
+      "default": "./dist/plugin-sdk/diagnostics-sentry.js"
+    },
     "./plugin-sdk/diffs": {
       "types": "./dist/plugin-sdk/diffs.d.ts",
       "default": "./dist/plugin-sdk/diffs.js"
