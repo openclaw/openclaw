@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/soundchain",
+  "version": "2026.2.18",
+  "description": "SoundChain music platform tools for OpenClaw - search, play, earn OGUN",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
