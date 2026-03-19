@@ -155,13 +155,30 @@ function resolveTransport(
         `bundle-mcp: server "${serverName}": header "${key}" has an unsupported value type and was ignored.`,
       );
     },
+    onMalformedHeaders: () => {
+      logWarn(
+        `bundle-mcp: server "${serverName}": "headers" must be a JSON object; the value was ignored.`,
+      );
+    },
   });
   if (sseLaunch.ok) {
     const headers: Record<string, string> = {
       ...sseLaunch.config.headers,
     };
+    const hasHeaders = Object.keys(headers).length > 0;
     const transport = new SSEClientTransport(new URL(sseLaunch.config.url), {
-      requestInit: Object.keys(headers).length > 0 ? { headers } : undefined,
+      // Apply headers to POST requests (tool calls, listTools, etc.).
+      requestInit: hasHeaders ? { headers } : undefined,
+      // Apply headers to the initial SSE GET handshake (required for auth).
+      eventSourceInit: hasHeaders
+        ? {
+            fetch: (url, init) =>
+              fetch(url, {
+                ...init,
+                headers: { ...headers, ...(init?.headers as Record<string, string>) },
+              }),
+          }
+        : undefined,
     });
     return {
       transport,
