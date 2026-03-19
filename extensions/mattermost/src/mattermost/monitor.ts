@@ -1632,17 +1632,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           if (isFinal) {
             stopPatchInterval();
             // Capture and clear the stream ID so normal delivery below can proceed.
-            // If the reply target diverged we hold the orphan ID and delete it
-            // *after* the replacement message is successfully sent (see below).
-            const orphanedStreamId = replyTargetDiverged ? streamMessageId : null;
+            const orphanedStreamId = streamMessageId;
             streamMessageId = null;
             pendingPatchText = "";
             lastSentText = "";
             patchSending = false;
 
-            if (!orphanedStreamId) {
-              // No divergence — fall through to normal delivery.
-            } else {
+            if (replyTargetDiverged && orphanedStreamId) {
               // Divergent target: deliver to the correct thread first, then clean
               // up the orphan. If delivery fails the user keeps the partial preview.
               await deliverMattermostReplyPayload({
@@ -1664,6 +1660,31 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               }
               return;
             }
+
+            if (orphanedStreamId && !payload.text) {
+              // Media-only final with a streamed text-preview: deliver media first,
+              // then delete the orphaned preview so users don't see stale partial
+              // text alongside the attachment. If delivery fails, the preview stays.
+              await deliverMattermostReplyPayload({
+                core,
+                cfg,
+                payload,
+                to,
+                accountId: account.accountId,
+                agentId: route.agentId,
+                replyToId: finalReplyToId,
+                textLimit,
+                tableMode,
+                sendMessage: sendMessageMattermost,
+              });
+              try {
+                await deleteMattermostPost(blockStreamingClient!, orphanedStreamId);
+              } catch {
+                // Ignore — media was already delivered.
+              }
+              return;
+            }
+            // Otherwise fall through to normal delivery.
           }
 
           // Normal delivery — streaming not active or non-final partial.
