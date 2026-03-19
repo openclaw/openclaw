@@ -357,6 +357,7 @@ describe("createTelegramDraftStream", () => {
     expect(typeof firstDraftId).toBe("number");
     expect(clearCall?.[1]).toBe(firstDraftId);
     expect(clearCall?.[2]).toBe(""); // clear call sends empty text
+    expect(clearCall?.[3]).toEqual({ message_thread_id: 42 });
     expect(typeof secondDraftId).toBe("number");
     expect(firstDraftId).not.toBe(secondDraftId);
     expect(api.sendMessageDraft.mock.calls[2]?.[2]).toBe("Message B");
