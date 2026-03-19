@@ -13,6 +13,12 @@ import { resolveAllowedAgentIds } from "./hooks-policy.js";
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
 const MAX_HOOK_IDEMPOTENCY_KEY_LENGTH = 256;
+const MAX_HOOK_NAME_LENGTH = 1000;
+const MAX_HOOK_TO_LENGTH = 1000;
+const MAX_HOOK_MODEL_LENGTH = 256;
+const MAX_HOOK_THINKING_LENGTH = 64;
+const MAX_HOOK_AGENT_ID_LENGTH = 256;
+const MAX_HOOK_SESSION_KEY_LENGTH = 1000;
 
 export type HooksConfigResolved = {
   basePath: string;
@@ -365,29 +371,50 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
   }
   const nameRaw = payload.name;
   const name = typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : "Hook";
+  if (name.length > MAX_HOOK_NAME_LENGTH) {
+    return { ok: false, error: `name exceeds maximum length of ${MAX_HOOK_NAME_LENGTH}` };
+  }
   const agentIdRaw = payload.agentId;
   const agentId =
     typeof agentIdRaw === "string" && agentIdRaw.trim() ? agentIdRaw.trim() : undefined;
+  if (agentId && agentId.length > MAX_HOOK_AGENT_ID_LENGTH) {
+    return { ok: false, error: `agentId exceeds maximum length of ${MAX_HOOK_AGENT_ID_LENGTH}` };
+  }
   const idempotencyKey = resolveOptionalHookIdempotencyKey(payload.idempotencyKey);
   const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKeyRaw = payload.sessionKey;
   const sessionKey =
     typeof sessionKeyRaw === "string" && sessionKeyRaw.trim() ? sessionKeyRaw.trim() : undefined;
+  if (sessionKey && sessionKey.length > MAX_HOOK_SESSION_KEY_LENGTH) {
+    return {
+      ok: false,
+      error: `sessionKey exceeds maximum length of ${MAX_HOOK_SESSION_KEY_LENGTH}`,
+    };
+  }
   const channel = resolveHookChannel(payload.channel);
   if (!channel) {
     return { ok: false, error: getHookChannelError() };
   }
   const toRaw = payload.to;
   const to = typeof toRaw === "string" && toRaw.trim() ? toRaw.trim() : undefined;
+  if (to && to.length > MAX_HOOK_TO_LENGTH) {
+    return { ok: false, error: `to exceeds maximum length of ${MAX_HOOK_TO_LENGTH}` };
+  }
   const modelRaw = payload.model;
   const model = typeof modelRaw === "string" && modelRaw.trim() ? modelRaw.trim() : undefined;
   if (modelRaw !== undefined && !model) {
     return { ok: false, error: "model required" };
   }
+  if (model && model.length > MAX_HOOK_MODEL_LENGTH) {
+    return { ok: false, error: `model exceeds maximum length of ${MAX_HOOK_MODEL_LENGTH}` };
+  }
   const deliver = resolveHookDeliver(payload.deliver);
   const thinkingRaw = payload.thinking;
   const thinking =
     typeof thinkingRaw === "string" && thinkingRaw.trim() ? thinkingRaw.trim() : undefined;
+  if (thinking && thinking.length > MAX_HOOK_THINKING_LENGTH) {
+    return { ok: false, error: `thinking exceeds maximum length of ${MAX_HOOK_THINKING_LENGTH}` };
+  }
   const timeoutRaw = payload.timeoutSeconds;
   const timeoutSeconds =
     typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw) && timeoutRaw > 0

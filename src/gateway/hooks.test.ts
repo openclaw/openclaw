@@ -323,6 +323,55 @@ describe("gateway hooks helpers", () => {
       "hooks.allowedSessionKeyPrefixes must include 'hook:' when hooks.defaultSessionKey is unset",
     );
   });
+
+  test("normalizeAgentPayload rejects oversized metadata fields", () => {
+    const longName = "x".repeat(1001);
+    expect(normalizeAgentPayload({ message: "hello", name: longName })).toEqual({
+      ok: false,
+      error: "name exceeds maximum length of 1000",
+    });
+
+    const longTo = "x".repeat(1001);
+    expect(normalizeAgentPayload({ message: "hello", to: longTo })).toEqual({
+      ok: false,
+      error: "to exceeds maximum length of 1000",
+    });
+
+    const longModel = "x".repeat(257);
+    expect(normalizeAgentPayload({ message: "hello", model: longModel })).toEqual({
+      ok: false,
+      error: "model exceeds maximum length of 256",
+    });
+
+    const longThinking = "x".repeat(65);
+    expect(normalizeAgentPayload({ message: "hello", thinking: longThinking })).toEqual({
+      ok: false,
+      error: "thinking exceeds maximum length of 64",
+    });
+
+    const longAgentId = "x".repeat(257);
+    expect(normalizeAgentPayload({ message: "hello", agentId: longAgentId })).toEqual({
+      ok: false,
+      error: "agentId exceeds maximum length of 256",
+    });
+
+    const longSessionKey = "x".repeat(1001);
+    expect(normalizeAgentPayload({ message: "hello", sessionKey: longSessionKey })).toEqual({
+      ok: false,
+      error: "sessionKey exceeds maximum length of 1000",
+    });
+  });
+
+  test("normalizeAgentPayload accepts fields at exact max length", () => {
+    const result = normalizeAgentPayload({
+      message: "hello",
+      name: "x".repeat(1000),
+      to: "x".repeat(1000),
+      model: "x".repeat(256),
+      thinking: "x".repeat(64),
+    });
+    expect(result.ok).toBe(true);
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);
