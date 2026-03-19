@@ -11,7 +11,7 @@ const ANSI_ESCAPE_PATTERN = new RegExp(
 const COMPLETED_TEST_FILE_LINE_PATTERN =
   /(?<file>(?:src|extensions|test|ui)\/\S+?\.(?:live\.test|e2e\.test|test)\.ts)\s+\(.*\)\s+(?<duration>\d+(?:\.\d+)?)(?<unit>ms|s)\s*$/;
 
-const PS_COLUMNS = ["pid=", "ppid=", "rss="];
+const PS_COLUMNS = ["pid=", "ppid=", "rss=", "comm="];
 
 function parseDurationMs(rawValue, unit) {
   const parsed = Number.parseFloat(rawValue);
@@ -41,7 +41,7 @@ export function parseCompletedTestFileLines(text) {
     .filter((entry) => entry !== null);
 }
 
-export function sampleProcessTreeRssKb(rootPid) {
+export function getProcessTreeRecords(rootPid) {
   if (!Number.isInteger(rootPid) || rootPid <= 0 || process.platform === "win32") {
     return null;
   }
@@ -54,13 +54,13 @@ export function sampleProcessTreeRssKb(rootPid) {
   }
 
   const childPidsByParent = new Map();
-  const rssByPid = new Map();
+  const recordsByPid = new Map();
   for (const line of result.stdout.split(/\r?\n/u)) {
     const trimmed = line.trim();
     if (!trimmed) {
       continue;
     }
-    const [pidRaw, parentRaw, rssRaw] = trimmed.split(/\s+/u);
+    const [pidRaw, parentRaw, rssRaw, commandRaw] = trimmed.split(/\s+/u, 4);
     const pid = Number.parseInt(pidRaw ?? "", 10);
     const parentPid = Number.parseInt(parentRaw ?? "", 10);
     const rssKb = Number.parseInt(rssRaw ?? "", 10);
@@ -70,33 +70,52 @@ export function sampleProcessTreeRssKb(rootPid) {
     const siblings = childPidsByParent.get(parentPid) ?? [];
     siblings.push(pid);
     childPidsByParent.set(parentPid, siblings);
-    rssByPid.set(pid, rssKb);
+    recordsByPid.set(pid, {
+      pid,
+      parentPid,
+      rssKb,
+      command: commandRaw ?? "",
+    });
   }
 
-  if (!rssByPid.has(rootPid)) {
+  if (!recordsByPid.has(rootPid)) {
     return null;
   }
 
-  let rssKb = 0;
-  let processCount = 0;
   const queue = [rootPid];
   const visited = new Set();
+  const records = [];
   while (queue.length > 0) {
     const pid = queue.shift();
     if (pid === undefined || visited.has(pid)) {
       continue;
     }
     visited.add(pid);
-    const currentRssKb = rssByPid.get(pid);
-    if (currentRssKb !== undefined) {
-      rssKb += currentRssKb;
-      processCount += 1;
+    const record = recordsByPid.get(pid);
+    if (record) {
+      records.push(record);
     }
     for (const childPid of childPidsByParent.get(pid) ?? []) {
       if (!visited.has(childPid)) {
         queue.push(childPid);
       }
     }
+  }
+
+  return records;
+}
+
+export function sampleProcessTreeRssKb(rootPid) {
+  const records = getProcessTreeRecords(rootPid);
+  if (!records) {
+    return null;
+  }
+
+  let rssKb = 0;
+  let processCount = 0;
+  for (const record of records) {
+    rssKb += record.rssKb;
+    processCount += 1;
   }
 
   return { rssKb, processCount };
