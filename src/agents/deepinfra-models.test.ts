@@ -82,7 +82,7 @@ describe("discoverDeepInfraModels", () => {
     expect(defaultModel).toBeDefined();
     expect(defaultModel?.name).toBe("gpt-oss-120b");
     expect(defaultModel?.reasoning).toBe(true);
-    expect(defaultModel?.input).toEqual(["text", "image"]);
+    expect(defaultModel?.input).toEqual(["text"]);
     expect(defaultModel?.contextWindow).toBe(131072);
     expect(defaultModel?.maxTokens).toBe(131072);
     expect(defaultModel?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
