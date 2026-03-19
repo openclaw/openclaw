@@ -176,6 +176,13 @@ function extractTextContent(content: unknown): string {
         if (typeof inputText === "string") {
           return inputText;
         }
+        // Preserve image_url parts as text references so the model sees them
+        if (type === "image_url") {
+          const url = resolveImageUrlPart(part);
+          if (url) {
+            return `[image: ${url}]`;
+          }
+        }
         return "";
       })
       .filter(Boolean)
