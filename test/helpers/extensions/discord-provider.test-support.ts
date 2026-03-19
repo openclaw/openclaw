@@ -475,3 +475,13 @@ vi.mock("../../../extensions/discord/src/monitor/thread-bindings.js", () => ({
   reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
   resolveThreadBindingIdleTimeoutMs: vi.fn(() => 24 * 60 * 60 * 1000),
 }));
+
+vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
+  return {
+    ...actual,
+    resolveThreadBindingIdleTimeoutMs: vi.fn(() => 24 * 60 * 60 * 1000),
+    resolveThreadBindingMaxAgeMs: vi.fn(() => 0),
+    resolveThreadBindingsEnabled: vi.fn(() => true),
+  };
+});
