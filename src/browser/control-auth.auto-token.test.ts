@@ -112,6 +112,36 @@ describe("ensureBrowserControlAuth", () => {
     await expectExplicitModeSkipsAutoAuth("none");
   });
 
+  it("auto-generates and persists a token for trusted-proxy mode", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+          },
+        },
+        trustedProxies: ["192.168.1.1"],
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
+
+    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+    // Token is generated and returned.
+    expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
+    expect(result.auth.token).toBe(result.generatedToken);
+
+    // Token is persisted to config, preserving the trusted-proxy mode.
+    expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    const persisted = mocks.writeConfigFile.mock.calls[0]?.[0];
+    expect(persisted?.gateway?.auth?.mode).toBe("trusted-proxy");
+    expect(persisted?.gateway?.auth?.token).toBe(result.generatedToken);
+  });
+
   it("reuses auth from latest config snapshot", async () => {
     const cfg: OpenClawConfig = {
       browser: {

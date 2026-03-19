@@ -1,5 +1,6 @@
+import crypto from "node:crypto";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 
@@ -62,10 +63,6 @@ export async function ensureBrowserControlAuth(params: {
     return { auth };
   }
 
-  if (params.cfg.gateway?.auth?.mode === "trusted-proxy") {
-    return { auth };
-  }
-
   // Re-read latest config to avoid racing with concurrent config writers.
   const latestCfg = loadConfig();
   const latestAuth = resolveBrowserControlAuth(latestCfg, env);
@@ -78,8 +75,28 @@ export async function ensureBrowserControlAuth(params: {
   if (latestCfg.gateway?.auth?.mode === "none") {
     return { auth: latestAuth };
   }
+
+  // trusted-proxy mode: the gateway authenticates via proxy headers, not
+  // tokens, so ensureGatewayStartupAuth will not generate a credential.
+  // Generate a browser-specific loopback token directly so the browser
+  // control server always starts with auth middleware installed.
   if (latestCfg.gateway?.auth?.mode === "trusted-proxy") {
-    return { auth: latestAuth };
+    const generatedToken = crypto.randomBytes(24).toString("hex");
+    const nextCfg: OpenClawConfig = {
+      ...latestCfg,
+      gateway: {
+        ...latestCfg.gateway,
+        auth: {
+          ...latestCfg.gateway?.auth,
+          token: generatedToken,
+        },
+      },
+    };
+    await writeConfigFile(nextCfg);
+    return {
+      auth: { token: generatedToken },
+      generatedToken,
+    };
   }
 
   const ensured = await ensureGatewayStartupAuth({
