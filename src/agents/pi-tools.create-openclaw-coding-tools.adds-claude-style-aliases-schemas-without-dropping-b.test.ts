@@ -108,6 +108,9 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("write")).toBe(true);
     expect(names.has("edit")).toBe(true);
     expect(names.has("apply_patch")).toBe(false);
+
+    const ownerTools = createOpenClawCodingTools({ senderIsOwner: true });
+    expect(ownerTools.some((tool) => tool.name === "github_checks")).toBe(true);
   });
   it("provides top-level object schemas for all tools", () => {
     const tools = createOpenClawCodingTools();
