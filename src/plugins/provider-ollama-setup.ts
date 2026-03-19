@@ -249,9 +249,12 @@ function buildOllamaModelsConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
 ) {
-  return modelNames.map((name) =>
-    buildOllamaModelDefinition(name, discoveredModelsByName?.get(name)?.contextWindow),
-  );
+  return modelNames.map((name) => {
+    const discovered = discoveredModelsByName?.get(name);
+    return buildOllamaModelDefinition(name, discovered?.contextWindow, {
+      vision: discovered?.vision,
+    });
+  });
 }
 
 function applyOllamaProviderConfig(

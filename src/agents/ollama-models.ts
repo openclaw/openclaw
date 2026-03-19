@@ -28,6 +28,7 @@ export type OllamaTagsResponse = {
 
 export type OllamaModelWithContext = OllamaTagModel & {
   contextWindow?: number;
+  vision?: boolean;
 };
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
@@ -48,10 +49,15 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   return trimmed.replace(/\/v1$/i, "");
 }
 
-export async function queryOllamaContextWindow(
+export type OllamaShowInfo = {
+  contextWindow?: number;
+  vision?: boolean;
+};
+
+export async function queryOllamaModelInfo(
   apiBase: string,
   modelName: string,
-): Promise<number | undefined> {
+): Promise<OllamaShowInfo> {
   try {
     const response = await fetch(`${apiBase}/api/show`, {
       method: "POST",
@@ -60,24 +66,42 @@ export async function queryOllamaContextWindow(
       signal: AbortSignal.timeout(3000),
     });
     if (!response.ok) {
-      return undefined;
+      return {};
     }
     const data = (await response.json()) as { model_info?: Record<string, unknown> };
     if (!data.model_info) {
-      return undefined;
+      return {};
     }
-    for (const [key, value] of Object.entries(data.model_info)) {
-      if (key.endsWith(".context_length") && typeof value === "number" && Number.isFinite(value)) {
-        const contextWindow = Math.floor(value);
-        if (contextWindow > 0) {
-          return contextWindow;
+    let contextWindow: number | undefined;
+    let vision = false;
+    for (const key of Object.keys(data.model_info)) {
+      if (key.endsWith(".context_length") && !contextWindow) {
+        const value = data.model_info[key];
+        if (typeof value === "number" && Number.isFinite(value)) {
+          const ctx = Math.floor(value);
+          if (ctx > 0) {
+            contextWindow = ctx;
+          }
         }
       }
+      // Ollama vision models expose projector/clip architecture keys in model_info
+      if (key.startsWith("clip.") || key.startsWith("projector.")) {
+        vision = true;
+      }
     }
-    return undefined;
+    return { contextWindow, vision };
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+/** @deprecated Use queryOllamaModelInfo instead. */
+export async function queryOllamaContextWindow(
+  apiBase: string,
+  modelName: string,
+): Promise<number | undefined> {
+  const info = await queryOllamaModelInfo(apiBase, modelName);
+  return info.contextWindow;
 }
 
 export async function enrichOllamaModelsWithContext(
@@ -90,10 +114,14 @@ export async function enrichOllamaModelsWithContext(
   for (let index = 0; index < models.length; index += concurrency) {
     const batch = models.slice(index, index + concurrency);
     const batchResults = await Promise.all(
-      batch.map(async (model) => ({
-        ...model,
-        contextWindow: await queryOllamaContextWindow(apiBase, model.name),
-      })),
+      batch.map(async (model) => {
+        const info = await queryOllamaModelInfo(apiBase, model.name);
+        return {
+          ...model,
+          contextWindow: info.contextWindow,
+          vision: info.vision || isVisionModelHeuristic(model.name),
+        };
+      }),
     );
     enriched.push(...batchResults);
   }
@@ -105,16 +133,31 @@ export function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
 
+/**
+ * Heuristic: detect vision/multimodal models by name.
+ * Covers common Ollama vision model naming patterns:
+ * - `-vl` / `_vl` suffix (qwen3-vl, internvl)
+ * - `vision` (llama3.2-vision)
+ * - `llava` / `bakllava` (LLaVA family)
+ * - `moondream` (small vision model)
+ * - `minicpm-v` (MiniCPM-V family)
+ */
+export function isVisionModelHeuristic(modelId: string): boolean {
+  return /[-_]vl\b|nvl\d|vision|llava|bakllava|moondream|minicpm-v/i.test(modelId);
+}
+
 /** Build a ModelDefinitionConfig for an Ollama model with default values. */
 export function buildOllamaModelDefinition(
   modelId: string,
   contextWindow?: number,
+  opts?: { vision?: boolean },
 ): ModelDefinitionConfig {
+  const vision = opts?.vision || isVisionModelHeuristic(modelId);
   return {
     id: modelId,
     name: modelId,
     reasoning: isReasoningModelHeuristic(modelId),
-    input: ["text"],
+    input: vision ? ["text", "image"] : ["text"],
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
