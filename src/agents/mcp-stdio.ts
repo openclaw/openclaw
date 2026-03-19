@@ -47,7 +47,7 @@ export function resolveStdioMcpServerLaunchConfig(raw: unknown): StdioMcpServerL
     if (typeof raw.url === "string" && raw.url.trim().length > 0) {
       return {
         ok: false,
-        reason: "only stdio MCP servers are supported right now",
+        reason: "not a stdio server (has url)",
       };
     }
     return { ok: false, reason: "its command is missing" };
