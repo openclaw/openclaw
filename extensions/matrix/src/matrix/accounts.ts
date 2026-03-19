@@ -10,7 +10,7 @@ import {
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
 import { resolveMatrixConfigForAccount } from "./client.js";
-import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials.js";
+import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials-read.js";
 
 /** Merge account config with top-level defaults, preserving nested objects. */
 function mergeAccountConfig(base: MatrixConfig, account: MatrixConfig): MatrixConfig {
