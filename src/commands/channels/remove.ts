@@ -8,6 +8,7 @@ import { type OpenClawConfig, writeConfigFile } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import { type ChatChannel, channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
 
 export type ChannelsRemoveOptions = {
@@ -29,14 +30,16 @@ export async function channelsRemoveCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
-  const cfg = await requireValidConfig(runtime);
-  if (!cfg) {
+  const loadedCfg = await requireValidConfig(runtime);
+  if (!loadedCfg) {
     return;
   }
+  let cfg = loadedCfg;
 
   const useWizard = shouldUseWizard(params);
   const prompter = useWizard ? createClackPrompter() : null;
-  let channel: ChatChannel | null = normalizeChannelId(opts.channel);
+  const rawChannel = opts.channel?.trim() ?? "";
+  let channel: ChatChannel | null = normalizeChannelId(rawChannel);
   let accountId = normalizeAccountId(opts.account);
   const deleteConfig = Boolean(opts.delete);
 
@@ -73,15 +76,16 @@ export async function channelsRemoveCommand(
       return;
     }
   } else {
-    if (!channel) {
+    if (!rawChannel) {
       runtime.error("Channel is required. Use --channel <name>.");
       runtime.exit(1);
       return;
     }
     if (!deleteConfig) {
       const confirm = createClackPrompter();
+      const channelPromptLabel = channel ? channelLabel(channel) : rawChannel;
       const ok = await confirm.confirm({
-        message: `Disable ${channelLabel(channel)} account "${accountId}"? (keeps config)`,
+        message: `Disable ${channelPromptLabel} account "${accountId}"? (keeps config)`,
         initialValue: true,
       });
       if (!ok) {
@@ -90,13 +94,31 @@ export async function channelsRemoveCommand(
     }
   }
 
-  const plugin = getChannelPlugin(channel);
-  if (!plugin) {
-    runtime.error(`Unknown channel: ${channel}`);
+  const resolvedPluginState =
+    !useWizard && rawChannel
+      ? await resolveInstallableChannelPlugin({
+          cfg,
+          runtime,
+          rawChannel,
+          allowInstall: true,
+        })
+      : null;
+  if (resolvedPluginState?.configChanged) {
+    cfg = resolvedPluginState.cfg;
+  }
+  const resolvedChannel = resolvedPluginState?.channelId ?? channel;
+  if (!resolvedChannel) {
+    runtime.error(`Unknown channel: ${rawChannel}`);
     runtime.exit(1);
     return;
   }
-
+  channel = resolvedChannel;
+  const plugin = resolvedPluginState?.plugin ?? getChannelPlugin(resolvedChannel);
+  if (!plugin) {
+    runtime.error(`Unknown channel: ${resolvedChannel}`);
+    runtime.exit(1);
+    return;
+  }
   const resolvedAccountId =
     normalizeAccountId(accountId) ?? resolveChannelDefaultAccountId({ plugin, cfg });
   const accountKey = resolvedAccountId || DEFAULT_ACCOUNT_ID;
@@ -141,14 +163,14 @@ export async function channelsRemoveCommand(
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig
-        ? `Deleted ${channelLabel(channel)} account "${accountKey}".`
-        : `Disabled ${channelLabel(channel)} account "${accountKey}".`,
+        ? `Deleted ${channelLabel(resolvedChannel)} account "${accountKey}".`
+        : `Disabled ${channelLabel(resolvedChannel)} account "${accountKey}".`,
     );
   } else {
     runtime.log(
       deleteConfig
-        ? `Deleted ${channelLabel(channel)} account "${accountKey}".`
-        : `Disabled ${channelLabel(channel)} account "${accountKey}".`,
+        ? `Deleted ${channelLabel(resolvedChannel)} account "${accountKey}".`
+        : `Disabled ${channelLabel(resolvedChannel)} account "${accountKey}".`,
     );
   }
 }
