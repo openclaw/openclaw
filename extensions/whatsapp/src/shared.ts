@@ -41,6 +41,7 @@ const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppA
   clearBaseFields: [],
   allowTopLevel: false,
   resolveAllowFrom: (account) => account.allowFrom,
+  resolveAllowSendTo: (account) => account.allowSendTo,
   formatAllowFrom: (allowFrom) => formatWhatsAppConfigAllowFromEntries(allowFrom),
   resolveDefaultTo: (account) => account.defaultTo,
 });
