@@ -110,7 +110,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     senderName: params.ctx.SenderName?.trim() || undefined,
     senderIsOwner: params.command.senderIsOwner,
     sourceProvider:
-      params.ctx.OriginatingChannel || params.ctx.Provider || params.ctx.Surface || undefined,
+      (params.ctx.OriginatingChannel || params.ctx.Provider || params.ctx.Surface || "")
+        .trim()
+        .toLowerCase()
+        .split(":")[0] || undefined,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
 
