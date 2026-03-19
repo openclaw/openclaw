@@ -224,4 +224,22 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts agentId in telegram topic config (#50574)", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          groups: {
+            "-1003806191278": {
+              topics: {
+                "214": { agentId: "test" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
