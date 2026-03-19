@@ -1,6 +1,23 @@
 import type { WebClient } from "@slack/web-api";
 import { vi } from "vitest";
 
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
+    loadConfig: () => ({}),
+  };
+});
+
+vi.mock("./accounts.js", () => ({
+  resolveSlackAccount: () => ({
+    accountId: "default",
+    botToken: "xoxb-test",
+    botTokenSource: "config",
+    config: {},
+  }),
+}));
+
 export type SlackEditTestClient = WebClient & {
   chat: {
     update: ReturnType<typeof vi.fn>;
@@ -17,18 +34,7 @@ export type SlackSendTestClient = WebClient & {
 };
 
 export function installSlackBlockTestMocks() {
-  vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
-    loadConfig: () => ({}),
-  }));
-
-  vi.mock("./accounts.js", () => ({
-    resolveSlackAccount: () => ({
-      accountId: "default",
-      botToken: "xoxb-test",
-      botTokenSource: "config",
-      config: {},
-    }),
-  }));
+  // Backward compatible no-op. Mocks are hoisted at module scope.
 }
 
 export function createSlackEditTestClient(): SlackEditTestClient {
