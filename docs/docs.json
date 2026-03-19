@@ -867,39 +867,40 @@
                 "pages": ["install/index", "install/installer", "install/node"]
               },
               {
-                "group": "Containers and package managers",
+                "group": "Containers",
                 "pages": [
-                  "install/docker",
-                  "install/podman",
-                  "install/nix",
                   "install/ansible",
-                  "install/bun"
+                  "install/bun",
+                  "install/docker",
+                  "install/nix",
+                  "install/podman"
+                ]
+              },
+              {
+                "group": "Hosting",
+                "pages": [
+                  "install/azure",
+                  "install/docker-vm-runtime",
+                  "install/exe-dev",
+                  "install/fly",
+                  "install/gcp",
+                  "install/hetzner",
+                  "install/kubernetes",
+                  "install/macos-vm",
+                  "install/northflank",
+                  "install/railway",
+                  "install/render",
+                  "vps"
                 ]
               },
               {
                 "group": "Maintenance",
-                "pages": ["install/updating", "install/migrating", "install/uninstall"]
-              },
-              {
-                "group": "Hosting and deployment",
                 "pages": [
-                  "vps",
-                  "install/docker-vm-runtime",
-                  "install/kubernetes",
-                  "install/fly",
-                  "install/hetzner",
-                  "install/gcp",
-                  "install/azure",
-                  "install/macos-vm",
-                  "install/exe-dev",
-                  "install/railway",
-                  "install/render",
-                  "install/northflank"
+                  "install/updating",
+                  "install/migrating",
+                  "install/uninstall",
+                  "install/development-channels"
                 ]
-              },
-              {
-                "group": "Advanced",
-                "pages": ["install/development-channels"]
               }
             ]
           },
