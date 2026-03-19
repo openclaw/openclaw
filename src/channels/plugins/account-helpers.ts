@@ -63,26 +63,38 @@ export function createAccountListHelpers(
     );
     if (baseTokenFields.length > 0) {
       const accounts = (base?.accounts ?? {}) as Record<string, Record<string, unknown>>;
+      // Use the caller-provided normalizer for the reverse map so it matches
+      // the IDs returned by listConfiguredAccountIds().
+      const normalizeId = options?.normalizeAccountId ?? normalizeAccountId;
       // Build reverse map from normalized ID → raw config key so we can look
       // up the account object even when normalizeAccountId transforms the keys.
       const rawKeys = Object.keys(accounts);
       const normalizedToRaw = new Map<string, string>();
       for (const key of rawKeys) {
-        const normalized = normalizeAccountId(key);
+        const normalized = normalizeId(key);
         if (normalized && !normalizedToRaw.has(normalized)) {
           normalizedToRaw.set(normalized, key);
         }
       }
-      const everyAccountHasOwnTokens = ids.every((id) => {
+      // Only consider enabled accounts — disabled accounts are skipped at
+      // startup and must not prevent default injection for enabled ones.
+      const enabledIds = ids.filter((id) => {
         const rawKey = normalizedToRaw.get(id) ?? id;
         const acct = accounts[rawKey];
-        if (!acct) {
-          return false;
-        }
-        // An account is only independent if it overrides *every* base token
-        // field.  Partial overrides still inherit the remaining base tokens.
-        return baseTokenFields.every((f) => isTruthy(acct[f]));
+        return !acct || acct["enabled"] !== false;
       });
+      const everyAccountHasOwnTokens =
+        enabledIds.length > 0 &&
+        enabledIds.every((id) => {
+          const rawKey = normalizedToRaw.get(id) ?? id;
+          const acct = accounts[rawKey];
+          if (!acct) {
+            return false;
+          }
+          // An account is only independent if it overrides *every* base token
+          // field.  Partial overrides still inherit the remaining base tokens.
+          return baseTokenFields.every((f) => isTruthy(acct[f]));
+        });
       if (everyAccountHasOwnTokens) {
         // Every named account has distinct credentials, so default won't
         // collide with any of them — safe to inject.
