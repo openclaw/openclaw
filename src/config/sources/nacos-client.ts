@@ -79,7 +79,11 @@ export function createNacosConfigClient(opts: NacosConfigClientOptions): NacosCo
             body: body.toString(),
           });
           if (stopped) return;
-          if (res.ok) {
+          if (!res.ok) {
+            // Nacos can respond quickly with HTTP errors (401/403/5xx) when ACL/service is unhealthy.
+            // Add a backoff to avoid a tight POST loop hammering the server.
+            await new Promise((r) => setTimeout(r, 5000));
+          } else {
             const text = await res.text();
             if (text.trim()) {
               try {

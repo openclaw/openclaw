@@ -17,6 +17,7 @@ import {
   loadConfig,
   migrateLegacyConfig,
   readConfigFileSnapshot,
+  getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "../config/config.js";
@@ -557,7 +558,11 @@ export async function startGatewayServer(
   // Nacos source: keep loadConfig() in sync with the config we use (no file path).
   const configSource = getConfigSource();
   if (configSource?.kind === "nacos") {
-    setRuntimeConfigSnapshot(cfgAtStart);
+    // Preserve the original Nacos "source" snapshot captured during secret activation.
+    // If we overwrite it with cfgAtStart, config.env and ${ENV} substitutions can lose
+    // their original surface values in subsequent config.get/set/patch operations.
+    const sourceSnapshot = getRuntimeConfigSourceSnapshot();
+    setRuntimeConfigSnapshot(cfgAtStart, sourceSnapshot ?? cfgAtStart);
   }
 
   initSubagentRegistry();

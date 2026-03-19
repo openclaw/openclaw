@@ -80,7 +80,13 @@ export async function buildSnapshotFromRaw(
     typeof parsedRes.parsed === "object" &&
     "env" in (parsedRes.parsed as object)
   ) {
-    applyConfigEnvVars(parsedRes.parsed as OpenClawConfig, envCopy);
+    const cfgWithEnv = parsedRes.parsed as OpenClawConfig;
+    // Nacos-backed snapshots should also hydrate the real process env so features
+    // that consult process.env later in the process see config.env values.
+    if (opts.env === process.env) {
+      applyConfigEnvVars(cfgWithEnv, opts.env);
+    }
+    applyConfigEnvVars(cfgWithEnv, envCopy);
   }
   const resolvedConfigRaw = resolveConfigEnvVars(parsedRes.parsed, envCopy, {
     onMissing: (w) => envWarnings.push(w),

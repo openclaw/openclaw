@@ -66,4 +66,39 @@ describe("createNacosConfigClient", () => {
     expect(onChange).toHaveBeenCalled();
     teardown();
   });
+
+  it("subscribe backs off when listener returns HTTP error", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: "Unauthorized",
+      text: () => Promise.resolve(""),
+    });
+
+    const client = createNacosConfigClient({
+      serverAddr: "http://127.0.0.1:8848",
+      dataId: "openclaw.json",
+      group: "DEFAULT_GROUP",
+      fetch: fetchMock,
+    });
+
+    const onChange = vi.fn();
+    const teardown = client.subscribe(onChange);
+
+    // Flush the initial microtasks so poll() reaches the HTTP error branch.
+    await Promise.resolve();
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 5000);
+    teardown();
+
+    // Let the scheduled backoff settle and avoid leaving pending timers/promises.
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(onChange).not.toHaveBeenCalled();
+    setTimeoutSpy.mockRestore();
+    vi.useRealTimers();
+  });
 });

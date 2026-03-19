@@ -12,12 +12,15 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { setConfigSource } from "../config/sources/current.js";
+import { resolveConfigSource } from "../config/sources/resolve.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { runStartupMatrixMigration } from "../gateway/server-startup-matrix-migration.js";
+import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -79,6 +82,11 @@ export async function doctorCommand(
   const prompter = createDoctorPrompter({ runtime, options });
   printWizardHeader(runtime);
   intro("OpenClaw doctor");
+
+  // Standalone CLI process: initialize config source (file vs Nacos)
+  // before any config reads/writes.
+  loadDotEnv({ quiet: true });
+  setConfigSource(resolveConfigSource(process.env));
 
   const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,

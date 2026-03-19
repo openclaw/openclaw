@@ -10,12 +10,15 @@ import {
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
+import { setConfigSource } from "../../config/sources/current.js";
+import { resolveConfigSource } from "../../config/sources/resolve.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
+import { loadDotEnv } from "../../infra/dotenv.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
@@ -197,6 +200,11 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   if (devMode) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
   }
+
+  // Initialize config source (file vs Nacos) before preflight so port/bind and
+  // config-exists / gateway.mode checks use Nacos when OPENCLAW_CONFIG_SOURCE=nacos.
+  loadDotEnv({ quiet: true });
+  setConfigSource(resolveConfigSource(process.env));
 
   const cfg = loadConfig();
   const portOverride = parsePort(opts.port);
