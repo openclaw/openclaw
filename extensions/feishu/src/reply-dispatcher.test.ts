@@ -327,6 +327,21 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
+  it("skips normalized duplicate final text after streaming close", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "```md\n同一条回复\n```" }, { kind: "final" });
+    await options.deliver({ text: "```md\r\n同一条回复\u200B \r\n```  " }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n同一条回复\n```", {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
   it("suppresses duplicate final text while still sending media", async () => {
     const options = setupNonStreamingAutoDispatcher();
     await options.deliver({ text: "plain final" }, { kind: "final" });

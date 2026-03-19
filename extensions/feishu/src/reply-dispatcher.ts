@@ -42,6 +42,14 @@ function normalizeEpochMs(timestamp: number | undefined): number | undefined {
   return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
 }
 
+function fingerprintFinalText(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
 /** Build a card header from agent identity config. */
 function resolveCardHeader(
   agentId: string,
@@ -327,7 +335,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       });
     }
     if (params.infoKind === "final") {
-      deliveredFinalTexts.add(params.text);
+      deliveredFinalTexts.add(fingerprintFinalText(params.text));
     }
   };
 
@@ -365,8 +373,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const text = reply.text;
         const hasText = reply.hasText;
         const hasMedia = reply.hasMedia;
+        const finalTextFingerprint = hasText ? fingerprintFinalText(text) : "";
         const skipTextForDuplicateFinal =
-          info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
+          info?.kind === "final" && hasText && deliveredFinalTexts.has(finalTextFingerprint);
         const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
 
         if (!shouldDeliverText && !hasMedia) {
@@ -404,7 +413,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "final") {
               streamText = mergeStreamingText(streamText, text);
               await closeStreaming();
-              deliveredFinalTexts.add(text);
+              deliveredFinalTexts.add(finalTextFingerprint);
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
