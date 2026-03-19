@@ -102,7 +102,6 @@ function replaceSpawnConfig(next: OpenClawConfig): void {
 
 function createSessionBindingCapabilities() {
   return {
-    adapterAvailable: true,
     bindSupported: true,
     unbindSupported: true,
     placements: ["current", "child"] satisfies SessionBindingPlacement[],

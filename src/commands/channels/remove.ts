@@ -108,7 +108,7 @@ export async function channelsRemoveCommand(
   }
   channel = resolvedPluginState?.channelId ?? channel;
   const plugin = resolvedPluginState?.plugin ?? (channel ? getChannelPlugin(channel) : undefined);
-  if (!plugin) {
+  if (!plugin || !channel) {
     runtime.error(`Unknown channel: ${channel}`);
     runtime.exit(1);
     return;

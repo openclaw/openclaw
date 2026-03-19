@@ -100,6 +100,16 @@ export type SessionThreadBindingsConfig = {
    * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
    */
   maxAgeHours?: number;
+  /**
+   * Allow subagent spawns with thread=true to auto-bind conversations
+   * when supported. Default: false (opt-in).
+   */
+  spawnSubagentSessions?: boolean;
+  /**
+   * Allow ACP spawns with thread=true to auto-bind conversations
+   * when supported. Default: false (opt-in).
+   */
+  spawnAcpSessions?: boolean;
 };
 
 export type SessionConfig = {

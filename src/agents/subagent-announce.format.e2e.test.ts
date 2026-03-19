@@ -6,6 +6,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import * as configSessions from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import * as gatewayCall from "../gateway/call.js";
 import {
   __testing as sessionBindingServiceTesting,
@@ -66,10 +67,10 @@ const readLatestAssistantReplyMock = vi.fn(
   async (_sessionKey?: string): Promise<string | undefined> => "raw subagent reply",
 );
 const embeddedRunMock = {
-  isEmbeddedPiRunActive: vi.fn(() => false),
-  isEmbeddedPiRunStreaming: vi.fn(() => false),
-  queueEmbeddedPiMessage: vi.fn((_: string, __: string) => false),
-  waitForEmbeddedPiRunEnd: vi.fn(async (_: string, __?: number) => true),
+  isEmbeddedPiRunActive: vi.fn((_sessionId?: string) => false),
+  isEmbeddedPiRunStreaming: vi.fn((_sessionId?: string) => false),
+  queueEmbeddedPiMessage: vi.fn((_sessionId: string, _text: string) => false),
+  waitForEmbeddedPiRunEnd: vi.fn(async (_sessionId: string, _timeoutMs?: number) => true),
 };
 const { subagentRegistryMock } = vi.hoisted(() => ({
   subagentRegistryMock: {
@@ -131,8 +132,8 @@ function setConfigOverride(next: OpenClawConfig): void {
   setRuntimeConfigSnapshot(configOverride);
 }
 
-function loadSessionStoreFixture(): ReturnType<typeof configSessions.loadSessionStore> {
-  return new Proxy(sessionStore as ReturnType<typeof configSessions.loadSessionStore>, {
+function loadSessionStoreFixture(): Record<string, SessionEntry> {
+  return new Proxy(sessionStore as Record<string, SessionEntry>, {
     get(target, key: string | symbol) {
       if (typeof key === "string" && !(key in target) && key.includes(":subagent:")) {
         return {
