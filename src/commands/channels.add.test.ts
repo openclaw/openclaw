@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -153,11 +154,9 @@ describe("channelsAddCommand", () => {
         })),
       },
     };
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel)
-      .mockReturnValueOnce(createTestRegistry())
-      .mockReturnValueOnce(
-        createTestRegistry([{ pluginId: "msteams", plugin: scopedMSTeamsPlugin, source: "test" }]),
-      );
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([{ pluginId: "msteams", plugin: scopedMSTeamsPlugin, source: "test" }]),
+    );
 
     await channelsAddCommand(
       {
@@ -294,35 +293,33 @@ describe("channelsAddCommand", () => {
       installed: true,
       pluginId: "@vendor/teams-runtime",
     }));
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel)
-      .mockReturnValueOnce(createTestRegistry())
-      .mockReturnValueOnce(
-        createTestRegistry([
-          {
-            pluginId: "@vendor/teams-runtime",
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: "msteams",
-                label: "Microsoft Teams",
-                docsPath: "/channels/msteams",
-              }),
-              setup: {
-                applyAccountConfig: vi.fn(({ cfg, input }) => ({
-                  ...cfg,
-                  channels: {
-                    ...cfg.channels,
-                    msteams: {
-                      enabled: true,
-                      tenantId: input.token,
-                    },
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/teams-runtime",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "msteams",
+              label: "Microsoft Teams",
+              docsPath: "/channels/msteams",
+            }),
+            setup: {
+              applyAccountConfig: vi.fn(({ cfg, input }) => ({
+                ...cfg,
+                channels: {
+                  ...cfg.channels,
+                  msteams: {
+                    enabled: true,
+                    tenantId: input.token,
                   },
-                })),
-              },
+                },
+              })),
             },
-            source: "test",
           },
-        ]),
-      );
+          source: "test",
+        },
+      ]),
+    );
 
     await channelsAddCommand(
       {
@@ -342,5 +339,107 @@ describe("channelsAddCommand", () => {
     );
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("runs post-setup hooks after writing config", async () => {
+    const afterAccountConfigWritten = vi.fn().mockResolvedValue(undefined);
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "signal",
+        label: "Signal",
+      }),
+      setup: {
+        applyAccountConfig: ({ cfg, accountId, input }) => ({
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            signal: {
+              enabled: true,
+              accounts: {
+                [accountId]: {
+                  signalNumber: input.signalNumber,
+                },
+              },
+            },
+          },
+        }),
+        afterAccountConfigWritten,
+      },
+    } as ChannelPlugin;
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]));
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      { channel: "signal", account: "ops", signalNumber: "+15550001" },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(afterAccountConfigWritten).toHaveBeenCalledTimes(1);
+    expect(configMocks.writeConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
+      afterAccountConfigWritten.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(afterAccountConfigWritten).toHaveBeenCalledWith({
+      previousCfg: baseConfigSnapshot.config,
+      cfg: expect.objectContaining({
+        channels: {
+          signal: {
+            enabled: true,
+            accounts: {
+              ops: {
+                signalNumber: "+15550001",
+              },
+            },
+          },
+        },
+      }),
+      accountId: "ops",
+      input: expect.objectContaining({
+        signalNumber: "+15550001",
+      }),
+      runtime,
+    });
+  });
+
+  it("keeps the saved config when a post-setup hook fails", async () => {
+    const afterAccountConfigWritten = vi.fn().mockRejectedValue(new Error("hook failed"));
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "signal",
+        label: "Signal",
+      }),
+      setup: {
+        applyAccountConfig: ({ cfg, accountId, input }) => ({
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            signal: {
+              enabled: true,
+              accounts: {
+                [accountId]: {
+                  signalNumber: input.signalNumber,
+                },
+              },
+            },
+          },
+        }),
+        afterAccountConfigWritten,
+      },
+    } as ChannelPlugin;
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]));
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      { channel: "signal", account: "ops", signalNumber: "+15550001" },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Channel signal post-setup warning for "ops": hook failed',
+    );
   });
 });
