@@ -9,10 +9,58 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
-import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
+import {
+  getActiveWebListener,
+  requestWebListenerRecovery,
+  resolveWebAccountId,
+  type ActiveWebListener,
+  type ActiveWebSendOptions,
+  requireActiveWebListener,
+} from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
+const LISTENER_RECOVERY_TIMEOUT_MS = 8_000;
+const LISTENER_RECOVERY_POLL_MS = 250;
+
+async function waitForRecoveredListener(
+  accountId: string,
+  timeoutMs = LISTENER_RECOVERY_TIMEOUT_MS,
+): Promise<ActiveWebListener | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const listener = getActiveWebListener(accountId);
+    if (listener) {
+      return listener;
+    }
+    await new Promise((resolve) => setTimeout(resolve, LISTENER_RECOVERY_POLL_MS));
+  }
+  return getActiveWebListener(accountId);
+}
+
+async function requireActiveWebListenerForSend(accountId?: string | null): Promise<{
+  accountId: string;
+  listener: ActiveWebListener;
+}> {
+  const resolvedAccountId = resolveWebAccountId(accountId);
+  const existing = getActiveWebListener(resolvedAccountId);
+  if (existing) {
+    return { accountId: resolvedAccountId, listener: existing };
+  }
+
+  const recoveryRequested = await requestWebListenerRecovery(
+    resolvedAccountId,
+    "send-path missing active listener",
+  );
+  if (recoveryRequested) {
+    const recovered = await waitForRecoveredListener(resolvedAccountId);
+    if (recovered) {
+      return { accountId: resolvedAccountId, listener: recovered };
+    }
+  }
+
+  return requireActiveWebListener(resolvedAccountId);
+}
 
 export async function sendMessageWhatsApp(
   to: string,
@@ -33,7 +81,7 @@ export async function sendMessageWhatsApp(
   }
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const { listener: active, accountId: resolvedAccountId } = requireActiveWebListener(
+  const { listener: active, accountId: resolvedAccountId } = await requireActiveWebListenerForSend(
     options.accountId,
   );
   const cfg = options.cfg ?? loadConfig();
@@ -126,7 +174,7 @@ export async function sendReactionWhatsApp(
   },
 ): Promise<void> {
   const correlationId = generateSecureUuid();
-  const { listener: active } = requireActiveWebListener(options.accountId);
+  const { listener: active } = await requireActiveWebListenerForSend(options.accountId);
   const redactedChatJid = redactIdentifier(chatJid);
   const logger = getChildLogger({
     module: "web-outbound",
@@ -164,7 +212,7 @@ export async function sendPollWhatsApp(
 ): Promise<{ messageId: string; toJid: string }> {
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const { listener: active } = requireActiveWebListener(options.accountId);
+  const { listener: active } = await requireActiveWebListenerForSend(options.accountId);
   const redactedTo = redactIdentifier(to);
   const logger = getChildLogger({
     module: "web-outbound",

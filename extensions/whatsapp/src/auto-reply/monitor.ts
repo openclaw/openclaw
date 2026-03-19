@@ -14,7 +14,13 @@ import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-e
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
-import { setActiveWebListener } from "../active-listener.js";
+import type { ActiveWebRecoveryRequest } from "../active-listener.js";
+import {
+  clearActiveWebListener,
+  clearWebListenerRecovery,
+  setActiveWebListener,
+  setWebListenerRecovery,
+} from "../active-listener.js";
 import { monitorWebInbox } from "../inbound.js";
 import {
   computeBackoff,
@@ -141,6 +147,32 @@ export async function monitorWebChannel(
   process.once("SIGINT", handleSigint);
 
   let reconnectAttempts = 0;
+  let latestListener: Awaited<ReturnType<typeof monitorWebInbox>> | null = null;
+  let recoveryRequested = false;
+  let wakeReconnect: (() => void) | null = null;
+
+  const recoveryHandler = async ({ reason }: ActiveWebRecoveryRequest) => {
+    recoveryRequested = true;
+    reconnectLogger.info(
+      {
+        accountId: account.accountId,
+        reason: reason ?? "manual-recovery-request",
+        hasActiveListener: Boolean(latestListener),
+      },
+      "web reconnect: recovery requested",
+    );
+    if (latestListener?.signalClose) {
+      latestListener.signalClose({
+        status: 499,
+        isLoggedOut: false,
+        error: reason ?? "requested-recovery",
+      });
+    }
+    wakeReconnect?.();
+    return true;
+  };
+
+  setWebListenerRecovery(account.accountId, recoveryHandler);
 
   while (true) {
     if (stopRequested()) {
@@ -227,6 +259,7 @@ export async function monitorWebChannel(
     });
 
     setActiveWebListener(account.accountId, listener);
+    latestListener = listener;
     unregisterUnhandled = registerUnhandledRejectionHandler((reason) => {
       if (!isLikelyWhatsAppCryptoError(reason)) {
         return false;
@@ -245,7 +278,8 @@ export async function monitorWebChannel(
     });
 
     const closeListener = async () => {
-      setActiveWebListener(account.accountId, null);
+      clearActiveWebListener(account.accountId, listener);
+      latestListener = null;
       if (unregisterUnhandled) {
         unregisterUnhandled();
         unregisterUnhandled = null;
@@ -453,10 +487,20 @@ export async function monitorWebChannel(
       `WhatsApp Web connection closed (status ${statusCode}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(delay)}… (${errorStr})`,
     );
     await closeListener();
+    if (recoveryRequested) {
+      recoveryRequested = false;
+      continue;
+    }
+    const waitForWake = new Promise<void>((resolve) => {
+      wakeReconnect = () => resolve();
+    });
     try {
-      await sleep(delay, abortSignal);
+      await Promise.race([sleep(delay, abortSignal), waitForWake]);
     } catch {
       break;
+    } finally {
+      wakeReconnect = null;
+      recoveryRequested = false;
     }
   }
 
@@ -466,4 +510,5 @@ export async function monitorWebChannel(
   emitStatus();
 
   process.removeListener("SIGINT", handleSigint);
+  clearWebListenerRecovery(account.accountId, recoveryHandler);
 }

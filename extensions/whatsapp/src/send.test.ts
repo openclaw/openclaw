@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { redactIdentifier } from "../../../src/logging/redact-identifier.js";
-import { setActiveWebListener } from "./active-listener.js";
+import { setActiveWebListener, setWebListenerRecovery } from "./active-listener.js";
 
 const loadWebMediaMock = vi.fn();
 vi.mock("./media.js", () => ({
@@ -36,6 +36,8 @@ describe("web outbound", () => {
     setLoggerOverride(null);
     setActiveWebListener(null);
     setActiveWebListener("work", null);
+    setWebListenerRecovery(null, null);
+    setWebListenerRecovery("work", null);
   });
 
   it("sends message via active listener", async () => {
@@ -87,6 +89,35 @@ describe("web outbound", () => {
     await expect(
       sendMessageWhatsApp("+1555", "hi", { verbose: false, accountId: "work" }),
     ).rejects.toThrow(/account: work/);
+  });
+
+  it("requests listener recovery and retries once before failing", async () => {
+    setActiveWebListener(null);
+    setWebListenerRecovery("work", async () => {
+      setTimeout(() => {
+        setActiveWebListener("work", {
+          sendComposingTo,
+          sendMessage,
+          sendPoll,
+          sendReaction,
+        });
+      }, 0);
+      return true;
+    });
+
+    const result = await sendMessageWhatsApp("+1555", "hi", {
+      verbose: false,
+      accountId: "work",
+    });
+
+    expect(result).toEqual({
+      messageId: "msg123",
+      toJid: "1555@s.whatsapp.net",
+    });
+    expect(sendComposingTo).toHaveBeenCalledWith("+1555");
+    expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined, {
+      accountId: "work",
+    });
   });
 
   it("maps audio to PTT with opus mime when ogg", async () => {
