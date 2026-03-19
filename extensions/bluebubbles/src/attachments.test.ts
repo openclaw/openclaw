@@ -525,6 +525,40 @@ describe("sendBlueBubblesAttachment", () => {
     expect(attachText).toContain("iMessage;-;+15559876543");
   });
 
+  it("retries chatGuid resolution after creating a chat with no returned guid", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ data: [] }),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ data: {} })),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ data: [{ guid: "iMessage;-;+15557654321" }] }),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ data: { guid: "attach-msg-2" } })),
+    });
+
+    const result = await sendBlueBubblesAttachment({
+      to: "+15557654321",
+      buffer: new Uint8Array([4, 5, 6]),
+      filename: "photo.jpg",
+      contentType: "image/jpeg",
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    expect(result.messageId).toBe("attach-msg-2");
+    const createCallBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+    expect(createCallBody.addresses).toEqual(["+15557654321"]);
+    const attachBody = mockFetch.mock.calls[3][1]?.body as Uint8Array;
+    const attachText = decodeBody(attachBody);
+    expect(attachText).toContain("iMessage;-;+15557654321");
+  });
+
   it("still throws for non-handle targets when chatGuid is not found", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,

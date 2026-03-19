@@ -830,6 +830,30 @@ describe("send", () => {
       expect(body.message).toBe("");
     });
 
+    it.each([
+      ["data.chatGuid", { data: { chatGuid: "shape-chat-guid" } }, "shape-chat-guid"],
+      ["data.guid", { data: { guid: "shape-guid" } }, "shape-guid"],
+      [
+        "data.chats[0].guid",
+        { data: { chats: [{ guid: "shape-array-guid" }] } },
+        "shape-array-guid",
+      ],
+      ["data.chat.guid", { data: { chat: { guid: "shape-object-guid" } } }, "shape-object-guid"],
+    ])("extracts chatGuid from %s", async (_label, responseBody, expectedChatGuid) => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify(responseBody)),
+      });
+
+      const result = await createChatForHandle({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        address: "+15559876543",
+      });
+
+      expect(result.chatGuid).toBe(expectedChatGuid);
+    });
+
     it("throws when Private API is not enabled", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
