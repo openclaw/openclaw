@@ -88,11 +88,11 @@ function normalizeProviderBaseUrl(baseUrl: string | undefined): string {
   }
 }
 
-function buildGigachatProvider(apiKey?: string): ProviderConfig {
+function buildGigachatProvider(params: { apiKey?: string; baseUrl?: string }): ProviderConfig {
   return {
-    baseUrl: GIGACHAT_BASE_URL,
+    baseUrl: params.baseUrl?.trim() || GIGACHAT_BASE_URL,
     api: "openai-completions",
-    ...(apiKey ? { apiKey } : {}),
+    ...(params.apiKey ? { apiKey: params.apiKey } : {}),
     models: [buildGigachatModelDefinition()],
   } satisfies ProviderConfig;
 }
@@ -713,7 +713,10 @@ function resolveImplicitGigachatProvider(ctx: ImplicitProviderContext): Provider
     return null;
   }
 
-  return buildGigachatProvider(auth.apiKey);
+  return buildGigachatProvider({
+    apiKey: auth.apiKey,
+    baseUrl: ctx.env.GIGACHAT_BASE_URL,
+  });
 }
 
 export async function resolveImplicitProviders(

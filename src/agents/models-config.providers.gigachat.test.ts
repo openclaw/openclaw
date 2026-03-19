@@ -20,4 +20,21 @@ describe("GigaChat implicit provider", () => {
       expect(providers?.gigachat?.models?.map((model) => model.id)).toEqual(["GigaChat-2-Max"]);
     });
   });
+
+  it("honors GIGACHAT_BASE_URL for implicit providers", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+
+    await withEnvAsync(
+      {
+        GIGACHAT_CREDENTIALS: "user:password",
+        GIGACHAT_BASE_URL: "https://preview.gigachat.example/api/v1",
+      },
+      async () => {
+        const providers = await resolveImplicitProvidersForTest({ agentDir });
+
+        expect(providers?.gigachat?.baseUrl).toBe("https://preview.gigachat.example/api/v1");
+        expect(providers?.gigachat?.apiKey).toBe("GIGACHAT_CREDENTIALS");
+      },
+    );
+  });
 });
