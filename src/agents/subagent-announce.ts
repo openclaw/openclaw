@@ -1,3 +1,4 @@
+import { parseTelegramTopicConversation } from "../acp/conversation-id.js";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
@@ -536,10 +537,41 @@ async function resolveSubagentCompletionOrigin(params: {
     requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
       ? String(requesterOrigin.threadId).trim()
       : undefined;
-  const conversationId =
-    threadId || (to?.startsWith("channel:") ? to.slice("channel:".length) : "");
-  const requesterConversation: ConversationRef | undefined =
-    channel && conversationId ? { channel, accountId, conversationId } : undefined;
+  const parentConversationId = to?.startsWith("channel:") ? to.slice("channel:".length) : undefined;
+  const requesterConversation: ConversationRef | undefined = (() => {
+    if (!channel) {
+      return undefined;
+    }
+    if (channel === "telegram") {
+      const parsedTopic = threadId
+        ? parseTelegramTopicConversation({
+            conversationId: threadId,
+            parentConversationId,
+          })
+        : null;
+      const conversationId =
+        parsedTopic?.canonicalConversationId || threadId || parentConversationId || "";
+      if (!conversationId) {
+        return undefined;
+      }
+      return {
+        channel,
+        accountId,
+        conversationId,
+        ...(parentConversationId ? { parentConversationId } : {}),
+      };
+    }
+    const conversationId = threadId || parentConversationId || "";
+    if (!conversationId) {
+      return undefined;
+    }
+    return {
+      channel,
+      accountId,
+      conversationId,
+      ...(parentConversationId ? { parentConversationId } : {}),
+    };
+  })();
 
   const route = createBoundDeliveryRouter().resolveDestination({
     eventKind: "task_completion",
@@ -548,15 +580,30 @@ async function resolveSubagentCompletionOrigin(params: {
     failClosed: false,
   });
   if (route.mode === "bound" && route.binding) {
+    const bindingConversationId = String(route.binding.conversation.conversationId).trim();
+    if (route.binding.conversation.channel === "telegram") {
+      const parsedTopic = parseTelegramTopicConversation({
+        conversationId: bindingConversationId,
+        parentConversationId,
+      });
+      if (parsedTopic) {
+        return mergeDeliveryContext(
+          {
+            channel: route.binding.conversation.channel,
+            accountId: route.binding.conversation.accountId,
+            to: `channel:${parsedTopic.chatId}`,
+            threadId: parsedTopic.topicId,
+          },
+          requesterOrigin,
+        );
+      }
+    }
     return mergeDeliveryContext(
       {
         channel: route.binding.conversation.channel,
         accountId: route.binding.conversation.accountId,
-        to: `channel:${route.binding.conversation.conversationId}`,
-        threadId:
-          requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
-            ? String(requesterOrigin.threadId)
-            : undefined,
+        to: `channel:${bindingConversationId}`,
+        threadId,
       },
       requesterOrigin,
     );
