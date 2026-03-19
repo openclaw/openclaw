@@ -1,6 +1,10 @@
 import { isIP } from "node:net";
 import path from "node:path";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
+import {
+  MUTABLE_ELEVATED_ALLOW_FIELDS,
+  parseExplicitElevatedAllowEntry,
+} from "../auto-reply/reply/elevated-allowlist-matcher.js";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
@@ -859,6 +863,8 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const enabled = cfg.tools?.elevated?.enabled;
   const allowFrom = cfg.tools?.elevated?.allowFrom ?? {};
+  const dangerouslyAllowMutableMatching =
+    cfg.tools?.elevated?.dangerouslyAllowMutableMatching === true;
   const anyAllowFromKeys = Object.keys(allowFrom).length > 0;
 
   if (enabled === false) {
@@ -884,6 +890,31 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
         title: "Elevated exec allowlist is large",
         detail: `tools.elevated.allowFrom.${provider} has ${normalized.length} entries; consider tightening elevated access.`,
       });
+    }
+
+    // Detect mutable display-name entries (name:/username:/tag:) without opt-in.
+    if (!dangerouslyAllowMutableMatching) {
+      const mutableEntries: string[] = [];
+      for (const entry of normalized) {
+        const parsed = parseExplicitElevatedAllowEntry(entry);
+        if (parsed && MUTABLE_ELEVATED_ALLOW_FIELDS.has(parsed.field)) {
+          mutableEntries.push(entry);
+        }
+      }
+      if (mutableEntries.length > 0) {
+        findings.push({
+          checkId: `tools.elevated.allowFrom.${provider}.mutable_identity`,
+          severity: "critical",
+          title: "Elevated exec allowlist uses mutable identity fields",
+          detail:
+            `tools.elevated.allowFrom.${provider} contains mutable display-name entries (${mutableEntries.join(", ")}). ` +
+            "These fields are user-controlled and spoofable; any user who changes their display name can gain elevated exec access. " +
+            "These entries are currently ignored at runtime (fail-closed).",
+          remediation:
+            "Replace mutable entries with immutable identifiers (id:, from:, e164:). " +
+            "If you accept the spoofing risk, set tools.elevated.dangerouslyAllowMutableMatching=true.",
+        });
+      }
     }
   }
 

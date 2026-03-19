@@ -6,6 +6,7 @@ import type { MsgContext } from "../templating.js";
 import {
   type AllowFromFormatter,
   type ExplicitElevatedAllowField,
+  MUTABLE_ELEVATED_ALLOW_FIELDS,
   addFormattedTokens,
   buildMutableTokens,
   matchesFormattedTokens,
@@ -55,6 +56,7 @@ function isApprovedElevatedSender(params: {
   formatAllowFrom: AllowFromFormatter;
   allowFrom?: AgentElevatedAllowFromConfig;
   fallbackAllowFrom?: Array<string | number>;
+  dangerouslyAllowMutableMatching?: boolean;
 }): boolean {
   const rawAllow = resolveElevatedAllowList(
     params.allowFrom,
@@ -104,9 +106,16 @@ function isApprovedElevatedSender(params: {
     ...senderE164Tokens,
   ]);
 
-  const senderNameTokens = buildMutableTokens(params.ctx.SenderName);
-  const senderUsernameTokens = buildMutableTokens(params.ctx.SenderUsername);
-  const senderTagTokens = buildMutableTokens(params.ctx.SenderTag);
+  const allowMutable = params.dangerouslyAllowMutableMatching === true;
+  const senderNameTokens = allowMutable
+    ? buildMutableTokens(params.ctx.SenderName)
+    : new Set<string>();
+  const senderUsernameTokens = allowMutable
+    ? buildMutableTokens(params.ctx.SenderUsername)
+    : new Set<string>();
+  const senderTagTokens = allowMutable
+    ? buildMutableTokens(params.ctx.SenderTag)
+    : new Set<string>();
 
   const explicitFieldMatchers: Record<ExplicitElevatedAllowField, (value: string) => boolean> = {
     id: (value) =>
@@ -147,6 +156,10 @@ function isApprovedElevatedSender(params: {
       ) {
         return true;
       }
+      continue;
+    }
+    // Skip mutable field matchers when dangerouslyAllowMutableMatching is not enabled (fail-closed).
+    if (MUTABLE_ELEVATED_ALLOW_FIELDS.has(explicitEntry.field) && !allowMutable) {
       continue;
     }
     const matchesExplicitField = explicitFieldMatchers[explicitEntry.field];
@@ -209,6 +222,7 @@ export function resolveElevatedPermissions(params: {
     formatAllowFrom,
     allowFrom: globalConfig?.allowFrom,
     fallbackAllowFrom,
+    dangerouslyAllowMutableMatching: globalConfig?.dangerouslyAllowMutableMatching,
   });
   if (!globalAllowed) {
     failures.push({
@@ -225,6 +239,7 @@ export function resolveElevatedPermissions(params: {
         formatAllowFrom,
         allowFrom: agentConfig.allowFrom,
         fallbackAllowFrom,
+        dangerouslyAllowMutableMatching: agentConfig?.dangerouslyAllowMutableMatching,
       })
     : true;
   if (!agentAllowed) {

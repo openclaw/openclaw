@@ -3,13 +3,17 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { resolveElevatedPermissions } from "./reply-elevated.js";
 
-function buildConfig(allowFrom: string[]): OpenClawConfig {
+function buildConfig(
+  allowFrom: string[],
+  opts?: { dangerouslyAllowMutableMatching?: boolean },
+): OpenClawConfig {
   return {
     tools: {
       elevated: {
         allowFrom: {
           whatsapp: allowFrom,
         },
+        dangerouslyAllowMutableMatching: opts?.dangerouslyAllowMutableMatching,
       },
     },
   } as OpenClawConfig;
@@ -31,9 +35,12 @@ function expectAllowFromDecision(params: {
   allowFrom: string[];
   ctx?: Partial<MsgContext>;
   allowed: boolean;
+  dangerouslyAllowMutableMatching?: boolean;
 }) {
   const result = resolveElevatedPermissions({
-    cfg: buildConfig(params.allowFrom),
+    cfg: buildConfig(params.allowFrom, {
+      dangerouslyAllowMutableMatching: params.dangerouslyAllowMutableMatching,
+    }),
     agentId: "main",
     provider: "whatsapp",
     ctx: buildContext(params.ctx),
@@ -79,13 +86,72 @@ describe("resolveElevatedPermissions", () => {
     });
   });
 
-  it("authorizes mutable sender fields only with explicit prefix", () => {
-    expectAllowFromDecision({
-      allowFrom: ["username:owner_username"],
-      allowed: true,
-      ctx: {
-        SenderUsername: "owner_username",
-      },
+  describe("mutable identity spoofing protection", () => {
+    it("rejects name: matcher without dangerouslyAllowMutableMatching (fail-closed)", () => {
+      expectAllowFromDecision({
+        allowFrom: ["name:Alice"],
+        allowed: false,
+        ctx: { SenderName: "Alice" },
+      });
+    });
+
+    it("rejects username: matcher without dangerouslyAllowMutableMatching (fail-closed)", () => {
+      expectAllowFromDecision({
+        allowFrom: ["username:owner_username"],
+        allowed: false,
+        ctx: { SenderUsername: "owner_username" },
+      });
+    });
+
+    it("rejects tag: matcher without dangerouslyAllowMutableMatching (fail-closed)", () => {
+      expectAllowFromDecision({
+        allowFrom: ["tag:Owner#1234"],
+        allowed: false,
+        ctx: { SenderTag: "Owner#1234" },
+      });
+    });
+
+    it("allows name: matcher when dangerouslyAllowMutableMatching is true", () => {
+      expectAllowFromDecision({
+        allowFrom: ["name:Alice"],
+        allowed: true,
+        dangerouslyAllowMutableMatching: true,
+        ctx: { SenderName: "Alice" },
+      });
+    });
+
+    it("allows username: matcher when dangerouslyAllowMutableMatching is true", () => {
+      expectAllowFromDecision({
+        allowFrom: ["username:owner_username"],
+        allowed: true,
+        dangerouslyAllowMutableMatching: true,
+        ctx: { SenderUsername: "owner_username" },
+      });
+    });
+
+    it("allows tag: matcher when dangerouslyAllowMutableMatching is true", () => {
+      expectAllowFromDecision({
+        allowFrom: ["tag:Owner#1234"],
+        allowed: true,
+        dangerouslyAllowMutableMatching: true,
+        ctx: { SenderTag: "Owner#1234" },
+      });
+    });
+
+    it("still authorizes immutable id: matcher without opt-in", () => {
+      expectAllowFromDecision({
+        allowFrom: ["id:+15550001111"],
+        allowed: true,
+        ctx: { SenderId: "+15550001111" },
+      });
+    });
+
+    it("still authorizes immutable e164: matcher without opt-in", () => {
+      expectAllowFromDecision({
+        allowFrom: ["e164:+15550001111"],
+        allowed: true,
+        ctx: { SenderE164: "+15550001111" },
+      });
     });
   });
 });

@@ -297,6 +297,11 @@ export type AgentToolsConfig = {
     enabled?: boolean;
     /** Approved senders for /elevated (per-provider allowlists). */
     allowFrom?: AgentElevatedAllowFromConfig;
+    /**
+     * Allow mutable display-name fields (name:, username:, tag:) in elevated allowFrom.
+     * These fields are user-controlled and spoofable. Default: false (fail-closed).
+     */
+    dangerouslyAllowMutableMatching?: boolean;
   };
   /** Exec tool defaults for this agent. */
   exec?: ExecToolConfig;
@@ -577,6 +582,11 @@ export type ToolsConfig = {
     enabled?: boolean;
     /** Approved senders for /elevated (per-provider allowlists). */
     allowFrom?: AgentElevatedAllowFromConfig;
+    /**
+     * Allow mutable display-name fields (name:, username:, tag:) in elevated allowFrom.
+     * These fields are user-controlled and spoofable. Default: false (fail-closed).
+     */
+    dangerouslyAllowMutableMatching?: boolean;
   };
   /** Exec tool defaults. */
   exec?: ExecToolConfig;

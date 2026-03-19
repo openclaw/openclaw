@@ -13,6 +13,13 @@ const EXPLICIT_ELEVATED_ALLOW_FIELDS = new Set<ExplicitElevatedAllowField>([
   "tag",
 ]);
 
+/** Fields that match user-controlled mutable display values (spoofable). */
+export const MUTABLE_ELEVATED_ALLOW_FIELDS = new Set<ExplicitElevatedAllowField>([
+  "name",
+  "username",
+  "tag",
+]);
+
 const SENDER_PREFIXES = [
   ...CHAT_CHANNEL_ORDER,
   INTERNAL_ALLOWLIST_CHANNEL,
