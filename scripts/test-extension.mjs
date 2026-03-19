@@ -65,6 +65,20 @@ function hasExtensionPackage(extensionId) {
   return fs.existsSync(path.join(repoRoot, "extensions", extensionId, "package.json"));
 }
 
+export function listAvailableExtensionIds() {
+  const extensionsDir = path.join(repoRoot, "extensions");
+  if (!fs.existsSync(extensionsDir)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(extensionsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((extensionId) => hasExtensionPackage(extensionId))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export function detectChangedExtensionIds(changedPaths) {
   const extensionIds = new Set();
 
@@ -76,7 +90,10 @@ export function detectChangedExtensionIds(changedPaths) {
 
     const extensionMatch = relativePath.match(/^extensions\/([^/]+)(?:\/|$)/);
     if (extensionMatch) {
-      extensionIds.add(extensionMatch[1]);
+      const extensionId = extensionMatch[1];
+      if (hasExtensionPackage(extensionId)) {
+        extensionIds.add(extensionId);
+      }
       continue;
     }
 
@@ -164,18 +181,40 @@ export function resolveExtensionTestPlan(params = {}) {
 function printUsage() {
   console.error("Usage: pnpm test:extension <extension-name|path> [vitest args...]");
   console.error("       node scripts/test-extension.mjs [extension-name|path] [vitest args...]");
+  console.error("       node scripts/test-extension.mjs --list");
   console.error(
     "       node scripts/test-extension.mjs --list-changed --base <git-ref> [--head <git-ref>]",
   );
+  console.error("       node scripts/test-extension.mjs <extension> --require-tests");
+}
+
+function printNoTestsMessage(plan, requireTests) {
+  const message = `No tests found for ${plan.extensionDir}. Run "pnpm test:extension ${plan.extensionId} -- --dry-run" to inspect the resolved roots.`;
+  if (requireTests) {
+    console.error(message);
+    return 1;
+  }
+  console.log(`[test-extension] ${message} Skipping.`);
+  return 0;
 }
 
 async function run() {
   const rawArgs = process.argv.slice(2);
   const dryRun = rawArgs.includes("--dry-run");
+  const requireTests =
+    rawArgs.includes("--require-tests") ||
+    process.env.OPENCLAW_TEST_EXTENSION_REQUIRE_TESTS === "1";
   const json = rawArgs.includes("--json");
+  const list = rawArgs.includes("--list");
   const listChanged = rawArgs.includes("--list-changed");
   const args = rawArgs.filter(
-    (arg) => arg !== "--" && arg !== "--dry-run" && arg !== "--json" && arg !== "--list-changed",
+    (arg) =>
+      arg !== "--" &&
+      arg !== "--dry-run" &&
+      arg !== "--require-tests" &&
+      arg !== "--json" &&
+      arg !== "--list" &&
+      arg !== "--list-changed",
   );
 
   let base = "";
@@ -199,6 +238,18 @@ async function run() {
     }
   } else {
     passthroughArgs.push(...args);
+  }
+
+  if (list) {
+    const extensionIds = listAvailableExtensionIds();
+    if (json) {
+      process.stdout.write(`${JSON.stringify({ extensionIds }, null, 2)}\n`);
+    } else {
+      for (const extensionId of extensionIds) {
+        console.log(extensionId);
+      }
+    }
+    return;
   }
 
   if (listChanged) {
@@ -235,11 +286,6 @@ async function run() {
     process.exit(1);
   }
 
-  if (plan.testFiles.length === 0) {
-    console.error(`No tests found for ${plan.extensionDir}.`);
-    process.exit(1);
-  }
-
   if (dryRun) {
     if (json) {
       process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
@@ -250,6 +296,10 @@ async function run() {
       console.log(`tests: ${plan.testFiles.length}`);
     }
     return;
+  }
+
+  if (plan.testFiles.length === 0) {
+    process.exit(printNoTestsMessage(plan, requireTests));
   }
 
   console.log(

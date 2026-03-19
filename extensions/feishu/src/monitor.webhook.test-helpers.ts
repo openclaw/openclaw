@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import type { monitorFeishuProvider } from "./monitor.js";
 
 export async function getFreePort(): Promise<number> {

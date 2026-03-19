@@ -1,9 +1,11 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
+import {
+  resolveChannelPluginIds,
+  resolveConfiguredChannelPluginIds,
+} from "../plugins/channel-plugin-ids.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginLogger } from "../plugins/types.js";
 
@@ -23,34 +25,6 @@ function scopeRank(scope: typeof pluginRegistryLoaded): number {
     case "all":
       return 3;
   }
-}
-
-function resolveChannelPluginIds(params: {
-  config: ReturnType<typeof loadConfig>;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-}): string[] {
-  return loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })
-    .plugins.filter((plugin) => plugin.channels.length > 0)
-    .map((plugin) => plugin.id);
-}
-
-function resolveConfiguredChannelPluginIds(params: {
-  config: ReturnType<typeof loadConfig>;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-}): string[] {
-  const configuredChannelIds = new Set(
-    listPotentialConfiguredChannelIds(params.config, params.env).map((id) => id.trim()),
-  );
-  if (configuredChannelIds.size === 0) {
-    return [];
-  }
-  return resolveChannelPluginIds(params).filter((pluginId) => configuredChannelIds.has(pluginId));
 }
 
 export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistryScope }): void {

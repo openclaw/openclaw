@@ -347,7 +347,7 @@ export async function executeActAction(params: {
       }
       if (!tabs.length) {
         throw new Error(
-          `No Chrome tabs found for profile="${profile}". Make sure Chrome (v144+) is running and has open tabs, then retry.`,
+          `No browser tabs found for profile="${profile}". Make sure the configured Chromium-based browser (v144+) is running and has open tabs, then retry.`,
           { cause: err },
         );
       }

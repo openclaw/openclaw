@@ -13,6 +13,7 @@ import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
+import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
 import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { secretRefKey } from "./ref-contract.js";
 import {
@@ -59,6 +60,11 @@ export type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma:
 export type SecretsAuditReport = {
   version: 1;
   status: SecretsAuditStatus;
+  resolution: {
+    refsChecked: number;
+    skippedExecRefs: number;
+    resolvabilityComplete: boolean;
+  };
   filesScanned: string[];
   summary: {
     plaintextCount: number;
@@ -456,9 +462,13 @@ async function collectUnresolvedRefFindings(params: {
   collector: AuditCollector;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): Promise<void> {
+  allowExec: boolean;
+}): Promise<{ refsChecked: number; skippedExecRefs: number }> {
   const cache: SecretRefResolveCache = {};
   const refsByProvider = new Map<string, Map<string, SecretRef>>();
+  const skippedRefKeys = new Set<string>();
+  let refsChecked = 0;
+  let skippedExecRefs = 0;
   for (const assignment of params.collector.refAssignments) {
     const providerKey = `${assignment.ref.source}:${assignment.ref.provider}`;
     let refsForProvider = refsByProvider.get(providerKey);
@@ -474,9 +484,30 @@ async function collectUnresolvedRefFindings(params: {
 
   for (const refsForProvider of refsByProvider.values()) {
     const refs = [...refsForProvider.values()];
+    const selectedRefs = selectRefsForExecPolicy({
+      refs,
+      allowExec: params.allowExec,
+    });
+    if (selectedRefs.skippedExecRefs.length > 0) {
+      skippedExecRefs += selectedRefs.skippedExecRefs.length;
+      for (const ref of selectedRefs.skippedExecRefs) {
+        skippedRefKeys.add(secretRefKey(ref));
+        const staticError = getSkippedExecRefStaticError({
+          ref,
+          config: params.config,
+        });
+        if (staticError) {
+          errorsByRefKey.set(secretRefKey(ref), new Error(staticError));
+        }
+      }
+    }
+    if (selectedRefs.refsToResolve.length === 0) {
+      continue;
+    }
+    refsChecked += selectedRefs.refsToResolve.length;
     const provider = refs[0]?.provider;
     try {
-      const resolved = await resolveSecretRefValues(refs, {
+      const resolved = await resolveSecretRefValues(selectedRefs.refsToResolve, {
         config: params.config,
         env: params.env,
         cache,
@@ -487,7 +518,7 @@ async function collectUnresolvedRefFindings(params: {
       continue;
     } catch (err) {
       if (provider && isProviderScopedSecretResolutionError(err)) {
-        for (const ref of refs) {
+        for (const ref of selectedRefs.refsToResolve) {
           errorsByRefKey.set(secretRefKey(ref), err);
         }
         continue;
@@ -495,7 +526,7 @@ async function collectUnresolvedRefFindings(params: {
       // Fall back to per-ref resolution for provider-specific pinpoint errors.
     }
 
-    const tasks = refs.map(
+    const tasks = selectedRefs.refsToResolve.map(
       (ref) => async (): Promise<{ key: string; resolved: unknown }> => ({
         key: secretRefKey(ref),
         resolved: await resolveSecretRefValue(ref, {
@@ -507,10 +538,10 @@ async function collectUnresolvedRefFindings(params: {
     );
     const fallback = await runTasksWithConcurrency({
       tasks,
-      limit: Math.min(REF_RESOLVE_FALLBACK_CONCURRENCY, refs.length),
+      limit: Math.min(REF_RESOLVE_FALLBACK_CONCURRENCY, selectedRefs.refsToResolve.length),
       errorMode: "continue",
       onTaskError: (error, index) => {
-        const ref = refs[index];
+        const ref = selectedRefs.refsToResolve[index];
         if (!ref) {
           return;
         }
@@ -527,6 +558,9 @@ async function collectUnresolvedRefFindings(params: {
 
   for (const assignment of params.collector.refAssignments) {
     const key = secretRefKey(assignment.ref);
+    if (skippedRefKeys.has(key) && !errorsByRefKey.has(key)) {
+      continue;
+    }
     const resolveErr = errorsByRefKey.get(key);
     if (resolveErr) {
       addFinding(params.collector, {
@@ -567,6 +601,10 @@ async function collectUnresolvedRefFindings(params: {
       });
     }
   }
+  return {
+    refsChecked,
+    skippedExecRefs,
+  };
 }
 
 function collectShadowingFindings(collector: AuditCollector): void {
@@ -601,9 +639,11 @@ function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport[
 export async function runSecretsAudit(
   params: {
     env?: NodeJS.ProcessEnv;
+    allowExec?: boolean;
   } = {},
 ): Promise<SecretsAuditReport> {
   const env = params.env ?? process.env;
+  const allowExec = Boolean(params.allowExec);
   const io = createSecretsConfigIO({ env });
   const snapshot = await io.readConfigFileSnapshot();
   const configPath = resolveUserPath(snapshot.path);
@@ -620,6 +660,11 @@ export async function runSecretsAudit(
   const stateDir = resolveStateDir(env, os.homedir);
   const envPath = path.join(resolveConfigDir(env, os.homedir), ".env");
   const config = snapshot.valid ? snapshot.config : ({} as OpenClawConfig);
+  let resolution = {
+    refsChecked: 0,
+    skippedExecRefs: 0,
+    resolvabilityComplete: true,
+  };
 
   if (snapshot.valid) {
     collectConfigSecrets({
@@ -640,11 +685,17 @@ export async function runSecretsAudit(
         collector,
       });
     }
-    await collectUnresolvedRefFindings({
+    const unresolvedRefResult = await collectUnresolvedRefFindings({
       collector,
       config,
       env,
+      allowExec,
     });
+    resolution = {
+      refsChecked: unresolvedRefResult.refsChecked,
+      skippedExecRefs: unresolvedRefResult.skippedExecRefs,
+      resolvabilityComplete: unresolvedRefResult.skippedExecRefs === 0,
+    };
     collectShadowingFindings(collector);
   } else {
     addFinding(collector, {
@@ -676,6 +727,7 @@ export async function runSecretsAudit(
   return {
     version: 1,
     status,
+    resolution,
     filesScanned: [...collector.filesScanned].toSorted(),
     summary,
     findings: collector.findings,

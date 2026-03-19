@@ -5,7 +5,7 @@
   "description": "OpenClaw Google Chat channel plugin",
   "type": "module",
   "dependencies": {
-    "google-auth-library": "^10.6.1"
+    "google-auth-library": "^10.6.2"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.11"
@@ -38,11 +38,6 @@
       "npmSpec": "@openclaw/googlechat",
       "localPath": "extensions/googlechat",
       "defaultChoice": "npm"
-    },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "google-auth-library"
-      ]
     }
   }
 }
