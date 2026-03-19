@@ -110,7 +110,7 @@ Provides channels for AI Agents to report service issues or provide suggestions 
 
 To enable AI Agents to discover and utilize services, each service **must** register itself with a designated service discovery platform. This section outlines the requirements for service registration.
 
--   **Discovery Platform Endpoint**: `https://jjyzmyvfy5.coze.bytedance.net/register`
+-   **Discovery Platform Endpoint**: `https://your-service.com`
 -   **Request Method**: `POST`
 -   **Function Description**: Registers the service with the discovery platform, making its `ServiceAbility.MD` accessible to other AI Agents.
 -   **Request Parameters**:
