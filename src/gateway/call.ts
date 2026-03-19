@@ -67,6 +67,7 @@ export type GatewayConnectionDetails = {
   bindDetail?: string;
   remoteFallbackNote?: string;
   message: string;
+  trustedNetworks?: string[];
 };
 
 export type ExplicitGatewayAuth = {
@@ -177,6 +178,7 @@ export function buildGatewayConnectionDetails(
     bindDetail,
     remoteFallbackNote,
     message,
+    trustedNetworks,
   };
 }
 
@@ -311,8 +313,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
   safeTimerTimeoutMs: number;
   connectionDetails: GatewayConnectionDetails;
 }): Promise<T> {
-  const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs } =
+  const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs, connectionDetails } =
     params;
+  const { trustedNetworks } = connectionDetails;
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
@@ -342,6 +345,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
+      trustedNetworks,
       deviceIdentity: loadOrCreateDeviceIdentity(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,

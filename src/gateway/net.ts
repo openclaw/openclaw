@@ -4,6 +4,7 @@ import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet
 import {
   isCanonicalDottedDecimalIPv4,
   isIpInCidr,
+  isIpv6Address,
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
   normalizeIpAddress,
@@ -381,12 +382,9 @@ export function isSecureWebSocketUrl(url: string, trustedNetworks?: string[]): b
   // Check if the host IP is in a trusted network (e.g., WireGuard, Tailscale)
   if (trustedNetworks && trustedNetworks.length > 0) {
     const hostname = parsed.hostname;
-    // Only check IPv4 addresses for now (Tailscale uses 100.64.0.0/10)
-    if (isCanonicalDottedDecimalIPv4(hostname)) {
-      for (const cidr of trustedNetworks) {
-        if (isIpInCidr(hostname, cidr)) {
-          return true;
-        }
+    for (const cidr of trustedNetworks) {
+      if (isIpInCidr(hostname, cidr)) {
+        return true;
       }
     }
   }

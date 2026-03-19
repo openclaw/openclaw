@@ -175,7 +175,7 @@ describe("model-selection", () => {
       ).toBeUndefined();
     });
 
-    it("returns undefined for provider-prefixed model ids", () => {
+    it("returns provider for exact full model ref match", () => {
       const cfg = {
         agents: {
           defaults: {
@@ -191,7 +191,7 @@ describe("model-selection", () => {
           cfg,
           model: "anthropic/claude-sonnet-4-6",
         }),
-      ).toBeUndefined();
+      ).toBe("anthropic");
     });
 
     it("infers provider for slash-containing model id when allowlist match is unique", () => {

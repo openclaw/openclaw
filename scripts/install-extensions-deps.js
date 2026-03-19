@@ -32,14 +32,26 @@ async function installDeps(dir) {
 }
 
 async function main() {
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const dir = path.join(extensionsDir, entry.name);
-    if (await hasDependencies(dir)) {
-      await installDeps(dir);
+  try {
+    const entries = await fs.readdir(extensionsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(extensionsDir, entry.name);
+      if (await hasDependencies(dir)) {
+        await installDeps(dir);
+      }
     }
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      // extensions directory doesn't exist, nothing to do
+      return;
+    }
+    console.error("install-extensions-deps failed:", err.message);
+    process.exit(1);
   }
 }
 
-main();
+main().catch((err) => {
+  console.error("install-extensions-deps failed:", err.message);
+  process.exit(1);
+});
