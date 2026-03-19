@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
 import {
   removeFileIfExists,
   removePathIfExists,
@@ -174,6 +175,11 @@ export function copyBundledPluginMetadata(params = {}) {
   const sourcePluginDirs = new Set();
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
+      continue;
+    }
+    // Skip optional bundled clusters that are not included in this build.
+    // This matches the filtering logic in tsdown.config.ts.
+    if (!shouldBuildBundledCluster(dirent.name, process.env)) {
       continue;
     }
     sourcePluginDirs.add(dirent.name);
