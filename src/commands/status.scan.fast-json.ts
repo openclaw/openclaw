@@ -5,7 +5,6 @@ import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
-import { buildPluginCompatibilityNotices } from "../plugins/status.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
@@ -23,6 +22,7 @@ import { getStatusSummary } from "./status.summary.js";
 import { getUpdateCheckResult } from "./status.update.js";
 
 let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
+let pluginStatusModulePromise: Promise<typeof import("../plugins/status.js")> | undefined;
 let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
 let commandSecretTargetsModulePromise:
   | Promise<typeof import("../cli/command-secret-targets.js")>
@@ -38,6 +38,11 @@ let statusScanDepsRuntimeModulePromise:
 function loadPluginRegistryModule() {
   pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
   return pluginRegistryModulePromise;
+}
+
+function loadPluginStatusModule() {
+  pluginStatusModulePromise ??= import("../plugins/status.js");
+  return pluginStatusModulePromise;
 }
 
 function loadConfigIoModule() {
@@ -194,7 +199,12 @@ export async function scanStatusJsonFast(
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
   const memory = await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
   const pluginCompatibility = shouldCollectPluginCompatibility(cfg)
-    ? buildPluginCompatibilityNotices({ config: cfg })
+    ? await loadPluginStatusModule().then(({ buildPluginCompatibilityNotices }) =>
+        // Keep plugin status loading off the empty-config `status --json` fast path.
+        // The plugin status module pulls in the full loader graph and materially bloats
+        // startup RSS even when plugin compatibility is never consulted.
+        buildPluginCompatibilityNotices({ config: cfg }),
+      )
     : [];
 
   return {

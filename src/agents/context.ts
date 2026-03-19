@@ -225,12 +225,17 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
   return loadPromise;
 }
 
-export function lookupContextTokens(modelId?: string): number | undefined {
+export function lookupContextTokens(
+  modelId?: string,
+  options?: { allowAsyncLoad?: boolean },
+): number | undefined {
   if (!modelId) {
     return undefined;
   }
   // Best-effort: kick off loading on demand, but don't block lookups.
-  void ensureContextWindowCacheLoaded();
+  if (options?.allowAsyncLoad !== false) {
+    void ensureContextWindowCacheLoaded();
+  }
   return MODEL_CACHE.get(modelId);
 }
 
@@ -354,6 +359,7 @@ export function resolveContextTokensForModel(params: {
   model?: string;
   contextTokensOverride?: number;
   fallbackContextTokens?: number;
+  allowAsyncLoad?: boolean;
 }): number | undefined {
   if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
     return params.contextTokensOverride;
@@ -402,6 +408,7 @@ export function resolveContextTokensForModel(params: {
   if (params.provider && ref && !ref.model.includes("/")) {
     const qualifiedResult = lookupContextTokens(
       `${normalizeProviderId(ref.provider)}/${ref.model}`,
+      { allowAsyncLoad: params.allowAsyncLoad },
     );
     if (qualifiedResult !== undefined) {
       return qualifiedResult;
@@ -410,7 +417,9 @@ export function resolveContextTokensForModel(params: {
 
   // Bare key fallback.  For model-only calls with slash-containing IDs
   // (e.g. "google/gemini-2.5-pro") this IS the raw discovery cache key.
-  const bareResult = lookupContextTokens(params.model);
+  const bareResult = lookupContextTokens(params.model, {
+    allowAsyncLoad: params.allowAsyncLoad,
+  });
   if (bareResult !== undefined) {
     return bareResult;
   }
@@ -421,6 +430,7 @@ export function resolveContextTokensForModel(params: {
   if (!params.provider && ref && !ref.model.includes("/")) {
     const qualifiedResult = lookupContextTokens(
       `${normalizeProviderId(ref.provider)}/${ref.model}`,
+      { allowAsyncLoad: params.allowAsyncLoad },
     );
     if (qualifiedResult !== undefined) {
       return qualifiedResult;
