@@ -768,6 +768,14 @@
       "destination": "/install/gcp"
     },
     {
+      "source": "/azure",
+      "destination": "/install/azure"
+    },
+    {
+      "source": "/install/azure/azure",
+      "destination": "/install/azure"
+    },
+    {
       "source": "/platforms/fly",
       "destination": "/install/fly"
     },
@@ -778,6 +786,10 @@
     {
       "source": "/platforms/gcp",
       "destination": "/install/gcp"
+    },
+    {
+      "source": "/platforms/azure",
+      "destination": "/install/azure"
     },
     {
       "source": "/platforms/macos-vm",
@@ -872,6 +884,7 @@
                   "install/fly",
                   "install/hetzner",
                   "install/gcp",
+                  "install/azure",
                   "install/macos-vm",
                   "install/exe-dev",
                   "install/railway",
