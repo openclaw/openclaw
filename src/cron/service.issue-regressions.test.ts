@@ -28,6 +28,7 @@ import { createCronServiceState, type CronEvent } from "./service/state.js";
 import {
   DEFAULT_JOB_TIMEOUT_MS,
   applyJobResult,
+  executeJobCoreWithTimeout,
   executeJobCore,
   onTimer,
   runMissedJobs,
@@ -1419,6 +1420,76 @@ describe("Cron issue regressions", () => {
       "stale-running",
       expect.objectContaining({ agentId: undefined }),
     );
+  });
+
+  it("#50280: timeout clears runningAtMs so manual runs can proceed", async () => {
+    vi.useFakeTimers();
+    const store = makeStorePath();
+    const now = Date.parse("2026-03-19T10:05:00.000Z");
+    const job: CronJob = {
+      id: "timeout-stale-marker",
+      name: "timeout-stale-marker",
+      enabled: true,
+      createdAtMs: now - 3_600_000,
+      updatedAtMs: now - 3_600_000,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "agentTurn",
+        message: "test",
+        timeoutSeconds: FAST_TIMEOUT_SECONDS,
+      },
+      state: {
+        runningAtMs: now,
+        nextRunAtMs: now,
+        lastRunAtMs: now - 60_000,
+        lastStatus: "ok",
+      },
+    };
+    await writeCronStoreSnapshot(store.storePath, [job]);
+
+    const blocked = createDeferred<void>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        await blocked.promise;
+        return { status: "ok", summary: "unblocked" };
+      }),
+    });
+
+    const timeoutMs = Math.floor(FAST_TIMEOUT_SECONDS * 1_000);
+    const corePromise = executeJobCoreWithTimeout(state, structuredClone(job)).catch(() => {
+      // Ignore; we assert state cleanup below.
+    });
+
+    await vi.advanceTimersByTimeAsync(timeoutMs + 5);
+    await corePromise;
+
+    // Timeout cleanup is best-effort and runs async in the timer callback.
+    // Give it a few turns to persist.
+    let updated: { id: string; state: { runningAtMs?: number; lastStatus?: string } } | undefined;
+    for (let i = 0; i < 20; i += 1) {
+      const stored = JSON.parse(await fs.readFile(store.storePath, "utf-8")) as {
+        jobs: Array<{ id: string; state: { runningAtMs?: number; lastStatus?: string } }>;
+      };
+      updated = stored.jobs.find((entry) => entry.id === job.id);
+      if (updated?.state.runningAtMs === undefined) {
+        break;
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+    }
+
+    blocked.resolve();
+
+    expect(updated?.state.runningAtMs).toBeUndefined();
+    expect(updated?.state.lastStatus).toBe("error");
   });
 
   it("honors cron maxConcurrentRuns for due jobs", async () => {

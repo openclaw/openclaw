@@ -73,18 +73,55 @@ export async function executeJobCoreWithTimeout(
 
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
+  let timeoutFired = false;
   try {
     return await Promise.race([
       executeJobCore(state, job, runAbortController.signal),
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
+          timeoutFired = true;
           runAbortController.abort(timeoutErrorMessage());
+          // Best-effort: clear the running marker immediately when the timeout
+          // fires so subsequent manual runs are not blocked by a stale marker.
+          // This is a safety net for cases where the underlying run ignores the
+          // abort signal and would otherwise keep the cron lane wedged.
+          void locked(state, async () => {
+            await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+            const storeJob = state.store?.jobs.find((entry) => entry.id === job.id);
+            const startedAt = storeJob?.state.runningAtMs;
+            if (!storeJob || typeof startedAt !== "number") {
+              return;
+            }
+            applyJobResult(state, storeJob, {
+              status: "error",
+              error: timeoutErrorMessage(),
+              startedAt,
+              endedAt: state.deps.nowMs(),
+            });
+            emitJobFinished(
+              state,
+              storeJob,
+              { status: "error", error: timeoutErrorMessage() },
+              startedAt,
+            );
+            await persist(state);
+          }).catch((err) => {
+            state.deps.log.warn(
+              { jobId: job.id, err: String(err) },
+              "cron: failed to persist timeout cleanup",
+            );
+          });
           reject(new Error(timeoutErrorMessage()));
         }, jobTimeoutMs);
       }),
     ]);
   } finally {
     if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    // If we timed out, avoid leaving the timer callback alive.
+    // (It should already have fired or been cleared above.)
+    if (timeoutFired && timeoutId) {
       clearTimeout(timeoutId);
     }
   }
