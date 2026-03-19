@@ -14,7 +14,7 @@ const getWebhookInfoMock = vi.hoisted(() => vi.fn(async () => ({ ok: true, resul
 const getUpdatesMock = vi.hoisted(() => vi.fn(() => new Promise(() => {})));
 const sendChatActionMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const sendMessageMock = vi.hoisted(() =>
-  vi.fn(async () => ({ ok: true, result: { message_id: "reply-zalo-1" } })),
+  vi.fn(async () => ({ ok: true, result: { message_id: "pairing-zalo-1" } })),
 );
 const sendPhotoMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const getZaloRuntimeMock = vi.hoisted(() => vi.fn());
@@ -59,11 +59,12 @@ function createLifecycleConfig(): OpenClawConfig {
       zalo: {
         enabled: true,
         accounts: {
-          "acct-zalo-lifecycle": {
+          "acct-zalo-pairing": {
             enabled: true,
             webhookUrl: "https://example.com/hooks/zalo",
             webhookSecret: "supersecret", // pragma: allowlist secret
-            dmPolicy: "open",
+            dmPolicy: "pairing",
+            allowFrom: [],
           },
         },
       },
@@ -73,14 +74,15 @@ function createLifecycleConfig(): OpenClawConfig {
 
 function createLifecycleAccount(): ResolvedZaloAccount {
   return {
-    accountId: "acct-zalo-lifecycle",
+    accountId: "acct-zalo-pairing",
     enabled: true,
     token: "zalo-token",
     tokenSource: "config",
     config: {
       webhookUrl: "https://example.com/hooks/zalo",
       webhookSecret: "supersecret", // pragma: allowlist secret
-      dmPolicy: "open",
+      dmPolicy: "pairing",
+      allowFrom: [],
     },
   } as ResolvedZaloAccount;
 }
@@ -96,8 +98,8 @@ function createTextUpdate(messageId: string) {
   return {
     event_name: "message.text.received",
     message: {
-      from: { id: "user-1", name: "User One" },
-      chat: { id: "dm-chat-1", chat_type: "PRIVATE" as const },
+      from: { id: "user-unauthorized", name: "Unauthorized User" },
+      chat: { id: "dm-pairing-1", chat_type: "PRIVATE" as const },
       message_id: messageId,
       date: Math.floor(Date.now() / 1000),
       text: "hello from zalo",
@@ -128,19 +130,9 @@ async function postWebhookUpdate(params: {
   });
 }
 
-describe("Zalo reply-once lifecycle", () => {
-  const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
-  const recordInboundSessionMock = vi.fn(async () => undefined);
-  const resolveAgentRouteMock = vi.fn(() => ({
-    agentId: "main",
-    channel: "zalo",
-    accountId: "acct-zalo-lifecycle",
-    sessionKey: "agent:main:zalo:direct:dm-chat-1",
-    mainSessionKey: "agent:main:main",
-    matchedBy: "default",
-  }));
-  const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn();
-
+describe("Zalo pairing lifecycle", () => {
+  const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
+  const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
   beforeEach(() => {
     vi.clearAllMocks();
     clearZaloWebhookSecurityStateForTest();
@@ -148,19 +140,15 @@ describe("Zalo reply-once lifecycle", () => {
     getZaloRuntimeMock.mockReturnValue(
       createPluginRuntimeMock({
         channel: {
-          routing: {
-            resolveAgentRoute:
-              resolveAgentRouteMock as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+          pairing: {
+            readAllowFromStore:
+              readAllowFromStoreMock as unknown as PluginRuntime["channel"]["pairing"]["readAllowFromStore"],
+            upsertPairingRequest:
+              upsertPairingRequestMock as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
           },
-          reply: {
-            finalizeInboundContext:
-              finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
-            dispatchReplyWithBufferedBlockDispatcher:
-              dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-          },
-          session: {
-            recordInboundSession:
-              recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
+          commands: {
+            shouldComputeCommandAuthorized: vi.fn(() => false),
+            resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
           },
         },
       }),
@@ -171,13 +159,7 @@ describe("Zalo reply-once lifecycle", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("routes one accepted webhook event to one visible reply across duplicate replay", async () => {
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
-      async ({ dispatcherOptions }) => {
-        await dispatcherOptions.deliver({ text: "zalo reply once" });
-      },
-    );
-
+  it("emits one pairing reply across duplicate webhook replay and scopes reads and writes to accountId", async () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
     const abort = new AbortController();
@@ -193,8 +175,10 @@ describe("Zalo reply-once lifecycle", () => {
       webhookSecret: "supersecret",
     });
 
-    await vi.waitFor(() => expect(setWebhookMock).toHaveBeenCalledTimes(1));
-    expect(registry.httpRoutes).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(setWebhookMock).toHaveBeenCalledTimes(1);
+      expect(registry.httpRoutes).toHaveLength(1);
+    });
     const route = registry.httpRoutes[0];
     if (!route) {
       throw new Error("missing plugin HTTP route");
@@ -203,7 +187,7 @@ describe("Zalo reply-once lifecycle", () => {
     await withServer(
       (req, res) => route.handler(req, res),
       async (baseUrl) => {
-        const payload = createTextUpdate(`zalo-replay-${Date.now()}`);
+        const payload = createTextUpdate(`zalo-pairing-${Date.now()}`);
         const first = await postWebhookUpdate({
           baseUrl,
           path: "/hooks/zalo",
@@ -223,28 +207,27 @@ describe("Zalo reply-once lifecycle", () => {
       },
     );
 
-    expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+    expect(readAllowFromStoreMock).toHaveBeenCalledTimes(1);
+    expect(readAllowFromStoreMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        AccountId: "acct-zalo-lifecycle",
-        SessionKey: "agent:main:zalo:direct:dm-chat-1",
-        MessageSid: expect.stringContaining("zalo-replay-"),
-        From: "zalo:user-1",
-        To: "zalo:dm-chat-1",
+        channel: "zalo",
+        accountId: "acct-zalo-pairing",
       }),
     );
-    expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
-    expect(recordInboundSessionMock).toHaveBeenCalledWith(
+    expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
+    expect(upsertPairingRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:zalo:direct:dm-chat-1",
+        channel: "zalo",
+        accountId: "acct-zalo-pairing",
+        id: "user-unauthorized",
       }),
     );
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
     expect(sendMessageMock).toHaveBeenCalledWith(
       "zalo-token",
       expect.objectContaining({
-        chat_id: "dm-chat-1",
-        text: "zalo reply once",
+        chat_id: "dm-pairing-1",
+        text: expect.stringContaining("PAIRCODE"),
       }),
       undefined,
     );
@@ -253,17 +236,8 @@ describe("Zalo reply-once lifecycle", () => {
     await run;
   });
 
-  it("does not emit a second visible reply when replay arrives after a post-send failure", async () => {
-    let dispatchAttempts = 0;
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
-      async ({ dispatcherOptions }) => {
-        dispatchAttempts += 1;
-        await dispatcherOptions.deliver({ text: "zalo reply after failure" });
-        if (dispatchAttempts === 1) {
-          throw new Error("post-send failure");
-        }
-      },
-    );
+  it("does not emit a second pairing reply when replay arrives after the first send fails", async () => {
+    sendMessageMock.mockRejectedValueOnce(new Error("pairing send failed"));
 
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
@@ -280,7 +254,10 @@ describe("Zalo reply-once lifecycle", () => {
       webhookSecret: "supersecret",
     });
 
-    await vi.waitFor(() => expect(setWebhookMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(setWebhookMock).toHaveBeenCalledTimes(1);
+      expect(registry.httpRoutes).toHaveLength(1);
+    });
     const route = registry.httpRoutes[0];
     if (!route) {
       throw new Error("missing plugin HTTP route");
@@ -289,7 +266,7 @@ describe("Zalo reply-once lifecycle", () => {
     await withServer(
       (req, res) => route.handler(req, res),
       async (baseUrl) => {
-        const payload = createTextUpdate(`zalo-retry-${Date.now()}`);
+        const payload = createTextUpdate(`zalo-pairing-retry-${Date.now()}`);
         const first = await postWebhookUpdate({
           baseUrl,
           path: "/hooks/zalo",
@@ -310,11 +287,9 @@ describe("Zalo reply-once lifecycle", () => {
       },
     );
 
-    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
+    expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Zalo webhook failed: Error: post-send failure"),
-    );
+    expect(runtime.error).not.toHaveBeenCalled();
 
     abort.abort();
     await run;
