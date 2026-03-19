@@ -41,20 +41,20 @@ export async function ensureConfigReady(params: {
   const commandPath = params.commandPath ?? [];
   if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath)) {
     didRunDoctorConfigFlow = true;
-    const runDoctorConfigFlow = async () =>
-      (await import("../../commands/doctor-config-flow.js")).loadAndMaybeMigrateDoctorConfig({
-        options: { nonInteractive: true },
-        confirm: async () => false,
+    const runDoctorConfigPreflight = async () =>
+      (await import("../../commands/doctor-config-preflight.js")).runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
       });
     if (!params.suppressDoctorStdout) {
-      await runDoctorConfigFlow();
+      await runDoctorConfigPreflight();
     } else {
       const originalStdoutWrite = process.stdout.write.bind(process.stdout);
       const originalSuppressNotes = process.env.OPENCLAW_SUPPRESS_NOTES;
       process.stdout.write = (() => true) as unknown as typeof process.stdout.write;
       process.env.OPENCLAW_SUPPRESS_NOTES = "1";
       try {
-        await runDoctorConfigFlow();
+        await runDoctorConfigPreflight();
       } finally {
         process.stdout.write = originalStdoutWrite;
         if (originalSuppressNotes === undefined) {

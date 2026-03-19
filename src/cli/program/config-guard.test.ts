@@ -4,8 +4,8 @@ import type { RuntimeEnv } from "../../runtime.js";
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../commands/doctor-config-flow.js", () => ({
-  loadAndMaybeMigrateDoctorConfig: loadAndMaybeMigrateDoctorConfigMock,
+vi.mock("../../commands/doctor-config-preflight.js", () => ({
+  runDoctorConfigPreflight: loadAndMaybeMigrateDoctorConfigMock,
 }));
 
 vi.mock("../../config/config.js", () => ({
