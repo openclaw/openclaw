@@ -142,6 +142,7 @@ describe("plugin contract registry", () => {
 
   it("keeps bundled web search ownership explicit", () => {
     expect(findWebSearchIdsForPlugin("brave")).toEqual(["brave"]);
+    expect(findWebSearchIdsForPlugin("exa")).toEqual(["exa"]);
     expect(findWebSearchIdsForPlugin("firecrawl")).toEqual(["firecrawl"]);
     expect(findWebSearchIdsForPlugin("google")).toEqual(["gemini"]);
     expect(findWebSearchIdsForPlugin("moonshot")).toEqual(["kimi"]);

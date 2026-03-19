@@ -8,6 +8,7 @@ import {
 } from "./web-search-providers.js";
 
 const BUNDLED_WEB_SEARCH_PROVIDERS = [
+  { pluginId: "exa", id: "exa", order: 5 },
   { pluginId: "brave", id: "brave", order: 10 },
   { pluginId: "google", id: "gemini", order: 20 },
   { pluginId: "xai", id: "grok", order: 30 },
@@ -89,6 +90,7 @@ describe("resolvePluginWebSearchProviders", () => {
     const providers = resolvePluginWebSearchProviders({});
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+      "exa:exa",
       "brave:brave",
       "google:gemini",
       "xai:grok",
@@ -97,6 +99,7 @@ describe("resolvePluginWebSearchProviders", () => {
       "firecrawl:firecrawl",
     ]);
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
+      "plugins.entries.exa.config.webSearch.apiKey",
       "plugins.entries.brave.config.webSearch.apiKey",
       "plugins.entries.google.config.webSearch.apiKey",
       "plugins.entries.xai.config.webSearch.apiKey",
@@ -123,6 +126,7 @@ describe("resolvePluginWebSearchProviders", () => {
     });
 
     expect(providers.map((provider) => provider.pluginId)).toEqual([
+      "exa",
       "brave",
       "google",
       "xai",
