@@ -9,7 +9,11 @@ const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set([
   "action-runtime-api.js",
   "api.js",
   "index.js",
+  "light-runtime-api.js",
   "login-qr-api.js",
+  "onboard.js",
+  "openai-codex-catalog.js",
+  "provider-catalog.js",
   "runtime-api.js",
   "session-key-api.js",
   "setup-api.js",
@@ -252,6 +256,7 @@ function collectCoreSourceFiles(): string[] {
       }
       if (
         fullPath.includes(".test.") ||
+        fullPath.includes(".mock-harness.") ||
         fullPath.includes(".spec.") ||
         fullPath.includes(".fixture.") ||
         fullPath.includes(".snap") ||
@@ -320,11 +325,14 @@ function collectImportSpecifiers(text: string): string[] {
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
   for (const specifier of imports) {
     const normalized = specifier.replaceAll("\\", "/");
-    const extensionId = normalized.match(/extensions\/([^/]+)\//)?.[1] ?? null;
+    const resolved = specifier.startsWith(".")
+      ? resolve(dirname(file), specifier).replaceAll("\\", "/")
+      : normalized;
+    const extensionId = resolved.match(/extensions\/([^/]+)\//)?.[1] ?? null;
     if (!extensionId || !GUARDED_CHANNEL_EXTENSIONS.has(extensionId)) {
       continue;
     }
-    const basename = normalized.split("/").at(-1) ?? "";
+    const basename = resolved.split("/").at(-1) ?? "";
     expect(
       ALLOWED_EXTENSION_PUBLIC_SURFACES.has(basename),
       `${file} should only import approved extension surfaces, got ${specifier}`,
