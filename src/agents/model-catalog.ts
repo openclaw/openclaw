@@ -241,7 +241,6 @@ export async function loadModelCatalog(params?: {
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
       await mergeLocalModelsDirectory({ models });
-      applyOpenAICodexSparkFallback(models);
       const supplemental = await augmentModelCatalogWithProviderPlugins({
         config: cfg,
         env: process.env,

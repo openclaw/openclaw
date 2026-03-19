@@ -4,6 +4,7 @@ import {
   listThinkingLevelLabels as listThinkingLevelLabelsFallback,
   listThinkingLevels as listThinkingLevelsFallback,
   normalizeProviderId,
+  normalizeThinkLevel as normalizeThinkLevelFromShared,
   resolveThinkingDefaultForModel as resolveThinkingDefaultForModelFallback,
   supportsBuiltInXHighThinking,
 } from "./thinking.shared.js";
@@ -128,4 +129,31 @@ export function resolveThinkingDefaultForModel(params: {
     return pluginDecision;
   }
   return resolveThinkingDefaultForModelFallback(params);
+}
+
+/** Normalize configured/thinking level string to "auto" or a valid ThinkLevel. */
+export function normalizeConfiguredThinkLevel(
+  raw?: string | null,
+): ThinkLevel | "auto" | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const key = raw.trim().toLowerCase();
+  if (key === "auto" || key === "adaptive") {
+    return "auto";
+  }
+  return normalizeThinkLevelFromShared(raw);
+}
+
+/** Coerce thinking level to one supported by the provider/model; returns { coerced, level }. */
+export function coerceThinkingLevelForModel(params: {
+  level: ThinkLevel;
+  provider: string;
+  model: string;
+}): { coerced: boolean; level: ThinkLevel } {
+  const { level, provider, model } = params;
+  if (level === "xhigh" && !supportsXHighThinking(provider, model)) {
+    return { coerced: true, level: "high" };
+  }
+  return { coerced: false, level };
 }

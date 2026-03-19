@@ -100,6 +100,14 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
+  /** Resolved configured thinking level (may be "auto"). */
+  configuredThink?: string;
+  /** Last non-auto model provider for think=auto resolution. */
+  lastNonAutoModelProvider?: string;
+  /** Last non-auto model for think=auto resolution. */
+  lastNonAutoModel?: string;
+  /** Auto model routing status for session. */
+  autoModelRoutingStatus?: unknown;
   fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
