@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 
 export const DISCORD_THREAD_BINDING_CHANNEL = "discord";
+export const MATRIX_THREAD_BINDING_CHANNEL = "matrix";
 const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
 const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;
 
@@ -127,8 +128,9 @@ export function resolveThreadBindingSpawnPolicy(params: {
   const spawnFlagKey = resolveSpawnFlagKey(params.kind);
   const spawnEnabledRaw =
     normalizeBoolean(account?.[spawnFlagKey]) ?? normalizeBoolean(root?.[spawnFlagKey]);
-  // Non-Discord channels currently have no dedicated spawn gate config keys.
-  const spawnEnabled = spawnEnabledRaw ?? channel !== DISCORD_THREAD_BINDING_CHANNEL;
+  const spawnEnabled =
+    spawnEnabledRaw ??
+    (channel !== DISCORD_THREAD_BINDING_CHANNEL && channel !== MATRIX_THREAD_BINDING_CHANNEL);
   return {
     channel,
     accountId,
@@ -183,6 +185,9 @@ export function formatThreadBindingDisabledError(params: {
   if (params.channel === DISCORD_THREAD_BINDING_CHANNEL) {
     return "Discord thread bindings are disabled (set channels.discord.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).";
   }
+  if (params.channel === MATRIX_THREAD_BINDING_CHANNEL) {
+    return "Matrix thread bindings are disabled (set channels.matrix.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).";
+  }
   return `Thread bindings are disabled for ${params.channel} (set session.threadBindings.enabled=true to enable).`;
 }
 
@@ -196,6 +201,12 @@ export function formatThreadBindingSpawnDisabledError(params: {
   }
   if (params.channel === DISCORD_THREAD_BINDING_CHANNEL && params.kind === "subagent") {
     return "Discord thread-bound subagent spawns are disabled for this account (set channels.discord.threadBindings.spawnSubagentSessions=true to enable).";
+  }
+  if (params.channel === MATRIX_THREAD_BINDING_CHANNEL && params.kind === "acp") {
+    return "Matrix thread-bound ACP spawns are disabled for this account (set channels.matrix.threadBindings.spawnAcpSessions=true to enable).";
+  }
+  if (params.channel === MATRIX_THREAD_BINDING_CHANNEL && params.kind === "subagent") {
+    return "Matrix thread-bound subagent spawns are disabled for this account (set channels.matrix.threadBindings.spawnSubagentSessions=true to enable).";
   }
   return `Thread-bound ${params.kind} spawns are disabled for ${params.channel}.`;
 }
