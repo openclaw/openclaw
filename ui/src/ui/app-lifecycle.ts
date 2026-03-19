@@ -7,7 +7,12 @@ import {
   startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
-import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import {
+  observeTopbar,
+  resetChatScroll,
+  scheduleChatScroll,
+  scheduleLogsScroll,
+} from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
   attachThemeListener,
@@ -105,6 +110,14 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
       changed.has("chatStream") &&
       (previousStream === null || previousStream === undefined) &&
       typeof host.chatStream === "string";
+    if (streamJustStarted) {
+      // A new reply has started. Clear all stale scroll state from the previous
+      // turn so that effectiveForce works cleanly: chatAutoScrollBlockId, mode,
+      // chatBottomFollowPinned, and suppression from the old block must not
+      // bleed into the new one or the else-if branch will downgrade mode back
+      // to "clamp" as soon as streaming text replaces the reading indicator.
+      resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
+    }
     scheduleChatScroll(
       host as unknown as Parameters<typeof scheduleChatScroll>[0],
       forcedByTab || forcedByLoad || streamJustStarted || !host.chatHasAutoScrolled,
