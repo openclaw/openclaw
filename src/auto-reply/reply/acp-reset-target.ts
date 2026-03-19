@@ -3,7 +3,6 @@ import {
   normalizeBindingConfig,
   type ConfiguredAcpBindingChannel,
 } from "../../acp/persistent-bindings.types.js";
-import { resolveConfiguredBindingRecord } from "../../channels/plugins/binding-registry.js";
 import { listAcpBindings } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -59,7 +58,7 @@ function resolveRawConfiguredAcpSessionKey(params: {
   return undefined;
 }
 
-export function resolveEffectiveResetTargetSessionKey(params: {
+export async function resolveEffectiveResetTargetSessionKey(params: {
   cfg: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;
@@ -69,7 +68,7 @@ export function resolveEffectiveResetTargetSessionKey(params: {
   allowNonAcpBindingSessionKey?: boolean;
   skipConfiguredFallbackWhenActiveSessionNonAcp?: boolean;
   fallbackToActiveAcpWhenUnbound?: boolean;
-}): string | undefined {
+}): Promise<string | undefined> {
   const activeSessionKey = normalizeText(params.activeSessionKey);
   const activeAcpSessionKey =
     activeSessionKey && isAcpSessionKey(activeSessionKey) ? activeSessionKey : undefined;
@@ -81,6 +80,11 @@ export function resolveEffectiveResetTargetSessionKey(params: {
     return activeAcpSessionKey;
   }
   const accountId = normalizeText(params.accountId) || DEFAULT_ACCOUNT_ID;
+
+  // Lazy load the binding registry only when necessary (inside the function)
+  // to avoid startup latency. This must be awaited.
+  const { resolveConfiguredBindingRecord } =
+    await import("../../channels/plugins/binding-registry.js");
   const parentConversationId = normalizeText(params.parentConversationId) || undefined;
   const allowNonAcpBindingSessionKey = Boolean(params.allowNonAcpBindingSessionKey);
 
