@@ -39,7 +39,47 @@ if [ "$#" -eq 0 ]; then
   usage
 fi
 
-files=("$@")
+path_exists_or_tracked() {
+  local candidate=$1
+  [ -e "$candidate" ] || git ls-files --error-unmatch -- "$candidate" >/dev/null 2>&1
+}
+
+append_normalized_file_arg() {
+  local raw=$1
+
+  if path_exists_or_tracked "$raw"; then
+    files+=("$raw")
+    return
+  fi
+
+  if [[ "$raw" == *$'\n'* || "$raw" == *$'\r'* ]]; then
+    local normalized=${raw//$'\r'/}
+    while IFS= read -r line; do
+      if [[ "$line" == *[![:space:]]* ]]; then
+        files+=("$line")
+      fi
+    done <<< "$normalized"
+    return
+  fi
+
+  if [[ "$raw" == *[[:space:]]* ]]; then
+    local split_paths=()
+    # Intentional IFS split for callers that pass a single shell-expanded path blob.
+    # shellcheck disable=SC2206
+    split_paths=($raw)
+    if [ "${#split_paths[@]}" -gt 1 ]; then
+      files+=("${split_paths[@]}")
+      return
+    fi
+  fi
+
+  files+=("$raw")
+}
+
+files=()
+for raw_arg in "$@"; do
+  append_normalized_file_arg "$raw_arg"
+done
 
 # Disallow "." because it stages the entire repository and defeats the helper's safety guardrails.
 for file in "${files[@]}"; do
@@ -129,11 +169,9 @@ run_git_with_lock_retry() {
 }
 
 for file in "${files[@]}"; do
-  if [ ! -e "$file" ]; then
-    if ! git ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
-      printf 'Error: file not found: %s\n' "$file" >&2
-      exit 1
-    fi
+  if ! path_exists_or_tracked "$file"; then
+    printf 'Error: file not found: %s\n' "$file" >&2
+    exit 1
   fi
 done
 
