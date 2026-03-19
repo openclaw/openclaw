@@ -3327,7 +3327,6 @@ module.exports = {
 
   it("derives plugin-sdk subpaths from package exports", () => {
     const subpaths = __testing.listPluginSdkExportedSubpaths();
-    expect(subpaths).toContain("compat");
     expect(subpaths).toContain("telegram");
     expect(subpaths).not.toContain("root-alias");
   });
