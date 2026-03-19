@@ -17,17 +17,17 @@ const hoisted = vi.hoisted(() => {
     debug: vi.fn(),
   };
   const stopThreadBindingManager = vi.fn();
-  const stopSharedClientInstance = vi.fn();
+  const releaseSharedClientInstance = vi.fn(async () => true);
   const setActiveMatrixClient = vi.fn();
   return {
     callOrder,
     client,
     createMatrixRoomMessageHandler,
     logger,
+    releaseSharedClientInstance,
     resolveTextChunkLimit,
     setActiveMatrixClient,
     startClientError: null as Error | null,
-    stopSharedClientInstance,
     stopThreadBindingManager,
   };
 });
@@ -127,7 +127,10 @@ vi.mock("../client.js", () => ({
     hoisted.callOrder.push("start-client");
     return hoisted.client;
   }),
-  stopSharedClientInstance: hoisted.stopSharedClientInstance,
+}));
+
+vi.mock("../client/shared.js", () => ({
+  releaseSharedClientInstance: hoisted.releaseSharedClientInstance,
 }));
 
 vi.mock("../config-update.js", () => ({
@@ -206,8 +209,8 @@ describe("monitorMatrixProvider", () => {
     hoisted.callOrder.length = 0;
     hoisted.startClientError = null;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
+    hoisted.releaseSharedClientInstance.mockReset().mockResolvedValue(true);
     hoisted.setActiveMatrixClient.mockReset();
-    hoisted.stopSharedClientInstance.mockReset();
     hoisted.stopThreadBindingManager.mockReset();
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
     hoisted.createMatrixRoomMessageHandler.mockReset().mockReturnValue(vi.fn());
@@ -251,12 +254,13 @@ describe("monitorMatrixProvider", () => {
     await expect(monitorMatrixProvider()).rejects.toThrow("start failed");
 
     expect(hoisted.stopThreadBindingManager).toHaveBeenCalledTimes(1);
-    expect(hoisted.stopSharedClientInstance).toHaveBeenCalledTimes(1);
+    expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledTimes(1);
+    expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(hoisted.client, "persist");
     expect(hoisted.setActiveMatrixClient).toHaveBeenNthCalledWith(1, hoisted.client, "default");
     expect(hoisted.setActiveMatrixClient).toHaveBeenNthCalledWith(2, null, "default");
   });
 
-  it("disables cold-start backlog dropping when sync state already exists", async () => {
+  it("disables cold-start backlog dropping only when sync state is cleanly persisted", async () => {
     hoisted.client.hasPersistedSyncState.mockReturnValue(true);
     const { monitorMatrixProvider } = await import("./index.js");
     const abortController = new AbortController();

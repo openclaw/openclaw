@@ -350,7 +350,9 @@ export class MatrixClient {
   }
 
   hasPersistedSyncState(): boolean {
-    return this.syncStore?.hasSavedSync() === true;
+    // Only trust restart replay when the previous process completed a final
+    // sync-store persist. A stale cursor can make Matrix re-surface old events.
+    return this.syncStore?.hasSavedSyncFromCleanShutdown() === true;
   }
 
   private async ensureStartedForCryptoControlPlane(): Promise<void> {
@@ -367,6 +369,7 @@ export class MatrixClient {
     }
     this.decryptBridge.stop();
     // Final persist on shutdown
+    this.syncStore?.markCleanShutdown();
     this.stopPersistPromise = Promise.all([
       persistIdbToDisk({
         snapshotPath: this.idbSnapshotPath,
