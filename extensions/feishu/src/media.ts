@@ -300,7 +300,7 @@ function isFeishuServerError(err: unknown): boolean {
   // Also match bare "5xx" patterns at word boundaries (e.g. "failed: 502")
   if (/:\s*5\d{2}\b/.test(msg)) return true;
   // Check numeric status properties set by HTTP clients
-  const errAny = err as Record<string, unknown>;
+  const errAny = err as unknown as Record<string, unknown>;
   const status = errAny.status ?? errAny.statusCode ?? errAny.httpStatus;
   if (typeof status === "number" && status >= 500) return true;
   return false;
