@@ -155,20 +155,21 @@ export async function getReplyFromConfig(
           if (attachment.index === undefined) {
             continue;
           }
-          const cached = cache.get(attachment.index);
-          if (cached?.resolvedPath) {
-            try {
-              const fs = await import("node:fs/promises");
-              const buffer = await fs.readFile(cached.resolvedPath);
-              const mimeType = cached.mime ?? "image/jpeg";
-              images.push({
-                type: "image",
-                data: `data:${mimeType};base64,${buffer.toString("base64")}`,
-                mimeType,
-              });
-            } catch {
-              // Skip images that can't be read
-            }
+          try {
+            const pathResult = await cache.getPath({
+              attachmentIndex: attachment.index,
+              timeoutMs: 10000,
+            });
+            const fs = await import("node:fs/promises");
+            const buffer = await fs.readFile(pathResult.path);
+            const mimeType = attachment.mime ?? "image/jpeg";
+            images.push({
+              type: "image",
+              data: `data:${mimeType};base64,${buffer.toString("base64")}`,
+              mimeType,
+            });
+          } catch {
+            // Skip images that can't be read
           }
         }
         if (images.length > 0) {
