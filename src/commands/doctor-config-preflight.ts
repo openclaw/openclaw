@@ -63,6 +63,7 @@ export async function runDoctorConfigPreflight(
   options: {
     migrateState?: boolean;
     migrateLegacyConfig?: boolean;
+    invalidConfigNote?: string | false;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   if (options.migrateState !== false) {
@@ -84,8 +85,15 @@ export async function runDoctorConfigPreflight(
   }
 
   const snapshot = await readConfigFileSnapshot();
-  if (snapshot.exists && !snapshot.valid && snapshot.legacyIssues.length === 0) {
-    note("Config invalid; doctor will run with best-effort config.", "Config");
+  const invalidConfigNote =
+    options.invalidConfigNote ?? "Config invalid; doctor will run with best-effort config.";
+  if (
+    invalidConfigNote &&
+    snapshot.exists &&
+    !snapshot.valid &&
+    snapshot.legacyIssues.length === 0
+  ) {
+    note(invalidConfigNote, "Config");
     noteIncludeConfinementWarning(snapshot);
   }
 

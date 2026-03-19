@@ -12,6 +12,8 @@ type LegacyCliDeps = {
 
 type LibraryExports = typeof import("./library.js");
 
+// These bindings are populated only for library consumers. The CLI entry stays
+// on the lean path and must not read them while running as main.
 export let assertWebChannel: LibraryExports["assertWebChannel"];
 export let applyTemplate: LibraryExports["applyTemplate"];
 export let createDefaultDeps: LibraryExports["createDefaultDeps"];
