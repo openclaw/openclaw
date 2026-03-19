@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { TopLevelComponents } from "@buape/carbon";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
@@ -16,7 +15,11 @@ import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import type {
+  ChannelId,
+  ChannelPlugin,
+  ChannelStructuredComponents,
+} from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -1132,7 +1135,10 @@ export type PluginInteractiveDiscordHandlerContext = {
     acknowledge: () => Promise<void>;
     reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
     followUp: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
-    editMessage: (params: { text?: string; components?: TopLevelComponents[] }) => Promise<void>;
+    editMessage: (params: {
+      text?: string;
+      components?: ChannelStructuredComponents;
+    }) => Promise<void>;
     clearComponents: (params?: { text?: string }) => Promise<void>;
   };
   requestConversationBinding: (

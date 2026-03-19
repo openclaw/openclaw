@@ -29,6 +29,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     );
     for (const packageRoot of packageRoots) {
       const sourceExtensionsDir = path.join(packageRoot, "extensions");
+      const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
       if (
         (preferSourceCheckout || isSourceCheckoutRoot(packageRoot)) &&
         fs.existsSync(sourceExtensionsDir)
@@ -39,9 +40,11 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
       // dist-runtime/. Prefer that over source extensions only when the paired
       // dist/ tree exists; otherwise wrappers can drift ahead of the last build.
       const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
-      const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
       if (fs.existsSync(runtimeExtensionsDir) && fs.existsSync(builtExtensionsDir)) {
         return runtimeExtensionsDir;
+      }
+      if (fs.existsSync(builtExtensionsDir)) {
+        return builtExtensionsDir;
       }
     }
   } catch {
@@ -51,6 +54,10 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   // bun --compile: ship a sibling `extensions/` next to the executable.
   try {
     const execDir = path.dirname(process.execPath);
+    const siblingBuilt = path.join(execDir, "dist", "extensions");
+    if (fs.existsSync(siblingBuilt)) {
+      return siblingBuilt;
+    }
     const sibling = path.join(execDir, "extensions");
     if (fs.existsSync(sibling)) {
       return sibling;

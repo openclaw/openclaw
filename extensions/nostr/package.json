@@ -29,11 +29,6 @@
     },
     "release": {
       "publishToNpm": true
-    },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "nostr-tools"
-      ]
     }
   }
 }
