@@ -3,7 +3,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveConfiguredAcpBindingRecord,
   type PluginRuntime,
-} from "../../../runtime-api.js";
+} from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
 
 type MatrixResolvedRoute = ReturnType<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>;

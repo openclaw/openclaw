@@ -8,7 +8,7 @@ import {
   writeJsonFileAtomically,
   type BindingTargetKind,
   type SessionBindingRecord,
-} from "../../runtime-api.js";
+} from "../runtime-api.js";
 import { resolveMatrixStoragePaths } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
 import type { MatrixClient } from "./sdk.js";

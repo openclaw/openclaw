@@ -443,7 +443,6 @@ describe("matrix thread bindings", () => {
       accountId: "ops",
       auth,
       client: {} as never,
-      stateDir: initialStateDir,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
       enableSweeper: false,
@@ -461,11 +460,16 @@ describe("matrix thread bindings", () => {
       placement: "current",
     });
 
+    setMatrixRuntime({
+      state: {
+        resolveStateDir: () => replacementStateDir,
+      },
+    } as PluginRuntime);
+
     const replacementManager = await createMatrixThreadBindingManager({
       accountId: "ops",
       auth,
       client: {} as never,
-      stateDir: replacementStateDir,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
       enableSweeper: false,

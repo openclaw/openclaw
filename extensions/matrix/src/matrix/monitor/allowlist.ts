@@ -2,7 +2,7 @@ import {
   normalizeStringEntries,
   resolveAllowlistMatchByCandidates,
   type AllowlistMatch,
-} from "../../../runtime-api.js";
+} from "../../runtime-api.js";
 
 function normalizeAllowList(list?: Array<string | number>) {
   return normalizeStringEntries(list);

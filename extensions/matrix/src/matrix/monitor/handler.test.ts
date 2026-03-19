@@ -588,8 +588,6 @@ describe("matrix monitor handler pairing account scope", () => {
       dmPolicy: "open",
       textLimit: 8_000,
       mediaMaxBytes: 10_000_000,
-      needsRoomAliasesForConfig: false,
-      dropPreStartupMessages: false,
       startupMs: 0,
       startupGraceMs: 0,
       dropPreStartupMessages: false,

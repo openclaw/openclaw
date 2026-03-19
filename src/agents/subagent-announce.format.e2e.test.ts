@@ -230,10 +230,12 @@ describe("subagent announce formatting", () => {
       .mockImplementation(() => embeddedRunMock.isEmbeddedPiRunStreaming());
     queueEmbeddedPiMessageSpy
       .mockReset()
-      .mockImplementation(() => embeddedRunMock.queueEmbeddedPiMessage());
+      .mockImplementation((...args) => embeddedRunMock.queueEmbeddedPiMessage(...args));
     waitForEmbeddedPiRunEndSpy
       .mockReset()
-      .mockImplementation(async () => await embeddedRunMock.waitForEmbeddedPiRunEnd());
+      .mockImplementation(
+        async (...args) => await embeddedRunMock.waitForEmbeddedPiRunEnd(...args),
+      );
     embeddedRunMock.isEmbeddedPiRunActive.mockClear().mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockClear().mockReturnValue(false);
     embeddedRunMock.queueEmbeddedPiMessage.mockClear().mockReturnValue(false);

@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { RuntimeEnv, RuntimeLogger } from "../../../runtime-api.js";
+import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
 import type { MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";
@@ -32,6 +32,7 @@ type MatrixHandlerTestHarnessOptions = {
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   textLimit?: number;
   mediaMaxBytes?: number;
+  needsRoomAliasesForConfig?: boolean;
   startupMs?: number;
   startupGraceMs?: number;
   dropPreStartupMessages?: boolean;

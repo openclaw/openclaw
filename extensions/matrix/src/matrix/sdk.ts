@@ -4,7 +4,6 @@ import { EventEmitter } from "node:events";
 import {
   ClientEvent,
   MatrixEventEvent,
-  Preset,
   createClient as createMatrixJsClient,
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,

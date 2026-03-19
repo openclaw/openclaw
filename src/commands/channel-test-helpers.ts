@@ -31,7 +31,7 @@ type PatchedSetupAdapterFields = {
 export function setDefaultChannelPluginRegistryForTests(): void {
   setMatrixRuntime({
     state: {
-      resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
+      resolveStateDir: (_env: unknown, homeDir?: () => string) => (homeDir ?? (() => "/tmp"))(),
     },
   } as Parameters<typeof setMatrixRuntime>[0]);
   const channels = [

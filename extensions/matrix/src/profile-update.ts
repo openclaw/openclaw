@@ -1,6 +1,6 @@
-import { normalizeAccountId } from "../runtime-api.js";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import { updateMatrixAccountConfig, resolveMatrixConfigPath } from "./matrix/config-update.js";
+import { normalizeAccountId } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
