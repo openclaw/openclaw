@@ -3,109 +3,32 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { channelTestPrefixes } from "../vitest.channel-paths.mjs";
+import { isUnitConfigTestFile } from "../vitest.unit-paths.mjs";
+import {
+  loadTestRunnerBehavior,
+  loadUnitTimingManifest,
+  packFilesByDuration,
+  selectTimedHeavyFiles,
+} from "./test-runner-manifest.mjs";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
 // (especially under GitHub Actions + Git Bash). Use `shell: true` and let the shell resolve pnpm.
 const pnpm = "pnpm";
-
-const unitIsolatedFilesRaw = [
-  "src/plugins/loader.test.ts",
-  "src/plugins/tools.optional.test.ts",
-  "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
-  "src/security/fix.test.ts",
-  // Runtime source guard scans are sensitive to filesystem contention.
-  "src/security/temp-path-guard.test.ts",
-  "src/security/audit.test.ts",
-  "src/utils.test.ts",
-  "src/auto-reply/tool-meta.test.ts",
-  "src/auto-reply/envelope.test.ts",
-  "src/commands/auth-choice.test.ts",
-  // Process supervision + docker setup suites are stable but setup-heavy.
-  "src/process/supervisor/supervisor.test.ts",
-  "src/docker-setup.test.ts",
-  // Filesystem-heavy skills sync suite.
-  "src/agents/skills.build-workspace-skills-prompt.syncs-merged-skills-into-target-workspace.test.ts",
-  // Real git hook integration test; keep signal, move off unit-fast critical path.
-  "test/git-hooks-pre-commit.test.ts",
-  // Setup-heavy doctor command suites; keep them off the unit-fast critical path.
-  "src/commands/doctor.warns-state-directory-is-missing.test.ts",
-  "src/commands/doctor.warns-per-agent-sandbox-docker-browser-prune.test.ts",
-  "src/commands/doctor.runs-legacy-state-migrations-yes-mode-without.test.ts",
-  // Setup-heavy CLI update flow suite; move off unit-fast critical path.
-  "src/cli/update-cli.test.ts",
-  // Uses temp repos + module cache resets; keep it off vmForks to avoid ref-resolution flakes.
-  "src/infra/git-commit.test.ts",
-  // Expensive schema build/bootstrap checks; keep coverage but run in isolated lane.
-  "src/config/schema.test.ts",
-  "src/config/schema.tags.test.ts",
-  // CLI smoke/agent flows are stable but setup-heavy.
-  "src/cli/program.smoke.test.ts",
-  "src/commands/agent.test.ts",
-  "src/media/store.test.ts",
-  "src/media/store.header-ext.test.ts",
-  "extensions/whatsapp/src/media.test.ts",
-  "extensions/whatsapp/src/auto-reply.web-auto-reply.falls-back-text-media-send-fails.test.ts",
-  "src/browser/server.covers-additional-endpoint-branches.test.ts",
-  "src/browser/server.post-tabs-open-profile-unknown-returns-404.test.ts",
-  "src/browser/server.agent-contract-snapshot-endpoints.test.ts",
-  "src/browser/server.agent-contract-form-layout-act-commands.test.ts",
-  "src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts",
-  "src/browser/server.auth-token-gates-http.test.ts",
-  // Keep this high-variance heavy file off the unit-fast critical path.
-  "src/auto-reply/reply.block-streaming.test.ts",
-  // Archive extraction/fixture-heavy suite; keep off unit-fast critical path.
-  "src/hooks/install.test.ts",
-  // Download/extraction safety cases can spike under unit-fast contention.
-  "src/agents/skills-install.download.test.ts",
-  // Skills discovery/snapshot suites are filesystem-heavy and high-variance in vmForks lanes.
-  "src/agents/skills.test.ts",
-  "src/agents/skills.buildworkspaceskillsnapshot.test.ts",
-  "extensions/acpx/src/runtime.test.ts",
-  // Shell-heavy script harness can contend under vmForks startup bursts.
-  "test/scripts/ios-team-id.test.ts",
-  // Heavy runner/exec/archive suites are stable but contend on shared resources under vmForks.
-  "src/agents/pi-embedded-runner.test.ts",
-  "src/agents/bash-tools.test.ts",
-  "src/agents/openclaw-tools.subagents.sessions-spawn.lifecycle.test.ts",
-  "src/agents/bash-tools.exec.background-abort.test.ts",
-  "src/agents/subagent-announce.format.test.ts",
-  "src/infra/archive.test.ts",
-  "src/cli/daemon-cli.coverage.test.ts",
-  // Model normalization test imports config/model discovery stack; keep off unit-fast critical path.
-  "src/agents/models-config.normalizes-gemini-3-ids-preview-google-providers.test.ts",
-  // Auth profile rotation suite is retry-heavy and high-variance under vmForks contention.
-  "src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts",
-  // Heavy trigger command scenarios; keep off unit-fast critical path to reduce contention noise.
-  "src/auto-reply/reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.targets-active-session-native-stop.test.ts",
-  "src/auto-reply/reply.triggers.group-intro-prompts.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.handles-inline-commands-strips-it-before-agent.test.ts",
-  "extensions/whatsapp/src/auto-reply.web-auto-reply.compresses-common-formats-jpeg-cap.test.ts",
-  // Setup-heavy bot bootstrap suite.
-  "extensions/telegram/src/bot.create-telegram-bot.test.ts",
-  // Medium-heavy bot behavior suite; move off unit-fast critical path.
-  "extensions/telegram/src/bot.test.ts",
-  // Slack slash registration tests are setup-heavy and can bottleneck unit-fast.
-  "extensions/slack/src/monitor/slash.test.ts",
-  // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
-  "extensions/imessage/src/monitor.shutdown.unhandled-rejection.test.ts",
-  // Mutates process.cwd() and mocks core module loaders; isolate from the shared fast lane.
-  "src/infra/git-commit.test.ts",
-];
-const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
-const unitSingletonIsolatedFilesRaw = [];
-const unitSingletonIsolatedFiles = unitSingletonIsolatedFilesRaw.filter((file) =>
-  fs.existsSync(file),
-);
-const unitVmForkSingletonFilesRaw = [
-  "src/channels/plugins/contracts/inbound.telegram.contract.test.ts",
-];
-const unitVmForkSingletonFiles = unitVmForkSingletonFilesRaw.filter((file) => fs.existsSync(file));
-const groupedUnitIsolatedFiles = unitIsolatedFiles.filter(
-  (file) => !unitSingletonIsolatedFiles.includes(file),
-);
-const channelSingletonFilesRaw = [];
-const channelSingletonFiles = channelSingletonFilesRaw.filter((file) => fs.existsSync(file));
+const behaviorManifest = loadTestRunnerBehavior();
+const existingFiles = (entries) =>
+  entries.map((entry) => entry.file).filter((file) => fs.existsSync(file));
+const existingUnitConfigFiles = (entries) => existingFiles(entries).filter(isUnitConfigTestFile);
+const unitBehaviorIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.isolated);
+const unitSingletonIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.singletonIsolated);
+const unitThreadSingletonFiles = existingUnitConfigFiles(behaviorManifest.unit.threadSingleton);
+const unitVmForkSingletonFiles = existingUnitConfigFiles(behaviorManifest.unit.vmForkSingleton);
+const unitBehaviorOverrideSet = new Set([
+  ...unitBehaviorIsolatedFiles,
+  ...unitSingletonIsolatedFiles,
+  ...unitThreadSingletonFiles,
+  ...unitVmForkSingletonFiles,
+]);
+const channelSingletonFiles = [];
 
 const children = new Set();
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
@@ -140,112 +63,7 @@ const testProfile =
 // Even on low-memory hosts, keep the isolated lane split so files like
 // git-commit.test.ts still get the worker/process isolation they require.
 const shouldSplitUnitRuns = testProfile !== "serial";
-const runs = [
-  ...(shouldSplitUnitRuns
-    ? [
-        {
-          name: "unit-fast",
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
-            ...(disableIsolation ? ["--isolate=false"] : []),
-            ...[
-              ...unitIsolatedFiles,
-              ...unitSingletonIsolatedFiles,
-              ...unitVmForkSingletonFiles,
-            ].flatMap((file) => ["--exclude", file]),
-          ],
-        },
-        ...(groupedUnitIsolatedFiles.length > 0
-          ? [
-              {
-                name: "unit-isolated",
-                args: [
-                  "vitest",
-                  "run",
-                  "--config",
-                  "vitest.unit.config.ts",
-                  "--pool=forks",
-                  ...groupedUnitIsolatedFiles,
-                ],
-              },
-            ]
-          : []),
-        ...unitSingletonIsolatedFiles.map((file) => ({
-          name: `${path.basename(file, ".test.ts")}-isolated`,
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
-            file,
-          ],
-        })),
-        ...unitVmForkSingletonFiles.map((file) => ({
-          name: `${path.basename(file, ".test.ts")}-vmforks`,
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
-            ...(disableIsolation ? ["--isolate=false"] : []),
-            file,
-          ],
-        })),
-        ...channelSingletonFiles.map((file) => ({
-          name: `${path.basename(file, ".test.ts")}-channels-isolated`,
-          args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
-        })),
-      ]
-    : [
-        {
-          name: "unit",
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.unit.config.ts",
-            `--pool=${useVmForks ? "vmForks" : "forks"}`,
-            ...(disableIsolation ? ["--isolate=false"] : []),
-          ],
-        },
-      ]),
-  ...(includeExtensionsSuite
-    ? [
-        {
-          name: "extensions",
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.extensions.config.ts",
-            ...(useVmForks ? ["--pool=vmForks"] : []),
-          ],
-        },
-      ]
-    : []),
-  ...(includeGatewaySuite
-    ? [
-        {
-          name: "gateway",
-          args: [
-            "vitest",
-            "run",
-            "--config",
-            "vitest.gateway.config.ts",
-            // Gateway tests are sensitive to vmForks behavior (global state + env stubs).
-            // Keep them on process forks for determinism even when other suites use vmForks.
-            "--pool=forks",
-          ],
-        },
-      ]
-    : []),
-];
+let runs = [];
 const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
 const configuredShardCount =
   Number.isFinite(shardOverride) && shardOverride > 1 ? shardOverride : null;
@@ -344,6 +162,10 @@ const parsePassthroughArgs = (args) => {
 };
 const { fileFilters: passthroughFileFilters, optionArgs: passthroughOptionArgs } =
   parsePassthroughArgs(passthroughArgs);
+const countExplicitEntryFilters = (entryArgs) => {
+  const { fileFilters } = parsePassthroughArgs(entryArgs.slice(2));
+  return fileFilters.length > 0 ? fileFilters.length : null;
+};
 const passthroughRequiresSingleRun = passthroughOptionArgs.some((arg) => {
   if (!arg.startsWith("-")) {
     return false;
@@ -387,7 +209,7 @@ const allKnownTestFiles = [
   ]),
 ];
 const inferTarget = (fileFilter) => {
-  const isolated = unitIsolatedFiles.includes(fileFilter);
+  const isolated = unitBehaviorIsolatedFiles.includes(fileFilter);
   if (fileFilter.endsWith(".live.test.ts")) {
     return { owner: "live", isolated };
   }
@@ -411,6 +233,157 @@ const inferTarget = (fileFilter) => {
   }
   return { owner: "base", isolated };
 };
+const unitTimingManifest = loadUnitTimingManifest();
+const parseEnvNumber = (name, fallback) => {
+  const parsed = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+const allKnownUnitFiles = allKnownTestFiles.filter((file) => {
+  return isUnitConfigTestFile(file);
+});
+const defaultHeavyUnitFileLimit =
+  testProfile === "serial" ? 0 : testProfile === "low" ? 20 : highMemLocalHost ? 80 : 60;
+const defaultHeavyUnitLaneCount =
+  testProfile === "serial" ? 0 : testProfile === "low" ? 2 : highMemLocalHost ? 5 : 4;
+const heavyUnitFileLimit = parseEnvNumber(
+  "OPENCLAW_TEST_HEAVY_UNIT_FILE_LIMIT",
+  defaultHeavyUnitFileLimit,
+);
+const heavyUnitLaneCount = parseEnvNumber(
+  "OPENCLAW_TEST_HEAVY_UNIT_LANES",
+  defaultHeavyUnitLaneCount,
+);
+const heavyUnitMinDurationMs = parseEnvNumber("OPENCLAW_TEST_HEAVY_UNIT_MIN_MS", 1200);
+const timedHeavyUnitFiles =
+  shouldSplitUnitRuns && heavyUnitFileLimit > 0
+    ? selectTimedHeavyFiles({
+        candidates: allKnownUnitFiles,
+        limit: heavyUnitFileLimit,
+        minDurationMs: heavyUnitMinDurationMs,
+        exclude: unitBehaviorOverrideSet,
+        timings: unitTimingManifest,
+      })
+    : [];
+const unitFastExcludedFiles = [
+  ...new Set([...unitBehaviorOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
+];
+const estimateUnitDurationMs = (file) =>
+  unitTimingManifest.files[file]?.durationMs ?? unitTimingManifest.defaultDurationMs;
+const heavyUnitBuckets = packFilesByDuration(
+  timedHeavyUnitFiles,
+  heavyUnitLaneCount,
+  estimateUnitDurationMs,
+);
+const unitHeavyEntries = heavyUnitBuckets.map((files, index) => ({
+  name: `unit-heavy-${String(index + 1)}`,
+  args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=forks", ...files],
+}));
+const baseRuns = [
+  ...(shouldSplitUnitRuns
+    ? [
+        {
+          name: "unit-fast",
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.unit.config.ts",
+            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            ...(disableIsolation ? ["--isolate=false"] : []),
+            ...unitFastExcludedFiles.flatMap((file) => ["--exclude", file]),
+          ],
+        },
+        ...(unitBehaviorIsolatedFiles.length > 0
+          ? [
+              {
+                name: "unit-isolated",
+                args: [
+                  "vitest",
+                  "run",
+                  "--config",
+                  "vitest.unit.config.ts",
+                  "--pool=forks",
+                  ...unitBehaviorIsolatedFiles,
+                ],
+              },
+            ]
+          : []),
+        ...unitHeavyEntries,
+        ...unitSingletonIsolatedFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-isolated`,
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.unit.config.ts",
+            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            file,
+          ],
+        })),
+        ...unitThreadSingletonFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-threads`,
+          args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=threads", file],
+        })),
+        ...unitVmForkSingletonFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-vmforks`,
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.unit.config.ts",
+            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            ...(disableIsolation ? ["--isolate=false"] : []),
+            file,
+          ],
+        })),
+        ...channelSingletonFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-channels-isolated`,
+          args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
+        })),
+      ]
+    : [
+        {
+          name: "unit",
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.unit.config.ts",
+            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            ...(disableIsolation ? ["--isolate=false"] : []),
+          ],
+        },
+      ]),
+  ...(includeExtensionsSuite
+    ? [
+        {
+          name: "extensions",
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.extensions.config.ts",
+            ...(useVmForks ? ["--pool=vmForks"] : []),
+          ],
+        },
+      ]
+    : []),
+  ...(includeGatewaySuite
+    ? [
+        {
+          name: "gateway",
+          args: ["vitest", "run", "--config", "vitest.gateway.config.ts", "--pool=forks"],
+        },
+      ]
+    : []),
+];
+runs = baseRuns;
+const formatEntrySummary = (entry) => {
+  const explicitFilters = countExplicitEntryFilters(entry.args) ?? 0;
+  return `${entry.name} filters=${String(explicitFilters || "all")} maxWorkers=${String(
+    maxWorkersForRun(entry.name) ?? "default",
+  )}`;
+};
 const resolveFilterMatches = (fileFilter) => {
   const normalizedFilter = normalizeRepoPath(fileFilter);
   if (fs.existsSync(fileFilter)) {
@@ -429,6 +402,7 @@ const resolveFilterMatches = (fileFilter) => {
   return allKnownTestFiles.filter((file) => file.includes(normalizedFilter));
 };
 const isVmForkSingletonUnitFile = (fileFilter) => unitVmForkSingletonFiles.includes(fileFilter);
+const isThreadSingletonUnitFile = (fileFilter) => unitThreadSingletonFiles.includes(fileFilter);
 const createTargetedEntry = (owner, isolated, filters) => {
   const name = isolated ? `${owner}-isolated` : owner;
   const forceForks = isolated;
@@ -460,6 +434,12 @@ const createTargetedEntry = (owner, isolated, filters) => {
       ],
     };
   }
+  if (owner === "unit-threads") {
+    return {
+      name,
+      args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=threads", ...filters],
+    };
+  }
   if (owner === "extensions") {
     return {
       name,
@@ -487,7 +467,7 @@ const createTargetedEntry = (owner, isolated, filters) => {
         "run",
         "--config",
         "vitest.channels.config.ts",
-        ...(forceForks ? ["--pool=forks"] : []),
+        ...(forceForks ? ["--pool=forks"] : useVmForks ? ["--pool=vmForks"] : []),
         ...filters,
       ],
     };
@@ -525,7 +505,11 @@ const targetedEntries = (() => {
     if (matchedFiles.length === 0) {
       const normalizedFile = normalizeRepoPath(fileFilter);
       const target = inferTarget(normalizedFile);
-      const owner = isVmForkSingletonUnitFile(normalizedFile) ? "unit-vmforks" : target.owner;
+      const owner = isThreadSingletonUnitFile(normalizedFile)
+        ? "unit-threads"
+        : isVmForkSingletonUnitFile(normalizedFile)
+          ? "unit-vmforks"
+          : target.owner;
       const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
       files.push(normalizedFile);
@@ -534,7 +518,11 @@ const targetedEntries = (() => {
     }
     for (const matchedFile of matchedFiles) {
       const target = inferTarget(matchedFile);
-      const owner = isVmForkSingletonUnitFile(matchedFile) ? "unit-vmforks" : target.owner;
+      const owner = isThreadSingletonUnitFile(matchedFile)
+        ? "unit-threads"
+        : isVmForkSingletonUnitFile(matchedFile)
+          ? "unit-vmforks"
+          : target.owner;
       const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
       files.push(matchedFile);
@@ -547,7 +535,10 @@ const targetedEntries = (() => {
     return createTargetedEntry(owner, mode === "isolated", [...new Set(filters)]);
   });
 })();
-const topLevelParallelEnabled = testProfile !== "low" && testProfile !== "serial";
+// Node 25 local runs still show cross-process worker shutdown contention even
+// after moving the known heavy files into singleton lanes.
+const topLevelParallelEnabled =
+  testProfile !== "low" && testProfile !== "serial" && !(!isCI && nodeMajor >= 25);
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
@@ -595,8 +586,10 @@ const defaultWorkerBudget =
           }
         : highMemLocalHost
           ? {
-              // High-memory local hosts can prioritize wall-clock speed.
-              unit: Math.max(4, Math.min(14, Math.floor((localWorkers * 7) / 8))),
+              // After peeling measured hotspots into dedicated lanes, the shared
+              // unit-fast lane shuts down more reliably with a slightly smaller
+              // worker fan-out than the old "max it out" local default.
+              unit: Math.max(4, Math.min(10, Math.floor((localWorkers * 5) / 8))),
               unitIsolated: Math.max(1, Math.min(2, Math.floor(localWorkers / 6) || 1)),
               extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
               gateway: Math.max(2, Math.min(6, Math.floor(localWorkers / 2))),
@@ -629,7 +622,13 @@ const maxWorkersForRun = (name) => {
   if (isCI && isMacOS) {
     return 1;
   }
-  if (name === "unit-isolated" || name.endsWith("-isolated")) {
+  if (name.endsWith("-threads") || name.endsWith("-vmforks")) {
+    return 1;
+  }
+  if (name.endsWith("-isolated") && name !== "unit-isolated") {
+    return 1;
+  }
+  if (name === "unit-isolated" || name.startsWith("unit-heavy-")) {
     return defaultWorkerBudget.unitIsolated;
   }
   if (name === "extensions") {
@@ -661,9 +660,12 @@ const maxOldSpaceSizeMb = (() => {
   }
   return null;
 })();
+const formatElapsedMs = (elapsedMs) =>
+  elapsedMs >= 1000 ? `${(elapsedMs / 1000).toFixed(1)}s` : `${Math.round(elapsedMs)}ms`;
 
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
+    const startedAt = Date.now();
     const maxWorkers = maxWorkersForRun(entry.name);
     // vmForks with a single worker has shown cross-file leakage in extension suites.
     // Fall back to process forks when we intentionally clamp that lane to one worker.
@@ -681,6 +683,11 @@ const runOnce = (entry, extraArgs = []) =>
           ...extraArgs,
         ]
       : [...entryArgs, ...silentArgs, ...windowsCiArgs, ...extraArgs];
+    console.log(
+      `[test-parallel] start ${entry.name} workers=${maxWorkers ?? "default"} filters=${String(
+        countExplicitEntryFilters(entryArgs) ?? "all",
+      )}`,
+    );
     const nodeOptions = process.env.NODE_OPTIONS ?? "";
     const nextNodeOptions = WARNING_SUPPRESSION_FLAGS.reduce(
       (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
@@ -711,20 +718,47 @@ const runOnce = (entry, extraArgs = []) =>
     });
     child.on("exit", (code, signal) => {
       children.delete(child);
+      console.log(
+        `[test-parallel] done ${entry.name} code=${String(code ?? (signal ? 1 : 0))} elapsed=${formatElapsedMs(
+          Date.now() - startedAt,
+        )}`,
+      );
       resolve(code ?? (signal ? 1 : 0));
     });
   });
 
 const run = async (entry, extraArgs = []) => {
-  if (shardCount <= 1) {
+  const explicitFilterCount = countExplicitEntryFilters(entry.args);
+  // Vitest requires the shard count to stay strictly below the number of
+  // resolved test files, so explicit-filter lanes need a `< fileCount` cap.
+  const effectiveShardCount =
+    explicitFilterCount === null
+      ? shardCount
+      : Math.min(shardCount, Math.max(1, explicitFilterCount - 1));
+
+  if (effectiveShardCount <= 1) {
+    if (shardIndexOverride !== null && shardIndexOverride > effectiveShardCount) {
+      return 0;
+    }
     return runOnce(entry, extraArgs);
   }
   if (shardIndexOverride !== null) {
-    return runOnce(entry, ["--shard", `${shardIndexOverride}/${shardCount}`, ...extraArgs]);
+    if (shardIndexOverride > effectiveShardCount) {
+      return 0;
+    }
+    return runOnce(entry, [
+      "--shard",
+      `${shardIndexOverride}/${effectiveShardCount}`,
+      ...extraArgs,
+    ]);
   }
-  for (let shardIndex = 1; shardIndex <= shardCount; shardIndex += 1) {
+  for (let shardIndex = 1; shardIndex <= effectiveShardCount; shardIndex += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const code = await runOnce(entry, ["--shard", `${shardIndex}/${shardCount}`, ...extraArgs]);
+    const code = await runOnce(entry, [
+      "--shard",
+      `${shardIndex}/${effectiveShardCount}`,
+      ...extraArgs,
+    ]);
     if (code !== 0) {
       return code;
     }
@@ -757,6 +791,14 @@ const shutdown = (signal) => {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+if (process.env.OPENCLAW_TEST_LIST_LANES === "1") {
+  const entriesToPrint = targetedEntries.length > 0 ? targetedEntries : runs;
+  for (const entry of entriesToPrint) {
+    console.log(formatEntrySummary(entry));
+  }
+  process.exit(0);
+}
 
 if (targetedEntries.length > 0) {
   if (passthroughRequiresSingleRun && targetedEntries.length > 1) {

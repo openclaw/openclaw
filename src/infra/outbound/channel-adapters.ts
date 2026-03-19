@@ -1,16 +1,15 @@
-import type { TopLevelComponents } from "@buape/carbon";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
+import type { ChannelId, ChannelStructuredComponents } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
-export type CrossContextComponentsBuilder = (message: string) => TopLevelComponents[];
+export type CrossContextComponentsBuilder = (message: string) => ChannelStructuredComponents;
 
 export type CrossContextComponentsFactory = (params: {
   originLabel: string;
   message: string;
   cfg: OpenClawConfig;
   accountId?: string | null;
-}) => TopLevelComponents[];
+}) => ChannelStructuredComponents;
 
 export type ChannelMessageAdapter = {
   supportsComponentsV2: boolean;

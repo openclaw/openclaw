@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/slack";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { slackOutbound } from "./outbound-adapter.js";
 
 const handleSlackActionMock = vi.fn();
 
@@ -168,6 +170,101 @@ describe("slackPlugin outbound", () => {
       }),
     );
     expect(result).toEqual({ channel: "slack", messageId: "m-media-local" });
+  });
+
+  it("sends block payload media first, then the final block message", async () => {
+    const sendSlack = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m-media-1" })
+      .mockResolvedValueOnce({ messageId: "m-media-2" })
+      .mockResolvedValueOnce({ messageId: "m-final" });
+    const sendPayload = slackOutbound.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    const result = await sendPayload!({
+      cfg,
+      to: "C999",
+      text: "",
+      payload: {
+        text: "hello",
+        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
+        channelData: {
+          slack: {
+            blocks: [
+              {
+                type: "section",
+                text: {
+                  type: "plain_text",
+                  text: "Block body",
+                },
+              },
+            ],
+          },
+        },
+      },
+      accountId: "default",
+      deps: { sendSlack },
+      mediaLocalRoots: ["/tmp/media"],
+    });
+
+    expect(sendSlack).toHaveBeenCalledTimes(3);
+    expect(sendSlack).toHaveBeenNthCalledWith(
+      1,
+      "C999",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/1.png",
+        mediaLocalRoots: ["/tmp/media"],
+      }),
+    );
+    expect(sendSlack).toHaveBeenNthCalledWith(
+      2,
+      "C999",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/2.png",
+        mediaLocalRoots: ["/tmp/media"],
+      }),
+    );
+    expect(sendSlack).toHaveBeenNthCalledWith(
+      3,
+      "C999",
+      "hello",
+      expect.objectContaining({
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "plain_text",
+              text: "Block body",
+            },
+          },
+        ],
+      }),
+    );
+    expect(result).toEqual({ channel: "slack", messageId: "m-final" });
+  });
+});
+
+describe("slackPlugin directory", () => {
+  it("lists configured peers without throwing a ReferenceError", async () => {
+    const listPeers = slackPlugin.directory?.listPeers;
+    expect(listPeers).toBeDefined();
+
+    await expect(
+      listPeers!({
+        cfg: {
+          channels: {
+            slack: {
+              dms: {
+                U123: {},
+              },
+            },
+          },
+        },
+        runtime: createRuntimeEnv(),
+      }),
+    ).resolves.toEqual([{ id: "user:u123", kind: "user" }]);
   });
 });
 
