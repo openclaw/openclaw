@@ -191,8 +191,8 @@
     bottom: 10px;
     width: 3px;
     border-radius: 999px;
-    background: color-mix(in srgb, #2de3d1 86%, transparent);
-    box-shadow: 0 0 14px color-mix(in srgb, #2de3d1 34%, transparent);
+    background: color-mix(in srgb, var(--accent) 86%, transparent);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
   }
 
   .sidebar--collapsed .sidebar-shell__footer {
@@ -214,6 +214,10 @@
     min-height: 44px;
     padding: 0;
     justify-content: center;
+  }
+
+  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-mode-switch {
+    display: none;
   }
 }
 
@@ -244,7 +248,7 @@
   }
 
   .topnav-shell__content {
-    order: 3;
+    display: none;
     width: 100%;
   }
 
@@ -275,7 +279,17 @@
   }
 
   .topbar-theme-mode {
-    flex-shrink: 0;
+    display: none;
+  }
+
+  .sidebar-mode-switch {
+    display: block;
+  }
+
+  .sidebar-mode-switch .topbar-theme-mode {
+    display: inline-flex;
+    width: 100%;
+    justify-content: center;
   }
 
   .topbar-status .pill {

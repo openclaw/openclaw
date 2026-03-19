@@ -1,7 +1,12 @@
 import path from "node:path";
+import { isPathInside } from "../../infra/path-guards.js";
 import type { SandboxBackendCommandParams, SandboxBackendCommandResult } from "./backend.js";
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.js";
+import {
+  isPathInsideContainerRoot,
+  normalizeContainerPath as normalizeSandboxContainerPath,
+} from "./path-utils.js";
 import type { SandboxContext } from "./types.js";
 
 type ResolvedRemotePath = SandboxResolvedPath & {
@@ -496,21 +501,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
 }
 
 function normalizeContainerPath(value: string): string {
-  const normalized = path.posix.normalize(value.trim() || "/");
+  const normalized = normalizeSandboxContainerPath(value.trim() || "/");
   return normalized.startsWith("/") ? normalized : `/${normalized}`;
-}
-
-function isPathInsideContainerRoot(root: string, candidate: string): boolean {
-  const normalizedRoot = normalizeContainerPath(root);
-  const normalizedCandidate = normalizeContainerPath(candidate);
-  return (
-    normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}/`)
-  );
-}
-
-function isPathInside(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function toPosixRelative(root: string, candidate: string): string {

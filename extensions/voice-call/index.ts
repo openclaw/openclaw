@@ -1,8 +1,9 @@
 import { Type } from "@sinclair/typebox";
-import type {
-  GatewayRequestHandlerOptions,
-  OpenClawPluginApi,
-} from "openclaw/plugin-sdk/voice-call";
+import {
+  definePluginEntry,
+  type GatewayRequestHandlerOptions,
+  type OpenClawPluginApi,
+} from "./api.js";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
   VoiceCallConfigSchema,
@@ -143,7 +144,7 @@ const VoiceCallToolSchema = Type.Union([
   }),
 ]);
 
-const voiceCallPlugin = {
+export default definePluginEntry({
   id: "voice-call",
   name: "Voice Call",
   description: "Voice-call plugin with Telnyx/Twilio/Plivo providers",
@@ -560,6 +561,4 @@ const voiceCallPlugin = {
       },
     });
   },
-};
-
-export default voiceCallPlugin;
+});

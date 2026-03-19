@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import {
   buildPairedProviderApiKeyCatalog,
   buildSingleProviderApiKeyCatalog,
@@ -7,12 +8,12 @@ import {
 } from "./provider-catalog.js";
 import type { ProviderCatalogContext } from "./types.js";
 
-function createProviderConfig(params?: { provider?: string; baseUrl?: string }) {
+function createProviderConfig(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
-    api: "openai-completions" as const,
-    provider: params?.provider ?? "test-provider",
-    baseUrl: params?.baseUrl ?? "https://default.example/v1",
+    api: "openai-completions",
+    baseUrl: "https://default.example/v1",
     models: [],
+    ...overrides,
   };
 }
 
@@ -25,6 +26,11 @@ function createCatalogContext(params: {
     env: {},
     resolveProviderApiKey: (providerId) => ({
       apiKey: providerId ? params.apiKeys?.[providerId] : undefined,
+    }),
+    resolveProviderAuth: (providerId) => ({
+      apiKey: providerId ? params.apiKeys?.[providerId] : undefined,
+      mode: providerId && params.apiKeys?.[providerId] ? "api_key" : "none",
+      source: providerId && params.apiKeys?.[providerId] ? "env" : "none",
     }),
   };
 }
@@ -67,7 +73,6 @@ describe("buildSingleProviderApiKeyCatalog", () => {
         api: "openai-completions",
         baseUrl: "https://default.example/v1",
         models: [],
-        provider: "test-provider",
         apiKey: "secret-key",
       },
     });
@@ -89,10 +94,7 @@ describe("buildSingleProviderApiKeyCatalog", () => {
         },
       }),
       providerId: "test-provider",
-      buildProvider: () => ({
-        ...createProviderConfig(),
-        baseUrl: "https://default.example/v1",
-      }),
+      buildProvider: () => createProviderConfig(),
       allowExplicitBaseUrl: true,
     });
 
@@ -101,7 +103,6 @@ describe("buildSingleProviderApiKeyCatalog", () => {
         api: "openai-completions",
         baseUrl: "https://override.example/v1/",
         models: [],
-        provider: "test-provider",
         apiKey: "secret-key",
       },
     });
@@ -114,8 +115,8 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       }),
       providerId: "test-provider",
       buildProviders: async () => ({
-        alpha: createProviderConfig({ provider: "alpha" }),
-        beta: createProviderConfig({ provider: "beta" }),
+        alpha: createProviderConfig(),
+        beta: createProviderConfig(),
       }),
     });
 
@@ -125,14 +126,12 @@ describe("buildSingleProviderApiKeyCatalog", () => {
           api: "openai-completions",
           baseUrl: "https://default.example/v1",
           models: [],
-          provider: "alpha",
           apiKey: "secret-key",
         },
         beta: {
           api: "openai-completions",
           baseUrl: "https://default.example/v1",
           models: [],
-          provider: "beta",
           apiKey: "secret-key",
         },
       },

@@ -1,18 +1,16 @@
-import { normalizeGoogleModelId } from "../../src/agents/model-id-normalization.js";
-import { parseGeminiAuth } from "../../src/infra/gemini-auth.js";
-import { describeImageWithModel } from "../../src/media-understanding/providers/image.js";
 import {
   assertOkOrThrowHttpError,
+  describeImageWithModel,
+  describeImagesWithModel,
   normalizeBaseUrl,
   postJsonRequest,
-} from "../../src/media-understanding/providers/shared.js";
-import type {
-  AudioTranscriptionRequest,
-  AudioTranscriptionResult,
-  MediaUnderstandingProvider,
-  VideoDescriptionRequest,
-  VideoDescriptionResult,
-} from "../../src/media-understanding/types.js";
+  type AudioTranscriptionRequest,
+  type AudioTranscriptionResult,
+  type MediaUnderstandingProvider,
+  type VideoDescriptionRequest,
+  type VideoDescriptionResult,
+} from "openclaw/plugin-sdk/media-understanding";
+import { normalizeGoogleModelId, parseGeminiAuth } from "./runtime-api.js";
 
 export const DEFAULT_GOOGLE_AUDIO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 export const DEFAULT_GOOGLE_VIDEO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
@@ -145,6 +143,7 @@ export const googleMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "google",
   capabilities: ["image", "audio", "video"],
   describeImage: describeImageWithModel,
+  describeImages: describeImagesWithModel,
   transcribeAudio: transcribeGeminiAudio,
   describeVideo: describeGeminiVideo,
 };

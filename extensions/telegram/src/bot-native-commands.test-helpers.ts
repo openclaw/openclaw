@@ -2,11 +2,15 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { MockFn } from "openclaw/plugin-sdk/test-utils";
+import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { vi } from "vitest";
+import {
+  createNativeCommandTestParams,
+  type NativeCommandTestParams,
+} from "./bot-native-commands.fixture-test-support.js";
+import type { RegisterTelegramNativeCommandsParams } from "./bot-native-commands.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 
-type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNativeCommands>[0];
 type GetPluginCommandSpecsFn =
   typeof import("openclaw/plugin-sdk/plugin-runtime").getPluginCommandSpecs;
 type MatchPluginCommandFn = typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand;
@@ -26,13 +30,7 @@ type NativeCommandHarness = {
   sendMessage: AnyAsyncMock;
   setMyCommands: AnyAsyncMock;
   log: AnyMock;
-  bot: {
-    api: {
-      setMyCommands: AnyAsyncMock;
-      sendMessage: AnyAsyncMock;
-    };
-    command: (name: string, handler: (ctx: unknown) => Promise<void>) => void;
-  };
+  bot: RegisterTelegramNativeCommandsParams["bot"];
 };
 
 const pluginCommandMocks = vi.hoisted(() => ({
@@ -67,70 +65,37 @@ const replyPipelineMocks = vi.hoisted(() => {
 export const dispatchReplyWithBufferedBlockDispatcher =
   replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher;
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  finalizeInboundContext: replyPipelineMocks.finalizeInboundContext,
-}));
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  dispatchReplyWithBufferedBlockDispatcher:
-    replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
-}));
-vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
-  createReplyPrefixOptions: replyPipelineMocks.createReplyPrefixOptions,
-}));
-vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
-  recordInboundSessionMetaSafe: replyPipelineMocks.recordInboundSessionMetaSafe,
-}));
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    finalizeInboundContext: replyPipelineMocks.finalizeInboundContext,
+    dispatchReplyWithBufferedBlockDispatcher:
+      replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
+  };
+});
+vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
+  return {
+    ...actual,
+    createReplyPrefixOptions: replyPipelineMocks.createReplyPrefixOptions,
+    recordInboundSessionMetaSafe: replyPipelineMocks.recordInboundSessionMetaSafe,
+  };
+});
 
 const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn(async () => {}),
 }));
 export const deliverReplies = deliveryMocks.deliverReplies;
 vi.mock("./bot/delivery.js", () => ({ deliverReplies: deliveryMocks.deliverReplies }));
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  readChannelAllowFromStore: vi.fn(async () => []),
-}));
-
-export function createNativeCommandTestParams(
-  params: Partial<RegisterTelegramNativeCommandsParams> = {},
-): RegisterTelegramNativeCommandsParams {
-  const log = vi.fn();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
-    bot:
-      params.bot ??
-      ({
-        api: {
-          setMyCommands: vi.fn().mockResolvedValue(undefined),
-          sendMessage: vi.fn().mockResolvedValue(undefined),
-        },
-        command: vi.fn(),
-      } as unknown as RegisterTelegramNativeCommandsParams["bot"]),
-    cfg: params.cfg ?? ({} as OpenClawConfig),
-    runtime:
-      params.runtime ?? ({ log } as unknown as RegisterTelegramNativeCommandsParams["runtime"]),
-    accountId: params.accountId ?? "default",
-    telegramCfg: params.telegramCfg ?? ({} as RegisterTelegramNativeCommandsParams["telegramCfg"]),
-    allowFrom: params.allowFrom ?? [],
-    groupAllowFrom: params.groupAllowFrom ?? [],
-    replyToMode: params.replyToMode ?? "off",
-    textLimit: params.textLimit ?? 4000,
-    useAccessGroups: params.useAccessGroups ?? false,
-    nativeEnabled: params.nativeEnabled ?? true,
-    nativeSkillsEnabled: params.nativeSkillsEnabled ?? false,
-    nativeDisabledExplicit: params.nativeDisabledExplicit ?? false,
-    resolveGroupPolicy:
-      params.resolveGroupPolicy ??
-      (() =>
-        ({
-          allowlistEnabled: false,
-          allowed: true,
-        }) as ReturnType<RegisterTelegramNativeCommandsParams["resolveGroupPolicy"]>),
-    resolveTelegramGroupConfig:
-      params.resolveTelegramGroupConfig ??
-      (() => ({ groupConfig: undefined, topicConfig: undefined })),
-    shouldSkipUpdate: params.shouldSkipUpdate ?? (() => false),
-    opts: params.opts ?? { token: "token" },
+    ...actual,
+    readChannelAllowFromStore: vi.fn(async () => []),
   };
-}
+});
+export { createNativeCommandTestParams };
 
 export function createNativeCommandsHarness(params?: {
   cfg?: OpenClawConfig;
@@ -147,7 +112,17 @@ export function createNativeCommandsHarness(params?: {
   const sendMessage: AnyAsyncMock = vi.fn(async () => undefined);
   const setMyCommands: AnyAsyncMock = vi.fn(async () => undefined);
   const log: AnyMock = vi.fn();
-  const bot: NativeCommandHarness["bot"] = {
+  const telegramDeps = {
+    loadConfig: vi.fn(() => params?.cfg ?? ({} as OpenClawConfig)),
+    resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/sessions.json"),
+    readChannelAllowFromStore: vi.fn(async () => []),
+    enqueueSystemEvent: vi.fn(),
+    dispatchReplyWithBufferedBlockDispatcher:
+      replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
+    listSkillCommandsForAgents: vi.fn(() => []),
+    wasSentByBot: vi.fn(() => false),
+  };
+  const bot = {
     api: {
       setMyCommands,
       sendMessage,
@@ -155,10 +130,10 @@ export function createNativeCommandsHarness(params?: {
     command: (name: string, handler: (ctx: unknown) => Promise<void>) => {
       handlers[name] = handler;
     },
-  } as const;
+  } as unknown as RegisterTelegramNativeCommandsParams["bot"];
 
   registerTelegramNativeCommands({
-    bot: bot as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+    bot,
     cfg: params?.cfg ?? ({} as OpenClawConfig),
     runtime: params?.runtime ?? ({ log } as unknown as RuntimeEnv),
     accountId: "default",
@@ -171,6 +146,7 @@ export function createNativeCommandsHarness(params?: {
     nativeEnabled: params?.nativeEnabled ?? true,
     nativeSkillsEnabled: false,
     nativeDisabledExplicit: false,
+    telegramDeps,
     resolveGroupPolicy:
       params?.resolveGroupPolicy ??
       (() =>

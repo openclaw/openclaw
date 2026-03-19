@@ -1,6 +1,6 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { ConfiguredBindingRule } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { AgentAcpBinding } from "../../config/types.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
@@ -170,6 +170,10 @@ export type ChannelOutboundAdapter = {
   ) => Promise<OutboundDeliveryResult>;
   sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
+  /**
+   * Shared outbound poll adapter for channels that fit the common poll model.
+   * Channels with extra poll semantics should prefer `actions.handleAction("poll")`.
+   */
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;
 };
 
@@ -541,24 +545,26 @@ export type ChannelAllowlistAdapter = {
   supportsScope?: (params: { scope: "dm" | "group" | "all" }) => boolean;
 };
 
-export type ChannelAcpBindingAdapter = {
-  normalizeConfiguredBindingTarget?: (params: {
-    binding: AgentAcpBinding;
+export type ChannelConfiguredBindingConversationRef = {
+  conversationId: string;
+  parentConversationId?: string;
+};
+
+export type ChannelConfiguredBindingMatch = ChannelConfiguredBindingConversationRef & {
+  matchPriority?: number;
+};
+
+export type ChannelConfiguredBindingProvider = {
+  compileConfiguredBinding: (params: {
+    binding: ConfiguredBindingRule;
     conversationId: string;
-  }) => {
+  }) => ChannelConfiguredBindingConversationRef | null;
+  matchInboundConversation: (params: {
+    binding: ConfiguredBindingRule;
+    compiledBinding: ChannelConfiguredBindingConversationRef;
     conversationId: string;
     parentConversationId?: string;
-  } | null;
-  matchConfiguredBinding?: (params: {
-    binding: AgentAcpBinding;
-    bindingConversationId: string;
-    conversationId: string;
-    parentConversationId?: string;
-  }) => {
-    conversationId: string;
-    parentConversationId?: string;
-    matchPriority?: number;
-  } | null;
+  }) => ChannelConfiguredBindingMatch | null;
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {

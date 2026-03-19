@@ -4,20 +4,21 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/core";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import {
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   listProfilesForProvider,
-  loginOpenAICodexOAuth,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/provider-auth";
+import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
 import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
   normalizeProviderId,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-models";
+import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import {
@@ -248,6 +249,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         transport: "auto",
       };
     },
+    wrapStreamFn: (ctx) => createOpenAIAttributionHeadersWrapper(ctx.streamFn),
     normalizeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
         return undefined;

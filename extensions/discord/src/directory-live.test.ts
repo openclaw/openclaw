@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DirectoryConfigParams } from "../../../src/channels/plugins/directory-config.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { DirectoryConfigParams } from "../../../src/plugin-sdk/directory-runtime.js";
 import { listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive } from "./directory-live.js";
 
 function makeParams(overrides: Partial<DirectoryConfigParams> = {}): DirectoryConfigParams {

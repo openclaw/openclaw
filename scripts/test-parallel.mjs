@@ -20,6 +20,9 @@ const unitIsolatedFilesRaw = [
   "src/auto-reply/tool-meta.test.ts",
   "src/auto-reply/envelope.test.ts",
   "src/commands/auth-choice.test.ts",
+  // Provider runtime contract imports plugin runtimes plus async ESM mocks;
+  // keep it off the shared fast lane to avoid teardown stalls on this host.
+  "src/plugins/contracts/runtime.contract.test.ts",
   // Process supervision + docker setup suites are stable but setup-heavy.
   "src/process/supervisor/supervisor.test.ts",
   "src/docker-setup.test.ts",
@@ -93,6 +96,34 @@ const unitIsolatedFilesRaw = [
   "src/infra/git-commit.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
+const unitSingletonIsolatedFilesRaw = [
+  // These pass clean in isolation but can hang on fork shutdown after sharing
+  // the broad unit-fast lane on this host; keep them in dedicated processes.
+  "src/cli/command-secret-gateway.test.ts",
+];
+const unitSingletonIsolatedFiles = unitSingletonIsolatedFilesRaw.filter((file) =>
+  fs.existsSync(file),
+);
+const unitThreadSingletonFilesRaw = [
+  // These suites terminate cleanly under the threads pool but can hang during
+  // forks worker shutdown on this host.
+  "src/channels/plugins/actions/actions.test.ts",
+  "src/infra/outbound/deliver.test.ts",
+  "src/infra/outbound/deliver.lifecycle.test.ts",
+  "src/infra/outbound/message.channels.test.ts",
+  "src/infra/outbound/message-action-runner.poll.test.ts",
+  "src/tts/tts.test.ts",
+];
+const unitThreadSingletonFiles = unitThreadSingletonFilesRaw.filter((file) => fs.existsSync(file));
+const unitVmForkSingletonFilesRaw = [
+  "src/channels/plugins/contracts/inbound.telegram.contract.test.ts",
+];
+const unitVmForkSingletonFiles = unitVmForkSingletonFilesRaw.filter((file) => fs.existsSync(file));
+const groupedUnitIsolatedFiles = unitIsolatedFiles.filter(
+  (file) => !unitSingletonIsolatedFiles.includes(file) && !unitThreadSingletonFiles.includes(file),
+);
+const channelSingletonFilesRaw = [];
+const channelSingletonFiles = channelSingletonFilesRaw.filter((file) => fs.existsSync(file));
 
 const children = new Set();
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
@@ -139,20 +170,60 @@ const runs = [
             "vitest.unit.config.ts",
             `--pool=${useVmForks ? "vmForks" : "forks"}`,
             ...(disableIsolation ? ["--isolate=false"] : []),
-            ...unitIsolatedFiles.flatMap((file) => ["--exclude", file]),
+            ...[
+              ...unitIsolatedFiles,
+              ...unitSingletonIsolatedFiles,
+              ...unitThreadSingletonFiles,
+              ...unitVmForkSingletonFiles,
+            ].flatMap((file) => ["--exclude", file]),
           ],
         },
-        {
-          name: "unit-isolated",
+        ...(groupedUnitIsolatedFiles.length > 0
+          ? [
+              {
+                name: "unit-isolated",
+                args: [
+                  "vitest",
+                  "run",
+                  "--config",
+                  "vitest.unit.config.ts",
+                  "--pool=forks",
+                  ...groupedUnitIsolatedFiles,
+                ],
+              },
+            ]
+          : []),
+        ...unitSingletonIsolatedFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-isolated`,
           args: [
             "vitest",
             "run",
             "--config",
             "vitest.unit.config.ts",
-            "--pool=forks",
-            ...unitIsolatedFiles,
+            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            file,
           ],
-        },
+        })),
+        ...unitThreadSingletonFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-threads`,
+          args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=threads", file],
+        })),
+        ...unitVmForkSingletonFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-vmforks`,
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.unit.config.ts",
+            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            ...(disableIsolation ? ["--isolate=false"] : []),
+            file,
+          ],
+        })),
+        ...channelSingletonFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-channels-isolated`,
+          args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
+        })),
       ]
     : [
         {
@@ -296,6 +367,10 @@ const parsePassthroughArgs = (args) => {
 };
 const { fileFilters: passthroughFileFilters, optionArgs: passthroughOptionArgs } =
   parsePassthroughArgs(passthroughArgs);
+const countExplicitEntryFilters = (entryArgs) => {
+  const { fileFilters } = parsePassthroughArgs(entryArgs.slice(2));
+  return fileFilters.length > 0 ? fileFilters.length : null;
+};
 const passthroughRequiresSingleRun = passthroughOptionArgs.some((arg) => {
   if (!arg.startsWith("-")) {
     return false;
@@ -380,9 +455,25 @@ const resolveFilterMatches = (fileFilter) => {
   }
   return allKnownTestFiles.filter((file) => file.includes(normalizedFilter));
 };
+const isVmForkSingletonUnitFile = (fileFilter) => unitVmForkSingletonFiles.includes(fileFilter);
+const isThreadSingletonUnitFile = (fileFilter) => unitThreadSingletonFiles.includes(fileFilter);
 const createTargetedEntry = (owner, isolated, filters) => {
   const name = isolated ? `${owner}-isolated` : owner;
   const forceForks = isolated;
+  if (owner === "unit-vmforks") {
+    return {
+      name,
+      args: [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.unit.config.ts",
+        `--pool=${useVmForks ? "vmForks" : "forks"}`,
+        ...(disableIsolation ? ["--isolate=false"] : []),
+        ...filters,
+      ],
+    };
+  }
   if (owner === "unit") {
     return {
       name,
@@ -395,6 +486,12 @@ const createTargetedEntry = (owner, isolated, filters) => {
         ...(disableIsolation ? ["--isolate=false"] : []),
         ...filters,
       ],
+    };
+  }
+  if (owner === "unit-threads") {
+    return {
+      name,
+      args: ["vitest", "run", "--config", "vitest.unit.config.ts", "--pool=threads", ...filters],
     };
   }
   if (owner === "extensions") {
@@ -424,7 +521,7 @@ const createTargetedEntry = (owner, isolated, filters) => {
         "run",
         "--config",
         "vitest.channels.config.ts",
-        ...(forceForks ? ["--pool=forks"] : []),
+        ...(forceForks ? ["--pool=forks"] : useVmForks ? ["--pool=vmForks"] : []),
         ...filters,
       ],
     };
@@ -460,16 +557,27 @@ const targetedEntries = (() => {
   const groups = passthroughFileFilters.reduce((acc, fileFilter) => {
     const matchedFiles = resolveFilterMatches(fileFilter);
     if (matchedFiles.length === 0) {
-      const target = inferTarget(normalizeRepoPath(fileFilter));
-      const key = `${target.owner}:${target.isolated ? "isolated" : "default"}`;
+      const normalizedFile = normalizeRepoPath(fileFilter);
+      const target = inferTarget(normalizedFile);
+      const owner = isThreadSingletonUnitFile(normalizedFile)
+        ? "unit-threads"
+        : isVmForkSingletonUnitFile(normalizedFile)
+          ? "unit-vmforks"
+          : target.owner;
+      const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
-      files.push(normalizeRepoPath(fileFilter));
+      files.push(normalizedFile);
       acc.set(key, files);
       return acc;
     }
     for (const matchedFile of matchedFiles) {
       const target = inferTarget(matchedFile);
-      const key = `${target.owner}:${target.isolated ? "isolated" : "default"}`;
+      const owner = isThreadSingletonUnitFile(matchedFile)
+        ? "unit-threads"
+        : isVmForkSingletonUnitFile(matchedFile)
+          ? "unit-vmforks"
+          : target.owner;
+      const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
       files.push(matchedFile);
       acc.set(key, files);
@@ -481,7 +589,10 @@ const targetedEntries = (() => {
     return createTargetedEntry(owner, mode === "isolated", [...new Set(filters)]);
   });
 })();
-const topLevelParallelEnabled = testProfile !== "low" && testProfile !== "serial";
+// Node 25 local runs still show cross-process worker shutdown contention even
+// after moving the known heavy files into singleton lanes.
+const topLevelParallelEnabled =
+  testProfile !== "low" && testProfile !== "serial" && !(!isCI && nodeMajor >= 25);
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
@@ -650,15 +761,35 @@ const runOnce = (entry, extraArgs = []) =>
   });
 
 const run = async (entry, extraArgs = []) => {
-  if (shardCount <= 1) {
+  const explicitFilterCount = countExplicitEntryFilters(entry.args);
+  // Wrapper-generated singleton/small-file lanes should not ask Vitest to shard
+  // into more buckets than there are explicit test filters.
+  const effectiveShardCount =
+    explicitFilterCount === null ? shardCount : Math.min(shardCount, explicitFilterCount);
+
+  if (effectiveShardCount <= 1) {
+    if (shardIndexOverride !== null && shardIndexOverride > effectiveShardCount) {
+      return 0;
+    }
     return runOnce(entry, extraArgs);
   }
   if (shardIndexOverride !== null) {
-    return runOnce(entry, ["--shard", `${shardIndexOverride}/${shardCount}`, ...extraArgs]);
+    if (shardIndexOverride > effectiveShardCount) {
+      return 0;
+    }
+    return runOnce(entry, [
+      "--shard",
+      `${shardIndexOverride}/${effectiveShardCount}`,
+      ...extraArgs,
+    ]);
   }
-  for (let shardIndex = 1; shardIndex <= shardCount; shardIndex += 1) {
+  for (let shardIndex = 1; shardIndex <= effectiveShardCount; shardIndex += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const code = await runOnce(entry, ["--shard", `${shardIndex}/${shardCount}`, ...extraArgs]);
+    const code = await runOnce(entry, [
+      "--shard",
+      `${shardIndex}/${effectiveShardCount}`,
+      ...extraArgs,
+    ]);
     if (code !== 0) {
       return code;
     }

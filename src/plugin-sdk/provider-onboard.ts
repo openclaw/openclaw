@@ -13,4 +13,4 @@ export {
   applyProviderConfigWithDefaultModels,
   applyProviderConfigWithModelCatalog,
 } from "../plugins/provider-onboarding-config.js";
-export { ensureModelAllowlistEntry } from "../commands/model-allowlist.js";
+export { ensureModelAllowlistEntry } from "../plugins/provider-model-allowlist.js";

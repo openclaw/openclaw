@@ -24,7 +24,7 @@ vi.mock("../../agents/session-write-lock.js", () => ({
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
-    { provider: "minimax", id: "m2.5", name: "M2.5" },
+    { provider: "minimax", id: "m2.7", name: "M2.7" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
   ]),
 }));
@@ -1288,7 +1288,7 @@ describe("applyResetModelOverride", () => {
     });
 
     expect(sessionEntry.providerOverride).toBe("minimax");
-    expect(sessionEntry.modelOverride).toBe("m2.5");
+    expect(sessionEntry.modelOverride).toBe("m2.7");
     expect(sessionCtx.BodyStripped).toBe("summarize");
   });
 
@@ -1411,6 +1411,63 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           RawBody: testCase.body,
           CommandBody: testCase.body,
           From: "user-overrides",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry, testCase.name).toMatchObject(overrides);
+    }
+  });
+
+  it("preserves selected auth profile overrides across /new and /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-model-auth-");
+    const sessionKey = "agent:main:telegram:dm:user-model-auth";
+    const existingSessionId = "existing-session-model-auth";
+    const overrides = {
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      authProfileOverride: "20251001",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 2,
+    } as const;
+    const cases = [
+      {
+        name: "new preserves selected auth profile overrides",
+        body: "/new",
+      },
+      {
+        name: "reset preserves selected auth profile overrides",
+        body: "/reset",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...overrides },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-model-auth",
           To: "bot",
           ChatType: "direct",
           SessionKey: sessionKey,

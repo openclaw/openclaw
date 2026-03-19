@@ -4,7 +4,7 @@ import {
   abortStartedAccount,
   expectPendingUntilAbort,
   startAccountAndTrackLifecycle,
-} from "../../test-utils/start-account-lifecycle.js";
+} from "../../../test/helpers/extensions/start-account-lifecycle.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({

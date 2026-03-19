@@ -52,6 +52,17 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI
   - No real keys required
   - Should be fast and stable
+- Embedded runner note:
+  - When you change message-tool discovery inputs or compaction runtime context,
+    keep both levels of coverage.
+  - Add focused helper regressions for pure routing/normalization boundaries.
+  - Also keep the embedded runner integration suites healthy:
+    `src/agents/pi-embedded-runner/compact.hooks.test.ts`,
+    `src/agents/pi-embedded-runner/run.overflow-compaction.test.ts`, and
+    `src/agents/pi-embedded-runner/run.overflow-compaction.loop.test.ts`.
+  - Those suites verify that scoped ids and compaction behavior still flow
+    through the real `run.ts` / `compact.ts` paths; helper-only tests are not a
+    sufficient substitute for those integration paths.
 - Pool note:
   - OpenClaw uses Vitest `vmForks` on Node 22, 23, and 24 for faster unit shards.
   - On Node 25+, OpenClaw automatically falls back to regular `forks` until the repo is re-validated there.
@@ -165,7 +176,7 @@ Live tests are split into two layers so we can isolate failures:
   - Separates “provider API is broken / key is invalid” from “gateway agent pipeline is broken”
   - Contains small, isolated regressions (example: OpenAI Responses/Codex Responses reasoning replay + tool-call flows)
 
-### Layer 2: Gateway + dev agent smoke (what “@openclaw” actually does)
+### Layer 2: Gateway + dev agent smoke (what "@openclaw" actually does)
 
 - Test: `src/gateway/gateway-models.profiles.live.test.ts`
 - Goal:
@@ -360,7 +371,31 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Enable: `BYTEPLUS_API_KEY=... BYTEPLUS_LIVE_TEST=1 pnpm test:live src/agents/byteplus.live.test.ts`
 - Optional model override: `BYTEPLUS_CODING_MODEL=ark-code-latest`
 
-## Docker runners (optional “works in Linux” checks)
+## Image generation live
+
+- Test: `src/image-generation/runtime.live.test.ts`
+- Command: `pnpm test:live src/image-generation/runtime.live.test.ts`
+- Scope:
+  - Enumerates every registered image-generation provider plugin
+  - Loads missing provider env vars from your login shell (`~/.profile`) before probing
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
+  - Skips providers with no usable auth/profile/model
+  - Runs the stock image-generation variants through the shared runtime capability:
+    - `google:flash-generate`
+    - `google:pro-generate`
+    - `google:pro-edit`
+    - `openai:default-generate`
+- Current bundled providers covered:
+  - `openai`
+  - `google`
+- Optional narrowing:
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="openai,google"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-1,google/gemini-3.1-flash-image-preview"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit"`
+- Optional auth behavior:
+  - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
+
+## Docker runners (optional "works in Linux" checks)
 
 These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). They also bind-mount CLI auth homes like `~/.codex`, `~/.claude`, `~/.qwen`, and `~/.minimax` when present, then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 

@@ -339,6 +339,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       providerIds: [],
       speechProviderIds: [],
       mediaUnderstandingProviderIds: [],
+      imageGenerationProviderIds: [],
       webSearchProviderIds: [],
       gatewayMethods: [],
       cliCommands: [],

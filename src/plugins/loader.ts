@@ -11,6 +11,7 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
+import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
@@ -287,6 +288,18 @@ const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
   return aliasMap;
 };
 
+function shouldPreferNativeJiti(modulePath: string): boolean {
+  switch (path.extname(modulePath).toLowerCase()) {
+    case ".js":
+    case ".mjs":
+    case ".cjs":
+    case ".json":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export const __testing = {
   buildPluginLoaderJitiOptions,
   listPluginSdkAliasCandidates,
@@ -294,6 +307,7 @@ export const __testing = {
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
+  shouldPreferNativeJiti,
   maxPluginRegistryCacheEntries: MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
 };
 
@@ -496,6 +510,7 @@ function createPluginRecord(params: {
     providerIds: [],
     speechProviderIds: [],
     mediaUnderstandingProviderIds: [],
+    imageGenerationProviderIds: [],
     webSearchProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
@@ -847,18 +862,28 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   }
 
   // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
-  let jitiLoader: ReturnType<typeof createJiti> | null = null;
-  const getJiti = () => {
-    if (jitiLoader) {
-      return jitiLoader;
+  const jitiLoaders = new Map<boolean, ReturnType<typeof createJiti>>();
+  const getJiti = (modulePath: string) => {
+    const tryNative = shouldPreferNativeJiti(modulePath);
+    const cached = jitiLoaders.get(tryNative);
+    if (cached) {
+      return cached;
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
     const aliasMap = {
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
       ...resolvePluginSdkScopedAliasMap(),
     };
-    jitiLoader = createJiti(import.meta.url, buildPluginLoaderJitiOptions(aliasMap));
-    return jitiLoader;
+    const loader = createJiti(import.meta.url, {
+      ...buildPluginLoaderJitiOptions(aliasMap),
+      // Source .ts runtime shims import sibling ".js" specifiers that only exist
+      // after build. Disable native loading for source entries so Jiti rewrites
+      // those imports against the source graph, while keeping native dist/*.js
+      // loading for the canonical built module graph.
+      tryNative,
+    });
+    jitiLoaders.set(tryNative, loader);
+    return loader;
   };
 
   let createPluginRuntimeFactory: ((options?: CreatePluginRuntimeOptions) => PluginRuntime) | null =
@@ -873,7 +898,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (!runtimeModulePath) {
       throw new Error("Unable to resolve plugin runtime module");
     }
-    const runtimeModule = getJiti()(runtimeModulePath) as {
+    const runtimeModule = getJiti(runtimeModulePath)(runtimeModulePath) as {
       createPluginRuntime?: (options?: CreatePluginRuntimeOptions) => PluginRuntime;
     };
     if (typeof runtimeModule.createPluginRuntime !== "function") {
@@ -1033,6 +1058,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       origin: candidate.origin,
       config: normalized,
       rootConfig: cfg,
+      enabledByDefault: manifestRecord.enabledByDefault,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
@@ -1099,12 +1125,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const unsupportedCapabilities = (record.bundleCapabilities ?? []).filter(
         (capability) =>
           capability !== "skills" &&
+          capability !== "mcpServers" &&
           capability !== "settings" &&
           !(
-            capability === "commands" &&
+            (capability === "commands" ||
+              capability === "agents" ||
+              capability === "outputStyles" ||
+              capability === "lspServers") &&
             (record.bundleFormat === "claude" || record.bundleFormat === "cursor")
           ) &&
-          !(capability === "hooks" && record.bundleFormat === "codex"),
+          !(
+            capability === "hooks" &&
+            (record.bundleFormat === "codex" || record.bundleFormat === "claude")
+          ),
       );
       for (const capability of unsupportedCapabilities) {
         registry.diagnostics.push({
@@ -1113,6 +1146,36 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           source: record.source,
           message: `bundle capability detected but not wired into OpenClaw yet: ${capability}`,
         });
+      }
+      if (
+        enableState.enabled &&
+        record.rootDir &&
+        record.bundleFormat &&
+        (record.bundleCapabilities ?? []).includes("mcpServers")
+      ) {
+        const runtimeSupport = inspectBundleMcpRuntimeSupport({
+          pluginId: record.id,
+          rootDir: record.rootDir,
+          bundleFormat: record.bundleFormat,
+        });
+        for (const message of runtimeSupport.diagnostics) {
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message,
+          });
+        }
+        if (runtimeSupport.unsupportedServerNames.length > 0) {
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message:
+              "bundle MCP servers use unsupported transports or incomplete configs " +
+              `(stdio only today): ${runtimeSupport.unsupportedServerNames.join(", ")}`,
+          });
+        }
       }
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
@@ -1168,7 +1231,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti()(safeSource) as OpenClawPluginModule;
+      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,

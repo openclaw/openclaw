@@ -1,5 +1,5 @@
-import type { OpenClawConfig, PluginRuntime, ReplyPayload } from "openclaw/plugin-sdk/mattermost";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/mattermost";
+import type { OpenClawConfig, PluginRuntime, ReplyPayload } from "../runtime-api.js";
+import { getAgentScopedMediaLocalRoots } from "../runtime-api.js";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
 

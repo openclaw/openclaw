@@ -1,9 +1,10 @@
+import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createAllowlistProviderRestrictSendersWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
-  collectAllowlistProviderRestrictSendersWarnings,
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
-  createScopedDmSecurityResolver,
-} from "openclaw/plugin-sdk/compat";
+  createEmptyChannelDirectoryAdapter,
+  createPairingPrefixStripper,
+  createTextPairingAdapter,
+} from "openclaw/plugin-sdk/channel-runtime";
 import {
   buildChannelConfigSchema,
   buildComputedAccountStatusSnapshot,
@@ -14,11 +15,13 @@ import {
   processLineMessage,
   type ChannelPlugin,
   type ChannelStatusIssue,
-  type OpenClawConfig,
   type LineConfig,
   type LineChannelData,
+  type OpenClawConfig,
   type ResolvedLineAccount,
-} from "openclaw/plugin-sdk/line";
+} from "../api.js";
+import { lineConfigAdapter } from "./config-adapter.js";
+import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { getLineRuntime } from "./runtime.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
@@ -35,26 +38,6 @@ const meta = {
   systemImage: "message.fill",
 };
 
-const lineConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) =>
-    getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
-  resolveAllowFrom: (account: ResolvedLineAccount) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) =>
-    allowFrom
-      .map((entry) => String(entry).trim())
-      .filter(Boolean)
-      .map((entry) => entry.replace(/^line:(?:user:)?/i, "")),
-});
-
-const lineConfigBase = createScopedChannelConfigBase<ResolvedLineAccount, OpenClawConfig>({
-  sectionKey: "line",
-  listAccountIds: (cfg) => getLineRuntime().channel.line.listLineAccountIds(cfg),
-  resolveAccount: (cfg, accountId) =>
-    getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
-  defaultAccountId: (cfg) => getLineRuntime().channel.line.resolveDefaultLineAccountId(cfg),
-  clearBaseFields: ["channelSecret", "tokenFile", "secretFile"],
-});
-
 const resolveLineDmPolicy = createScopedDmSecurityResolver<ResolvedLineAccount>({
   channelKey: "line",
   resolvePolicy: (account) => account.config.dmPolicy,
@@ -64,29 +47,39 @@ const resolveLineDmPolicy = createScopedDmSecurityResolver<ResolvedLineAccount>(
   normalizeEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
 });
 
+const collectLineSecurityWarnings =
+  createAllowlistProviderRestrictSendersWarningCollector<ResolvedLineAccount>({
+    providerConfigPresent: (cfg) => cfg.channels?.line !== undefined,
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
+    surface: "LINE groups",
+    openScope: "any member in groups",
+    groupPolicyPath: "channels.line.groupPolicy",
+    groupAllowFromPath: "channels.line.groupAllowFrom",
+    mentionGated: false,
+  });
+
 export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   id: "line",
   meta: {
     ...meta,
     quickstartAllowFrom: true,
   },
-  pairing: {
+  pairing: createTextPairingAdapter({
     idLabel: "lineUserId",
-    normalizeAllowEntry: (entry) => {
-      // LINE IDs are case-sensitive; only strip prefix variants (line: / line:user:).
-      return entry.replace(/^line:(?:user:)?/i, "");
-    },
-    notifyApproval: async ({ cfg, id }) => {
+    message: "OpenClaw: your access has been approved.",
+    // LINE IDs are case-sensitive; only strip prefix variants (line: / line:user:).
+    normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
+    notify: async ({ cfg, id, message }) => {
       const line = getLineRuntime().channel.line;
       const account = line.resolveLineAccount({ cfg });
       if (!account.channelAccessToken) {
         throw new Error("LINE channel access token not configured");
       }
-      await line.pushMessageLine(id, "OpenClaw: your access has been approved.", {
+      await line.pushMessageLine(id, message, {
         channelAccessToken: account.channelAccessToken,
       });
     },
-  },
+  }),
   capabilities: {
     chatTypes: ["direct", "group"],
     reactions: false,
@@ -99,7 +92,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   configSchema: buildChannelConfigSchema(LineConfigSchema),
   setupWizard: lineSetupWizard,
   config: {
-    ...lineConfigBase,
+    ...lineConfigAdapter,
     isConfigured: (account) =>
       Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
     describeAccount: (account) => ({
@@ -109,36 +102,13 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       configured: Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
       tokenSource: account.tokenSource ?? undefined,
     }),
-    ...lineConfigAccessors,
   },
   security: {
     resolveDmPolicy: resolveLineDmPolicy,
-    collectWarnings: ({ account, cfg }) => {
-      return collectAllowlistProviderRestrictSendersWarnings({
-        cfg,
-        providerConfigPresent: cfg.channels?.line !== undefined,
-        configuredGroupPolicy: account.config.groupPolicy,
-        surface: "LINE groups",
-        openScope: "any member in groups",
-        groupPolicyPath: "channels.line.groupPolicy",
-        groupAllowFromPath: "channels.line.groupAllowFrom",
-        mentionGated: false,
-      });
-    },
+    collectWarnings: collectLineSecurityWarnings,
   },
   groups: {
-    resolveRequireMention: ({ cfg, accountId, groupId }) => {
-      const account = getLineRuntime().channel.line.resolveLineAccount({
-        cfg,
-        accountId: accountId ?? undefined,
-      });
-      const groups = account.config.groups;
-      if (!groups || !groupId) {
-        return false;
-      }
-      const groupConfig = groups[groupId] ?? groups["*"];
-      return groupConfig?.requireMention ?? false;
-    },
+    resolveRequireMention: resolveLineGroupRequireMention,
   },
   messaging: {
     normalizeTarget: (target) => {
@@ -162,11 +132,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       hint: "<userId|groupId|roomId>",
     },
   },
-  directory: {
-    self: async () => null,
-    listPeers: async () => [],
-    listGroups: async () => [],
-  },
+  directory: createEmptyChannelDirectoryAdapter(),
   setup: lineSetupAdapter,
   outbound: {
     deliveryMode: "direct",

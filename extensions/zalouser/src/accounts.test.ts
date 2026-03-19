@@ -124,6 +124,19 @@ describe("zalouser account resolution", () => {
     expect(resolved.config.allowFrom).toEqual(["123"]);
   });
 
+  it("defaults group policy to allowlist when unset", () => {
+    const cfg = asConfig({
+      channels: {
+        zalouser: {
+          enabled: true,
+        },
+      },
+    });
+
+    const resolved = resolveZalouserAccountSync({ cfg, accountId: "default" });
+    expect(resolved.config.groupPolicy).toBe("allowlist");
+  });
+
   it("resolves profile precedence correctly", () => {
     const cfg = asConfig({
       channels: {

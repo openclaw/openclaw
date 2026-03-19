@@ -3,7 +3,9 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import * as jsonFiles from "../../infra/json-files.js";
+import type { OpenClawConfig } from "../config.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -278,6 +280,72 @@ describe("session store lock (Promise chain mutex)", () => {
     const store = loadSessionStore(storePath);
     expect(store[key]?.modelProvider).toBeUndefined();
     expect(store[key]?.model).toBeUndefined();
+  });
+
+  it("preserves ACP metadata when replacing a session entry wholesale", async () => {
+    const key = "agent:codex:acp:binding:discord:default:feedface";
+    const acp = {
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex-discord",
+      mode: "persistent" as const,
+      state: "idle" as const,
+      lastActivityAt: 100,
+    };
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-acp",
+        updatedAt: 100,
+        acp,
+      },
+    });
+
+    await updateSessionStore(storePath, (store) => {
+      store[key] = {
+        sessionId: "sess-acp",
+        updatedAt: 200,
+        modelProvider: "openai-codex",
+        model: "gpt-5.4",
+      };
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[key]?.acp).toEqual(acp);
+    expect(store[key]?.modelProvider).toBe("openai-codex");
+    expect(store[key]?.model).toBe("gpt-5.4");
+  });
+
+  it("allows explicit ACP metadata removal through the ACP session helper", async () => {
+    const key = "agent:codex:acp:binding:discord:default:deadbeef";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-acp-clear",
+        updatedAt: 100,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-discord",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 100,
+        },
+      },
+    });
+    const cfg = {
+      session: {
+        store: storePath,
+      },
+    } as OpenClawConfig;
+
+    const result = await upsertAcpSessionMeta({
+      cfg,
+      sessionKey: key,
+      mutate: () => null,
+    });
+
+    expect(result?.acp).toBeUndefined();
+    const store = loadSessionStore(storePath);
+    expect(store[key]?.acp).toBeUndefined();
   });
 });
 

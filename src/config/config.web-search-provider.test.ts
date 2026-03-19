@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObjectWithPlugins } from "./config.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
 
 vi.mock("../runtime.js", () => ({
@@ -9,37 +9,55 @@ vi.mock("../runtime.js", () => ({
 vi.mock("../plugins/web-search-providers.js", () => {
   const getScoped = (key: string) => (search?: Record<string, unknown>) =>
     (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
+  const getConfigured = (pluginId: string) => (config?: Record<string, unknown>) =>
+    (
+      config?.plugins as
+        | { entries?: Record<string, { config?: { webSearch?: { apiKey?: unknown } } }> }
+        | undefined
+    )?.entries?.[pluginId]?.config?.webSearch?.apiKey;
   return {
     resolvePluginWebSearchProviders: () => [
       {
         id: "brave",
         envVars: ["BRAVE_API_KEY"],
+        credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
         getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
+        getConfiguredCredentialValue: getConfigured("brave"),
       },
       {
         id: "firecrawl",
         envVars: ["FIRECRAWL_API_KEY"],
+        credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
         getCredentialValue: getScoped("firecrawl"),
+        getConfiguredCredentialValue: getConfigured("firecrawl"),
       },
       {
         id: "gemini",
         envVars: ["GEMINI_API_KEY"],
+        credentialPath: "plugins.entries.google.config.webSearch.apiKey",
         getCredentialValue: getScoped("gemini"),
+        getConfiguredCredentialValue: getConfigured("google"),
       },
       {
         id: "grok",
         envVars: ["XAI_API_KEY"],
+        credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
         getCredentialValue: getScoped("grok"),
+        getConfiguredCredentialValue: getConfigured("xai"),
       },
       {
         id: "kimi",
         envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+        credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
         getCredentialValue: getScoped("kimi"),
+        getConfiguredCredentialValue: getConfigured("moonshot"),
       },
       {
         id: "perplexity",
         envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+        credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
         getCredentialValue: getScoped("perplexity"),
+        getConfiguredCredentialValue: getConfigured("perplexity"),
       },
     ],
   };
@@ -50,7 +68,7 @@ const { resolveSearchProvider } = __testing;
 
 describe("web search provider config", () => {
   it("accepts perplexity provider and config", () => {
-    const res = validateConfigObject(
+    const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
         enabled: true,
         provider: "perplexity",
@@ -66,7 +84,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts gemini provider and config", () => {
-    const res = validateConfigObject(
+    const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
         enabled: true,
         provider: "gemini",
@@ -81,7 +99,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts firecrawl provider and config", () => {
-    const res = validateConfigObject(
+    const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
         enabled: true,
         provider: "firecrawl",
@@ -96,7 +114,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts gemini provider with no extra config", () => {
-    const res = validateConfigObject(
+    const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
         provider: "gemini",
       }),
@@ -106,7 +124,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts brave llm-context mode config", () => {
-    const res = validateConfigObject(
+    const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
         provider: "brave",
         providerConfig: {
@@ -119,7 +137,7 @@ describe("web search provider config", () => {
   });
 
   it("rejects invalid brave mode config values", () => {
-    const res = validateConfigObject(
+    const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
         provider: "brave",
         providerConfig: {

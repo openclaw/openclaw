@@ -1,17 +1,16 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
-import { buildSingleProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
+import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import { applyQianfanConfig, QIANFAN_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildQianfanProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "qianfan";
 
-const qianfanPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Qianfan Provider",
   description: "Bundled Qianfan provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Qianfan",
@@ -50,6 +49,4 @@ const qianfanPlugin = {
       },
     });
   },
-};
-
-export default qianfanPlugin;
+});

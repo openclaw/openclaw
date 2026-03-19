@@ -1,19 +1,22 @@
 import {
   DM_GROUP_ACCESS_REASON,
+  resolveDmGroupAccessWithLists,
+} from "openclaw/plugin-sdk/channel-policy";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
-  KeyedAsyncQueue,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
-  resolveDmGroupAccessWithLists,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/reply-history";
+import { createDeferred } from "../../shared/deferred.js";
 import type {
   MarkdownTableMode,
   OpenClawConfig,
   OutboundReplyPayload,
   RuntimeEnv,
-} from "openclaw/plugin-sdk/zalouser";
+} from "../runtime-api.js";
 import {
   createTypingCallbacks,
   createScopedPairingAccess,
@@ -31,8 +34,7 @@ import {
   sendMediaWithLeadingCaption,
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/zalouser";
-import { createDeferred } from "../../shared/deferred.js";
+} from "../runtime-api.js";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,

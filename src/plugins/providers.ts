@@ -1,6 +1,9 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { withBundledPluginAllowlistCompat } from "./bundled-compat.js";
+import {
+  withBundledPluginAllowlistCompat,
+  withBundledPluginEnablementCompat,
+} from "./bundled-compat.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -82,6 +85,11 @@ function resolveBundledProviderCompatPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+export const __testing = {
+  resolveBundledProviderCompatPluginIds,
+  withBundledProviderVitestCompat,
+} as const;
+
 export function resolveOwningPluginIdsForProvider(params: {
   provider: string;
   config?: PluginLoadOptions["config"];
@@ -160,13 +168,20 @@ export function resolvePluginProviders(params: {
         pluginIds: bundledProviderCompatPluginIds,
       })
     : params.config;
-  const config = params.bundledProviderVitestCompat
+  const maybeVitestCompat = params.bundledProviderVitestCompat
     ? withBundledProviderVitestCompat({
         config: maybeAllowlistCompat,
         pluginIds: bundledProviderCompatPluginIds,
         env: params.env,
       })
     : maybeAllowlistCompat;
+  const config =
+    params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
+      ? withBundledPluginEnablementCompat({
+          config: maybeVitestCompat,
+          pluginIds: bundledProviderCompatPluginIds,
+        })
+      : maybeVitestCompat;
   const registry = loadOpenClawPlugins({
     config,
     workspaceDir: params.workspaceDir,

@@ -148,12 +148,14 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   providers: [],
   speechProviders: [],
   mediaUnderstandingProviders: [],
+  imageGenerationProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
   commands: [],
+  conversationBindingResolvedHandlers: [],
   diagnostics: [],
 });
 
@@ -572,7 +574,7 @@ vi.mock("../commands/health.js", () => ({
 vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
-vi.mock("../../extensions/whatsapp/src/send.js", () => ({
+vi.mock("../../extensions/whatsapp/runtime-api.js", () => ({
   sendMessageWhatsApp: (...args: unknown[]) =>
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
   sendPollWhatsApp: (...args: unknown[]) =>

@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { SecretInputMode } from "../plugins/provider-auth-types.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
@@ -90,7 +91,7 @@ export type NodeManagerChoice = "npm" | "pnpm" | "bun";
 export type ChannelChoice = ChannelId;
 // Legacy alias (pre-rename).
 export type ProviderChoice = ChannelChoice;
-export type SecretInputMode = "plaintext" | "ref"; // pragma: allowlist secret
+export type { SecretInputMode } from "../plugins/provider-auth-types.js";
 
 export type OnboardOptions = {
   mode?: OnboardMode;

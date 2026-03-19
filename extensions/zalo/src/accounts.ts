@@ -1,5 +1,6 @@
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { createAccountListHelpers, type OpenClawConfig } from "openclaw/plugin-sdk/zalo";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveZaloToken } from "./token.js";
 import type { ResolvedZaloAccount, ZaloAccountConfig, ZaloConfig } from "./types.js";
 

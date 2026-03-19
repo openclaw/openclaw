@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { resolveProviderAttributionHeaders } from "../provider-attribution.js";
 import { log } from "./logger.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
@@ -40,6 +41,40 @@ function isOpenAIPublicApiBaseUrl(baseUrl: unknown): boolean {
   } catch {
     return baseUrl.toLowerCase().includes("api.openai.com");
   }
+}
+
+function isOpenAICodexBaseUrl(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return false;
+  }
+
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === "chatgpt.com";
+  } catch {
+    return baseUrl.toLowerCase().includes("chatgpt.com");
+  }
+}
+
+function shouldApplyOpenAIAttributionHeaders(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}): "openai" | "openai-codex" | undefined {
+  if (
+    model.provider === "openai" &&
+    (model.api === "openai-completions" || model.api === "openai-responses") &&
+    isOpenAIPublicApiBaseUrl(model.baseUrl)
+  ) {
+    return "openai";
+  }
+  if (
+    model.provider === "openai-codex" &&
+    (model.api === "openai-codex-responses" || model.api === "openai-responses") &&
+    isOpenAICodexBaseUrl(model.baseUrl)
+  ) {
+    return "openai-codex";
+  }
+  return undefined;
 }
 
 function shouldForceResponsesStore(model: {
@@ -355,5 +390,24 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
       openaiWsWarmup: typedOptions?.openaiWsWarmup ?? false,
     } as SimpleStreamOptions;
     return underlying(model, context, mergedOptions);
+  };
+}
+
+export function createOpenAIAttributionHeadersWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const attributionProvider = shouldApplyOpenAIAttributionHeaders(model);
+    if (!attributionProvider) {
+      return underlying(model, context, options);
+    }
+    return underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        ...resolveProviderAttributionHeaders(attributionProvider),
+      },
+    });
   };
 }

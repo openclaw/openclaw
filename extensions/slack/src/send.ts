@@ -12,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/reply-runtime";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { loadWebMedia } from "../../whatsapp/src/media.js";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";

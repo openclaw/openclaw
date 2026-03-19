@@ -1,17 +1,21 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
-import { buildSingleProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
+import { applyXaiModelCompat } from "openclaw/plugin-sdk/provider-models";
 import { applyVeniceConfig, VENICE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildVeniceProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "venice";
 
-const venicePlugin = {
+function isXaiBackedVeniceModel(modelId: string): boolean {
+  return modelId.trim().toLowerCase().includes("grok");
+}
+
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Venice Provider",
   description: "Bundled Venice provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Venice",
@@ -54,8 +58,8 @@ const venicePlugin = {
             buildProvider: buildVeniceProvider,
           }),
       },
+      normalizeResolvedModel: ({ modelId, model }) =>
+        isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
     });
   },
-};
-
-export default venicePlugin;
+});

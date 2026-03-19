@@ -1,17 +1,16 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
-import { buildSingleProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
+import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import { applyVercelAiGatewayConfig, VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildVercelAiGatewayProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "vercel-ai-gateway";
 
-const vercelAiGatewayPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Vercel AI Gateway Provider",
   description: "Bundled Vercel AI Gateway provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Vercel AI Gateway",
@@ -50,6 +49,4 @@ const vercelAiGatewayPlugin = {
       },
     });
   },
-};
-
-export default vercelAiGatewayPlugin;
+});

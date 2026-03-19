@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const callGateway = vi.fn();
@@ -7,7 +7,13 @@ vi.mock("../gateway/call.js", () => ({
   callGateway,
 }));
 
-const { resolveCommandSecretRefsViaGateway } = await import("./command-secret-gateway.js");
+let resolveCommandSecretRefsViaGateway: typeof import("./command-secret-gateway.js").resolveCommandSecretRefsViaGateway;
+
+beforeEach(async () => {
+  vi.resetModules();
+  callGateway.mockReset();
+  ({ resolveCommandSecretRefsViaGateway } = await import("./command-secret-gateway.js"));
+});
 
 describe("resolveCommandSecretRefsViaGateway", () => {
   function makeTalkApiKeySecretRefConfig(envKey: string): OpenClawConfig {
@@ -153,6 +159,45 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       }),
     );
     expect(result.resolvedConfig.talk?.apiKey).toBe("sk-live");
+  });
+
+  it("enforces unresolved checks only for allowed paths when provided", async () => {
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: "channels.discord.accounts.ops.token",
+          pathSegments: ["channels", "discord", "accounts", "ops", "token"],
+          value: "ops-token",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const result = await resolveCommandSecretRefsViaGateway({
+      config: {
+        channels: {
+          discord: {
+            accounts: {
+              ops: {
+                token: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" },
+              },
+              chat: {
+                token: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      commandName: "message",
+      targetIds: new Set(["channels.discord.accounts.*.token"]),
+      allowedPaths: new Set(["channels.discord.accounts.ops.token"]),
+    });
+
+    expect(result.resolvedConfig.channels?.discord?.accounts?.ops?.token).toBe("ops-token");
+    expect(result.targetStatesByPath).toEqual({
+      "channels.discord.accounts.ops.token": "resolved_gateway",
+    });
+    expect(result.hadUnresolvedTargets).toBe(false);
   });
 
   it("fails fast when gateway-backed resolution is unavailable", async () => {
