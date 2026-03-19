@@ -43,6 +43,17 @@ describe("createEditorSubmitHandler", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("treats shell test command ![ -f .env ] as a bang command", () => {
+    const { handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+
+    onSubmit("![ -f .env ] && echo yes");
+
+    expect(handleBangLine).toHaveBeenCalledTimes(1);
+    expect(handleBangLine).toHaveBeenCalledWith("![ -f .env ] && echo yes");
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(handleCommand).not.toHaveBeenCalled();
+  });
+
   it("does not treat leading whitespace before ! as a bang command", () => {
     const { editor, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
 

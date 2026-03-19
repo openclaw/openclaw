@@ -1004,7 +1004,7 @@ describe("handleCommands /config configWrites gating", () => {
 });
 
 describe("handleCommands bash alias", () => {
-  it.each(["![image]", "![image](https://example.com/img.png)", "![](url)", "![a]"])(
+  it.each(["![image](https://example.com/img.png)", "![](url)", "![alt text](file.jpg)"])(
     "does not treat Markdown image %s as bash bang",
     async (commandBody) => {
       const cfg = {
@@ -1014,6 +1014,20 @@ describe("handleCommands bash alias", () => {
       const params = buildParams(commandBody, cfg);
       const result = await handleCommands(params);
       expect(result.shouldContinue).toBe(true);
+    },
+  );
+
+  it.each(["![image]", "![a]", "![ -f package.json ] && echo ok", "![ -d /tmp ]"])(
+    "treats non-Markdown-image %s as bash bang",
+    async (commandBody) => {
+      resetBashChatCommandForTests();
+      const cfg = {
+        commands: { bash: true, text: true },
+        whatsapp: { allowFrom: ["*"] },
+      } as OpenClawConfig;
+      const params = buildParams(commandBody, cfg);
+      const result = await handleCommands(params);
+      expect(result.shouldContinue).toBe(false);
     },
   );
 
