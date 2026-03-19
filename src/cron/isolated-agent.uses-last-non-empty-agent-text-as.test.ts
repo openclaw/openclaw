@@ -190,6 +190,30 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("strips leading interim cron chatter before choosing the final summary", async () => {
+    await withTempHome(async (home) => {
+      const { res } = await runCronTurn(home, {
+        jobPayload: {
+          ...DEFAULT_AGENT_TURN_PAYLOAD,
+          deliver: true,
+          channel: "discord",
+          to: "channel:789",
+        },
+        mockTexts: [
+          "Running the Gmail lookups now and then I’ll triage results and post the exact Discord-formatted report.\n\n📧 **Email Triage — 2026-03-19**\n\nAll Gmail access is blocked until OAuth credentials are configured.",
+        ],
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.summary).toBe(
+        "📧 **Email Triage — 2026-03-19**\n\nAll Gmail access is blocked until OAuth credentials are configured.",
+      );
+      expect(res.outputText).toBe(
+        "📧 **Email Triage — 2026-03-19**\n\nAll Gmail access is blocked until OAuth credentials are configured.",
+      );
+    });
+  });
+
   it("returns error when embedded run payload is marked as error", async () => {
     await withTempHome(async (home) => {
       mockEmbeddedPayloads([

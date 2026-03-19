@@ -46,6 +46,15 @@ export async function resolveDeliveryTarget(
     accountId?: string;
     sessionKey?: string;
   },
+  options?: {
+    /**
+     * When false, do not reuse the main/thread session's lastChannel/lastTo as an implicit target.
+     * This prevents isolated cron announce jobs from leaking into unrelated personal sessions.
+     */
+    useSessionFallback?: boolean;
+    /** When true, do not auto-pick a single configured channel when no target exists. */
+    skipAutoChannelSelection?: boolean;
+  },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
@@ -61,9 +70,13 @@ export async function resolveDeliveryTarget(
   const threadSessionKey = jobPayload.sessionKey?.trim();
   const threadEntry = threadSessionKey ? store[threadSessionKey] : undefined;
   const main = threadEntry ?? store[mainSessionKey];
+  const sessionEntry =
+    options?.useSessionFallback == false && requestedChannel === "last" && !explicitTo
+      ? undefined
+      : main;
 
   const preliminary = resolveSessionDeliveryTarget({
-    entry: main,
+    entry: sessionEntry,
     requestedChannel,
     explicitTo,
     allowMismatchedLastTo,
@@ -74,7 +87,7 @@ export async function resolveDeliveryTarget(
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {
       fallbackChannel = preliminary.lastChannel;
-    } else {
+    } else if (!options?.skipAutoChannelSelection) {
       try {
         const selection = await resolveMessageChannelSelection({ cfg });
         fallbackChannel = selection.channel;
@@ -84,6 +97,10 @@ export async function resolveDeliveryTarget(
           `${detail} Set delivery.channel explicitly or use a main session with a previous channel.`,
         );
       }
+    } else {
+      channelResolutionError = new Error(
+        "No deterministic delivery channel available. Set delivery.channel explicitly for this cron job.",
+      );
     }
   }
 

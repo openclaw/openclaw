@@ -49,6 +49,9 @@ type TimedCronRunOutcome = CronRunOutcome &
     jobId: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
+    resolvedDeliveryChannel?: string;
+    resolvedDeliveryTo?: string;
+    resolvedDeliveryAccountId?: string;
     startedAt: number;
     endedAt: number;
   };
@@ -300,6 +303,9 @@ export function applyJobResult(
     status: CronRunStatus;
     error?: string;
     delivered?: boolean;
+    resolvedDeliveryChannel?: string;
+    resolvedDeliveryTo?: string;
+    resolvedDeliveryAccountId?: string;
     startedAt: number;
     endedAt: number;
   },
@@ -329,6 +335,11 @@ export function applyJobResult(
   job.state.lastDeliveryStatus = deliveryStatus;
   job.state.lastDeliveryError =
     deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
+  if (result.delivered === true) {
+    job.state.lastDeliveryChannel = normalizeCronMessageChannel(result.resolvedDeliveryChannel);
+    job.state.lastDeliveryTo = normalizeTo(result.resolvedDeliveryTo);
+    job.state.lastDeliveryAccountId = normalizeTo(result.resolvedDeliveryAccountId);
+  }
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
@@ -489,6 +500,9 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     status: result.status,
     error: result.error,
     delivered: result.delivered,
+    resolvedDeliveryChannel: result.resolvedDeliveryChannel,
+    resolvedDeliveryTo: result.resolvedDeliveryTo,
+    resolvedDeliveryAccountId: result.resolvedDeliveryAccountId,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
@@ -1184,6 +1198,9 @@ export async function executeJobCore(
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
+    resolvedDeliveryChannel: res.resolvedDeliveryChannel,
+    resolvedDeliveryTo: res.resolvedDeliveryTo,
+    resolvedDeliveryAccountId: res.resolvedDeliveryAccountId,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
     model: res.model,
@@ -1213,6 +1230,9 @@ export async function executeJob(
   let coreResult: {
     status: CronRunStatus;
     delivered?: boolean;
+    resolvedDeliveryChannel?: string;
+    resolvedDeliveryTo?: string;
+    resolvedDeliveryAccountId?: string;
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
@@ -1226,6 +1246,9 @@ export async function executeJob(
     status: coreResult.status,
     error: coreResult.error,
     delivered: coreResult.delivered,
+    resolvedDeliveryChannel: coreResult.resolvedDeliveryChannel,
+    resolvedDeliveryTo: coreResult.resolvedDeliveryTo,
+    resolvedDeliveryAccountId: coreResult.resolvedDeliveryAccountId,
     startedAt,
     endedAt,
   });

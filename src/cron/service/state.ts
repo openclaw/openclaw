@@ -104,6 +104,9 @@ export type CronServiceDeps = {
        * if the final per-message ack status is uncertain.
        */
       deliveryAttempted?: boolean;
+      resolvedDeliveryChannel?: string;
+      resolvedDeliveryTo?: string;
+      resolvedDeliveryAccountId?: string;
     } & CronRunOutcome &
       CronRunTelemetry
   >;

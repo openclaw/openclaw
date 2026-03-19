@@ -155,4 +155,45 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
       });
     });
   }
+
+  it("prefers persisted cron delivery affinity over the main session's last interactive channel", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, {
+        lastProvider: "imessage",
+        lastChannel: "imessage",
+        lastTo: "friend@example.com",
+      });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "hello from cron" }]);
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "do it" }),
+          delivery: { mode: "announce" },
+          state: {
+            lastDeliveryChannel: "discord",
+            lastDeliveryTo: "channel:789",
+          },
+        },
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(true);
+      expect(res.deliveryAttempted).toBe(true);
+      expect(res.resolvedDeliveryChannel).toBe("discord");
+      expect(res.resolvedDeliveryTo).toBe("channel:789");
+      expect(deps.sendMessageDiscord).toHaveBeenCalledTimes(1);
+      expect(deps.sendMessageDiscord).toHaveBeenCalledWith(
+        "channel:789",
+        "hello from cron",
+        expect.any(Object),
+      );
+      expect(deps.sendMessageIMessage).not.toHaveBeenCalled();
+    });
+  });
 });

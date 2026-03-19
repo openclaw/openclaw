@@ -41,6 +41,11 @@ function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
   delivered?: boolean;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
+  resolvedDelivery?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+  };
 }) {
   const finished = createFinishedBarrier();
   const cron = new CronService({
@@ -53,6 +58,13 @@ function createIsolatedCronWithFinishedBarrier(params: {
       status: "ok" as const,
       summary: "done",
       ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
+      ...(params.resolvedDelivery?.channel
+        ? { resolvedDeliveryChannel: params.resolvedDelivery.channel }
+        : {}),
+      ...(params.resolvedDelivery?.to ? { resolvedDeliveryTo: params.resolvedDelivery.to } : {}),
+      ...(params.resolvedDelivery?.accountId
+        ? { resolvedDeliveryAccountId: params.resolvedDelivery.accountId }
+        : {}),
     })),
     onEvent: (evt) => {
       if (evt.action === "finished") {
@@ -118,12 +130,18 @@ async function runIsolatedJobAndReadState(params: {
   job: CronAddInput;
   delivered?: boolean;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
+  resolvedDelivery?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+  };
 }) {
   const store = await makeStorePath();
   const { cron, finished } = createIsolatedCronWithFinishedBarrier({
     storePath: store.storePath,
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
     ...(params.onFinished ? { onFinished: params.onFinished } : {}),
+    ...(params.resolvedDelivery ? { resolvedDelivery: params.resolvedDelivery } : {}),
   });
 
   await cron.start();
@@ -149,6 +167,24 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDelivered).toBe(true);
     expect(updated?.state.lastDeliveryStatus).toBe("delivered");
     expect(updated?.state.lastDeliveryError).toBeUndefined();
+  });
+
+  it("persists last successful delivery affinity when isolated job reports it", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildIsolatedAgentTurnJob("delivery-affinity"),
+      delivered: true,
+      resolvedDelivery: {
+        channel: "discord",
+        to: "channel:789",
+        accountId: "clawdy",
+      },
+    });
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBe(true);
+    expect(updated?.state.lastDeliveryStatus).toBe("delivered");
+    expect(updated?.state.lastDeliveryChannel).toBe("discord");
+    expect(updated?.state.lastDeliveryTo).toBe("channel:789");
+    expect(updated?.state.lastDeliveryAccountId).toBe("clawdy");
   });
 
   it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {

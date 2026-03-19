@@ -36,6 +36,7 @@ import {
   normalizeVerboseLevel,
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -92,6 +93,12 @@ export type RunCronAgentTurnResult = {
    * cannot guarantee a final delivery ack synchronously.
    */
   deliveryAttempted?: boolean;
+  /** Channel resolved for final delivery when known. */
+  resolvedDeliveryChannel?: string;
+  /** Recipient resolved for final delivery when known. */
+  resolvedDeliveryTo?: string;
+  /** Account ID resolved for final delivery when known. */
+  resolvedDeliveryAccountId?: string;
 } & CronRunOutcome &
   CronRunTelemetry;
 
@@ -179,12 +186,61 @@ async function resolveCronDeliveryContext(params: {
   agentId: string;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
-  const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
-    channel: deliveryPlan.channel ?? "last",
-    to: deliveryPlan.to,
-    accountId: deliveryPlan.accountId,
-    sessionKey: params.job.sessionKey,
-  });
+  const explicitDeliveryChannel =
+    typeof params.job.delivery?.channel === "string" && params.job.delivery.channel.trim()
+      ? params.job.delivery.channel.trim()
+      : params.job.payload.kind === "agentTurn" &&
+          typeof params.job.payload.channel === "string" &&
+          params.job.payload.channel.trim()
+        ? params.job.payload.channel.trim()
+        : undefined;
+  const persistedDeliveryChannel =
+    typeof params.job.state.lastDeliveryChannel === "string" &&
+    params.job.state.lastDeliveryChannel.trim()
+      ? params.job.state.lastDeliveryChannel.trim()
+      : undefined;
+  const persistedDeliveryTo =
+    typeof params.job.state.lastDeliveryTo === "string" && params.job.state.lastDeliveryTo.trim()
+      ? params.job.state.lastDeliveryTo.trim()
+      : undefined;
+  const persistedDeliveryAccountId =
+    typeof params.job.state.lastDeliveryAccountId === "string" &&
+    params.job.state.lastDeliveryAccountId.trim()
+      ? params.job.state.lastDeliveryAccountId.trim()
+      : undefined;
+  const usesImplicitLastChannel =
+    deliveryPlan.requested && deliveryPlan.channel === "last" && !explicitDeliveryChannel;
+  const resolvedDelivery = persistedDeliveryChannel && usesImplicitLastChannel
+    ? await resolveDeliveryTarget(
+        params.cfg,
+        params.agentId,
+        {
+          channel: persistedDeliveryChannel as ChannelId,
+          to: deliveryPlan.to ?? persistedDeliveryTo,
+          accountId: deliveryPlan.accountId ?? persistedDeliveryAccountId,
+          sessionKey: params.job.sessionKey,
+        },
+        {
+          useSessionFallback: false,
+          skipAutoChannelSelection: true,
+        },
+      )
+    : await resolveDeliveryTarget(
+        params.cfg,
+        params.agentId,
+        {
+          channel: deliveryPlan.channel ?? "last",
+          to: deliveryPlan.to,
+          accountId: deliveryPlan.accountId,
+          sessionKey: params.job.sessionKey,
+        },
+        usesImplicitLastChannel
+          ? {
+              useSessionFallback: false,
+              skipAutoChannelSelection: true,
+            }
+          : undefined,
+      );
   return {
     deliveryPlan,
     deliveryRequested: deliveryPlan.requested,
@@ -203,7 +259,50 @@ function appendCronDeliveryInstruction(params: {
   if (!params.deliveryRequested) {
     return params.commandBody;
   }
-  return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+  return `${params.commandBody}\n\nReturn only the final external-facing summary/report as plain text. Do not include progress updates, execution narration, credential/setup chatter, or delivery commentary. It will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+}
+
+function isLikelyInterimCronParagraph(text: string): boolean {
+  if (isLikelyInterimCronMessage(text)) {
+    return true;
+  }
+  const normalized = text.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!normalized) {
+    return true;
+  }
+  const wordCount = normalized.split(" ").filter(Boolean).length;
+  return (
+    wordCount <= 50 &&
+    /\b(i['’]ll|i will)\b/.test(normalized) &&
+    /\b(check|checking|triage|triaging|post|posting|report|reporting|lookup|lookups|send|sending)\b/.test(
+      normalized,
+    )
+  );
+}
+
+function stripLeadingInterimParagraphs(text: string | undefined): string | undefined {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const paragraphs = trimmed.split(/\n\s*\n+/);
+  let start = 0;
+  while (start < paragraphs.length - 1 && isLikelyInterimCronParagraph(paragraphs[start] ?? "")) {
+    start += 1;
+  }
+  const cleaned = paragraphs.slice(start).join("\n\n").trim();
+  return cleaned || undefined;
+}
+
+function sanitizeCronPayloadText<T extends { text?: string }>(payload: T): T {
+  const cleanedText = stripLeadingInterimParagraphs(payload.text);
+  if (cleanedText === payload.text) {
+    return payload;
+  }
+  return {
+    ...payload,
+    text: cleanedText,
+  };
 }
 
 function formatHookContextBlock(context: CronAgentTurnContext | undefined): string {
@@ -849,11 +948,15 @@ export async function runCronIsolatedAgentTurn(params: {
   if (isAborted()) {
     return withRunSession({ status: "error", error: abortReason(), ...telemetry });
   }
-  const firstText = payloads[0]?.text ?? "";
-  let summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
-  let outputText = pickLastNonEmptyTextFromPayloads(payloads);
+  const sanitizedPayloads = payloads.map((payload) => sanitizeCronPayloadText(payload));
+  const firstText = sanitizedPayloads[0]?.text ?? "";
+  let summary =
+    stripLeadingInterimParagraphs(pickSummaryFromPayloads(sanitizedPayloads)) ??
+    stripLeadingInterimParagraphs(pickSummaryFromOutput(firstText));
+  let outputText =
+    stripLeadingInterimParagraphs(pickLastNonEmptyTextFromPayloads(sanitizedPayloads));
   let synthesizedText = outputText?.trim() || summary?.trim() || undefined;
-  const deliveryPayload = pickLastDeliverablePayload(payloads);
+  const deliveryPayload = pickLastDeliverablePayload(sanitizedPayloads);
   let deliveryPayloads =
     deliveryPayload !== undefined
       ? [deliveryPayload]
@@ -900,6 +1003,9 @@ export async function runCronIsolatedAgentTurn(params: {
       delivered: params?.delivered,
       deliveryAttempted: params?.deliveryAttempted,
       deliveryError: params?.deliveryError,
+      resolvedDeliveryChannel: resolvedDelivery.ok ? resolvedDelivery.channel : undefined,
+      resolvedDeliveryTo: resolvedDelivery.ok ? resolvedDelivery.to : undefined,
+      resolvedDeliveryAccountId: resolvedDelivery.ok ? resolvedDelivery.accountId : undefined,
       ...telemetry,
     });
 
@@ -949,6 +1055,9 @@ export async function runCronIsolatedAgentTurn(params: {
       ...deliveryResult.result,
       deliveryAttempted:
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
+      resolvedDeliveryChannel: resolvedDelivery.ok ? resolvedDelivery.channel : undefined,
+      resolvedDeliveryTo: resolvedDelivery.ok ? resolvedDelivery.to : undefined,
+      resolvedDeliveryAccountId: resolvedDelivery.ok ? resolvedDelivery.accountId : undefined,
     };
     if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;

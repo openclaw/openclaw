@@ -72,13 +72,14 @@ function setStoredWhatsAppAllowFrom(allowFrom: string[]) {
 async function resolveForAgent(params: {
   cfg: OpenClawConfig;
   target?: { channel?: "last" | "telegram"; to?: string };
+  options?: Parameters<typeof resolveDeliveryTarget>[3];
 }) {
   const channel = params.target ? params.target.channel : DEFAULT_TARGET.channel;
   const to = params.target && "to" in params.target ? params.target.to : DEFAULT_TARGET.to;
   return resolveDeliveryTarget(params.cfg, AGENT_ID, {
     channel,
     to,
-  });
+  }, params.options);
 }
 
 describe("resolveDeliveryTarget", () => {
@@ -250,6 +251,57 @@ describe("resolveDeliveryTarget", () => {
       throw new Error("expected ambiguous channel selection error");
     }
     expect(result.error.message).toContain("Channel is required");
+  });
+
+  it("does not reuse session fallback when implicit last-channel fallback is disabled", async () => {
+    setMainSessionEntry({
+      sessionId: "sess-imessage",
+      updatedAt: 1000,
+      lastChannel: "imessage",
+      lastTo: "friend@example.com",
+    });
+
+    const result = await resolveDeliveryTarget(
+      makeCfg({ bindings: [] }),
+      AGENT_ID,
+      {
+        channel: "last",
+        to: undefined,
+      },
+      {
+        useSessionFallback: false,
+        skipAutoChannelSelection: true,
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.channel).toBeUndefined();
+    expect(result.to).toBeUndefined();
+    if (result.ok) {
+      throw new Error("expected unresolved delivery target");
+    }
+    expect(result.error.message).toContain("No deterministic delivery channel available");
+  });
+
+  it("skips auto channel selection when requested", async () => {
+    setMainSessionEntry(undefined);
+    vi.mocked(resolveMessageChannelSelection).mockClear();
+
+    const result = await resolveForAgent({
+      cfg: makeCfg({ bindings: [] }),
+      target: { channel: "last", to: undefined },
+      options: {
+        useSessionFallback: false,
+        skipAutoChannelSelection: true,
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(vi.mocked(resolveMessageChannelSelection)).not.toHaveBeenCalled();
+    if (result.ok) {
+      throw new Error("expected unresolved delivery target");
+    }
+    expect(result.error.message).toContain("No deterministic delivery channel available");
   });
 
   it("uses sessionKey thread entry before main session entry", async () => {

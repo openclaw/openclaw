@@ -144,6 +144,12 @@ export type CronJobState = {
   lastDeliveryError?: string;
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
+  /** Channel used for the last successful delivery. */
+  lastDeliveryChannel?: string;
+  /** Recipient used for the last successful delivery. */
+  lastDeliveryTo?: string;
+  /** Account ID used for the last successful delivery. */
+  lastDeliveryAccountId?: string;
 };
 
 export type CronJob = CronJobBase<
