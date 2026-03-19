@@ -22,6 +22,9 @@ import { downloadInboundMedia } from "./media.js";
 import { createWebSendApi } from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
+const WA_CONNECT_TIMEOUT_MS = 15_000;
+const WA_PRESENCE_UPDATE_TIMEOUT_MS = 5_000;
+
 export async function monitorWebInbox(options: {
   verbose: boolean;
   accountId: string;
@@ -40,7 +43,29 @@ export async function monitorWebInbox(options: {
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
   });
-  await waitForWaConnection(sock);
+  {
+    let connectTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        waitForWaConnection(sock),
+        new Promise<never>((_, reject) => {
+          connectTimer = setTimeout(
+            () => reject(new Error("waitForWaConnection timeout")),
+            WA_CONNECT_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } catch (err) {
+      try {
+        sock.ws?.close();
+      } catch {
+        /* ignore close errors */
+      }
+      throw err;
+    } finally {
+      if (connectTimer !== undefined) clearTimeout(connectTimer);
+    }
+  }
   const connectedAtMs = Date.now();
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
@@ -56,13 +81,26 @@ export async function monitorWebInbox(options: {
     resolver(reason);
   };
 
-  try {
-    await sock.sendPresenceUpdate("available");
-    if (shouldLogVerbose()) {
-      logVerbose("Sent global 'available' presence on connect");
+  {
+    let presenceTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        sock.sendPresenceUpdate("available"),
+        new Promise<never>((_, reject) => {
+          presenceTimer = setTimeout(
+            () => reject(new Error("presence update timeout")),
+            WA_PRESENCE_UPDATE_TIMEOUT_MS,
+          );
+        }),
+      ]);
+      if (shouldLogVerbose()) {
+        logVerbose("Sent global 'available' presence on connect");
+      }
+    } catch (err) {
+      logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
+    } finally {
+      if (presenceTimer !== undefined) clearTimeout(presenceTimer);
     }
-  } catch (err) {
-    logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
   }
 
   const selfJid = sock.user?.id;
