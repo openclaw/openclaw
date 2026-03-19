@@ -82,7 +82,7 @@ static void on_helper_exited(GObject *source_object, GAsyncResult *res, gpointer
     g_autoptr(GError) error = NULL;
     g_subprocess_wait_finish(G_SUBPROCESS(source_object), res, &error);
     g_print("Tray helper exited.\n");
-    helper_process = NULL;
+    g_clear_object(&helper_process);
     helper_stdin = NULL;
 }
 

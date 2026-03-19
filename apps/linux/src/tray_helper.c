@@ -76,8 +76,11 @@ static gboolean handle_stdin(GIOChannel *source, GIOCondition condition, gpointe
         }
         g_free(line);
     } else if (status == G_IO_STATUS_EOF) {
+        g_clear_error(&error);
         gtk_main_quit();
         return G_SOURCE_REMOVE;
+    } else {
+        g_clear_error(&error);
     }
     
     return G_SOURCE_CONTINUE;
