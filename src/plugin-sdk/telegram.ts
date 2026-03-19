@@ -51,7 +51,7 @@ export {
 export {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
-} from "../../extensions/telegram/src/directory-config.js";
+} from "../../extensions/telegram/api.js";
 export {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
