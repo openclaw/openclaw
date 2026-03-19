@@ -80,10 +80,12 @@ export function setActiveWebListener(listener: ActiveWebListener | null): void;
 export function setActiveWebListener(
   accountId: string | null | undefined,
   listener: ActiveWebListener | null,
+  expected?: ActiveWebListener,
 ): void;
 export function setActiveWebListener(
   accountIdOrListener: string | ActiveWebListener | null | undefined,
   maybeListener?: ActiveWebListener | null,
+  expected?: ActiveWebListener,
 ): void {
   const { accountId, listener } =
     typeof accountIdOrListener === "string"
@@ -95,12 +97,20 @@ export function setActiveWebListener(
 
   const id = resolveWebAccountId(accountId);
   if (!listener) {
-    listeners.delete(id);
+    // Compare-and-delete: only evict if the caller still owns this slot.
+    // Prevents a stale monitor shutdown from clearing a newer instance's
+    // registration when two monitors briefly overlap during restart.
+    if (expected === undefined || listeners.get(id) === expected) {
+      listeners.delete(id);
+      if (id === DEFAULT_ACCOUNT_ID) {
+        setCurrentListener(null);
+      }
+    }
   } else {
     listeners.set(id, listener);
-  }
-  if (id === DEFAULT_ACCOUNT_ID) {
-    setCurrentListener(listener);
+    if (id === DEFAULT_ACCOUNT_ID) {
+      setCurrentListener(listener);
+    }
   }
 }
 

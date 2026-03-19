@@ -245,7 +245,7 @@ export async function monitorWebChannel(
     });
 
     const closeListener = async () => {
-      setActiveWebListener(account.accountId, null);
+      setActiveWebListener(account.accountId, null, listener);
       if (unregisterUnhandled) {
         unregisterUnhandled();
         unregisterUnhandled = null;
