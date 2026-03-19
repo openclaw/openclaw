@@ -539,6 +539,9 @@ describe("applyPluginAutoEnable", () => {
       writePluginManifestFixture({
         rootDir: pluginDir,
         id: "wecom-openclaw-plugin",
+        // Keep the on-disk manifest schema-valid for config validation; the injected
+        // manifestRegistry below intentionally simulates the stale startup snapshot
+        // where channel mappings have not been populated yet.
         channels: ["wecom"],
       });
       writePackageChannelFixture({
@@ -604,6 +607,112 @@ describe("applyPluginAutoEnable", () => {
 
       expect(result.config.plugins?.entries?.["wecom-openclaw-plugin"]?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.wecom).toBeUndefined();
+    });
+
+    it("prefers bundled plugin ids over non-explicit global duplicates", () => {
+      const stateDir = makeTempDir();
+      const bundledDir = makeTempDir();
+      const globalPluginDir = path.join(stateDir, "extensions", "shared-global-plugin");
+      writePluginManifestFixture({
+        rootDir: globalPluginDir,
+        id: "shared-global-plugin",
+      });
+      writePackageChannelFixture({
+        rootDir: globalPluginDir,
+        packageName: "@test/shared-global-plugin",
+        channelId: "shared-channel",
+        channelLabel: "Shared Channel",
+      });
+
+      const bundledPluginDir = path.join(bundledDir, "shared-bundled-plugin");
+      writePluginManifestFixture({
+        rootDir: bundledPluginDir,
+        id: "shared-bundled-plugin",
+      });
+      writePackageChannelFixture({
+        rootDir: bundledPluginDir,
+        packageName: "@test/shared-bundled-plugin",
+        channelId: "shared-channel",
+        channelLabel: "Shared Channel",
+      });
+
+      const env = {
+        ...process.env,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      };
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { "shared-channel": { token: "demo" } },
+        },
+        env,
+        manifestRegistry: makeRegistry([
+          { id: "shared-global-plugin", channels: [] },
+          { id: "shared-bundled-plugin", channels: [] },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["shared-bundled-plugin"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["shared-global-plugin"]).toBeUndefined();
+    });
+
+    it("prefers explicit installed global duplicates over bundled plugin ids", () => {
+      const stateDir = makeTempDir();
+      const bundledDir = makeTempDir();
+      const globalPluginDir = path.join(stateDir, "extensions", "shared-global-plugin");
+      writePluginManifestFixture({
+        rootDir: globalPluginDir,
+        id: "shared-global-plugin",
+      });
+      writePackageChannelFixture({
+        rootDir: globalPluginDir,
+        packageName: "@test/shared-global-plugin",
+        channelId: "shared-channel",
+        channelLabel: "Shared Channel",
+      });
+
+      const bundledPluginDir = path.join(bundledDir, "shared-bundled-plugin");
+      writePluginManifestFixture({
+        rootDir: bundledPluginDir,
+        id: "shared-bundled-plugin",
+      });
+      writePackageChannelFixture({
+        rootDir: bundledPluginDir,
+        packageName: "@test/shared-bundled-plugin",
+        channelId: "shared-channel",
+        channelLabel: "Shared Channel",
+      });
+
+      const env = {
+        ...process.env,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      };
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { "shared-channel": { token: "demo" } },
+          plugins: {
+            installs: {
+              "shared-global-plugin": {
+                installPath: globalPluginDir,
+                source: "path",
+              },
+            },
+          },
+        },
+        env,
+        manifestRegistry: makeRegistry([
+          { id: "shared-global-plugin", channels: [] },
+          { id: "shared-bundled-plugin", channels: [] },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["shared-global-plugin"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["shared-bundled-plugin"]).toBeUndefined();
     });
 
     it("applies preferOver using channel ids even when plugin ids differ", () => {
