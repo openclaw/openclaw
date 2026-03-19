@@ -1,3 +1,4 @@
+import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type ChannelId, type ChannelPlugin } from "../channels/plugins/types.js";
 import {
@@ -15,6 +16,8 @@ import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/regis
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
+  pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginHttpRouteRegistry,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -25,6 +28,8 @@ import {
   ChannelLifecyclePluginRuntimeState,
   resolveChannelLifecyclePluginRuntimeState,
 } from "./server-plugin-runtime-state.js";
+import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
+import { makeMockHttpResponse } from "./test-http-response.js";
 
 const hoisted = vi.hoisted(() => {
   const computeBackoff = vi.fn(() => 10);
@@ -58,6 +63,7 @@ function createTestPlugin(params?: {
   id?: ChannelId;
   account?: TestAccount;
   startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
+  stopAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["stopAccount"];
   includeDescribeAccount?: boolean;
   resolveAccount?: ChannelPlugin<TestAccount>["config"]["resolveAccount"];
   isConfigured?: ChannelPlugin<TestAccount>["config"]["isConfigured"];
@@ -81,6 +87,9 @@ function createTestPlugin(params?: {
   const gateway: NonNullable<ChannelPlugin<TestAccount>["gateway"]> = {};
   if (params?.startAccount) {
     gateway.startAccount = params.startAccount;
+  }
+  if (params?.stopAccount) {
+    gateway.stopAccount = params.stopAccount;
   }
   return {
     id,
@@ -168,6 +177,7 @@ describe("server-channels auto restart", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    releasePinnedPluginHttpRouteRegistry();
     setActivePluginRegistry(
       previousRegistry ?? createEmptyPluginRegistry(),
       previousRegistryKey ?? undefined,
@@ -607,5 +617,90 @@ describe("server-channels auto restart", () => {
     expect(getActivePluginRegistry()).toBe(upgradedRegistry);
     expect(getActivePluginRegistryKey()).toBe("upgraded-registry");
     expect(getGlobalPluginRegistry()).toBe(upgradedRegistry);
+  });
+
+  it("keeps webhook dispatch reachable through the pinned route registry after channel restart", async () => {
+    let unregisterWebhook = () => {};
+    const initialWebhookHandler = vi.fn(async (_req, res) => {
+      res.statusCode = 202;
+      res.end("initial");
+      return true;
+    });
+    const restartedWebhookHandler = vi.fn(async (_req, res) => {
+      res.statusCode = 400;
+      res.end("invalid payload");
+      return true;
+    });
+    const startAccount = vi
+      .fn<NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"]>()
+      .mockImplementationOnce(async () => {
+        unregisterWebhook = registerPluginHttpRoute({
+          path: "/bluebubbles-webhook",
+          auth: "plugin",
+          pluginId: "discord",
+          source: "test-webhook",
+          handler: initialWebhookHandler,
+          replaceExisting: true,
+        });
+      })
+      .mockImplementationOnce(async () => {
+        unregisterWebhook = registerPluginHttpRoute({
+          path: "/bluebubbles-webhook",
+          auth: "plugin",
+          pluginId: "discord",
+          source: "test-webhook",
+          handler: restartedWebhookHandler,
+          replaceExisting: true,
+        });
+      });
+    const stopAccount = vi.fn(async () => {
+      unregisterWebhook();
+      unregisterWebhook = () => {};
+    });
+
+    const startupRegistry = createTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+      }),
+    );
+    const driftedRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(startupRegistry, "startup-registry");
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+    initializeGlobalHookRunner(startupRegistry);
+    const manager = createManager({
+      resolvePluginRuntimeState: () => ({
+        registry: startupRegistry,
+        cacheKey: "startup-registry",
+      }),
+    });
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(initialWebhookHandler).not.toHaveBeenCalled();
+
+    setActivePluginRegistry(driftedRegistry, "drifted-registry");
+    initializeGlobalHookRunner(driftedRegistry);
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    const handler = createGatewayPluginRequestHandler({
+      registry: startupRegistry,
+      log: createSubsystemLogger("gateway/server-channels-test/plugin-http"),
+    });
+    const { res, end } = makeMockHttpResponse();
+    const handled = await handler({ url: "/bluebubbles-webhook" } as IncomingMessage, res);
+
+    expect(handled).toBe(true);
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(initialWebhookHandler).not.toHaveBeenCalled();
+    expect(restartedWebhookHandler).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(400);
+    expect(end).toHaveBeenCalledWith("invalid payload");
+    expect(startupRegistry.httpRoutes).toHaveLength(1);
+    expect(startupRegistry.httpRoutes[0]?.path).toBe("/bluebubbles-webhook");
+    expect(driftedRegistry.httpRoutes).toHaveLength(0);
   });
 });
