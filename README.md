@@ -34,6 +34,8 @@
 **OpenClaw** is a _personal AI assistant_ you run on your own devices.
 It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
+</div>
+
 ---
 
 ## What is OpenFinClaw?
@@ -91,11 +93,11 @@ OpenFinClaw is different:
 
 ## Features
 
+```bash
 # Talk to the assistant (optionally deliver back to any connected channel: WhatsApp/Telegram/Slack/Discord/Google Chat/Signal/iMessage/BlueBubbles/IRC/Microsoft Teams/Matrix/Feishu/LINE/Mattermost/Nextcloud Talk/Nostr/Synology Chat/Tlon/Twitch/Zalo/Zalo Personal/WebChat)
 
 openclaw agent --message "Ship checklist" --thinking high
-
-````
+```
 
 | Dimension               | What you contribute                                      | Format                | Example                                                        |
 | ----------------------- | -------------------------------------------------------- | --------------------- | -------------------------------------------------------------- |
@@ -117,7 +119,7 @@ finclaw commons publish --type skill --path ./skills/tax-loss-harvest/
 
 # Example: publish a workspace template
 finclaw commons publish --type workspace --path ./workspaces/crypto-trader/
-````
+```
 
 **Discovering** — Users browse, search, and install from the commons:
 
