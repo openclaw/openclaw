@@ -8,31 +8,27 @@ title: "Getting Started"
 
 # Getting Started
 
-Goal: go from zero to a first working chat with minimal setup.
+Install OpenClaw, run onboarding, and chat with your AI assistant — all in
+about 5 minutes. By the end you will have a running Gateway, configured auth,
+and a working chat session.
 
-<Info>
-Fastest chat: open the Control UI (no channel setup needed). Run `openclaw dashboard`
-and chat in the browser, or open `http://127.0.0.1:18789/` on the
-<Tooltip headline="Gateway host" tip="The machine running the OpenClaw gateway service.">gateway host</Tooltip>.
-Docs: [Dashboard](/web/dashboard) and [Control UI](/web/control-ui).
-</Info>
+## What you need
 
-## Prereqs
-
-- Node 24 recommended (Node 22 LTS, currently `22.16+`, still supported for compatibility)
-- An API key from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you for this
+- **Node.js** — Node 24 recommended (Node 22.16+ also supported)
+- **An API key** from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you
 
 <Tip>
-Check your Node version with `node --version` if you are unsure.
+Check your Node version with `node --version`.
 Windows users: WSL2 is strongly recommended. See [Windows](/platforms/windows).
+Need to install Node? See [Node setup](/install/node).
 </Tip>
 
-## Quick setup (CLI)
+## Quick setup
 
 <Steps>
-  <Step title="Install OpenClaw (recommended)">
+  <Step title="Install OpenClaw">
     <Tabs>
-      <Tab title="macOS/Linux">
+      <Tab title="macOS / Linux">
         ```bash
         curl -fsSL https://openclaw.ai/install.sh | bash
         ```
@@ -50,7 +46,7 @@ Windows users: WSL2 is strongly recommended. See [Windows](/platforms/windows).
     </Tabs>
 
     <Note>
-    Other install methods and requirements: [Install](/install).
+    Other install methods (Docker, Nix, npm): [Install](/install).
     </Note>
 
   </Step>
@@ -59,66 +55,61 @@ Windows users: WSL2 is strongly recommended. See [Windows](/platforms/windows).
     openclaw onboard --install-daemon
     ```
 
-    Onboarding configures auth, gateway settings, and optional channels.
-    See [Onboarding (CLI)](/start/wizard) for details.
+    The wizard walks you through choosing a model provider, setting an API key,
+    and configuring the Gateway. It takes about 2 minutes.
+
+    See [Onboarding (CLI)](/start/wizard) for the full reference.
 
   </Step>
-  <Step title="Check the Gateway">
-    If you installed the service, it should already be running:
-
+  <Step title="Verify the Gateway is running">
     ```bash
     openclaw gateway status
     ```
 
+    You should see the Gateway listening on port 18789.
+
   </Step>
-  <Step title="Open the Control UI">
+  <Step title="Open the dashboard">
     ```bash
     openclaw dashboard
     ```
 
-    If the Control UI loads, your Gateway is ready.
+    This opens the Control UI in your browser. If it loads, everything is working.
 
   </Step>
   <Step title="Send your first message">
-    The fastest way to chat is directly in the Control UI browser tab.
-    Type a message and you should get an AI reply.
+    Type a message in the Control UI chat and you should get an AI reply.
 
-    Want to chat from a messaging app instead? The fastest channel setup
-    is usually [Telegram](/channels/telegram) (just a bot token, no QR
-    pairing). See [Channels](/channels) for all options.
+    Want to chat from your phone instead? The fastest channel to set up is
+    [Telegram](/channels/telegram) (just a bot token). See [Channels](/channels)
+    for all options.
 
   </Step>
 </Steps>
 
-## Useful environment variables
-
-If you run OpenClaw as a service account or want custom config/state locations:
-
-- `OPENCLAW_HOME` sets the home directory used for internal path resolution.
-- `OPENCLAW_STATE_DIR` overrides the state directory.
-- `OPENCLAW_CONFIG_PATH` overrides the config file path.
-
-Full environment variable reference: [Environment vars](/help/environment).
-
-## Go deeper
+## What to do next
 
 <Columns>
-  <Card title="Onboarding (CLI)" href="/start/wizard">
-    Full CLI onboarding reference and advanced options.
+  <Card title="Connect a channel" href="/channels" icon="message-square">
+    WhatsApp, Telegram, Discord, iMessage, and more.
   </Card>
-  <Card title="macOS app onboarding" href="/start/onboarding">
-    First run flow for the macOS app.
+  <Card title="Pairing and safety" href="/channels/pairing" icon="shield">
+    Control who can message your agent.
+  </Card>
+  <Card title="Configure the Gateway" href="/gateway/configuration" icon="settings">
+    Models, tools, sandbox, and advanced settings.
+  </Card>
+  <Card title="Browse tools" href="/tools" icon="wrench">
+    Browser, exec, web search, skills, and plugins.
   </Card>
 </Columns>
 
-## What you will have
+<Accordion title="Advanced: environment variables">
+  If you run OpenClaw as a service account or want custom paths:
 
-- A running Gateway
-- Auth configured
-- Control UI access or a connected channel
+- `OPENCLAW_HOME` — home directory for internal path resolution
+- `OPENCLAW_STATE_DIR` — override the state directory
+- `OPENCLAW_CONFIG_PATH` — override the config file path
 
-## Next steps
-
-- DM safety and approvals: [Pairing](/channels/pairing)
-- Connect more channels: [Channels](/channels)
-- Advanced workflows and from source: [Setup](/start/setup)
+Full reference: [Environment variables](/help/environment).
+</Accordion>
