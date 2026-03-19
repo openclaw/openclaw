@@ -21,10 +21,37 @@ describe("chat-model-ref helpers", () => {
     });
   });
 
+  it("prefers canonical catalog keys for option values when provided", () => {
+    expect(
+      buildChatModelOption({
+        id: "custom-hajimi-zabc-net/gpt-5.2",
+        key: "custom-hajimi-zabc-net/gpt-5.2",
+        name: "GPT-5.2",
+        provider: "moonshot",
+      }),
+    ).toEqual({
+      value: "custom-hajimi-zabc-net/gpt-5.2",
+      label: "custom-hajimi-zabc-net/gpt-5.2 · moonshot",
+    });
+  });
+
   it("normalizes raw overrides when the catalog match is unique", () => {
     expect(normalizeChatModelOverrideValue(createChatModelOverride("gpt-5-mini"), catalog)).toBe(
       "openai/gpt-5-mini",
     );
+  });
+
+  it("normalizes raw overrides to the server-supplied catalog key", () => {
+    expect(
+      normalizeChatModelOverrideValue(createChatModelOverride("gpt-5-mini"), [
+        {
+          id: "gpt-5-mini",
+          key: "custom-hajimi-zabc-net/gpt-5-mini",
+          name: "GPT-5 Mini",
+          provider: "moonshot",
+        },
+      ]),
+    ).toBe("custom-hajimi-zabc-net/gpt-5-mini");
   });
 
   it("keeps ambiguous raw overrides unchanged", () => {

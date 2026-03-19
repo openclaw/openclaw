@@ -125,6 +125,7 @@ export type GatewayModelChoice = {
   id: string;
   name: string;
   provider: string;
+  key?: string;
   contextWindow?: number;
   reasoning?: boolean;
 };

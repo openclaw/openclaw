@@ -89,6 +89,7 @@ type ModelCatalogRpcEntry = {
   id: string;
   name: string;
   provider: string;
+  key?: string;
   contextWindow?: number;
 };
 
@@ -126,24 +127,28 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
     id: "claude-test-a",
     name: "A-Model",
     provider: "anthropic",
+    key: "anthropic/claude-test-a",
     contextWindow: 200_000,
   },
   {
     id: "claude-test-b",
     name: "B-Model",
     provider: "anthropic",
+    key: "anthropic/claude-test-b",
     contextWindow: 1000,
   },
   {
     id: "gpt-test-a",
     name: "A-Model",
     provider: "openai",
+    key: "openai/gpt-test-a",
     contextWindow: 8000,
   },
   {
     id: "gpt-test-z",
     name: "gpt-test-z",
     provider: "openai",
+    key: "openai/gpt-test-z",
   },
 ];
 
@@ -331,12 +336,14 @@ describe("gateway server models + voicewake", () => {
           id: "claude-test-a",
           name: "A-Model",
           provider: "anthropic",
+          key: "anthropic/claude-test-a",
           contextWindow: 200_000,
         },
         {
           id: "gpt-test-z",
           name: "gpt-test-z",
           provider: "openai",
+          key: "openai/gpt-test-z",
         },
       ],
     });
@@ -353,6 +360,7 @@ describe("gateway server models + voicewake", () => {
           id: "not-in-catalog",
           name: "not-in-catalog",
           provider: "openai",
+          key: "openai/not-in-catalog",
         },
       ],
     });

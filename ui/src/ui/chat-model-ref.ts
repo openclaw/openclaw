@@ -30,6 +30,16 @@ export function createChatModelOverride(value: string): ChatModelOverride | null
   return { kind: "raw", value: trimmed };
 }
 
+function resolveCatalogChatModelValue(
+  entry: Pick<ModelCatalogEntry, "id" | "provider" | "key">,
+): string {
+  const key = entry.key?.trim();
+  if (key) {
+    return key;
+  }
+  return buildQualifiedChatModelValue(entry.id, entry.provider);
+}
+
 export function normalizeChatModelOverrideValue(
   override: ChatModelOverride | null | undefined,
   catalog: ModelCatalogEntry[],
@@ -50,7 +60,7 @@ export function normalizeChatModelOverrideValue(
     if (entry.id.trim().toLowerCase() !== trimmed.toLowerCase()) {
       continue;
     }
-    const candidate = buildQualifiedChatModelValue(entry.id, entry.provider);
+    const candidate = resolveCatalogChatModelValue(entry);
     if (!matchedValue) {
       matchedValue = candidate;
       continue;
@@ -87,7 +97,7 @@ export function formatChatModelDisplay(value: string): string {
 export function buildChatModelOption(entry: ModelCatalogEntry): { value: string; label: string } {
   const provider = entry.provider?.trim();
   return {
-    value: buildQualifiedChatModelValue(entry.id, provider),
+    value: resolveCatalogChatModelValue(entry),
     label: provider ? `${entry.id} · ${provider}` : entry.id,
   };
 }
