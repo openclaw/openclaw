@@ -1,6 +1,5 @@
 ---
 title: IRC
-description: Connect OpenClaw to IRC channels and direct messages.
 summary: "IRC plugin setup, access controls, and troubleshooting"
 read_when:
   - You want to connect OpenClaw to IRC channels or DMs
