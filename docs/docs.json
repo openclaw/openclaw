@@ -1127,6 +1127,7 @@
                   "providers/deepgram",
                   "providers/github-copilot",
                   "providers/google",
+                  "providers/groq",
                   "providers/huggingface",
                   "providers/kilocode",
                   "providers/litellm",
@@ -1286,52 +1287,76 @@
                 "group": "CLI commands",
                 "pages": [
                   "cli/index",
-                  "cli/acp",
-                  "cli/agent",
-                  "cli/agents",
-                  "cli/approvals",
-                  "cli/backup",
-                  "cli/browser",
-                  "cli/channels",
-                  "cli/clawbot",
-                  "cli/completion",
-                  "cli/config",
-                  "cli/configure",
-                  "cli/cron",
-                  "cli/daemon",
-                  "cli/dashboard",
-                  "cli/devices",
-                  "cli/directory",
-                  "cli/dns",
-                  "cli/docs",
-                  "cli/doctor",
-                  "cli/gateway",
-                  "cli/health",
-                  "cli/hooks",
-                  "cli/logs",
-                  "cli/memory",
-                  "cli/message",
-                  "cli/models",
-                  "cli/node",
-                  "cli/nodes",
-                  "cli/onboard",
-                  "cli/pairing",
-                  "cli/plugins",
-                  "cli/qr",
-                  "cli/reset",
-                  "cli/sandbox",
-                  "cli/secrets",
-                  "cli/security",
-                  "cli/sessions",
-                  "cli/setup",
-                  "cli/skills",
-                  "cli/status",
-                  "cli/system",
-                  "cli/tui",
-                  "cli/uninstall",
-                  "cli/update",
-                  "cli/voicecall",
-                  "cli/webhooks"
+                  {
+                    "group": "Gateway and service",
+                    "pages": [
+                      "cli/backup",
+                      "cli/daemon",
+                      "cli/doctor",
+                      "cli/gateway",
+                      "cli/health",
+                      "cli/logs",
+                      "cli/onboard",
+                      "cli/reset",
+                      "cli/secrets",
+                      "cli/security",
+                      "cli/setup",
+                      "cli/status",
+                      "cli/uninstall",
+                      "cli/update"
+                    ]
+                  },
+                  {
+                    "group": "Agents and sessions",
+                    "pages": [
+                      "cli/agent",
+                      "cli/agents",
+                      "cli/hooks",
+                      "cli/memory",
+                      "cli/message",
+                      "cli/models",
+                      "cli/sessions",
+                      "cli/system"
+                    ]
+                  },
+                  {
+                    "group": "Channels and messaging",
+                    "pages": [
+                      "cli/channels",
+                      "cli/devices",
+                      "cli/directory",
+                      "cli/pairing",
+                      "cli/qr",
+                      "cli/voicecall"
+                    ]
+                  },
+                  {
+                    "group": "Tools and execution",
+                    "pages": [
+                      "cli/approvals",
+                      "cli/browser",
+                      "cli/cron",
+                      "cli/node",
+                      "cli/nodes",
+                      "cli/sandbox"
+                    ]
+                  },
+                  {
+                    "group": "Configuration",
+                    "pages": ["cli/config", "cli/configure", "cli/webhooks"]
+                  },
+                  {
+                    "group": "Plugins and skills",
+                    "pages": ["cli/plugins", "cli/skills"]
+                  },
+                  {
+                    "group": "Interfaces",
+                    "pages": ["cli/dashboard", "cli/tui"]
+                  },
+                  {
+                    "group": "Utility",
+                    "pages": ["cli/acp", "cli/clawbot", "cli/completion", "cli/dns", "cli/docs"]
+                  }
                 ]
               },
               {
@@ -1362,6 +1387,7 @@
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
+                  "reference/memory-config",
                   "date-time"
                 ]
               },
