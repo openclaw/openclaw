@@ -289,19 +289,14 @@ Respond with exactly 3 queries, one per line. No numbers, bullets, or explanatio
     // Execute all queries in parallel
     const parallelResults = await Promise.all(
       searchQueries.map(async (query) => {
-        const [nodes, facts] = await Promise.all([
-          this.graph.searchNodes(sessionId, query),
-          this.graph.searchFacts(sessionId, query),
-        ]);
-        return { query, nodes, facts };
+        const facts = await this.graph.searchFacts(sessionId, query);
+        return { query, facts };
       }),
     );
 
-    for (const { query, nodes, facts } of parallelResults) {
-      this.log(
-        `    ✅ [GRAPH] Query "${query}": Found ${nodes.length} nodes and ${facts.length} facts.`,
-      );
-      const results = [...nodes, ...facts];
+    for (const { query, facts } of parallelResults) {
+      this.log(`    ✅ [GRAPH] Query "${query}": Found ${facts.length} facts.`);
+      const results = [...facts];
       for (const res of results) {
         const id = res.message?.uuid || res.uuid || res.content;
         if (id && !seenUris.has(id)) {

@@ -31,27 +31,15 @@ export const handleRememberCommand: CommandHandler = async (params, allowTextCom
   }
 
   try {
-    const [nodesResult, factsResult] = await Promise.allSettled([
-      callGateway<{ nodes: GraphMemory[] }>({
-        method: "narrative.searchNodes",
-        params: { query },
-        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-        clientDisplayName: "remember command",
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-      }),
-      callGateway<{ facts: GraphMemory[] }>({
-        method: "narrative.searchFacts",
-        params: { query },
-        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-        clientDisplayName: "remember command",
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-      }),
-    ]);
+    const factsResult = await callGateway<{ facts: GraphMemory[] }>({
+      method: "narrative.searchFacts",
+      params: { query },
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientDisplayName: "remember command",
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+    });
 
-    const nodes = nodesResult.status === "fulfilled" ? (nodesResult.value?.nodes ?? []) : [];
-    const facts = factsResult.status === "fulfilled" ? (factsResult.value?.facts ?? []) : [];
-
-    const combined: GraphMemory[] = [...nodes, ...facts];
+    const combined: GraphMemory[] = factsResult?.facts ?? [];
 
     if (combined.length === 0) {
       return {

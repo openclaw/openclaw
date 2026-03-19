@@ -381,12 +381,9 @@ export default function register(api: PluginApi) {
       const sessionId = "global_user_memory";
 
       try {
-        const [nodes, facts] = await Promise.all([
-          graphService.searchNodes(sessionId, query),
-          graphService.searchFacts(sessionId, query),
-        ]);
+        const facts = await graphService.searchFacts(sessionId, query);
 
-        const combined = [...nodes, ...facts];
+        const combined = [...facts];
 
         if (combined.length === 0) {
           return {
