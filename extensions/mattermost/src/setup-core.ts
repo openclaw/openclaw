@@ -5,11 +5,11 @@ import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
   DEFAULT_ACCOUNT_ID,
-  hasConfiguredSecretInput,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   type OpenClawConfig,
 } from "./runtime-api.js";
+import { hasConfiguredSecretInput } from "./secret-input.js";
 
 const channel = "mattermost" as const;
 

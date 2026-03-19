@@ -1,9 +1,5 @@
-import type {
-  BlockStreamingCoalesceConfig,
-  DmPolicy,
-  GroupPolicy,
-  SecretInput,
-} from "./runtime-api.js";
+import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./runtime-api.js";
+import type { SecretInput } from "./secret-input.js";
 
 export type MattermostReplyToMode = "off" | "first" | "all";
 export type MattermostChatTypeKey = "direct" | "channel" | "group";

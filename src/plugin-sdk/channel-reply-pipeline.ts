@@ -25,6 +25,7 @@ export function createChannelReplyPipeline(params: {
   channel?: string;
   accountId?: string;
   typing?: CreateTypingCallbacksParams;
+  typingCallbacks?: TypingCallbacks;
 }): ChannelReplyPipeline {
   return {
     ...createReplyPrefixOptions({
@@ -33,6 +34,10 @@ export function createChannelReplyPipeline(params: {
       channel: params.channel,
       accountId: params.accountId,
     }),
-    ...(params.typing ? { typingCallbacks: createTypingCallbacks(params.typing) } : {}),
+    ...(params.typingCallbacks
+      ? { typingCallbacks: params.typingCallbacks }
+      : params.typing
+        ? { typingCallbacks: createTypingCallbacks(params.typing) }
+        : {}),
   };
 }
