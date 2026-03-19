@@ -240,10 +240,12 @@ async function probeProfileGateway(params: {
       typeof params.timeoutMs === "number"
         ? Math.max(1, Math.min(PROBE_TIMEOUT_MS, params.timeoutMs))
         : PROBE_TIMEOUT_MS,
-    // Shared-secret probes do not need pairing, while no-auth probes must
-    // explicitly preserve device identity so loopback probe defaults do not
-    // trigger "device identity required" closes.
-    disableDeviceIdentity: hasSharedProbeAuth,
+    // Watchdog probes are health checks, not real client sessions. Always
+    // disable device identity so the probe never triggers pairing-gated or
+    // "device identity required" closes on any bind address (loopback,
+    // custom, or tailnet). Without this, non-loopback no-auth gateways
+    // would report false failures and cause unnecessary recovery cycles.
+    disableDeviceIdentity: true,
   });
   if (probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason)) {
     return { healthy: true };

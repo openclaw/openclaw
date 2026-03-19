@@ -372,7 +372,7 @@ describe("runRescueWatchdogJob", () => {
     );
   });
 
-  it("explicitly keeps device identity enabled for no-auth watchdog probes", async () => {
+  it("disables device identity for no-auth watchdog probes on tailnet", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         port: 18_789,
@@ -410,7 +410,9 @@ describe("runRescueWatchdogJob", () => {
       | { disableDeviceIdentity?: boolean; url?: string }
       | undefined;
     expect(probeCall?.url).toBe("ws://100.64.0.10:18789");
-    expect(probeCall?.disableDeviceIdentity).toBe(false);
+    // Watchdog probes always disable device identity to avoid triggering
+    // pairing-gated or "device identity required" closes on any bind address.
+    expect(probeCall?.disableDeviceIdentity).toBe(true);
   });
 
   it("treats pairing-required closes as healthy for no-auth watchdog probes", async () => {
@@ -485,7 +487,7 @@ describe("runRescueWatchdogJob", () => {
     expect(result.status).toBe("ok");
     expect(probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({
-        disableDeviceIdentity: false,
+        disableDeviceIdentity: true,
         url: "ws://127.0.0.1:18789",
       }),
     );
