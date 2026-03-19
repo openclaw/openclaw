@@ -14,6 +14,7 @@ import {
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type MemorySearchManagerCacheStore = {
   qmdManagerCache: Map<string, MemorySearchManager>;
+  postgresManagerCache: Map<string, MemorySearchManager>;
 };
 
 function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
@@ -22,12 +23,13 @@ function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
     MEMORY_SEARCH_MANAGER_CACHE_KEY,
     () => ({
       qmdManagerCache: new Map<string, MemorySearchManager>(),
+      postgresManagerCache: new Map<string, MemorySearchManager>(),
     }),
   );
 }
 
 const log = createSubsystemLogger("memory");
-const { qmdManagerCache: QMD_MANAGER_CACHE } = getMemorySearchManagerCacheStore();
+const { qmdManagerCache: QMD_MANAGER_CACHE, postgresManagerCache: PG_MANAGER_CACHE } = getMemorySearchManagerCacheStore();
 let managerRuntimePromise: Promise<typeof import("./manager-runtime.js")> | null = null;
 
 function loadManagerRuntime() {
@@ -55,6 +57,7 @@ export async function getMemorySearchManager(params: {
         cfg: params.cfg,
         agentId: params.agentId,
       });
+      const cacheKey = `pg:${params.agentId}`;
       const wrapper = new FallbackMemoryManager(
         {
           primary,
@@ -63,8 +66,11 @@ export async function getMemorySearchManager(params: {
             return await MemoryIndexManager.get(params);
           },
         },
-        () => {},
+        () => {
+          PG_MANAGER_CACHE.delete(cacheKey);
+        },
       );
+      PG_MANAGER_CACHE.set(cacheKey, wrapper);
       return { manager: wrapper };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -174,6 +180,15 @@ class BorrowedMemoryManager implements MemorySearchManager {
 }
 
 export async function closeAllMemorySearchManagers(): Promise<void> {
+  const pgManagers = Array.from(PG_MANAGER_CACHE.values());
+  PG_MANAGER_CACHE.clear();
+  for (const manager of pgManagers) {
+    try {
+      await manager.close?.();
+    } catch (err) {
+      log.warn(`failed to close postgres memory manager: ${String(err)}`);
+    }
+  }
   const managers = Array.from(QMD_MANAGER_CACHE.values());
   QMD_MANAGER_CACHE.clear();
   for (const manager of managers) {
