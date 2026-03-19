@@ -12,10 +12,23 @@ import {
   normalizeGatewayClientMode,
   normalizeGatewayClientName,
 } from "../gateway/protocol/client-info.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
 
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
 export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
+const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+
+type PluginRegistryStateLike = {
+  registry?: {
+    channels?: Array<{
+      plugin: {
+        id: string;
+        meta: {
+          aliases?: string[];
+        };
+      };
+    }>;
+  } | null;
+};
 
 const MARKDOWN_CAPABLE_CHANNELS = new Set<string>([
   "slack",
@@ -64,8 +77,13 @@ export function normalizeMessageChannel(raw?: string | null): string | undefined
   if (builtIn) {
     return builtIn;
   }
-  const registry = getActivePluginRegistry();
-  const pluginMatch = registry?.channels.find((entry) => {
+  const channels =
+    (
+      globalThis as typeof globalThis & {
+        [REGISTRY_STATE]?: PluginRegistryStateLike;
+      }
+    )[REGISTRY_STATE]?.registry?.channels ?? [];
+  const pluginMatch = channels.find((entry) => {
     if (entry.plugin.id.toLowerCase() === normalized) {
       return true;
     }
@@ -77,19 +95,23 @@ export function normalizeMessageChannel(raw?: string | null): string | undefined
 }
 
 const listPluginChannelIds = (): string[] => {
-  const registry = getActivePluginRegistry();
-  if (!registry) {
-    return [];
-  }
-  return registry.channels.map((entry) => entry.plugin.id);
+  const channels =
+    (
+      globalThis as typeof globalThis & {
+        [REGISTRY_STATE]?: PluginRegistryStateLike;
+      }
+    )[REGISTRY_STATE]?.registry?.channels ?? [];
+  return channels.map((entry) => entry.plugin.id);
 };
 
 const listPluginChannelAliases = (): string[] => {
-  const registry = getActivePluginRegistry();
-  if (!registry) {
-    return [];
-  }
-  return registry.channels.flatMap((entry) => entry.plugin.meta.aliases ?? []);
+  const channels =
+    (
+      globalThis as typeof globalThis & {
+        [REGISTRY_STATE]?: PluginRegistryStateLike;
+      }
+    )[REGISTRY_STATE]?.registry?.channels ?? [];
+  return channels.flatMap((entry) => entry.plugin.meta.aliases ?? []);
 };
 
 export const listDeliverableMessageChannels = (): ChannelId[] =>

@@ -35,14 +35,14 @@ MiniMax highlights these improvements in M2.5:
 
 ## Choose a setup
 
-### MiniMax OAuth (Coding Plan) — recommended
+### MiniMax OAuth (Coding Plan) - recommended
 
 **Best for:** quick setup with MiniMax Coding Plan via OAuth, no API key required.
 
 Enable the bundled OAuth plugin and authenticate:
 
 ```bash
-openclaw plugins enable minimax-portal-auth  # skip if already loaded.
+openclaw plugins enable minimax  # skip if already loaded.
 openclaw gateway restart  # restart if gateway is already running
 openclaw onboard --auth-choice minimax-portal
 ```
@@ -52,7 +52,7 @@ You will be prompted to select an endpoint:
 - **Global** - International users (`api.minimax.io`)
 - **CN** - Users in China (`api.minimaxi.com`)
 
-See [MiniMax OAuth plugin README](https://github.com/openclaw/openclaw/tree/main/extensions/minimax-portal-auth) for details.
+See [MiniMax plugin README](https://github.com/openclaw/openclaw/tree/main/extensions/minimax) for details.
 
 ### MiniMax M2.5 (API key)
 
@@ -194,7 +194,7 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 
 ## Troubleshooting
 
-### “Unknown model: minimax/MiniMax-M2.5”
+### "Unknown model: minimax/MiniMax-M2.5"
 
 This usually means the **MiniMax provider isn’t configured** (no provider entry
 and no MiniMax auth profile/env key found). A fix for this detection is in

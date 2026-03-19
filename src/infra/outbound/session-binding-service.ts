@@ -148,15 +148,22 @@ function resolveAdapterCapabilities(
 const ADAPTERS_BY_CHANNEL_ACCOUNT = new Map<string, SessionBindingAdapter>();
 
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
-  const key = toAdapterKey({
-    channel: adapter.channel,
-    accountId: adapter.accountId,
-  });
-  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, {
+  const normalizedAdapter = {
     ...adapter,
     channel: adapter.channel.trim().toLowerCase(),
     accountId: normalizeAccountId(adapter.accountId),
+  };
+  const key = toAdapterKey({
+    channel: normalizedAdapter.channel,
+    accountId: normalizedAdapter.accountId,
   });
+  const existing = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
+  if (existing && existing !== adapter) {
+    throw new Error(
+      `Session binding adapter already registered for ${normalizedAdapter.channel}:${normalizedAdapter.accountId}`,
+    );
+  }
+  ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, normalizedAdapter);
 }
 
 export function unregisterSessionBindingAdapter(params: {

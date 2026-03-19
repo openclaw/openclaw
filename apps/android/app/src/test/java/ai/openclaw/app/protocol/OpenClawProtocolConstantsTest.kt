@@ -34,6 +34,7 @@ class OpenClawProtocolConstantsTest {
     assertEquals("contacts", OpenClawCapability.Contacts.rawValue)
     assertEquals("calendar", OpenClawCapability.Calendar.rawValue)
     assertEquals("motion", OpenClawCapability.Motion.rawValue)
+    assertEquals("callLog", OpenClawCapability.CallLog.rawValue)
   }
 
   @Test
@@ -83,5 +84,15 @@ class OpenClawProtocolConstantsTest {
   fun motionCommandsUseStableStrings() {
     assertEquals("motion.activity", OpenClawMotionCommand.Activity.rawValue)
     assertEquals("motion.pedometer", OpenClawMotionCommand.Pedometer.rawValue)
+  }
+
+  @Test
+  fun callLogCommandsUseStableStrings() {
+    assertEquals("callLog.search", OpenClawCallLogCommand.Search.rawValue)
+  }
+
+  @Test
+  fun smsCommandsUseStableStrings() {
+    assertEquals("sms.search", OpenClawSmsCommand.Search.rawValue)
   }
 }

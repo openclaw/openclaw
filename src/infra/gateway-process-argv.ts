@@ -20,6 +20,7 @@ export function isGatewayArgv(args: string[], opts?: { allowGatewayBinary?: bool
     "dist/entry.js",
     "openclaw.mjs",
     "scripts/run-node.mjs",
+    "src/entry.ts",
     "src/index.ts",
   ];
   if (normalized.some((arg) => entryCandidates.some((entry) => arg.endsWith(entry)))) {

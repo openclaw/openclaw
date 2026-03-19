@@ -84,6 +84,20 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
   return null;
 }
 
+export function resolveTlonOutboundTarget(to?: string | null) {
+  const parsed = parseTlonTarget(to ?? "");
+  if (!parsed) {
+    return {
+      ok: false as const,
+      error: new Error(`Invalid Tlon target. Use ${formatTargetHint()}`),
+    };
+  }
+  if (parsed.kind === "dm") {
+    return { ok: true as const, to: parsed.ship };
+  }
+  return { ok: true as const, to: parsed.nest };
+}
+
 export function formatTargetHint(): string {
   return "dm/~sampel-palnet | ~sampel-palnet | chat/~host-ship/channel | group:~host-ship/channel";
 }

@@ -179,6 +179,60 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("migrates legacy browser extension profiles to existing-session on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        browser: {
+          relayBindHost: "0.0.0.0",
+          profiles: {
+            chromeLive: {
+              driver: "extension",
+              color: "#00AA00",
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
+    expect(browser.relayBindHost).toBeUndefined();
+    expect(
+      ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
+    ).toBe("existing-session");
+  });
+
+  it("notes legacy browser extension migration changes", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          browser: {
+            relayBindHost: "127.0.0.1",
+            profiles: {
+              chromeLive: {
+                driver: "extension",
+                color: "#00AA00",
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const messages = noteSpy.mock.calls
+        .filter((call) => call[1] === "Doctor changes")
+        .map((call) => String(call[0]));
+      expect(
+        messages.some((line) => line.includes('browser.profiles.chromeLive.driver "extension"')),
+      ).toBe(true);
+      expect(messages.some((line) => line.includes("browser.relayBindHost"))).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
@@ -324,6 +378,61 @@ describe("doctor config flow", () => {
         noteSpy.mock.calls.some((call) =>
           String(call[0]).includes(
             "configured Telegram bot credentials are unavailable in this command path",
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("warns and continues when Telegram account inspection hits inactive SecretRef surfaces", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const result = await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          channels: {
+            telegram: {
+              accounts: {
+                inactive: {
+                  enabled: false,
+                  botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+                  allowFrom: ["@testuser"],
+                },
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const cfg = result.cfg as {
+        channels?: {
+          telegram?: {
+            accounts?: Record<string, { allowFrom?: string[] }>;
+          };
+        };
+      };
+      expect(cfg.channels?.telegram?.accounts?.inactive?.allowFrom).toEqual(["@testuser"]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(
+        noteSpy.mock.calls.some((call) =>
+          String(call[0]).includes("Telegram account inactive: failed to inspect bot token"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some((call) =>
+          String(call[0]).includes(
+            "Telegram allowFrom contains @username entries, but no Telegram bot token is configured",
           ),
         ),
       ).toBe(true);

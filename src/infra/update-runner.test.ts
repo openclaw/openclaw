@@ -187,6 +187,21 @@ describe("runGatewayUpdate", () => {
     );
   }
 
+  async function writeGlobalPackageVersion(pkgRoot: string, version = "2.0.0") {
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version }),
+      "utf-8",
+    );
+  }
+
+  async function createGlobalPackageFixture(rootDir: string) {
+    const nodeModules = path.join(rootDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+    return { nodeModules, pkgRoot };
+  }
+
   function createGlobalNpmUpdateRunner(params: {
     pkgRoot: string;
     nodeModules: string;
@@ -366,13 +381,17 @@ describe("runGatewayUpdate", () => {
     pkgRoot: string;
     npmRootOutput?: string;
     installCommand: string;
-    onInstall?: () => Promise<void>;
+    gitRootMode?: "not-git" | "missing";
+    onInstall?: (options?: { env?: NodeJS.ProcessEnv }) => Promise<void>;
   }) => {
     const calls: string[] = [];
-    const runCommand = async (argv: string[]) => {
+    const runCommand = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
       const key = argv.join(" ");
       calls.push(key);
       if (key === `git -C ${params.pkgRoot} rev-parse --show-toplevel`) {
+        if (params.gitRootMode === "missing") {
+          throw Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" });
+        }
         return { stdout: "", stderr: "not a git repository", code: 128 };
       }
       if (key === "npm root -g") {
@@ -385,7 +404,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 1 };
       }
       if (key === params.installCommand) {
-        await params.onInstall?.();
+        await params.onInstall?.(options);
         return { stdout: "ok", stderr: "", code: 0 };
       }
       return { stdout: "", stderr: "", code: 0 };
@@ -422,33 +441,29 @@ describe("runGatewayUpdate", () => {
     expect(calls.some((call) => call === expectedInstallCommand)).toBe(true);
   });
 
-  it("falls back to global npm update when git is missing from PATH", async () => {
-    const nodeModules = path.join(tempDir, "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    await seedGlobalPackageRoot(pkgRoot);
+  it("updates global npm installs from the GitHub main package spec", async () => {
+    const { calls, result } = await runNpmGlobalUpdateCase({
+      expectedInstallCommand:
+        "npm i -g github:openclaw/openclaw#main --no-fund --no-audit --loglevel=error",
+      tag: "main",
+    });
 
-    const calls: string[] = [];
-    const runCommand = async (argv: string[]): Promise<CommandResult> => {
-      const key = argv.join(" ");
-      calls.push(key);
-      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
-        throw Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" });
-      }
-      if (key === "npm root -g") {
-        return { stdout: nodeModules, stderr: "", code: 0 };
-      }
-      if (key === "pnpm root -g") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (key === "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error") {
-        await fs.writeFile(
-          path.join(pkgRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
-          "utf-8",
-        );
-      }
-      return { stdout: "ok", stderr: "", code: 0 };
-    };
+    expect(result.status).toBe("ok");
+    expect(result.mode).toBe("npm");
+    expect(calls).toContain(
+      "npm i -g github:openclaw/openclaw#main --no-fund --no-audit --loglevel=error",
+    );
+  });
+
+  it("falls back to global npm update when git is missing from PATH", async () => {
+    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      gitRootMode: "missing",
+      onInstall: async () => writeGlobalPackageVersion(pkgRoot),
+    });
 
     const result = await runWithCommand(runCommand, { cwd: pkgRoot });
 
@@ -537,35 +552,17 @@ describe("runGatewayUpdate", () => {
     await fs.mkdir(portableGitMingw, { recursive: true });
     await fs.mkdir(portableGitUsr, { recursive: true });
 
-    const nodeModules = path.join(tempDir, "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    await seedGlobalPackageRoot(pkgRoot);
-
     let installEnv: NodeJS.ProcessEnv | undefined;
-    const runCommand = async (
-      argv: string[],
-      options?: { env?: NodeJS.ProcessEnv },
-    ): Promise<CommandResult> => {
-      const key = argv.join(" ");
-      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
-        return { stdout: "", stderr: "not a git repository", code: 128 };
-      }
-      if (key === "npm root -g") {
-        return { stdout: nodeModules, stderr: "", code: 0 };
-      }
-      if (key === "pnpm root -g") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (key === "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error") {
+    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
+    const { runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      onInstall: async (options) => {
         installEnv = options?.env;
-        await fs.writeFile(
-          path.join(pkgRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
-          "utf-8",
-        );
-      }
-      return { stdout: "ok", stderr: "", code: 0 };
-    };
+        await writeGlobalPackageVersion(pkgRoot);
+      },
+    });
 
     await withEnvAsync({ LOCALAPPDATA: localAppData }, async () => {
       const result = await runWithCommand(runCommand, { cwd: pkgRoot });
@@ -584,35 +581,15 @@ describe("runGatewayUpdate", () => {
   });
 
   it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for global package updates", async () => {
-    const nodeModules = path.join(tempDir, "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    await seedGlobalPackageRoot(pkgRoot);
-
-    const calls: string[] = [];
-    const runCommand = async (argv: string[]): Promise<CommandResult> => {
-      const key = argv.join(" ");
-      calls.push(key);
-      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
-        return { stdout: "", stderr: "not a git repository", code: 128 };
-      }
-      if (key === "npm root -g") {
-        return { stdout: nodeModules, stderr: "", code: 0 };
-      }
-      if (key === "pnpm root -g") {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      if (
-        key ===
-        "npm i -g http://10.211.55.2:8138/openclaw-next.tgz --no-fund --no-audit --loglevel=error"
-      ) {
-        await fs.writeFile(
-          path.join(pkgRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
-          "utf-8",
-        );
-      }
-      return { stdout: "ok", stderr: "", code: 0 };
-    };
+    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
+    const expectedInstallCommand =
+      "npm i -g http://10.211.55.2:8138/openclaw-next.tgz --no-fund --no-audit --loglevel=error";
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: expectedInstallCommand,
+      onInstall: async () => writeGlobalPackageVersion(pkgRoot),
+    });
 
     await withEnvAsync(
       { OPENCLAW_UPDATE_PACKAGE_SPEC: "http://10.211.55.2:8138/openclaw-next.tgz" },
@@ -622,27 +599,21 @@ describe("runGatewayUpdate", () => {
       },
     );
 
-    expect(calls).toContain(
-      "npm i -g http://10.211.55.2:8138/openclaw-next.tgz --no-fund --no-audit --loglevel=error",
-    );
+    expect(calls).toContain(expectedInstallCommand);
   });
 
   it("updates global bun installs when detected", async () => {
     const bunInstall = path.join(tempDir, "bun-install");
     await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
-      const bunGlobalRoot = path.join(bunInstall, "install", "global", "node_modules");
-      const pkgRoot = path.join(bunGlobalRoot, "openclaw");
-      await seedGlobalPackageRoot(pkgRoot);
+      const { pkgRoot } = await createGlobalPackageFixture(
+        path.join(bunInstall, "install", "global"),
+      );
 
       const { calls, runCommand } = createGlobalInstallHarness({
         pkgRoot,
         installCommand: "bun add -g openclaw@latest",
         onInstall: async () => {
-          await fs.writeFile(
-            path.join(pkgRoot, "package.json"),
-            JSON.stringify({ name: "openclaw", version: "2.0.0" }),
-            "utf-8",
-          );
+          await writeGlobalPackageVersion(pkgRoot);
         },
       });
 
