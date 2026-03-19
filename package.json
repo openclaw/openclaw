@@ -77,6 +77,14 @@
       "types": "./dist/plugin-sdk/setup.d.ts",
       "default": "./dist/plugin-sdk/setup.js"
     },
+    "./plugin-sdk/setup-adapter-runtime": {
+      "types": "./dist/plugin-sdk/setup-adapter-runtime.d.ts",
+      "default": "./dist/plugin-sdk/setup-adapter-runtime.js"
+    },
+    "./plugin-sdk/setup-runtime": {
+      "types": "./dist/plugin-sdk/setup-runtime.d.ts",
+      "default": "./dist/plugin-sdk/setup-runtime.js"
+    },
     "./plugin-sdk/channel-setup": {
       "types": "./dist/plugin-sdk/channel-setup.d.ts",
       "default": "./dist/plugin-sdk/channel-setup.js"

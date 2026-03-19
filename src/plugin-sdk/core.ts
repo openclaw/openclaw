@@ -55,7 +55,6 @@ export type {
   OpenClawPluginDefinition,
   PluginCommandContext,
   PluginLogger,
-  PluginCommandContext,
   PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
