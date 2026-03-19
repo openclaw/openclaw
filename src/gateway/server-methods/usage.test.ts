@@ -62,12 +62,33 @@ describe("gateway usage helpers", () => {
     expect(__test.parseDays("nope")).toBeUndefined();
   });
 
+  it("parseDateParts rejects impossible calendar dates", () => {
+    expect(__test.parseDateParts("2026-02-31")).toBeUndefined();
+    expect(__test.parseDateParts("2026-13-01")).toBeUndefined();
+    expect(__test.parseDateParts("2026-02-05")).toEqual({
+      year: 2026,
+      monthIndex: 1,
+      day: 5,
+    });
+  });
+
   it("parseDateRange uses explicit start/end as UTC when mode is missing (backward compatible)", () => {
     const range = expectDateRange(
       __test.parseDateRange({ startDate: "2026-02-01", endDate: "2026-02-02" }),
     );
     expect(range.startMs).toBe(Date.UTC(2026, 1, 1));
     expect(range.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
+  });
+
+  it("parseDateRange rejects incomplete or invalid explicit date ranges", () => {
+    expect(__test.parseDateRange({ startDate: "2026-02-01" })).toBeUndefined();
+    expect(__test.parseDateRange({ endDate: "2026-02-02" })).toBeUndefined();
+    expect(
+      __test.parseDateRange({
+        startDate: "2026-02-31",
+        endDate: "2026-03-01",
+      }),
+    ).toBeUndefined();
   });
 
   it("parseDateRange uses explicit UTC mode", () => {
@@ -198,6 +219,18 @@ describe("gateway usage helpers", () => {
       __test.parseDateRange({
         startDate: "2011-12-30",
         endDate: "2011-12-30",
+        mode: "specific",
+        timeZone: "Pacific/Apia",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("parseDateRange rejects rolling day windows that cross skipped civil days", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2011-12-30T22:00:00.000Z"));
+    expect(
+      __test.parseDateRange({
+        days: 2,
         mode: "specific",
         timeZone: "Pacific/Apia",
       }),

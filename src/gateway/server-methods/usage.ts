@@ -127,6 +127,14 @@ const parseDateParts = (
   if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || !Number.isFinite(day)) {
     return undefined;
   }
+  const normalized = new Date(Date.UTC(year, monthIndex, day));
+  if (
+    normalized.getUTCFullYear() !== year ||
+    normalized.getUTCMonth() !== monthIndex ||
+    normalized.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
   return { year, monthIndex, day };
 };
 
@@ -419,9 +427,13 @@ const parseDateRange = (
   const now = new Date();
   const todayParts = getDatePartsForInstant(now, interpretation);
 
+  const hasExplicitDateRange = params.startDate !== undefined || params.endDate !== undefined;
   const startParts = parseDateParts(params.startDate);
   const endParts = parseDateParts(params.endDate);
-  if (startParts && endParts) {
+  if (hasExplicitDateRange) {
+    if (!startParts || !endParts) {
+      return undefined;
+    }
     const startMs = getStartOfDayMs(startParts, interpretation);
     const endExclusiveMs = getStartOfDayMs(addDaysToDateParts(endParts, 1), interpretation);
     if (startMs !== undefined && endExclusiveMs !== undefined) {
@@ -433,14 +445,16 @@ const parseDateRange = (
   const days = parseDays(params.days);
   if (days !== undefined) {
     const clampedDays = Math.max(1, days);
-    if (todayParts) {
-      const startParts = addDaysToDateParts(todayParts, -(clampedDays - 1));
-      const startMs = getStartOfDayMs(startParts, interpretation);
-      const endExclusiveMs = getStartOfDayMs(addDaysToDateParts(todayParts, 1), interpretation);
-      if (startMs !== undefined && endExclusiveMs !== undefined) {
-        return { startMs, endMs: endExclusiveMs - 1 };
-      }
+    if (!todayParts) {
+      return undefined;
     }
+    const startParts = addDaysToDateParts(todayParts, -(clampedDays - 1));
+    const startMs = getStartOfDayMs(startParts, interpretation);
+    const endExclusiveMs = getStartOfDayMs(addDaysToDateParts(todayParts, 1), interpretation);
+    if (startMs !== undefined && endExclusiveMs !== undefined) {
+      return { startMs, endMs: endExclusiveMs - 1 };
+    }
+    return undefined;
   }
 
   const todayStartMs = getTodayStartMs(now, interpretation);
@@ -453,6 +467,7 @@ const parseDateRange = (
     if (defaultStartMs !== undefined && endExclusiveMs !== undefined) {
       return { startMs: defaultStartMs, endMs: endExclusiveMs - 1 };
     }
+    return undefined;
   }
 
   // Default to last 30 days.

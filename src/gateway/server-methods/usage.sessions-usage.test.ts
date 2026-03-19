@@ -214,6 +214,75 @@ describe("sessions.usage", () => {
     );
   });
 
+  it("rejects sessions.usage when explicit date ranges are incomplete or invalid", async () => {
+    const respond = await runSessionsUsage({
+      startDate: "2026-02-31",
+      limit: 10,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining(
+          "invalid date range for the requested date interpretation",
+        ),
+      }),
+    );
+  });
+
+  it("rejects usage.cost when explicit date ranges are incomplete or invalid", async () => {
+    const respond = await runUsageCost({
+      startDate: "2026-02-01",
+      mode: "utc",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining(
+          "invalid date range for the requested date interpretation",
+        ),
+      }),
+    );
+  });
+
+  it("rejects sessions.usage when only one explicit date bound is provided", async () => {
+    const respond = await runSessionsUsage({
+      startDate: "2026-02-01",
+      limit: 10,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("invalid date range"),
+      }),
+    );
+  });
+
+  it("rejects usage.cost when explicit dates are calendar-invalid", async () => {
+    const respond = await runUsageCost({
+      startDate: "2026-02-31",
+      endDate: "2026-02-31",
+      mode: "utc",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("invalid date range"),
+      }),
+    );
+  });
+
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
