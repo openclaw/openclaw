@@ -541,6 +541,8 @@ export async function runExecProcess(opts: {
         isNormalExit && !isShellFailure ? "completed" : "failed";
 
       markExited(session, exit.exitCode, exit.exitSignal, status);
+      // Kill the PTY synchronously after marking session as done to prevent zombie PTY sessions
+      supervisor.cancel(sessionId, "session-done");
       maybeNotifyOnExit(session, status);
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
@@ -590,6 +592,8 @@ export async function runExecProcess(opts: {
     })
     .catch((err): ExecProcessOutcome => {
       markExited(session, null, null, "failed");
+      // Kill the PTY synchronously after marking session as done to prevent zombie PTY sessions
+      supervisor.cancel(sessionId, "session-done");
       maybeNotifyOnExit(session, "failed");
       const aggregated = session.aggregated.trim();
       const message = aggregated ? `${aggregated}\n\n${String(err)}` : String(err);
