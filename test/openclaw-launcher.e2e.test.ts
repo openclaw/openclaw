@@ -15,6 +15,11 @@ async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
   return fixtureRoot;
 }
 
+async function addSourceTreeMarker(fixtureRoot: string): Promise<void> {
+  await fs.mkdir(path.join(fixtureRoot, "src"), { recursive: true });
+  await fs.writeFile(path.join(fixtureRoot, "src", "entry.ts"), "export {};\n", "utf8");
+}
+
 describe("openclaw launcher", () => {
   const fixtureRoots: string[] = [];
 
@@ -54,5 +59,21 @@ describe("openclaw launcher", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("missing dist/entry.(m)js");
+  });
+
+  it("explains how to recover from an unbuilt source install", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await addSourceTreeMarker(fixtureRoot);
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      encoding: "utf8",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("missing dist/entry.(m)js");
+    expect(result.stderr).toContain("unbuilt source tree or GitHub source archive");
+    expect(result.stderr).toContain("pnpm install && pnpm build");
+    expect(result.stderr).toContain("github:openclaw/openclaw#<ref>");
   });
 });
