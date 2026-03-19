@@ -161,6 +161,7 @@ Docs: https://docs.openclaw.ai
 - Matrix: make onboarding status runtime-safe (#49995) Thanks @joshavant.
 - Channels: stabilize lane harness and monitor tests (#50167) Thanks @joshavant.
 - WhatsApp/active-listener: pin the active listener registry to a `globalThis` singleton so split WhatsApp bundle chunks share one listener map and outbound sends stop missing the registered session. (#47433) Thanks @clawdia67.
+- Plugins/WhatsApp: share split-load singleton state for plugin command registration and active WhatsApp listeners so duplicate module graphs no longer lose native plugin commands or outbound listener state. (#50418) Thanks @huntharo.
 
 ### Breaking
 
