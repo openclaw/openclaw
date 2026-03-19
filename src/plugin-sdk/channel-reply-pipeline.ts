@@ -1,5 +1,4 @@
 import {
-  createReplyPrefixContext,
   createReplyPrefixOptions,
   type ReplyPrefixContextBundle,
   type ReplyPrefixOptions,
@@ -13,7 +12,6 @@ import {
 export type ReplyPrefixContext = ReplyPrefixContextBundle["prefixContext"];
 export type { ReplyPrefixContextBundle, ReplyPrefixOptions };
 export type { CreateTypingCallbacksParams, TypingCallbacks };
-export { createReplyPrefixContext, createReplyPrefixOptions, createTypingCallbacks };
 
 export type ChannelReplyPipeline = ReplyPrefixOptions & {
   typingCallbacks?: TypingCallbacks;

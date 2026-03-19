@@ -58,7 +58,7 @@ const replyPipelineMocks = vi.hoisted(() => {
     dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
       async () => dispatchReplyResult,
     ),
-    createReplyPrefixOptions: vi.fn(() => ({ onModelSelected: () => {} })),
+    createChannelReplyPipeline: vi.fn(() => ({ onModelSelected: () => {} })),
     recordInboundSessionMetaSafe: vi.fn<RecordInboundSessionMetaSafeFn>(async () => undefined),
   };
 });
@@ -78,8 +78,15 @@ vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
   return {
     ...actual,
-    createReplyPrefixOptions: replyPipelineMocks.createReplyPrefixOptions,
     recordInboundSessionMetaSafe: replyPipelineMocks.recordInboundSessionMetaSafe,
+  };
+});
+vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>();
+  return {
+    ...actual,
+    createChannelReplyPipeline: replyPipelineMocks.createChannelReplyPipeline,
   };
 });
 
