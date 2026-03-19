@@ -1,10 +1,39 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { parseCmdScriptCommandLine } from "../daemon/cmd-argv.js";
+import { isGatewayArgv } from "./gateway-process-argv.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
+function isGatewayExecutablePath(raw: string): boolean {
+  const normalized = raw.replaceAll("\\", "/").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const withoutQuotes = normalized.replace(/^["']|["']$/g, "");
+  const basename = withoutQuotes.split("/").at(-1) ?? withoutQuotes;
+  return (
+    basename === "openclaw" ||
+    basename === "openclaw.exe" ||
+    basename === "openclaw-gateway" ||
+    basename === "openclaw-gateway.exe"
+  );
+}
+
 export function classifyPortListener(listener: PortListener, port: number): PortListenerKind {
-  const raw = `${listener.commandLine ?? ""} ${listener.command ?? ""}`.trim().toLowerCase();
-  if (raw.includes("openclaw")) {
+  const commandLine = listener.commandLine?.trim() ?? "";
+  const command = listener.command?.trim() ?? "";
+  if (commandLine) {
+    const argv = parseCmdScriptCommandLine(commandLine);
+    if (argv.length > 0 && isGatewayArgv(argv, { allowGatewayBinary: true })) {
+      return "gateway";
+    }
+  }
+  if (isGatewayExecutablePath(command)) {
     return "gateway";
+  }
+
+  const raw = `${commandLine} ${command}`.trim().toLowerCase();
+  if (raw.includes("openclaw")) {
+    return "unknown";
   }
   if (raw.includes("ssh")) {
     const portToken = String(port);

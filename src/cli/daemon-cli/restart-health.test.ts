@@ -210,6 +210,30 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.staleGatewayPids).toEqual([]);
   });
 
+  it("treats a busy unknown Windows listener as healthy when the probe succeeds", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    classifyPortListener.mockReturnValue("unknown");
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+    });
+
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "stopped" },
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 9100, commandLine: "" }],
+        hints: [],
+      },
+      includeUnknownListenersAsStale: true,
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(snapshot.probeResult).toBe("ok");
+  });
+
   it("treats auth-closed probe as healthy gateway reachability", async () => {
     const snapshot = await inspectAmbiguousOwnershipWithProbe({
       ok: false,
@@ -239,5 +263,36 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(probeGateway).not.toHaveBeenCalled();
+  });
+
+  it("reports probe result, listener classification, and failure reason in diagnostics", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    classifyPortListener.mockImplementation((listener) =>
+      "command" in (listener as Record<string, unknown>) ? "unknown" : "gateway",
+    );
+    probeGateway.mockResolvedValue({
+      ok: false,
+      close: null,
+    });
+
+    const { inspectGatewayRestart, renderRestartDiagnostics } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({
+      service: makeGatewayService({ status: "stopped" }),
+      port: 18789,
+      includeUnknownListenersAsStale: false,
+    });
+
+    const lines = renderRestartDiagnostics({
+      ...snapshot,
+      listenerKinds: { gateway: [9000], unknown: [9100], other: [] },
+      staleGatewayPids: [9000],
+      failureReason: "stale-gateway-listener",
+      probeResult: "failed",
+    });
+
+    expect(lines).toContain("Restart probe: failed.");
+    expect(lines).toContain("Listener classification: gateway=9000; unknown=9100; other=none.");
+    expect(lines).toContain("Stale gateway termination candidates: 9000.");
+    expect(lines).toContain("Restart health failure reason: stale-gateway-listener.");
   });
 });

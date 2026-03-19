@@ -21,6 +21,13 @@ export type GatewayRestartSnapshot = {
   portUsage: PortUsage;
   healthy: boolean;
   staleGatewayPids: number[];
+  probeResult: "ok" | "failed" | "not-run";
+  listenerKinds: {
+    gateway: number[];
+    unknown: number[];
+    other: number[];
+  };
+  failureReason?: "runtime-lag" | "probe-failed" | "stale-gateway-listener";
 };
 
 export type GatewayPortHealthSnapshot = {
@@ -124,35 +131,49 @@ export async function inspectGatewayRestart(params: {
     };
   }
 
+  let probeResult: GatewayRestartSnapshot["probeResult"] = "not-run";
   if (portUsage.status === "busy" && runtime.status !== "running") {
     try {
       const reachable = await confirmGatewayReachable(params.port);
+      probeResult = reachable ? "ok" : "failed";
       if (reachable) {
         return {
           runtime,
           portUsage,
           healthy: true,
           staleGatewayPids: [],
+          probeResult,
+          listenerKinds: { gateway: [], unknown: [], other: [] },
         };
       }
     } catch {
+      probeResult = "failed";
       // Probe is best-effort; keep the ownership-based diagnostics.
     }
   }
 
-  const gatewayListeners =
+  const classifiedListeners =
     portUsage.status === "busy"
-      ? portUsage.listeners.filter(
-          (listener) => classifyPortListener(listener, params.port) === "gateway",
-        )
+      ? portUsage.listeners.map((listener) => ({
+          listener,
+          kind: classifyPortListener(listener, params.port),
+        }))
       : [];
+  const gatewayListeners = classifiedListeners
+    .filter(({ kind }) => kind === "gateway")
+    .map(({ listener }) => listener);
+  const unknownListeners = classifiedListeners
+    .filter(({ kind }) => kind === "unknown")
+    .map(({ listener }) => listener);
+  const otherListeners = classifiedListeners
+    .filter(({ kind }) => kind !== "gateway" && kind !== "unknown")
+    .map(({ listener }) => listener);
   const fallbackListenerPids =
     params.includeUnknownListenersAsStale &&
     process.platform === "win32" &&
     runtime.status !== "running" &&
     portUsage.status === "busy"
-      ? portUsage.listeners
-          .filter((listener) => classifyPortListener(listener, params.port) === "unknown")
+      ? unknownListeners
           .map((listener) => listener.pid)
           .filter((pid): pid is number => Number.isFinite(pid))
       : [];
@@ -169,7 +190,9 @@ export async function inspectGatewayRestart(params: {
   if (!healthy && running && portUsage.status === "busy") {
     try {
       healthy = await confirmGatewayReachable(params.port);
+      probeResult = healthy ? "ok" : "failed";
     } catch {
+      probeResult = "failed";
       // best-effort probe
     }
   }
@@ -192,12 +215,34 @@ export async function inspectGatewayRestart(params: {
       ),
     ]),
   );
+  const failureReason = healthy
+    ? undefined
+    : staleGatewayPids.length > 0
+      ? "stale-gateway-listener"
+      : portUsage.status === "busy" && probeResult === "failed" && runtime.status !== "running"
+        ? "probe-failed"
+        : portUsage.status === "busy" && runtime.status !== "running"
+          ? "runtime-lag"
+          : undefined;
 
   return {
     runtime,
     portUsage,
     healthy,
     staleGatewayPids,
+    probeResult,
+    listenerKinds: {
+      gateway: gatewayListeners
+        .map((listener) => listener.pid)
+        .filter((pid): pid is number => Number.isFinite(pid)),
+      unknown: unknownListeners
+        .map((listener) => listener.pid)
+        .filter((pid): pid is number => Number.isFinite(pid)),
+      other: otherListeners
+        .map((listener) => listener.pid)
+        .filter((pid): pid is number => Number.isFinite(pid)),
+    },
+    failureReason,
   };
 }
 
@@ -288,6 +333,26 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
 
   if (runtimeSummary) {
     lines.push(`Service runtime: ${runtimeSummary}`);
+  }
+
+  lines.push(`Restart probe: ${snapshot.probeResult}.`);
+
+  const formatPidSummary = (label: string, pids: number[]) =>
+    `${label}=${pids.length > 0 ? pids.join(", ") : "none"}`;
+  lines.push(
+    `Listener classification: ${[
+      formatPidSummary("gateway", snapshot.listenerKinds.gateway),
+      formatPidSummary("unknown", snapshot.listenerKinds.unknown),
+      formatPidSummary("other", snapshot.listenerKinds.other),
+    ].join("; ")}.`,
+  );
+
+  if (snapshot.staleGatewayPids.length > 0) {
+    lines.push(`Stale gateway termination candidates: ${snapshot.staleGatewayPids.join(", ")}.`);
+  }
+
+  if (snapshot.failureReason) {
+    lines.push(`Restart health failure reason: ${snapshot.failureReason}.`);
   }
 
   lines.push(...renderPortUsageDiagnostics(snapshot));

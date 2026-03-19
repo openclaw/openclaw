@@ -3,8 +3,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 type RestartHealthSnapshot = {
   healthy: boolean;
   staleGatewayPids: number[];
-  runtime: { status?: string };
+  runtime: { status?: string; pid?: number };
   portUsage: { port: number; status: string; listeners: []; hints: []; errors?: string[] };
+  listenerKinds?: { gateway: number[]; unknown: number[]; other: number[] };
 };
 
 type RestartPostCheckContext = {
@@ -21,6 +22,7 @@ type RestartParams = {
 
 const service = {
   readCommand: vi.fn(),
+  readRuntime: vi.fn(),
   restart: vi.fn(),
 };
 
@@ -128,6 +130,7 @@ describe("runDaemonRestart health checks", () => {
 
   beforeEach(() => {
     service.readCommand.mockReset();
+    service.readRuntime.mockReset();
     service.restart.mockReset();
     runServiceRestart.mockReset();
     runServiceStop.mockReset();
@@ -148,6 +151,7 @@ describe("runDaemonRestart health checks", () => {
       programArguments: ["openclaw", "gateway", "--port", "18789"],
       environment: {},
     });
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 1500 });
     service.restart.mockResolvedValue({ outcome: "completed" });
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
@@ -194,6 +198,7 @@ describe("runDaemonRestart health checks", () => {
       staleGatewayPids: [],
       runtime: { status: "running" },
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      listenerKinds: { gateway: [], unknown: [], other: [] },
     };
     waitForGatewayHealthyRestart.mockResolvedValueOnce(unhealthy).mockResolvedValueOnce(healthy);
     terminateStaleGatewayPids.mockResolvedValue([1993]);
@@ -204,6 +209,9 @@ describe("runDaemonRestart health checks", () => {
     expect(terminateStaleGatewayPids).toHaveBeenCalledWith([1993]);
     expect(service.restart).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
+    for (const [params] of waitForGatewayHealthyRestart.mock.calls) {
+      expect(params).not.toHaveProperty("includeUnknownListenersAsStale");
+    }
   });
 
   it("skips stale-pid retry health checks when the retry restart is only scheduled", async () => {
@@ -240,6 +248,47 @@ describe("runDaemonRestart health checks", () => {
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns on Windows when restart health recovers without a clear pid change", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const healthy: RestartHealthSnapshot & {
+      listenerKinds: { gateway: number[]; unknown: number[]; other: number[] };
+    } = {
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running", pid: 1500 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      listenerKinds: { gateway: [1500], unknown: [], other: [] },
+    };
+    waitForGatewayHealthyRestart.mockResolvedValue(healthy);
+    const capturedWarnings: string[][] = [];
+    runServiceRestart.mockImplementationOnce(async (params: RestartParams) => {
+      const warnings: string[] = [];
+      capturedWarnings.push(warnings);
+      await params.postRestartCheck?.({
+        json: true,
+        stdout: process.stdout,
+        warnings,
+        fail: (message: string, hints?: string[]) => {
+          const err = new Error(message) as Error & { hints?: string[] };
+          err.hints = hints;
+          throw err;
+        },
+      });
+      return true;
+    });
+
+    try {
+      await expect(runDaemonRestart({ json: true })).resolves.toBe(true);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+
+    expect(capturedWarnings[0]).toContain(
+      "Gateway restart became healthy, but process identity did not clearly change from pid 1500; runtime may be lagging or the old process may still own the listener.",
+    );
   });
 
   it("signals an unmanaged gateway process on stop", async () => {
