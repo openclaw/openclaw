@@ -6,7 +6,10 @@ export type { SecretInput } from "../config/types.secrets.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export type { ChannelSetupInput } from "../channels/plugins/types.core.js";
-export type { ChannelSetupDmPolicy } from "../channels/plugins/setup-wizard-types.js";
+export type {
+  ChannelSetupDmPolicy,
+  ChannelSetupWizardAdapter,
+} from "../channels/plugins/setup-wizard-types.js";
 export type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,

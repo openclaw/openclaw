@@ -119,7 +119,6 @@ export async function channelsRemoveCommand(
     runtime.exit(1);
     return;
   }
-
   const resolvedAccountId =
     normalizeAccountId(accountId) ?? resolveChannelDefaultAccountId({ plugin, cfg });
   const accountKey = resolvedAccountId || DEFAULT_ACCOUNT_ID;
@@ -164,14 +163,14 @@ export async function channelsRemoveCommand(
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig
-        ? `Deleted ${channelLabel(channel)} account "${accountKey}".`
-        : `Disabled ${channelLabel(channel)} account "${accountKey}".`,
+        ? `Deleted ${channelLabel(resolvedChannel)} account "${accountKey}".`
+        : `Disabled ${channelLabel(resolvedChannel)} account "${accountKey}".`,
     );
   } else {
     runtime.log(
       deleteConfig
-        ? `Deleted ${channelLabel(channel)} account "${accountKey}".`
-        : `Disabled ${channelLabel(channel)} account "${accountKey}".`,
+        ? `Deleted ${channelLabel(resolvedChannel)} account "${accountKey}".`
+        : `Disabled ${channelLabel(resolvedChannel)} account "${accountKey}".`,
     );
   }
 }

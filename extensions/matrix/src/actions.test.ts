@@ -4,6 +4,8 @@ import { matrixMessageActions } from "./actions.js";
 import { setMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
+const profileAction = "set-profile" as const;
+
 const runtimeStub = {
   config: {
     loadConfig: () => ({}),
@@ -52,101 +54,115 @@ describe("matrixMessageActions", () => {
 
   it("exposes poll create but only handles poll votes inside the plugin", () => {
     const describeMessageTool = matrixMessageActions.describeMessageTool;
-    const supportsAction = matrixMessageActions.supportsAction;
+    const supportsAction = matrixMessageActions.supportsAction ?? (() => false);
 
     expect(describeMessageTool).toBeTypeOf("function");
     expect(supportsAction).toBeTypeOf("function");
 
     const discovery = describeMessageTool!({
       cfg: createConfiguredMatrixConfig(),
-    } as never) ?? { actions: [] };
+    } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
     const actions = discovery.actions;
-
     expect(actions).toContain("poll");
     expect(actions).toContain("poll-vote");
-    expect(supportsAction!({ action: "poll" } as never)).toBe(false);
-    expect(supportsAction!({ action: "poll-vote" } as never)).toBe(true);
+    expect(supportsAction({ action: "poll" } as never)).toBe(false);
+    expect(supportsAction({ action: "poll-vote" } as never)).toBe(true);
   });
 
   it("exposes and describes self-profile updates", () => {
     const describeMessageTool = matrixMessageActions.describeMessageTool;
-    const supportsAction = matrixMessageActions.supportsAction;
+    const supportsAction = matrixMessageActions.supportsAction ?? (() => false);
 
     const discovery = describeMessageTool!({
       cfg: createConfiguredMatrixConfig(),
-    } as never) ?? { actions: [], schema: null };
+    } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
     const actions = discovery.actions;
-    const properties =
-      (discovery.schema as { properties?: Record<string, unknown> } | null)?.properties ?? {};
+    const schema = discovery.schema;
+    if (!schema) {
+      throw new Error("matrix schema missing");
+    }
+    const properties = (schema as { properties?: Record<string, unknown> }).properties ?? {};
 
-    expect(actions).toContain("set-profile");
-    expect(supportsAction!({ action: "set-profile" } as never)).toBe(true);
+    expect(actions).toContain(profileAction);
+    expect(supportsAction({ action: profileAction } as never)).toBe(true);
     expect(properties.displayName).toBeDefined();
     expect(properties.avatarUrl).toBeDefined();
     expect(properties.avatarPath).toBeDefined();
   });
 
   it("hides gated actions when the default Matrix account disables them", () => {
-    const actions =
-      matrixMessageActions.describeMessageTool!({
-        cfg: {
-          channels: {
-            matrix: {
-              defaultAccount: "assistant",
-              actions: {
-                messages: true,
-                reactions: true,
-                pins: true,
-                profile: true,
-                memberInfo: true,
-                channelInfo: true,
-                verification: true,
-              },
-              accounts: {
-                assistant: {
-                  homeserver: "https://matrix.example.org",
-                  userId: "@bot:example.org",
-                  accessToken: "token",
-                  encryption: true,
-                  actions: {
-                    messages: false,
-                    reactions: false,
-                    pins: false,
-                    profile: false,
-                    memberInfo: false,
-                    channelInfo: false,
-                    verification: false,
-                  },
+    const discovery = matrixMessageActions.describeMessageTool!({
+      cfg: {
+        channels: {
+          matrix: {
+            defaultAccount: "assistant",
+            actions: {
+              messages: true,
+              reactions: true,
+              pins: true,
+              profile: true,
+              memberInfo: true,
+              channelInfo: true,
+              verification: true,
+            },
+            accounts: {
+              assistant: {
+                homeserver: "https://matrix.example.org",
+                userId: "@bot:example.org",
+                accessToken: "token",
+                encryption: true,
+                actions: {
+                  messages: false,
+                  reactions: false,
+                  pins: false,
+                  profile: false,
+                  memberInfo: false,
+                  channelInfo: false,
+                  verification: false,
                 },
               },
             },
           },
-        } as CoreConfig,
-      } as never)?.actions ?? [];
+        },
+      } as CoreConfig,
+    } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
+    const actions = discovery.actions;
 
     expect(actions).toEqual(["poll", "poll-vote"]);
   });
 
   it("hides actions until defaultAccount is set for ambiguous multi-account configs", () => {
-    const actions =
-      matrixMessageActions.describeMessageTool!({
-        cfg: {
-          channels: {
-            matrix: {
-              accounts: {
-                assistant: {
-                  homeserver: "https://matrix.example.org",
-                  accessToken: "assistant-token",
-                },
-                ops: {
-                  homeserver: "https://matrix.example.org",
-                  accessToken: "ops-token",
-                },
+    const discovery = matrixMessageActions.describeMessageTool!({
+      cfg: {
+        channels: {
+          matrix: {
+            accounts: {
+              assistant: {
+                homeserver: "https://matrix.example.org",
+                accessToken: "assistant-token",
+              },
+              ops: {
+                homeserver: "https://matrix.example.org",
+                accessToken: "ops-token",
               },
             },
           },
-        } as CoreConfig,
-      } as never)?.actions ?? [];
+        },
+      } as CoreConfig,
+    } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
+    const actions = discovery.actions;
 
     expect(actions).toEqual([]);
   });
