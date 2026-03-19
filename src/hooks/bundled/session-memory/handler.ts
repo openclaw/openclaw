@@ -39,11 +39,11 @@ import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } fro
 const log = createSubsystemLogger("hooks/session-memory");
 
 function resolveSessionTimestamp(
-  timestamp: number,
+  timestamp: Date | number,
   cfg?: OpenClawConfig,
 ): { dateStr: string; timeStr: string; timeSlug: string; timezone: string } {
   const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone ?? process.env.TZ);
-  const date = new Date(timestamp);
+  const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
     year: "numeric",
