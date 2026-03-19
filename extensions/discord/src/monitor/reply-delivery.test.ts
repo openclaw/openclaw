@@ -12,11 +12,15 @@ const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendWebhookMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendDiscordTextMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../send.js", () => ({
-  sendMessageDiscord: (...args: unknown[]) => sendMessageDiscordMock(...args),
-  sendVoiceMessageDiscord: (...args: unknown[]) => sendVoiceMessageDiscordMock(...args),
-  sendWebhookMessageDiscord: (...args: unknown[]) => sendWebhookMessageDiscordMock(...args),
-}));
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
+  return {
+    ...actual,
+    sendMessageDiscord: (...args: unknown[]) => sendMessageDiscordMock(...args),
+    sendVoiceMessageDiscord: (...args: unknown[]) => sendVoiceMessageDiscordMock(...args),
+    sendWebhookMessageDiscord: (...args: unknown[]) => sendWebhookMessageDiscordMock(...args),
+  };
+});
 
 vi.mock("../send.shared.js", () => ({
   sendDiscordText: (...args: unknown[]) => sendDiscordTextMock(...args),

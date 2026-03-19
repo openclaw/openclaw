@@ -13,6 +13,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "tlon",
       "label": "Tlon",
@@ -27,13 +28,6 @@
       "npmSpec": "@openclaw/tlon",
       "localPath": "extensions/tlon",
       "defaultChoice": "npm"
-    },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "@tloncorp/api",
-        "@tloncorp/tlon-skill",
-        "@urbit/aura"
-      ]
     }
   }
 }

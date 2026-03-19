@@ -1,7 +1,4 @@
-import {
-  parseDiscordTarget,
-  type DiscordTargetKind,
-} from "../../../extensions/discord/src/targets.js";
+import { parseDiscordTarget } from "../../../extensions/discord/src/targets.js";
 import {
   parseIMessageTarget,
   normalizeIMessageHandle,
@@ -284,7 +281,7 @@ function resolveDiscordSession(
 
 function resolveDiscordOutboundTargetKindHint(
   params: ResolveOutboundSessionRouteParams,
-): DiscordTargetKind | undefined {
+): "user" | "channel" | undefined {
   const resolvedKind = params.resolvedTarget?.kind;
   if (resolvedKind === "user") {
     return "user";
@@ -538,21 +535,6 @@ function resolveMatrixSession(
   };
 }
 
-function buildSimpleBaseSession(params: {
-  route: ResolveOutboundSessionRouteParams;
-  channel: string;
-  peer: RoutePeer;
-}) {
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.route.cfg,
-    agentId: params.route.agentId,
-    channel: params.channel,
-    accountId: params.route.accountId,
-    peer: params.peer,
-  });
-  return { baseSessionKey, peer: params.peer };
-}
-
 function resolveMSTeamsSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
@@ -617,10 +599,13 @@ function resolveMattermostSession(
   if (!rawId) {
     return null;
   }
-  const { baseSessionKey, peer } = buildSimpleBaseSession({
-    route: params,
+  const peer: RoutePeer = { kind: isUser ? "direct" : "channel", id: rawId };
+  const baseSessionKey = buildBaseSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
     channel: "mattermost",
-    peer: { kind: isUser ? "direct" : "channel", id: rawId },
+    accountId: params.accountId,
+    peer,
   });
   const threadId = normalizeThreadId(params.replyToId ?? params.threadId);
   const threadKeys = resolveThreadSessionKeys({

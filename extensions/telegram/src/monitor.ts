@@ -1,14 +1,15 @@
 import type { RunOptions } from "@grammyjs/runner";
-import { resolveAgentMaxConcurrent } from "../../../src/config/agent-limits.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { loadConfig } from "../../../src/config/config.js";
-import { waitForAbortSignal } from "../../../src/infra/abort-signal.js";
-import { formatErrorMessage } from "../../../src/infra/errors.js";
-import { registerUnhandledRejectionHandler } from "../../../src/infra/unhandled-rejections.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
+import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
+import { resolveTelegramTransport } from "./fetch.js";
 import {
   isRecoverableTelegramNetworkError,
   isTelegramPollingNetworkError,
@@ -178,6 +179,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       return;
     }
 
+    // Create transport once to preserve sticky IPv4 fallback state across polling restarts
+    const telegramTransport = resolveTelegramTransport(proxyFetch, {
+      network: account.config.network,
+    });
+
     pollingSession = new TelegramPollingSession({
       token,
       config: cfg,
@@ -189,6 +195,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       getLastUpdateId: () => lastUpdateId,
       persistUpdateId,
       log,
+      telegramTransport,
     });
     await pollingSession.runUntilAbort();
   } finally {

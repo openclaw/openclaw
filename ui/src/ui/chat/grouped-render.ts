@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
@@ -322,7 +323,7 @@ type DeleteConfirmSide = "left" | "right";
 
 function shouldSkipDeleteConfirm(): boolean {
   try {
-    return localStorage.getItem(SKIP_DELETE_CONFIRM_KEY) === "1";
+    return getSafeLocalStorage()?.getItem(SKIP_DELETE_CONFIRM_KEY) === "1";
   } catch {
     return false;
   }
@@ -370,7 +371,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
           yes.addEventListener("click", () => {
             if (check.checked) {
               try {
-                localStorage.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
+                getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
               } catch {}
             }
             popover.remove();
@@ -619,6 +620,20 @@ function jsonSummaryLabel(parsed: unknown): string {
   return "JSON";
 }
 
+function renderExpandButton(markdown: string, onOpenSidebar: (content: string) => void) {
+  return html`
+    <button
+      class="chat-expand-btn"
+      type="button"
+      title="Open in canvas"
+      aria-label="Open in canvas"
+      @click=${() => onOpenSidebar(markdown)}
+    >
+      <span class="chat-expand-btn__icon" aria-hidden="true">${icons.panelRightOpen}</span>
+    </button>
+  `;
+}
+
 function renderGroupedMessage(
   message: unknown,
   opts: { isStreaming: boolean; showReasoning: boolean; showToolCalls?: boolean },
@@ -646,6 +661,7 @@ function renderGroupedMessage(
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
+  const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -673,9 +689,18 @@ function renderGroupedMessage(
   const toolPreview =
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
 
+  const hasActions = canCopyMarkdown || canExpand;
+
   return html`
     <div class="${bubbleClasses}">
-      ${canCopyMarkdown ? html`<div class="chat-bubble-actions">${renderCopyAsMarkdownButton(markdown!)}</div>` : nothing}
+      ${
+        hasActions
+          ? html`<div class="chat-bubble-actions">
+              ${canExpand ? renderExpandButton(markdown!, onOpenSidebar!) : nothing}
+              ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
+            </div>`
+          : nothing
+      }
       ${
         isToolMessage
           ? html`

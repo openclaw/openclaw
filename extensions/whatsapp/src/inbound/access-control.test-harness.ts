@@ -33,15 +33,33 @@ export function setupAccessControlTestHarness(): void {
   });
 }
 
-vi.mock("../../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig: () => config,
   };
 });
 
-vi.mock("../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: async (
+      params: Parameters<typeof actual.readStoreAllowFromForDmPolicy>[0],
+    ) =>
+      await actual.readStoreAllowFromForDmPolicy({
+        ...params,
+        readStore: async (provider, accountId) =>
+          (await readAllowFromStoreMock(provider, accountId)) as string[],
+      }),
+  };
+});

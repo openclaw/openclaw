@@ -1,44 +1,40 @@
-import { resolveHumanDelayConfig } from "../../../../src/agents/identity.js";
-import { hasControlCommand } from "../../../../src/auto-reply/command-detection.js";
-import { dispatchInboundMessage } from "../../../../src/auto-reply/dispatch.js";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  createChannelInboundDebouncer,
+  shouldDebounceTextInbound,
+} from "openclaw/plugin-sdk/channel-runtime";
+import { logInboundDrop, logTypingFailure } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-runtime";
+import { normalizeSignalMessagingTarget } from "openclaw/plugin-sdk/channel-runtime";
+import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/config-runtime";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import {
   formatInboundEnvelope,
   formatInboundFromLabel,
   resolveEnvelopeFormatOptions,
-} from "../../../../src/auto-reply/envelope.js";
+} from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
-} from "../../../../src/auto-reply/reply/history.js";
-import { finalizeInboundContext } from "../../../../src/auto-reply/reply/inbound-context.js";
-import {
-  buildMentionRegexes,
-  matchesMentionPatterns,
-} from "../../../../src/auto-reply/reply/mentions.js";
-import { createReplyDispatcherWithTyping } from "../../../../src/auto-reply/reply/reply-dispatcher.js";
-import { resolveControlCommandGate } from "../../../../src/channels/command-gating.js";
-import {
-  createChannelInboundDebouncer,
-  shouldDebounceTextInbound,
-} from "../../../../src/channels/inbound-debounce-policy.js";
-import { logInboundDrop, logTypingFailure } from "../../../../src/channels/logging.js";
-import { resolveMentionGatingWithBypass } from "../../../../src/channels/mention-gating.js";
-import { normalizeSignalMessagingTarget } from "../../../../src/channels/plugins/normalize/signal.js";
-import { createReplyPrefixOptions } from "../../../../src/channels/reply-prefix.js";
-import { recordInboundSession } from "../../../../src/channels/session.js";
-import { createTypingCallbacks } from "../../../../src/channels/typing.js";
-import { resolveChannelGroupRequireMention } from "../../../../src/config/group-policy.js";
-import { readSessionUpdatedAt, resolveStorePath } from "../../../../src/config/sessions.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
-import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
-import { kindFromMime } from "../../../../src/media/mime.js";
-import { resolveAgentRoute } from "../../../../src/routing/resolve-route.js";
+} from "openclaw/plugin-sdk/reply-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   DM_GROUP_ACCESS_REASON,
   resolvePinnedMainDmOwnerFromAllowlist,
-} from "../../../../src/security/dm-policy-shared.js";
-import { normalizeE164 } from "../../../../src/utils.js";
+} from "openclaw/plugin-sdk/security-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -261,36 +257,35 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
       cfg: deps.cfg,
       agentId: route.agentId,
       channel: "signal",
       accountId: route.accountId,
-    });
-
-    const typingCallbacks = createTypingCallbacks({
-      start: async () => {
-        if (!ctxPayload.To) {
-          return;
-        }
-        await sendTypingSignal(ctxPayload.To, {
-          baseUrl: deps.baseUrl,
-          account: deps.account,
-          accountId: deps.accountId,
-        });
-      },
-      onStartError: (err) => {
-        logTypingFailure({
-          log: logVerbose,
-          channel: "signal",
-          target: ctxPayload.To ?? undefined,
-          error: err,
-        });
+      typing: {
+        start: async () => {
+          if (!ctxPayload.To) {
+            return;
+          }
+          await sendTypingSignal(ctxPayload.To, {
+            baseUrl: deps.baseUrl,
+            account: deps.account,
+            accountId: deps.accountId,
+          });
+        },
+        onStartError: (err) => {
+          logTypingFailure({
+            log: logVerbose,
+            channel: "signal",
+            target: ctxPayload.To ?? undefined,
+            error: err,
+          });
+        },
       },
     });
 
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-      ...prefixOptions,
+      ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
       deliver: async (payload) => {

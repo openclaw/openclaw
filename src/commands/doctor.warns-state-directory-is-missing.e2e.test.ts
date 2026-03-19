@@ -122,4 +122,52 @@ describe("doctor command", () => {
       "openclaw config set gateway.auth.mode password",
     );
   });
+
+  it("keeps doctor read-only when gateway token is SecretRef-managed but unresolved", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_TOKEN",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+    });
+
+    const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    note.mockClear();
+    try {
+      await doctorCommand(createDoctorRuntime(), {
+        nonInteractive: true,
+        workspaceSuggestions: false,
+      });
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+      }
+    }
+
+    const gatewayAuthNote = note.mock.calls.find((call) => call[1] === "Gateway auth");
+    expect(gatewayAuthNote).toBeTruthy();
+    expect(String(gatewayAuthNote?.[0])).toContain(
+      "Gateway token is managed via SecretRef and is currently unavailable.",
+    );
+    expect(String(gatewayAuthNote?.[0])).toContain(
+      "Doctor will not overwrite gateway.auth.token with a plaintext value.",
+    );
+  });
 });
