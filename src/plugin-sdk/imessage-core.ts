@@ -17,5 +17,5 @@ export {
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
-} from "../../extensions/imessage/src/target-parsing-helpers.js";
-export type { ParsedChatTarget } from "../../extensions/imessage/src/target-parsing-helpers.js";
+} from "../../extensions/imessage/api.js";
+export type { ParsedChatTarget } from "../../extensions/imessage/api.js";
