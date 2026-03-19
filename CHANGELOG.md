@@ -44,7 +44,6 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: add an expand-to-canvas button on assistant chat bubbles and in-app session navigation from Sessions and Cron views. Thanks @BunsDev.
 - Plugins/context engines: expose `delegateCompactionToRuntime(...)` on the public plugin SDK, refactor the legacy engine to use the shared helper, and clarify `ownsCompaction` delegation semantics for non-owning engines. (#49061) Thanks @jalehman.
 - Plugins/MiniMax: add MiniMax-M2.7 and MiniMax-M2.7-highspeed models and update the default model from M2.5 to M2.7. (#49691) Thanks @liyuan97.
-- Contracts/Matrix: validate Matrix session binding coverage through the real manager, expose the manager on the Matrix runtime API, and let tests pass an explicit state directory for isolated contract setup. (#50369) thanks @ChroniCat.
 
 ### Fixes
 
@@ -93,6 +92,7 @@ Docs: https://docs.openclaw.ai
 - Z.AI/onboarding: add `glm-5-turbo` to the default Z.AI provider catalog so onboarding-generated configs expose the new model alongside the existing GLM defaults. (#46670) Thanks @tomsun28.
 - Zalo Personal/group gating: stop reapplying `dmPolicy.allowFrom` as a sender gate for already-allowlisted groups when `groupAllowFrom` is unset, so any member of an allowed group can trigger replies while DMs stay restricted. (#46663) Fixes #40146. Thanks @Takhoffman.
 - Zalo/plugin runtime: export `resolveClientIp` from `openclaw/plugin-sdk/zalo` so installed builds no longer crash on startup when the webhook monitor loads from the packaged extension instead of the monorepo source tree. (#46549) Thanks @No898.
+- Onboarding/custom providers: store Azure OpenAI and Azure AI Foundry custom endpoints with the Responses API config shape, normalized `/openai/v1` base URLs, and Azure-safe defaults so TUI and agent runs work after setup. (#49543) Thanks @kunalk16.
 - Docker/live tests: mount external CLI auth homes into writable container copies, derive Codex OAuth expiry from JWT `exp`, refresh synced CLI creds instead of trusting stale cached expiry, and make gateway live probes wait on transcript output so `pnpm test:docker:all` stays green in Linux.
 - Plugins/install precedence: keep bundled plugins ahead of auto-discovered globals by default, but let an explicitly installed plugin record win its own duplicate-id tie so installed channel plugins load from `~/.openclaw/extensions` after `openclaw plugins install`. (#46722) Thanks @Takhoffman.
 - Control UI/logging: make browser-safe logger imports avoid eager temp-dir resolution so the bundled Control UI no longer crashes to a blank screen when logging reaches `tmp-openclaw-dir`. (#48469) Fixes #48062. Thanks @7inspire.
