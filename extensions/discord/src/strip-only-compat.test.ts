@@ -8,10 +8,10 @@ const STRIP_ONLY_TARGETS = [
 ];
 
 describe("Discord strip-only compatibility", () => {
-  it.each(STRIP_ONLY_TARGETS)("parses %s under Node strip-only mode", (relativePath) => {
+  it.each(STRIP_ONLY_TARGETS)("executes %s under Node strip-only mode", (relativePath) => {
     const result = spawnSync(
       process.execPath,
-      ["--experimental-strip-types", "--check", path.resolve(process.cwd(), relativePath)],
+      ["--experimental-strip-types", path.resolve(process.cwd(), relativePath)],
       {
         cwd: process.cwd(),
         encoding: "utf8",
