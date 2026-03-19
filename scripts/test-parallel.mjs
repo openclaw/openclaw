@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { channelTestPrefixes } from "../vitest.channel-paths.mjs";
 import { isUnitConfigTestFile } from "../vitest.unit-paths.mjs";
+import { parseCompletedTestFileLines, sampleProcessTreeRssKb } from "./test-parallel-memory.mjs";
 import {
   appendCapturedOutput,
   hasFatalTestRunOutput,
@@ -184,6 +185,7 @@ const countExplicitEntryFilters = (entryArgs) => {
   const { fileFilters } = parsePassthroughArgs(entryArgs.slice(2));
   return fileFilters.length > 0 ? fileFilters.length : null;
 };
+const getExplicitEntryFilters = (entryArgs) => parsePassthroughArgs(entryArgs.slice(2)).fileFilters;
 const passthroughRequiresSingleRun = passthroughOptionArgs.some((arg) => {
   if (!arg.startsWith("-")) {
     return false;
@@ -707,6 +709,22 @@ const maxOldSpaceSizeMb = (() => {
 })();
 const formatElapsedMs = (elapsedMs) =>
   elapsedMs >= 1000 ? `${(elapsedMs / 1000).toFixed(1)}s` : `${Math.round(elapsedMs)}ms`;
+const formatMemoryKb = (rssKb) =>
+  rssKb >= 1024 ** 2
+    ? `${(rssKb / 1024 ** 2).toFixed(2)}GiB`
+    : rssKb >= 1024
+      ? `${(rssKb / 1024).toFixed(1)}MiB`
+      : `${rssKb}KiB`;
+const formatMemoryDeltaKb = (rssKb) =>
+  `${rssKb >= 0 ? "+" : "-"}${formatMemoryKb(Math.abs(rssKb))}`;
+const rawMemoryTrace = process.env.OPENCLAW_TEST_MEMORY_TRACE?.trim().toLowerCase();
+const memoryTraceEnabled =
+  process.platform !== "win32" &&
+  (rawMemoryTrace === "1" ||
+    rawMemoryTrace === "true" ||
+    (rawMemoryTrace !== "0" && rawMemoryTrace !== "false" && isCI));
+const memoryTracePollMs = Math.max(250, parseEnvNumber("OPENCLAW_TEST_MEMORY_TRACE_POLL_MS", 1000));
+const memoryTraceTopCount = Math.max(1, parseEnvNumber("OPENCLAW_TEST_MEMORY_TRACE_TOP_COUNT", 6));
 
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
@@ -718,6 +736,7 @@ const runOnce = (entry, extraArgs = []) =>
       entry.name === "extensions" && maxWorkers === 1 && entry.args.includes("--pool=vmForks")
         ? entry.args.map((arg) => (arg === "--pool=vmForks" ? "--pool=forks" : arg))
         : entry.args;
+    const explicitEntryFilters = getExplicitEntryFilters(entryArgs);
     const args = maxWorkers
       ? [
           ...entryArgs,
@@ -749,12 +768,115 @@ const runOnce = (entry, extraArgs = []) =>
     let fatalSeen = false;
     let childError = null;
     let child;
+    let pendingLine = "";
+    let memoryPollTimer = null;
+    const memoryFileRecords = [];
+    let initialTreeSample = null;
+    let latestTreeSample = null;
+    let peakTreeSample = null;
+    const updatePeakTreeSample = (sample, reason) => {
+      if (!sample) {
+        return;
+      }
+      if (!peakTreeSample || sample.rssKb > peakTreeSample.rssKb) {
+        peakTreeSample = { ...sample, reason };
+      }
+    };
+    const captureTreeSample = (reason) => {
+      if (!memoryTraceEnabled || !child?.pid) {
+        return null;
+      }
+      const sample = sampleProcessTreeRssKb(child.pid);
+      if (!sample) {
+        return null;
+      }
+      latestTreeSample = sample;
+      if (!initialTreeSample) {
+        initialTreeSample = sample;
+      }
+      updatePeakTreeSample(sample, reason);
+      return sample;
+    };
+    const logMemoryTraceForText = (text) => {
+      if (!memoryTraceEnabled) {
+        return;
+      }
+      const combined = `${pendingLine}${text}`;
+      const lines = combined.split(/\r?\n/u);
+      pendingLine = lines.pop() ?? "";
+      const completedFiles = parseCompletedTestFileLines(lines.join("\n"));
+      for (const completedFile of completedFiles) {
+        const sample = captureTreeSample(completedFile.file);
+        if (!sample) {
+          continue;
+        }
+        const previousRssKb =
+          memoryFileRecords.length > 0
+            ? (memoryFileRecords.at(-1)?.rssKb ?? initialTreeSample?.rssKb ?? sample.rssKb)
+            : (initialTreeSample?.rssKb ?? sample.rssKb);
+        const deltaKb = sample.rssKb - previousRssKb;
+        const record = {
+          ...completedFile,
+          rssKb: sample.rssKb,
+          processCount: sample.processCount,
+          deltaKb,
+        };
+        memoryFileRecords.push(record);
+        console.log(
+          `[test-parallel][mem] ${entry.name} file=${record.file} rss=${formatMemoryKb(
+            record.rssKb,
+          )} delta=${formatMemoryDeltaKb(record.deltaKb)} peak=${formatMemoryKb(
+            peakTreeSample?.rssKb ?? record.rssKb,
+          )} procs=${record.processCount}${record.durationMs ? ` duration=${formatElapsedMs(record.durationMs)}` : ""}`,
+        );
+      }
+    };
+    const logMemoryTraceSummary = () => {
+      if (!memoryTraceEnabled) {
+        return;
+      }
+      captureTreeSample("close");
+      const fallbackRecord =
+        memoryFileRecords.length === 0 &&
+        explicitEntryFilters.length === 1 &&
+        latestTreeSample &&
+        initialTreeSample
+          ? [
+              {
+                file: explicitEntryFilters[0],
+                deltaKb: latestTreeSample.rssKb - initialTreeSample.rssKb,
+              },
+            ]
+          : [];
+      const totalDeltaKb =
+        initialTreeSample && latestTreeSample
+          ? latestTreeSample.rssKb - initialTreeSample.rssKb
+          : 0;
+      const topGrowthFiles = [...memoryFileRecords, ...fallbackRecord]
+        .filter((record) => record.deltaKb > 0 && typeof record.file === "string")
+        .toSorted((left, right) => right.deltaKb - left.deltaKb)
+        .slice(0, memoryTraceTopCount)
+        .map((record) => `${record.file}:${formatMemoryDeltaKb(record.deltaKb)}`);
+      console.log(
+        `[test-parallel][mem] summary ${entry.name} files=${memoryFileRecords.length} peak=${formatMemoryKb(
+          peakTreeSample?.rssKb ?? 0,
+        )} totalDelta=${formatMemoryDeltaKb(totalDeltaKb)} peakAt=${
+          peakTreeSample?.reason ?? "n/a"
+        } top=${topGrowthFiles.length > 0 ? topGrowthFiles.join(", ") : "none"}`,
+      );
+    };
     try {
       child = spawn(pnpm, args, {
         stdio: ["inherit", "pipe", "pipe"],
         env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: resolvedNodeOptions },
         shell: isWindows,
       });
+      captureTreeSample("spawn");
+      if (memoryTraceEnabled) {
+        memoryPollTimer = setInterval(() => {
+          captureTreeSample("poll");
+        }, memoryTracePollMs);
+      }
     } catch (err) {
       console.error(`[test-parallel] spawn failed: ${String(err)}`);
       resolve(1);
@@ -765,12 +887,14 @@ const runOnce = (entry, extraArgs = []) =>
       const text = chunk.toString();
       fatalSeen ||= hasFatalTestRunOutput(`${output}${text}`);
       output = appendCapturedOutput(output, text);
+      logMemoryTraceForText(text);
       process.stdout.write(chunk);
     });
     child.stderr?.on("data", (chunk) => {
       const text = chunk.toString();
       fatalSeen ||= hasFatalTestRunOutput(`${output}${text}`);
       output = appendCapturedOutput(output, text);
+      logMemoryTraceForText(text);
       process.stderr.write(chunk);
     });
     child.on("error", (err) => {
@@ -778,8 +902,12 @@ const runOnce = (entry, extraArgs = []) =>
       console.error(`[test-parallel] child error: ${String(err)}`);
     });
     child.on("close", (code, signal) => {
+      if (memoryPollTimer) {
+        clearInterval(memoryPollTimer);
+      }
       children.delete(child);
       const resolvedCode = resolveTestRunExitCode({ code, signal, output, fatalSeen, childError });
+      logMemoryTraceSummary();
       console.log(
         `[test-parallel] done ${entry.name} code=${String(resolvedCode)} elapsed=${formatElapsedMs(Date.now() - startedAt)}`,
       );
