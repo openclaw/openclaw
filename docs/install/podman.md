@@ -7,49 +7,60 @@ title: "Podman"
 
 # Podman
 
-Run the OpenClaw gateway in a **rootless** Podman container. Uses the same image as Docker (build from the repo [Dockerfile](https://github.com/openclaw/openclaw/blob/main/Dockerfile)).
+Run the OpenClaw Gateway in a **rootless** Podman container. Uses the same image as Docker (built from the repo [Dockerfile](https://github.com/openclaw/openclaw/blob/main/Dockerfile)).
 
-## Requirements
+## Prerequisites
 
-- Podman (rootless)
-- Sudo for one-time setup (create user, build image)
+- **Podman** (rootless mode)
+- **sudo** access for one-time setup (creating the dedicated user and building the image)
 
 ## Quick start
 
-**1. One-time setup** (from repo root; creates user, builds image, installs launch script):
+<Steps>
+  <Step title="One-time setup">
+    From the repo root, run the setup script. It creates a dedicated `openclaw` user, builds the container image, and installs the launch script:
 
-```bash
-./setup-podman.sh
-```
+    ```bash
+    ./setup-podman.sh
+    ```
 
-This also creates a minimal `~openclaw/.openclaw/openclaw.json` (sets `gateway.mode="local"`) so the gateway can start without running the wizard.
+    This also creates a minimal config at `~openclaw/.openclaw/openclaw.json` (sets `gateway.mode` to `"local"`) so the Gateway can start without running the wizard.
 
-By default the container is **not** installed as a systemd service, you start it manually (see below). For a production-style setup with auto-start and restarts, install it as a systemd Quadlet user service instead:
+    By default the container is **not** installed as a systemd service -- you start it manually in the next step. For a production-style setup with auto-start and restarts, pass `--quadlet` instead:
 
-```bash
-./setup-podman.sh --quadlet
-```
+    ```bash
+    ./setup-podman.sh --quadlet
+    ```
 
-(Or set `OPENCLAW_PODMAN_QUADLET=1`; use `--container` to install only the container and launch script.)
+    (Or set `OPENCLAW_PODMAN_QUADLET=1`. Use `--container` to install only the container and launch script.)
 
-Optional build-time env vars (set before running `setup-podman.sh`):
+    **Optional build-time env vars** (set before running `setup-podman.sh`):
 
-- `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during image build
-- `OPENCLAW_EXTENSIONS` — pre-install extension dependencies (space-separated extension names, e.g. `diagnostics-otel matrix`)
+    - `OPENCLAW_DOCKER_APT_PACKAGES` -- install extra apt packages during image build.
+    - `OPENCLAW_EXTENSIONS` -- pre-install extension dependencies (space-separated names, e.g. `diagnostics-otel matrix`).
 
-**2. Start gateway** (manual, for quick smoke testing):
+  </Step>
 
-```bash
-./scripts/run-openclaw-podman.sh launch
-```
+  <Step title="Start the Gateway">
+    For a quick manual launch:
 
-**3. Onboarding wizard** (e.g. to add channels or providers):
+    ```bash
+    ./scripts/run-openclaw-podman.sh launch
+    ```
 
-```bash
-./scripts/run-openclaw-podman.sh launch setup
-```
+  </Step>
 
-Then open `http://127.0.0.1:18789/` and use the token from `~openclaw/.openclaw/.env` (or the value printed by setup).
+  <Step title="Run the onboarding wizard">
+    To add channels or providers interactively:
+
+    ```bash
+    ./scripts/run-openclaw-podman.sh launch setup
+    ```
+
+    Then open `http://127.0.0.1:18789/` and use the token from `~openclaw/.openclaw/.env` (or the value printed by setup).
+
+  </Step>
+</Steps>
 
 ## Systemd (Quadlet, optional)
 
