@@ -10,6 +10,9 @@ title: "Gmail PubSub"
 
 Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> OpenClaw webhook.
 
+> Migrating from `gog` to `gws` for Gmail-related automation? See
+> [Gmail migration: gog → gws](/guides/gmail-migration-gog-to-gws).
+
 ## Prereqs
 
 - `gcloud` installed and logged in ([install guide](https://docs.cloud.google.com/sdk/docs/install-sdk)).
