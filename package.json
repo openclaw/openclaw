@@ -333,6 +333,10 @@
       "types": "./dist/plugin-sdk/diffs.d.ts",
       "default": "./dist/plugin-sdk/diffs.js"
     },
+    "./plugin-sdk/extension-shared": {
+      "types": "./dist/plugin-sdk/extension-shared.d.ts",
+      "default": "./dist/plugin-sdk/extension-shared.js"
+    },
     "./plugin-sdk/channel-config-helpers": {
       "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
       "default": "./dist/plugin-sdk/channel-config-helpers.js"
