@@ -33,13 +33,6 @@
     },
     "release": {
       "publishToNpm": true
-    },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        "@vector-im/matrix-bot-sdk",
-        "music-metadata"
-      ]
     }
   }
 }
