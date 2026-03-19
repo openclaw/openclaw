@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
@@ -30,14 +31,14 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
     baseUrl: params.baseUrl,
     models: [],
   };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim() === "minimax" ? "" : resolvedApiKey;
+  const normalizedApiKey =
+    typeof existingApiKey === "string" && existingApiKey.trim() === "minimax" ? "" : existingApiKey;
   providers[params.providerId] = {
     ...existingProviderRest,
     baseUrl: params.baseUrl,
     api: "anthropic-messages",
     authHeader: true,
-    ...(normalizedApiKey?.trim() ? { apiKey: normalizedApiKey } : {}),
+    ...(hasConfiguredSecretInput(normalizedApiKey) ? { apiKey: normalizedApiKey } : {}),
     models: mergedModels.length > 0 ? mergedModels : [apiModel],
   };
 

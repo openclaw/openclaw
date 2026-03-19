@@ -4,6 +4,7 @@ import {
   type ModelProviderConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/setup";
 import {
   buildMinimaxApiModelDefinition,
   MINIMAX_API_BASE_URL,
@@ -30,14 +31,14 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
     baseUrl: params.baseUrl,
     models: [],
   };
-  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey = resolvedApiKey?.trim() === "minimax" ? "" : resolvedApiKey;
+  const normalizedApiKey =
+    typeof existingApiKey === "string" && existingApiKey.trim() === "minimax" ? "" : existingApiKey;
   providers[params.providerId] = {
     ...existingProviderRest,
     baseUrl: params.baseUrl,
     api: "anthropic-messages",
     authHeader: true,
-    ...(normalizedApiKey?.trim() ? { apiKey: normalizedApiKey } : {}),
+    ...(hasConfiguredSecretInput(normalizedApiKey) ? { apiKey: normalizedApiKey } : {}),
     models: mergedModels.length > 0 ? mergedModels : [apiModel],
   };
 

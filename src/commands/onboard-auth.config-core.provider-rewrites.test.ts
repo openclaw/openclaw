@@ -7,6 +7,7 @@ import {
   applySyntheticProviderConfig,
   applyZaiProviderConfig,
 } from "./onboard-auth.config-core.js";
+import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard-auth.config-minimax.js";
 
 function makeModel(id: string): ModelDefinitionConfig {
   return {
@@ -92,6 +93,52 @@ describe("core onboarding provider rewriters", () => {
     expect(result.models?.providers?.modelstudio?.apiKey).toEqual(secretRef);
     expect(result.models?.providers?.modelstudio?.models?.map((model) => model.id)).toEqual(
       expect.arrayContaining(["legacy-modelstudio-model", "qwen3.5-plus"]),
+    );
+  });
+
+  it("preserves secret-ref api keys when rewriting MiniMax global config", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          minimax: {
+            api: "openai-completions",
+            baseUrl: "https://minimax-legacy.example/anthropic",
+            apiKey: secretRef,
+            models: [makeModel("legacy-minimax-model")],
+          },
+        },
+      },
+    };
+
+    const result = applyMinimaxApiConfig(cfg);
+
+    expect(result.models?.providers?.minimax?.apiKey).toEqual(secretRef);
+    expect(result.models?.providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
+    expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual(
+      expect.arrayContaining(["legacy-minimax-model", "MiniMax-M2.5"]),
+    );
+  });
+
+  it("preserves secret-ref api keys when rewriting MiniMax CN config", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          minimax: {
+            api: "openai-completions",
+            baseUrl: "https://minimax-legacy.example/anthropic",
+            apiKey: secretRef,
+            models: [makeModel("legacy-minimax-model")],
+          },
+        },
+      },
+    };
+
+    const result = applyMinimaxApiConfigCn(cfg);
+
+    expect(result.models?.providers?.minimax?.apiKey).toEqual(secretRef);
+    expect(result.models?.providers?.minimax?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+    expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual(
+      expect.arrayContaining(["legacy-minimax-model", "MiniMax-M2.5"]),
     );
   });
 });

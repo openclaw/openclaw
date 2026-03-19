@@ -5,6 +5,7 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyMinimaxApiConfig,
+  applyMinimaxApiConfigCn,
   applyMinimaxApiProviderConfig,
 } from "../../extensions/minimax/onboard.js";
 import {
@@ -428,6 +429,52 @@ describe("applyMinimaxApiConfig", () => {
       "old-model",
       "MiniMax-M2.7",
     ]);
+  });
+
+  it("preserves secret-ref api keys when rewriting minimax global config", () => {
+    const secretRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "MINIMAX_API_KEY",
+    };
+    const cfg = applyMinimaxApiConfig({
+      models: {
+        providers: {
+          minimax: {
+            baseUrl: "https://legacy.minimax.example/anthropic",
+            api: "openai-completions",
+            apiKey: secretRef,
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(cfg.models?.providers?.minimax?.apiKey).toEqual(secretRef);
+    expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
+  });
+
+  it("preserves secret-ref api keys when rewriting minimax CN config", () => {
+    const secretRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "MINIMAX_API_KEY",
+    };
+    const cfg = applyMinimaxApiConfigCn({
+      models: {
+        providers: {
+          minimax: {
+            baseUrl: "https://legacy.minimax.example/anthropic",
+            api: "openai-completions",
+            apiKey: secretRef,
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(cfg.models?.providers?.minimax?.apiKey).toEqual(secretRef);
+    expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
   });
 
   it("preserves other providers when adding minimax", () => {
