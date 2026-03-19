@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { channelTestPrefixes } from "../vitest.channel-paths.mjs";
 import { isUnitConfigTestFile } from "../vitest.unit-paths.mjs";
-import { appendCapturedOutput, resolveTestRunExitCode } from "./test-parallel-utils.mjs";
+import {
+  appendCapturedOutput,
+  hasFatalTestRunOutput,
+  resolveTestRunExitCode,
+} from "./test-parallel-utils.mjs";
 import {
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
@@ -742,6 +746,8 @@ const runOnce = (entry, extraArgs = []) =>
       ? `${nextNodeOptions} ${heapFlag}`.trim()
       : nextNodeOptions;
     let output = "";
+    let fatalSeen = false;
+    let childError = null;
     let child;
     try {
       child = spawn(pnpm, args, {
@@ -757,20 +763,23 @@ const runOnce = (entry, extraArgs = []) =>
     children.add(child);
     child.stdout?.on("data", (chunk) => {
       const text = chunk.toString();
+      fatalSeen ||= hasFatalTestRunOutput(`${output}${text}`);
       output = appendCapturedOutput(output, text);
       process.stdout.write(chunk);
     });
     child.stderr?.on("data", (chunk) => {
       const text = chunk.toString();
+      fatalSeen ||= hasFatalTestRunOutput(`${output}${text}`);
       output = appendCapturedOutput(output, text);
       process.stderr.write(chunk);
     });
     child.on("error", (err) => {
+      childError = err;
       console.error(`[test-parallel] child error: ${String(err)}`);
     });
     child.on("close", (code, signal) => {
       children.delete(child);
-      const resolvedCode = resolveTestRunExitCode({ code, signal, output });
+      const resolvedCode = resolveTestRunExitCode({ code, signal, output, fatalSeen, childError });
       console.log(
         `[test-parallel] done ${entry.name} code=${String(resolvedCode)} elapsed=${formatElapsedMs(Date.now() - startedAt)}`,
       );
