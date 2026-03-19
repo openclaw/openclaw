@@ -73,6 +73,13 @@ function shouldSkipMissingConfigFastPath(): boolean {
   );
 }
 
+function shouldCollectPluginCompatibility(cfg: OpenClawConfig): boolean {
+  if (hasPotentialConfiguredChannels(cfg)) {
+    return true;
+  }
+  return existsSync(resolveConfigPath(process.env));
+}
+
 function resolveDefaultMemoryStorePath(agentId: string): string {
   return path.join(resolveStateDir(process.env, os.homedir), "memory", `${agentId}.sqlite`);
 }
@@ -186,7 +193,9 @@ export async function scanStatusJsonFast(
     : null;
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
   const memory = await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
-  const pluginCompatibility = buildPluginCompatibilityNotices({ config: cfg });
+  const pluginCompatibility = shouldCollectPluginCompatibility(cfg)
+    ? buildPluginCompatibilityNotices({ config: cfg })
+    : [];
 
   return {
     cfg,
