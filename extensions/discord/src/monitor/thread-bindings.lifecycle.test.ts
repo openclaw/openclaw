@@ -42,6 +42,7 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../send.js", () => ({
+  addRoleDiscord: vi.fn(),
   sendMessageDiscord: hoisted.sendMessageDiscord,
   sendWebhookMessageDiscord: hoisted.sendWebhookMessageDiscord,
 }));

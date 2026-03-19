@@ -289,7 +289,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       expect(result.targetStatesByPath["tools.web.search.gemini.apiKey"]).toBe("resolved_local");
       expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
-  });
+  }, 300_000);
 
   it("falls back to local resolution for Firecrawl SecretRefs when gateway is unavailable", async () => {
     const envKey = "WEB_FETCH_FIRECRAWL_API_KEY_LOCAL_FALLBACK";

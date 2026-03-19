@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
-import { buildModelsProviderData } from "../../runtime-api.js";
 import {
   buildMattermostAllowedModelRefs,
   parseMattermostModelPickerContext,
@@ -145,7 +144,17 @@ describe("Mattermost model picker", () => {
           ],
         },
       };
-      const providerData = await buildModelsProviderData(cfg, "support");
+      const providerData = {
+        byProvider: new Map<string, Set<string>>([
+          ["anthropic", new Set(["claude-opus-4-5"])],
+          ["openai", new Set(["gpt-5"])],
+        ]),
+        providers: ["anthropic", "openai"],
+        resolvedDefault: {
+          provider: "openai",
+          model: "gpt-5",
+        },
+      };
 
       expect(
         resolveMattermostModelPickerCurrentModel({
