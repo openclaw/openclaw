@@ -1,0 +1,16 @@
+{
+  "gateway": {
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "allowTailscale": true
+    },
+    "tailscale": {
+      "mode": "serve"
+    },
+    "controlUi": {
+      "allowedOrigins": []
+    },
+    "trustedProxies": []
+  }
+}

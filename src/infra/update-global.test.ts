@@ -44,6 +44,9 @@ describe("update global helpers", () => {
   });
 
   it("resolves global roots and package roots from runner output", async () => {
+    envSnapshot = captureEnv(["BUN_INSTALL"]);
+    delete process.env.BUN_INSTALL;
+
     const runCommand: CommandRunner = async (argv) => {
       if (argv[0] === "npm") {
         return { stdout: "/tmp/npm-root\n", stderr: "", code: 0 };
