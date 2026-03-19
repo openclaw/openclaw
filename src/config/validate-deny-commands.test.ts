@@ -101,4 +101,26 @@ describe("validate-deny-commands", () => {
     expect(result.valid).toBe(false);
     expect(result.errors[0]).toContain("exact matching");
   });
+
+  it("does not infer patterns from punctuation alone", () => {
+    expect(looksLikeCommandPattern("camera.capture(v2)")).toBe(false);
+    expect(looksLikeCommandPattern("foo|bar")).toBe(false);
+    expect(looksLikeCommandPattern("^caret-prefix")).toBe(false);
+    expect(looksLikeCommandPattern("suffix$")).toBe(false);
+  });
+
+  it("accepts exact allowCommands entries that contain punctuation", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          allowCommands: ["camera.capture(v2)", "foo|bar"],
+        },
+      },
+    };
+
+    expect(validateDenyCommandEntries(["camera.capture(v2)", "foo|bar"], cfg)).toEqual({
+      valid: true,
+      errors: [],
+    });
+  });
 });

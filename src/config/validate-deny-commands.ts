@@ -99,18 +99,16 @@ export function looksLikeCommandPattern(value: string): boolean {
   if (!value) {
     return false;
   }
-  if (/[?*[\]{}(),|]/.test(value)) {
+  if (value.startsWith("group:")) {
     return true;
   }
-  if (
-    value.startsWith("/") ||
-    value.endsWith("/") ||
-    value.startsWith("^") ||
-    value.endsWith("$")
-  ) {
+  if (value.includes("*") || value.includes("?")) {
     return true;
   }
-  return value.includes("group:");
+  if (value.includes("[") && value.includes("]")) {
+    return true;
+  }
+  return /^\/.+\/[a-z]*$/i.test(value);
 }
 
 export function validateDenyCommandEntries(

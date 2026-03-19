@@ -371,6 +371,49 @@ describe("config cli", () => {
       );
     });
 
+    it("accepts exact denyCommands entries with punctuation when allowCommands declares them", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "gateway.nodes",
+        '{"allowCommands":["camera.capture(v2)","foo|bar"],"denyCommands":["camera.capture(v2)","foo|bar"]}',
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.nodes).toEqual({
+        allowCommands: ["camera.capture(v2)", "foo|bar"],
+        denyCommands: ["camera.capture(v2)", "foo|bar"],
+      });
+    });
+
+    it("rejects unsetting allowCommands when it leaves denyCommands invalid", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          port: 18789,
+          nodes: {
+            allowCommands: ["camera.capture(v2)"],
+            denyCommands: ["camera.capture(v2)"],
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "unset", "gateway.nodes.allowCommands"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining('Unknown command "camera.capture(v2)"'),
+      );
+    });
+
     it("does not revalidate denyCommands for unrelated gateway.nodes edits", async () => {
       const resolved: OpenClawConfig = {
         gateway: {

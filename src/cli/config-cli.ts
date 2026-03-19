@@ -1216,6 +1216,18 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
       runtime.exit(1);
       return;
     }
+    const shouldValidateGatewayNodeCommands =
+      pathOverlaps(parsedPath, GATEWAY_NODES_ALLOW_COMMANDS_PATH) ||
+      pathOverlaps(parsedPath, GATEWAY_NODES_DENY_COMMANDS_PATH);
+    if (shouldValidateGatewayNodeCommands) {
+      const denyCommandErrors = collectDenyCommandValidationMessages(next as OpenClawConfig);
+      if (denyCommandErrors.length > 0) {
+        throw new Error(
+          "Invalid denyCommands entries:\n" +
+            denyCommandErrors.map((error) => `- ${error}`).join("\n"),
+        );
+      }
+    }
     await writeConfigFile(next, { unsetPaths: [parsedPath] });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
   } catch (err) {
