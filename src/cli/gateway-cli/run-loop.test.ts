@@ -385,6 +385,7 @@ describe("runGatewayLoop", () => {
       sigusr1();
 
       await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(gatewayLog.info).toHaveBeenCalledWith("checking gateway lock on port 18789");
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
