@@ -679,7 +679,9 @@ function buildChatModelOptions(
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
     const modelId = entry.id?.trim();
-    if (!modelId) continue;
+    if (!modelId) {
+      continue;
+    }
 
     const value = provider ? `${provider}/${modelId}` : modelId;
     const displayLabel = entry.name?.trim() || modelId;
@@ -699,13 +701,13 @@ function buildChatModelOptions(
   }
 
   // Sort groups alphabetically by provider name
-  const groups = Array.from(providerGroups.values()).sort((a, b) =>
+  const groups = Array.from(providerGroups.values()).toSorted((a, b) =>
     a.provider.localeCompare(b.provider),
   );
 
   // Sort options within each group
   for (const group of groups) {
-    group.options.sort((a, b) => a.label.localeCompare(b.label));
+    group.options = group.options.toSorted((a, b) => a.label.localeCompare(b.label));
   }
 
   return { groups, ungrouped };
