@@ -413,16 +413,11 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
         })
       : null;
   // Feishu group_topic_sender bindings are keyed with :sender:<openId> suffix
-  // that resolveFeishuConversationId does not include. Try sender-scoped first.
-  let feishuBinding =
-    onFeishu && feishuConversationId
-      ? sessionBindingService.resolveByConversation({
-          channel: "feishu",
-          accountId,
-          conversationId: feishuConversationId,
-        })
-      : null;
-  if (!feishuBinding && onFeishu && feishuConversationId?.includes(":topic:")) {
+  // that resolveFeishuConversationId does not include. Prefer sender-scoped
+  // lookup so lifecycle changes target the user's own binding, not a shared
+  // topic-level configured binding.
+  let feishuBinding: ReturnType<typeof sessionBindingService.resolveByConversation> = null;
+  if (onFeishu && feishuConversationId?.includes(":topic:")) {
     const senderId = (params.command.senderId ?? "").trim();
     if (senderId) {
       feishuBinding = sessionBindingService.resolveByConversation({
@@ -431,6 +426,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
         conversationId: `${feishuConversationId}:sender:${senderId}`,
       });
     }
+  }
+  if (!feishuBinding && onFeishu && feishuConversationId) {
+    feishuBinding = sessionBindingService.resolveByConversation({
+      channel: "feishu",
+      accountId,
+      conversationId: feishuConversationId,
+    });
   }
   if (onDiscord && !discordBinding) {
     if (onDiscord && !threadId) {

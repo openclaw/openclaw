@@ -38,27 +38,27 @@ export async function handleSubagentsUnfocusAction(
     return undefined;
   })();
 
-  // Feishu sender-scoped fallback: bindings in group_topic_sender scope are
-  // keyed with :sender:<openId>. Try sender-scoped lookup when topic-only misses.
+  // Feishu sender-scoped bindings: in group_topic_sender scope, bindings are
+  // keyed with :sender:<openId>. Prefer sender-scoped lookup so /unfocus removes
+  // the user's own binding rather than a shared topic-level configured binding.
   const resolveFeishuBinding = () => {
     if (channel !== "feishu" || !conversationId) {
       return null;
     }
-    const base = bindingService.resolveByConversation({ channel, accountId, conversationId });
-    if (base) {
-      return base;
-    }
     if (conversationId.includes(":topic:")) {
       const senderId = (params.command.senderId ?? "").trim();
       if (senderId) {
-        return bindingService.resolveByConversation({
+        const senderScoped = bindingService.resolveByConversation({
           channel,
           accountId,
           conversationId: `${conversationId}:sender:${senderId}`,
         });
+        if (senderScoped) {
+          return senderScoped;
+        }
       }
     }
-    return null;
+    return bindingService.resolveByConversation({ channel, accountId, conversationId });
   };
 
   if (!conversationId) {
