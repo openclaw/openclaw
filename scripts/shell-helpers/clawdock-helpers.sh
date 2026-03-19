@@ -114,7 +114,7 @@ _clawdock_ensure_dir() {
     echo "Clone it first:"
     echo ""
     echo "  git clone https://github.com/openclaw/openclaw.git ~/openclaw"
-    echo "  cd ~/openclaw && ./docker-setup.sh"
+    echo "  cd ~/openclaw && ./scripts/docker/setup.sh"
     echo ""
     echo "Or set CLAWDOCK_DIR if it's elsewhere:"
     echo ""
