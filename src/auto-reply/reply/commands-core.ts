@@ -28,6 +28,7 @@ import {
   handleGraphitiModelCommand,
 } from "./commands-narrative-graphiti-model.js";
 import { handlePluginCommand } from "./commands-plugin.js";
+import { handleRememberCommand } from "./commands-remember.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
@@ -202,6 +203,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleModelsCommand,
       handleNarrativeModelCommand,
       handleGraphitiModelCommand,
+      handleRememberCommand,
       handleStopCommand,
       handleCompactCommand,
       handleHyperfocusCommand,

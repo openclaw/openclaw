@@ -566,6 +566,20 @@ function buildChatCommands(): ChatCommandDefinition[] {
       ],
     }),
     defineChatCommand({
+      key: "remember",
+      nativeName: "remember",
+      description: "Search long-term memory graph for a query.",
+      textAlias: "/remember",
+      category: "session",
+      args: [
+        {
+          name: "query",
+          description: "What to search for",
+          type: "string",
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "hyperfocus",
       nativeName: "hyperfocus",
       description: "Toggle hyperfocus mode (compact memory, no flashbacks).",
