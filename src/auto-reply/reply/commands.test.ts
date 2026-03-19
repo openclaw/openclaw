@@ -1004,6 +1004,19 @@ describe("handleCommands /config configWrites gating", () => {
 });
 
 describe("handleCommands bash alias", () => {
+  it.each(["![image]", "![image](https://example.com/img.png)", "![](url)", "![a]"])(
+    "does not treat Markdown image %s as bash bang",
+    async (commandBody) => {
+      const cfg = {
+        commands: { bash: true, text: true },
+        whatsapp: { allowFrom: ["*"] },
+      } as OpenClawConfig;
+      const params = buildParams(commandBody, cfg);
+      const result = await handleCommands(params);
+      expect(result.shouldContinue).toBe(true);
+    },
+  );
+
   it("routes !poll and !stop through the /bash handler", async () => {
     const cfg = {
       commands: { bash: true, text: true },

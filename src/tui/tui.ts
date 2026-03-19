@@ -61,7 +61,7 @@ export function createEditorSubmitHandler(params: {
     // Bash mode: only if the very first character is '!' and it's not just '!'.
     // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
     // Per requirement: a lone '!' should be treated as a normal message.
-    if (raw.startsWith("!") && raw !== "!") {
+    if (raw.startsWith("!") && raw !== "!" && !raw.startsWith("![")) {
       params.editor.addToHistory(raw);
       void params.handleBangLine(raw);
       return;

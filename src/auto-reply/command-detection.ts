@@ -76,7 +76,7 @@ export function hasInlineCommandTokens(text?: string): boolean {
   if (!body.trim()) {
     return false;
   }
-  return /(?:^|\s)[/!][a-z]/i.test(body);
+  return /(?:^|\s)(?:\/[a-z]|!(?!\[)[a-z])/i.test(body);
 }
 
 export function shouldComputeCommandAuthorized(

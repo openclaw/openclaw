@@ -120,7 +120,7 @@ export function shouldBypassAcpDispatchForCommand(
   }
 
   const normalized = candidate.trim();
-  if (!normalized.startsWith("!")) {
+  if (!normalized.startsWith("!") || normalized.startsWith("![")) {
     return false;
   }
 

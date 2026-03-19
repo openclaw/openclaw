@@ -24,6 +24,25 @@ describe("createEditorSubmitHandler", () => {
     expect(sendMessage).toHaveBeenCalledWith("!");
   });
 
+  it("does not treat Markdown image ![...] as a bang command", () => {
+    const { sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+
+    onSubmit("![image](https://example.com/img.png)");
+
+    expect(handleBangLine).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith("![image](https://example.com/img.png)");
+  });
+
+  it("does not treat empty alt-text Markdown image ![](url) as a bang command", () => {
+    const { sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+
+    onSubmit("![](https://example.com/img.png)");
+
+    expect(handleBangLine).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("does not treat leading whitespace before ! as a bang command", () => {
     const { editor, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
 
