@@ -59,11 +59,12 @@ describe("matrix thread bindings", () => {
     accessToken: "token",
   } as const;
 
-  function resolveBindingsFilePath() {
+  function resolveBindingsFilePath(customStateDir?: string) {
     return path.join(
       resolveMatrixStoragePaths({
         ...auth,
         env: process.env,
+        ...(customStateDir ? { stateDir: customStateDir } : {}),
       }).rootDir,
       "thread-bindings.json",
     );
@@ -430,6 +431,98 @@ describe("matrix thread bindings", () => {
       "thread-bindings.json",
     );
     expect(rotatedBindingsPath).toBe(initialBindingsPath);
+  });
+
+  it("replaces reused account managers when the bindings stateDir changes", async () => {
+    const initialStateDir = stateDir;
+    const replacementStateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "matrix-thread-bindings-replacement-"),
+    );
+
+    const initialManager = await createMatrixThreadBindingManager({
+      accountId: "ops",
+      auth,
+      client: {} as never,
+      stateDir: initialStateDir,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+      enableSweeper: false,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:ops:subagent:child",
+      targetKind: "subagent",
+      conversation: {
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$thread",
+        parentConversationId: "!room:example",
+      },
+      placement: "current",
+    });
+
+    const replacementManager = await createMatrixThreadBindingManager({
+      accountId: "ops",
+      auth,
+      client: {} as never,
+      stateDir: replacementStateDir,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+      enableSweeper: false,
+    });
+
+    expect(replacementManager).not.toBe(initialManager);
+    expect(replacementManager.listBindings()).toEqual([]);
+    expect(
+      getSessionBindingService().resolveByConversation({
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$thread",
+        parentConversationId: "!room:example",
+      }),
+    ).toBeNull();
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:ops:subagent:replacement",
+      targetKind: "subagent",
+      conversation: {
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$thread-2",
+        parentConversationId: "!room:example",
+      },
+      placement: "current",
+    });
+
+    await vi.waitFor(async () => {
+      const replacementRaw = await fs.readFile(
+        resolveBindingsFilePath(replacementStateDir),
+        "utf-8",
+      );
+      expect(JSON.parse(replacementRaw)).toMatchObject({
+        version: 1,
+        bindings: [
+          expect.objectContaining({
+            conversationId: "$thread-2",
+            parentConversationId: "!room:example",
+            targetSessionKey: "agent:ops:subagent:replacement",
+          }),
+        ],
+      });
+    });
+    await vi.waitFor(async () => {
+      const initialRaw = await fs.readFile(resolveBindingsFilePath(initialStateDir), "utf-8");
+      expect(JSON.parse(initialRaw)).toMatchObject({
+        version: 1,
+        bindings: [
+          expect.objectContaining({
+            conversationId: "$thread",
+            parentConversationId: "!room:example",
+            targetSessionKey: "agent:ops:subagent:child",
+          }),
+        ],
+      });
+    });
   });
 
   it("updates lifecycle windows by session key and refreshes activity", async () => {
