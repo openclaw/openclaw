@@ -5,9 +5,9 @@ import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import {
   applySetupAccountConfigPatch,
   DEFAULT_ACCOUNT_ID,
-  hasConfiguredSecretInput,
   type OpenClawConfig,
 } from "./runtime-api.js";
+import { hasConfiguredSecretInput } from "./secret-input.js";
 import {
   isMattermostConfigured,
   mattermostSetupAdapter,
