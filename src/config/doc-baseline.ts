@@ -497,6 +497,7 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
   logConfigDocBaselineDebug(`imported ${channelPlugins.length} bundled channel plugins`);
 
   return buildConfigSchema({
+    cache: false,
     plugins: manifestRegistry.plugins
       .filter((plugin) => plugin.origin === "bundled")
       .map((plugin) => ({
