@@ -27,6 +27,42 @@ describe("validate-deny-commands", () => {
     expect(result).toEqual({ valid: true, errors: [] });
   });
 
+  it("does not crash when allowCommands is malformed", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          allowCommands: 42 as unknown as string[],
+        },
+      },
+    };
+
+    expect(() => validateDenyCommandEntries(["system.run"], cfg)).not.toThrow();
+    expect(validateDenyCommandEntries(["system.run"], cfg)).toEqual({ valid: true, errors: [] });
+  });
+
+  it("ignores non-string allowCommands entries during validation", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          allowCommands: [42, null, "custom.mycommand"] as unknown as string[],
+        },
+      },
+    };
+
+    const result = validateDenyCommandEntries(["custom.mycommand"], cfg);
+    expect(result).toEqual({ valid: true, errors: [] });
+  });
+
+  it("does not crash when gateway.nodes has a malformed shape", () => {
+    const cfg = {
+      gateway: {
+        nodes: "broken" as unknown,
+      },
+    } as OpenClawConfig;
+
+    expect(() => validateDenyCommandEntries(["system.run"], cfg)).not.toThrow();
+  });
+
   it("rejects typos with a suggestion", () => {
     const result = validateDenyCommandEntries(["system.rn"], {});
     expect(result.valid).toBe(false);

@@ -10,12 +10,19 @@ export interface DenyCommandValidationResult {
 }
 
 export function collectAllKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
+  // This validator runs before full schema validation, so malformed allowCommands
+  // must not crash known-command collection.
+  const rawAllowCommands = cfg.gateway?.nodes?.allowCommands;
+  const safeAllowCommands = Array.isArray(rawAllowCommands)
+    ? rawAllowCommands.filter((value): value is string => typeof value === "string")
+    : [];
   const baseCfg: OpenClawConfig = {
     ...cfg,
     gateway: {
       ...cfg.gateway,
       nodes: {
         ...cfg.gateway?.nodes,
+        allowCommands: safeAllowCommands,
         denyCommands: [],
       },
     },

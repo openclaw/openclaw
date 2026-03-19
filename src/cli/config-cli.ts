@@ -1041,7 +1041,6 @@ export async function runConfigSet(opts: {
     if (opts.cliOptions.dryRun) {
       const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
       const hasBuilderMode = operations.some((operation) => operation.inputMode === "builder");
-      const schemaChecksEnabled = hasJsonMode || shouldValidateGatewayNodeCommands;
       const refs =
         hasJsonMode || hasBuilderMode
           ? collectDryRunRefs({
@@ -1080,7 +1079,7 @@ export async function runConfigSet(opts: {
         configPath: shortenHomePath(snapshot.path),
         inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
         checks: {
-          schema: schemaChecksEnabled,
+          schema: hasJsonMode,
           resolvability: hasJsonMode || hasBuilderMode,
           resolvabilityComplete:
             (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,

@@ -1255,6 +1255,56 @@ describe("config cli", () => {
       ).toBe(true);
     });
 
+    it("keeps the value-mode dry-run note for gateway.nodes writes without json-mode validation", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "gateway.nodes",
+        '{"denyCommands":["system.run"]}',
+        "--dry-run",
+      ]);
+
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining("value mode does not run schema/resolvability checks"),
+      );
+    });
+
+    it("returns structured schema errors instead of crashing on malformed allowCommands", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "gateway.nodes",
+          '{"allowCommands":42,"denyCommands":["system.run"]}',
+          "--strict-json",
+          "--dry-run",
+          "--json",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      const raw = mockLog.mock.calls.at(-1)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        ok: boolean;
+        checks: { schema: boolean };
+        errors?: Array<{ kind: string; message: string }>;
+      };
+      expect(payload.ok).toBe(false);
+      expect(payload.checks.schema).toBe(true);
+      expect(payload.errors?.some((entry) => entry.message.includes("allowCommands"))).toBe(true);
+      expect(payload.errors?.some((entry) => entry.message.includes("TypeError"))).toBe(false);
+    });
+
     it("fails dry-run when provider updates make existing refs unresolvable", async () => {
       const resolved: OpenClawConfig = {
         gateway: { port: 18789 },
