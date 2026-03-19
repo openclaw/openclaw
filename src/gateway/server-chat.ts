@@ -761,6 +761,19 @@ export function createAgentEventHandler({
       if (recipients && recipients.size > 0) {
         broadcastToConnIds("agent", agentPayload, recipients);
       }
+      // Mirror thinking events onto a session-scoped event so operator UIs or
+      // clients that (re-)attach mid-run can receive the in-flight reasoning
+      // stream without knowing the runId in advance. This mirrors the same
+      // pattern used for tool events above. Access is gated by READ_SCOPE at
+      // the WebSocket level (see EVENT_SCOPE_GUARDS in server-broadcast.ts).
+      if (sessionKey) {
+        const sessionSubscribers = sessionEventSubscribers.getAll();
+        if (sessionSubscribers.size > 0) {
+          broadcastToConnIds("session.thinking", agentPayload, sessionSubscribers, {
+            dropIfSlow: true,
+          });
+        }
+      }
     } else {
       broadcast("agent", agentPayload);
     }

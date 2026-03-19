@@ -1369,6 +1369,18 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
 
       let agentRunStarted = false;
+      // Register thinking event recipient eagerly, before the run starts, so that
+      // reasoning deltas emitted before onAgentRunStart fires are not dropped.
+      // emitReasoningStream() publishes directly to the agent-event bus and does not
+      // invoke onAgentRunStart, so deferring registration until that callback would
+      // cause the opening thinking frames to be silently discarded.
+      const connIdEager = typeof client?.connId === "string" ? client.connId : undefined;
+      if (
+        connIdEager &&
+        hasGatewayClientCap(client?.connect?.caps, GATEWAY_CLIENT_CAPS.THINKING_EVENTS)
+      ) {
+        context.registerThinkingEventRecipient(clientRunId, connIdEager);
+      }
       void dispatchInboundMessage({
         ctx,
         cfg,
@@ -1401,7 +1413,8 @@ export const chatHandlers: GatewayRequestHandlers = {
               GATEWAY_CLIENT_CAPS.THINKING_EVENTS,
             );
             if (connId && wantsThinkingEvents) {
-              context.registerThinkingEventRecipient(runId, connId);
+              // Eager registration above covered clientRunId; register any other
+              // active runs in the same session (late-joining / page-refresh case).
               for (const [activeRunId, active] of context.chatAbortControllers) {
                 if (activeRunId !== runId && active.sessionKey === p.sessionKey) {
                   context.registerThinkingEventRecipient(activeRunId, connId);
