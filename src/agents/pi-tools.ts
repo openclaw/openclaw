@@ -352,6 +352,7 @@ export function createOpenClawCodingTools(options?: {
   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
   const workspaceOnly = fsPolicy.workspaceOnly;
   const allowedRoots = fsPolicy.allowedRoots;
+  const applyPatchAllowedRoots = workspaceOnly ? allowedRoots : [];
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
@@ -473,10 +474,14 @@ export function createOpenClawCodingTools(options?: {
           cwd: sandboxRoot ?? workspaceRoot,
           sandbox:
             sandboxRoot && allowWorkspaceWrites
-              ? { root: sandboxRoot, bridge: sandboxFsBridge!, allowedRoots }
+              ? {
+                  root: sandboxRoot,
+                  bridge: sandboxFsBridge!,
+                  allowedRoots: applyPatchAllowedRoots,
+                }
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
-          allowedRoots,
+          allowedRoots: applyPatchAllowedRoots,
         });
   const tools: AnyAgentTool[] = [
     ...base,
