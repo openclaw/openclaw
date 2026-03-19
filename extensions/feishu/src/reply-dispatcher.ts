@@ -288,23 +288,26 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const closeStreaming = async () => {
-    if (streamingStartPromise) {
-      await streamingStartPromise;
-    }
-    await partialUpdateQueue;
-    if (streaming?.isActive()) {
-      let text = buildCombinedStreamText(reasoningText, streamText);
-      if (mentionTargets?.length) {
-        text = buildMentionedCardContent(mentionTargets, text);
+    try {
+      if (streamingStartPromise) {
+        await streamingStartPromise;
       }
-      const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-      await streaming.close(text, { note: finalNote });
+      await partialUpdateQueue;
+      if (streaming?.isActive()) {
+        let text = buildCombinedStreamText(reasoningText, streamText);
+        if (mentionTargets?.length) {
+          text = buildMentionedCardContent(mentionTargets, text);
+        }
+        const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+        await streaming.close(text, { note: finalNote });
+      }
+    } finally {
+      streaming = null;
+      streamingStartPromise = null;
+      streamText = "";
+      lastPartial = "";
+      reasoningText = "";
     }
-    streaming = null;
-    streamingStartPromise = null;
-    streamText = "";
-    lastPartial = "";
-    reasoningText = "";
   };
 
   const sendChunkedTextReply = async (params: {
