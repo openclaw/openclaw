@@ -17,14 +17,6 @@ import {
 } from "openclaw/plugin-sdk/channel-runtime";
 import { buildTrafficStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  buildChannelConfigSchema,
-  buildProbeChannelStatusSummary,
-  collectStatusIssuesFromLastError,
-  DEFAULT_ACCOUNT_ID,
-  PAIRING_APPROVED_MESSAGE,
-  type ChannelPlugin,
-} from "../runtime-api.js";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import {
@@ -44,6 +36,14 @@ import {
   resolveMatrixDirectUserId,
   resolveMatrixTargetIdentity,
 } from "./matrix/target-ids.js";
+import {
+  buildChannelConfigSchema,
+  buildProbeChannelStatusSummary,
+  collectStatusIssuesFromLastError,
+  DEFAULT_ACCOUNT_ID,
+  PAIRING_APPROVED_MESSAGE,
+  type ChannelPlugin,
+} from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import { matrixSetupAdapter } from "./setup-core.js";
