@@ -38,9 +38,7 @@ describe("postJson", () => {
 
   it("forwards timeoutMs to withRemoteHttpResponse", async () => {
     remoteHttpMock.mockImplementationOnce(async (params) => {
-      return await params.onResponse(
-        new Response(JSON.stringify({}), { status: 200 }),
-      );
+      return await params.onResponse(new Response(JSON.stringify({}), { status: 200 }));
     });
 
     await postJson({
