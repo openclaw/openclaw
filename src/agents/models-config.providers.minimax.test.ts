@@ -7,7 +7,7 @@ import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js"
 
 describe("minimax provider catalog", () => {
   it(
-    "does not advertise the removed lightning model for api-key or oauth providers",
+    "only advertises M2.7 models for api-key or oauth providers",
     { timeout: 300_000 },
     async () => {
       const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
