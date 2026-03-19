@@ -47,9 +47,12 @@ const COST_USAGE_CACHE_TTL_MS = 30_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
+type DateParts = { year: number; monthIndex: number; day: number };
+type DateTimeParts = DateParts & { hour: number; minute: number; second: number };
 type DateInterpretation =
   | { mode: "utc" | "gateway" }
-  | { mode: "specific"; utcOffsetMinutes: number };
+  | { mode: "specific"; utcOffsetMinutes: number }
+  | { mode: "specific"; timeZone: string };
 
 type CostUsageCacheEntry = {
   summary?: CostUsageSummary;
@@ -58,6 +61,19 @@ type CostUsageCacheEntry = {
 };
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
+const timeZoneDateTimeFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function hasSpecificTimeZoneInterpretation(
+  interpretation: DateInterpretation,
+): interpretation is { mode: "specific"; timeZone: string } {
+  return interpretation.mode === "specific" && "timeZone" in interpretation;
+}
+
+function hasSpecificUtcOffsetInterpretation(
+  interpretation: DateInterpretation,
+): interpretation is { mode: "specific"; utcOffsetMinutes: number } {
+  return interpretation.mode === "specific" && "utcOffsetMinutes" in interpretation;
+}
 
 function resolveSessionUsageFileOrRespond(
   key: string,
@@ -141,14 +157,194 @@ const parseUtcOffsetToMinutes = (raw: unknown): number | undefined => {
   return totalMinutes;
 };
 
+const resolveTimeZoneName = (raw: unknown): string | undefined => {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
+    return trimmed;
+  } catch {
+    return undefined;
+  }
+};
+
+const getTimeZoneDateTimeFormatter = (timeZone: string): Intl.DateTimeFormat => {
+  let formatter = timeZoneDateTimeFormatterCache.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    });
+    timeZoneDateTimeFormatterCache.set(timeZone, formatter);
+  }
+  return formatter;
+};
+
+const parseDateTimePartsInTimeZone = (
+  date: Date,
+  timeZone: string,
+): DateTimeParts | undefined => {
+  try {
+    const parts = getTimeZoneDateTimeFormatter(timeZone).formatToParts(date);
+    const map: Record<string, string> = {};
+    for (const part of parts) {
+      if (part.type !== "literal") {
+        map[part.type] = part.value;
+      }
+    }
+    const year = Number(map.year);
+    const month = Number(map.month);
+    const day = Number(map.day);
+    const hour = Number(map.hour);
+    const minute = Number(map.minute);
+    const second = Number(map.second);
+    if (
+      !Number.isFinite(year) ||
+      !Number.isFinite(month) ||
+      !Number.isFinite(day) ||
+      !Number.isFinite(hour) ||
+      !Number.isFinite(minute) ||
+      !Number.isFinite(second)
+    ) {
+      return undefined;
+    }
+    return {
+      year,
+      monthIndex: month - 1,
+      day,
+      hour,
+      minute,
+      second,
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+const addDaysToDateParts = (parts: DateParts, days: number): DateParts => {
+  const shifted = new Date(Date.UTC(parts.year, parts.monthIndex, parts.day + days));
+  return {
+    year: shifted.getUTCFullYear(),
+    monthIndex: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
+  };
+};
+
+const getTimeZoneStartOfDayMs = (parts: DateParts, timeZone: string): number | undefined => {
+  const targetUtcMidnight = Date.UTC(parts.year, parts.monthIndex, parts.day);
+  let candidateMs = targetUtcMidnight;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const zoned = parseDateTimePartsInTimeZone(new Date(candidateMs), timeZone);
+    if (!zoned) {
+      return undefined;
+    }
+    const offsetMs =
+      Date.UTC(
+        zoned.year,
+        zoned.monthIndex,
+        zoned.day,
+        zoned.hour,
+        zoned.minute,
+        zoned.second,
+      ) - candidateMs;
+    const nextCandidateMs = targetUtcMidnight - offsetMs;
+    if (nextCandidateMs === candidateMs) {
+      return candidateMs;
+    }
+    candidateMs = nextCandidateMs;
+  }
+  return candidateMs;
+};
+
+const getDatePartsForInstant = (
+  date: Date,
+  interpretation: DateInterpretation,
+): DateParts | undefined => {
+  if (interpretation.mode === "gateway") {
+    return {
+      year: date.getFullYear(),
+      monthIndex: date.getMonth(),
+      day: date.getDate(),
+    };
+  }
+  if (interpretation.mode === "utc") {
+    return {
+      year: date.getUTCFullYear(),
+      monthIndex: date.getUTCMonth(),
+      day: date.getUTCDate(),
+    };
+  }
+  if (hasSpecificTimeZoneInterpretation(interpretation)) {
+    const parts = parseDateTimePartsInTimeZone(date, interpretation.timeZone);
+    if (!parts) {
+      return undefined;
+    }
+    return {
+      year: parts.year,
+      monthIndex: parts.monthIndex,
+      day: parts.day,
+    };
+  }
+  if (!hasSpecificUtcOffsetInterpretation(interpretation)) {
+    return undefined;
+  }
+  const shifted = new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
+  return {
+    year: shifted.getUTCFullYear(),
+    monthIndex: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
+  };
+};
+
+const getStartOfDayMs = (
+  parts: DateParts,
+  interpretation: DateInterpretation = { mode: "utc" },
+): number | undefined => {
+  if (interpretation.mode === "gateway") {
+    const ms = new Date(parts.year, parts.monthIndex, parts.day).getTime();
+    return Number.isNaN(ms) ? undefined : ms;
+  }
+  if (interpretation.mode === "utc") {
+    const ms = Date.UTC(parts.year, parts.monthIndex, parts.day);
+    return Number.isNaN(ms) ? undefined : ms;
+  }
+  if (hasSpecificTimeZoneInterpretation(interpretation)) {
+    return getTimeZoneStartOfDayMs(parts, interpretation.timeZone);
+  }
+  if (!hasSpecificUtcOffsetInterpretation(interpretation)) {
+    return undefined;
+  }
+  const ms = Date.UTC(parts.year, parts.monthIndex, parts.day);
+  if (Number.isNaN(ms)) {
+    return undefined;
+  }
+  return ms - interpretation.utcOffsetMinutes * 60 * 1000;
+};
+
 const resolveDateInterpretation = (params: {
   mode?: unknown;
+  timeZone?: unknown;
   utcOffset?: unknown;
 }): DateInterpretation => {
   if (params.mode === "gateway") {
     return { mode: "gateway" };
   }
   if (params.mode === "specific") {
+    const timeZone = resolveTimeZoneName(params.timeZone);
+    if (timeZone) {
+      return { mode: "specific", timeZone };
+    }
     const utcOffsetMinutes = parseUtcOffsetToMinutes(params.utcOffset);
     if (utcOffsetMinutes !== undefined) {
       return { mode: "specific", utcOffsetMinutes };
@@ -170,29 +366,16 @@ const parseDateToMs = (
   if (!parts) {
     return undefined;
   }
-  const { year, monthIndex, day } = parts;
-  if (interpretation.mode === "gateway") {
-    const ms = new Date(year, monthIndex, day).getTime();
-    return Number.isNaN(ms) ? undefined : ms;
-  }
-  if (interpretation.mode === "specific") {
-    const ms = Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
-    return Number.isNaN(ms) ? undefined : ms;
-  }
-  const ms = Date.UTC(year, monthIndex, day);
-  return Number.isNaN(ms) ? undefined : ms;
+  return getStartOfDayMs(parts, interpretation);
 };
 
 const getTodayStartMs = (now: Date, interpretation: DateInterpretation): number => {
-  if (interpretation.mode === "gateway") {
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  }
-  if (interpretation.mode === "specific") {
-    const shifted = new Date(now.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
-    return (
-      Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) -
-      interpretation.utcOffsetMinutes * 60 * 1000
-    );
+  const today = getDatePartsForInstant(now, interpretation);
+  if (today) {
+    const startMs = getStartOfDayMs(today, interpretation);
+    if (startMs !== undefined) {
+      return startMs;
+    }
   }
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 };
@@ -219,31 +402,50 @@ const parseDateRange = (params: {
   endDate?: unknown;
   days?: unknown;
   mode?: unknown;
+  timeZone?: unknown;
   utcOffset?: unknown;
 }): DateRange => {
   const now = new Date();
   const interpretation = resolveDateInterpretation(params);
-  const todayStartMs = getTodayStartMs(now, interpretation);
-  const todayEndMs = todayStartMs + DAY_MS - 1;
+  const todayParts = getDatePartsForInstant(now, interpretation);
 
-  const startMs = parseDateToMs(params.startDate, interpretation);
-  const endMs = parseDateToMs(params.endDate, interpretation);
-
-  if (startMs !== undefined && endMs !== undefined) {
-    // endMs should be end of day
-    return { startMs, endMs: endMs + DAY_MS - 1 };
+  const startParts = parseDateParts(params.startDate);
+  const endParts = parseDateParts(params.endDate);
+  if (startParts && endParts) {
+    const startMs = getStartOfDayMs(startParts, interpretation);
+    const endExclusiveMs = getStartOfDayMs(addDaysToDateParts(endParts, 1), interpretation);
+    if (startMs !== undefined && endExclusiveMs !== undefined) {
+      return { startMs, endMs: endExclusiveMs - 1 };
+    }
   }
 
   const days = parseDays(params.days);
   if (days !== undefined) {
     const clampedDays = Math.max(1, days);
-    const start = todayStartMs - (clampedDays - 1) * DAY_MS;
-    return { startMs: start, endMs: todayEndMs };
+    if (todayParts) {
+      const startParts = addDaysToDateParts(todayParts, -(clampedDays - 1));
+      const startMs = getStartOfDayMs(startParts, interpretation);
+      const endExclusiveMs = getStartOfDayMs(addDaysToDateParts(todayParts, 1), interpretation);
+      if (startMs !== undefined && endExclusiveMs !== undefined) {
+        return { startMs, endMs: endExclusiveMs - 1 };
+      }
+    }
   }
 
-  // Default to last 30 days
-  const defaultStartMs = todayStartMs - 29 * DAY_MS;
-  return { startMs: defaultStartMs, endMs: todayEndMs };
+  const todayStartMs = getTodayStartMs(now, interpretation);
+  const todayEndMs = todayStartMs + DAY_MS - 1;
+
+  if (todayParts) {
+    const defaultStartParts = addDaysToDateParts(todayParts, -29);
+    const defaultStartMs = getStartOfDayMs(defaultStartParts, interpretation);
+    const endExclusiveMs = getStartOfDayMs(addDaysToDateParts(todayParts, 1), interpretation);
+    if (defaultStartMs !== undefined && endExclusiveMs !== undefined) {
+      return { startMs: defaultStartMs, endMs: endExclusiveMs - 1 };
+    }
+  }
+
+  // Default to last 30 days.
+  return { startMs: todayStartMs - 29 * DAY_MS, endMs: todayEndMs };
 };
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
@@ -287,7 +489,9 @@ async function loadCostUsageSummaryCached(params: {
 }): Promise<CostUsageSummary> {
   const interpretationKey =
     params.dayKeyInterpretation.mode === "specific"
-      ? `specific:${params.dayKeyInterpretation.utcOffsetMinutes}`
+      ? "timeZone" in params.dayKeyInterpretation
+        ? `specific-tz:${params.dayKeyInterpretation.timeZone}`
+        : `specific:${params.dayKeyInterpretation.utcOffsetMinutes}`
       : params.dayKeyInterpretation.mode;
   const cacheKey = `${params.startMs}-${params.endMs}-${interpretationKey}`;
   const now = Date.now();
@@ -362,6 +566,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const config = loadConfig();
     const dayKeyInterpretation = resolveDateInterpretation({
       mode: params?.mode,
+      timeZone: params?.timeZone,
       utcOffset: params?.utcOffset,
     });
     const { startMs, endMs } = parseDateRange({
@@ -369,6 +574,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       endDate: params?.endDate,
       days: params?.days,
       mode: params?.mode,
+      timeZone: params?.timeZone,
       utcOffset: params?.utcOffset,
     });
     const summary = await loadCostUsageSummaryCached({
@@ -396,12 +602,14 @@ export const usageHandlers: GatewayRequestHandlers = {
     const config = loadConfig();
     const dayKeyInterpretation = resolveDateInterpretation({
       mode: p.mode,
+      timeZone: p.timeZone,
       utcOffset: p.utcOffset,
     });
     const { startMs, endMs } = parseDateRange({
       startDate: p.startDate,
       endDate: p.endDate,
       mode: p.mode,
+      timeZone: p.timeZone,
       utcOffset: p.utcOffset,
     });
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;

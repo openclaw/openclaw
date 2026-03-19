@@ -149,6 +149,29 @@ describe("sessions.usage", () => {
     expect(sessions[1].agentId).toBe("main");
   });
 
+  it("accepts IANA date interpretation params and forwards them to session summaries", async () => {
+    const respond = await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      mode: "specific",
+      timeZone: "America/New_York",
+    });
+
+    expectSuccessfulSessionsUsage(respond);
+    expect(vi.mocked(loadSessionCostSummary)).toHaveBeenCalled();
+    expect(
+      vi.mocked(loadSessionCostSummary).mock.calls.every(
+        (call) => {
+          const interpretation = call[0]?.dayKeyInterpretation;
+          return (
+            interpretation?.mode === "specific" &&
+            "timeZone" in interpretation &&
+            interpretation.timeZone === "America/New_York"
+          );
+        },
+      ),
+    ).toBe(true);
+  });
+
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));

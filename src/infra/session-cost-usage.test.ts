@@ -155,6 +155,21 @@ describe("session cost usage", () => {
     );
   });
 
+  it("formats day keys with IANA time zones across DST boundaries", async () => {
+    expect(
+      __test.formatDayKey(
+        new Date("2026-03-08T04:30:00.000Z"),
+        { mode: "specific", timeZone: "America/New_York" },
+      ),
+    ).toBe("2026-03-07");
+    expect(
+      __test.formatDayKey(
+        new Date("2026-03-09T03:30:00.000Z"),
+        { mode: "specific", timeZone: "America/New_York" },
+      ),
+    ).toBe("2026-03-08");
+  });
+
   it("captures message counts, tool usage, and model usage", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-session-meta-"));
     const sessionFile = path.join(root, "session.jsonl");

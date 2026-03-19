@@ -69,7 +69,20 @@ const emptyTotals = (): CostUsageTotals => ({
 
 type DayKeyInterpretation =
   | { mode: "gateway" | "utc" }
-  | { mode: "specific"; utcOffsetMinutes: number };
+  | { mode: "specific"; utcOffsetMinutes: number }
+  | { mode: "specific"; timeZone: string };
+
+function hasSpecificTimeZoneInterpretation(
+  interpretation: DayKeyInterpretation,
+): interpretation is { mode: "specific"; timeZone: string } {
+  return interpretation.mode === "specific" && "timeZone" in interpretation;
+}
+
+function hasSpecificUtcOffsetInterpretation(
+  interpretation: DayKeyInterpretation,
+): interpretation is { mode: "specific"; utcOffsetMinutes: number } {
+  return interpretation.mode === "specific" && "utcOffsetMinutes" in interpretation;
+}
 
 const toFiniteNumber = (value: unknown): number | undefined => {
   if (typeof value !== "number") {
@@ -170,13 +183,39 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
 const formatDateKeyFromUtcParts = (date: Date): string =>
   `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 
+const formatDateKeyInTimeZone = (date: Date, timeZone: string): string => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const map: Record<string, string> = {};
+  for (const part of parts) {
+    if (part.type !== "literal") {
+      map[part.type] = part.value;
+    }
+  }
+  const year = map.year;
+  const month = map.month;
+  const day = map.day;
+  if (!year || !month || !day) {
+    return formatDateKeyFromUtcParts(date);
+  }
+  return `${year}-${month}-${day}`;
+};
+
 const formatDayKey = (date: Date, interpretation?: DayKeyInterpretation): string => {
   if (!interpretation || interpretation.mode === "gateway") {
-    return date.toLocaleDateString("en-CA", {
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    });
+    return formatDateKeyInTimeZone(date, Intl.DateTimeFormat().resolvedOptions().timeZone);
   }
   if (interpretation.mode === "utc") {
+    return formatDateKeyFromUtcParts(date);
+  }
+  if (hasSpecificTimeZoneInterpretation(interpretation)) {
+    return formatDateKeyInTimeZone(date, interpretation.timeZone);
+  }
+  if (!hasSpecificUtcOffsetInterpretation(interpretation)) {
     return formatDateKeyFromUtcParts(date);
   }
   const shifted = new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
