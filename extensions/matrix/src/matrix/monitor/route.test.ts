@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  __testing as sessionBindingTesting,
   createTestRegistry,
-  type OpenClawConfig,
-  resolveAgentRoute,
   registerSessionBindingAdapter,
-  sessionBindingTesting,
+  resolveAgentRoute,
   setActivePluginRegistry,
-} from "../../../../../test/helpers/extensions/matrix-route-test.js";
+  type OpenClawConfig,
+} from "../../../../../test/helpers/extensions/matrix-monitor-route.js";
 import { matrixPlugin } from "../../channel.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 

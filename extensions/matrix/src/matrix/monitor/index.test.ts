@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const callOrder: string[] = [];
+  const state = {
+    startClientError: null as Error | null,
+  };
   const client = {
     id: "matrix-client",
     hasPersistedSyncState: vi.fn(() => false),
@@ -27,7 +30,7 @@ const hoisted = vi.hoisted(() => {
     releaseSharedClientInstance,
     resolveTextChunkLimit,
     setActiveMatrixClient,
-    startClientError: null as Error | null,
+    state,
     stopThreadBindingManager,
   };
 });
@@ -121,8 +124,8 @@ vi.mock("../client.js", () => ({
     if (!hoisted.callOrder.includes("create-manager")) {
       throw new Error("Matrix client started before thread bindings were registered");
     }
-    if (hoisted.startClientError) {
-      throw hoisted.startClientError;
+    if (hoisted.state.startClientError) {
+      throw hoisted.state.startClientError;
     }
     hoisted.callOrder.push("start-client");
     return hoisted.client;
@@ -207,7 +210,7 @@ describe("monitorMatrixProvider", () => {
   beforeEach(() => {
     vi.resetModules();
     hoisted.callOrder.length = 0;
-    hoisted.startClientError = null;
+    hoisted.state.startClientError = null;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
     hoisted.releaseSharedClientInstance.mockReset().mockResolvedValue(true);
     hoisted.setActiveMatrixClient.mockReset();
@@ -249,7 +252,7 @@ describe("monitorMatrixProvider", () => {
 
   it("cleans up thread bindings and shared clients when startup fails", async () => {
     const { monitorMatrixProvider } = await import("./index.js");
-    hoisted.startClientError = new Error("start failed");
+    hoisted.state.startClientError = new Error("start failed");
 
     await expect(monitorMatrixProvider()).rejects.toThrow("start failed");
 

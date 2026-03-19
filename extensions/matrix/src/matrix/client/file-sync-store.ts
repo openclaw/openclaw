@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import {
+  Category,
   MemoryStore,
   SyncAccumulator,
   type ISyncData,
+  type IRooms,
   type ISyncResponse,
   type IStoredClientOpts,
 } from "matrix-js-sdk";
@@ -41,31 +43,54 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function normalizeRoomsData(value: unknown): IRooms | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return {
+    [Category.Join]: isRecord(value[Category.Join]) ? (value[Category.Join] as IRooms["join"]) : {},
+    [Category.Invite]: isRecord(value[Category.Invite])
+      ? (value[Category.Invite] as IRooms["invite"])
+      : {},
+    [Category.Leave]: isRecord(value[Category.Leave])
+      ? (value[Category.Leave] as IRooms["leave"])
+      : {},
+    [Category.Knock]: isRecord(value[Category.Knock])
+      ? (value[Category.Knock] as IRooms["knock"])
+      : {},
+  };
+}
+
 function toPersistedSyncData(value: unknown): ISyncData | null {
   if (!isRecord(value)) {
     return null;
   }
   if (typeof value.nextBatch === "string" && value.nextBatch.trim()) {
-    if (!Array.isArray(value.accountData) || !isRecord(value.roomsData)) {
+    const roomsData = normalizeRoomsData(value.roomsData);
+    if (!Array.isArray(value.accountData) || !roomsData) {
       return null;
     }
     return {
       nextBatch: value.nextBatch,
       accountData: value.accountData,
-      roomsData: value.roomsData,
-    } as unknown as ISyncData;
+      roomsData,
+    };
   }
 
   // Older Matrix state files stored the raw /sync-shaped payload directly.
   if (typeof value.next_batch === "string" && value.next_batch.trim()) {
+    const roomsData = normalizeRoomsData(value.rooms);
+    if (!roomsData) {
+      return null;
+    }
     return {
       nextBatch: value.next_batch,
       accountData:
         isRecord(value.account_data) && Array.isArray(value.account_data.events)
           ? value.account_data.events
           : [],
-      roomsData: isRecord(value.rooms) ? value.rooms : {},
-    } as unknown as ISyncData;
+      roomsData,
+    };
   }
 
   return null;
