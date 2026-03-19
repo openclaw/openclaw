@@ -25,6 +25,11 @@ export async function runGatewayLoop(params: {
   runtime: typeof defaultRuntime;
   lockPort?: number;
 }) {
+  gatewayLog.info(
+    params.lockPort != null
+      ? `checking gateway lock on port ${params.lockPort} before startup`
+      : "checking gateway lock before startup",
+  );
   let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
@@ -49,6 +54,11 @@ export async function runGatewayLoop(params: {
   };
   const reacquireLockForInProcessRestart = async (): Promise<boolean> => {
     try {
+      gatewayLog.info(
+        params.lockPort != null
+          ? `checking gateway lock on port ${params.lockPort} before in-process restart`
+          : "checking gateway lock before in-process restart",
+      );
       lock = await acquireGatewayLock({ port: params.lockPort });
       return true;
     } catch (err) {

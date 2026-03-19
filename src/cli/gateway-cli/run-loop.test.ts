@@ -154,6 +154,7 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+      expect(gatewayLog.info).toHaveBeenCalledWith("checking gateway lock before startup");
       expect(runtime.exit).toHaveBeenCalledWith(0);
     });
   });
@@ -298,6 +299,16 @@ describe("runGatewayLoop", () => {
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(1, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(2, { port: 18789 });
       expect(acquireGatewayLock).toHaveBeenNthCalledWith(3, { port: 18789 });
+      expect(
+        gatewayLog.info.mock.calls.filter(
+          ([msg]) => msg === "checking gateway lock on port 18789 before startup",
+        ),
+      ).toHaveLength(1);
+      expect(
+        gatewayLog.info.mock.calls.filter(
+          ([msg]) => msg === "checking gateway lock on port 18789 before in-process restart",
+        ),
+      ).toHaveLength(2);
     });
   });
 
