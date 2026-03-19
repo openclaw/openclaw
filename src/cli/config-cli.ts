@@ -17,6 +17,7 @@ import {
 } from "../config/types.secrets.js";
 import { validateConfigObjectRaw } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import { resolveNodeCommandAllowlist } from "../gateway/node-command-policy.js";
 import { danger, info, success } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -70,6 +71,7 @@ type ConfigSetOperation = {
 const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
 const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
+const GATEWAY_NODE_DENY_COMMANDS_PATH: PathSegment[] = ["gateway", "nodes", "denyCommands"];
 const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
   "openclaw config set gateway.port 19001 --strict-json",
 );
@@ -332,6 +334,149 @@ function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
   return (
     path.length === expected.length && path.every((segment, index) => segment === expected[index])
   );
+}
+
+function pathStartsWith(path: PathSegment[], prefix: PathSegment[]): boolean {
+  return path.length >= prefix.length && prefix.every((segment, index) => path[index] === segment);
+}
+
+function normalizeNodeCommand(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function listKnownNodeCommandsForConfig(cfg: OpenClawConfig): Set<string> {
+  const baseCfg: OpenClawConfig = {
+    ...cfg,
+    gateway: {
+      ...cfg.gateway,
+      nodes: {
+        ...cfg.gateway?.nodes,
+        denyCommands: [],
+      },
+    },
+  };
+  const known = new Set<string>();
+  for (const platform of ["ios", "android", "macos", "linux", "windows", "unknown"] as const) {
+    for (const cmd of resolveNodeCommandAllowlist(baseCfg, { platform })) {
+      const normalized = normalizeNodeCommand(cmd);
+      if (normalized) {
+        known.add(normalized);
+      }
+    }
+  }
+  return known;
+}
+
+function looksLikeNodeCommandPattern(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  if (/[?*[\]{}(),|]/.test(value)) {
+    return true;
+  }
+  if (
+    value.startsWith("/") ||
+    value.endsWith("/") ||
+    value.startsWith("^") ||
+    value.endsWith("$")
+  ) {
+    return true;
+  }
+  return /\s/.test(value) || value.includes("group:");
+}
+
+function editDistance(a: string, b: string): number {
+  if (a === b) {
+    return 0;
+  }
+  if (!a) {
+    return b.length;
+  }
+  if (!b) {
+    return a.length;
+  }
+  const dp: number[] = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    let prev = dp[0] ?? 0;
+    dp[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const temp = dp[j] ?? 0;
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[j] = Math.min((dp[j] ?? 0) + 1, (dp[j - 1] ?? 0) + 1, prev + cost);
+      prev = temp;
+    }
+  }
+  return dp[b.length] ?? 0;
+}
+
+function suggestKnownNodeCommands(unknown: string, known: Set<string>): string[] {
+  const needle = unknown.trim();
+  if (!needle) {
+    return [];
+  }
+  const prefix = needle.includes(".") ? needle.split(".").slice(0, 2).join(".") : needle;
+  const prefixHits = Array.from(known)
+    .filter((cmd) => cmd.startsWith(prefix))
+    .slice(0, 3);
+  if (prefixHits.length > 0) {
+    return prefixHits;
+  }
+  const ranked = Array.from(known)
+    .map((cmd) => ({ cmd, d: editDistance(needle, cmd) }))
+    .toSorted((a, b) => a.d - b.d || a.cmd.localeCompare(b.cmd));
+  const best = ranked[0]?.d ?? Infinity;
+  const threshold = Math.max(2, Math.min(4, best));
+  return ranked
+    .filter((entry) => entry.d <= threshold)
+    .slice(0, 3)
+    .map((entry) => entry.cmd);
+}
+
+function collectNodeDenyCommandWarnings(params: {
+  config: OpenClawConfig;
+  operations: ConfigSetOperation[];
+}): string[] {
+  const touchedDenyCommands = params.operations.some((operation) =>
+    pathStartsWith(operation.setPath, GATEWAY_NODE_DENY_COMMANDS_PATH),
+  );
+  if (!touchedDenyCommands) {
+    return [];
+  }
+  const denyRaw = params.config.gateway?.nodes?.denyCommands;
+  if (!Array.isArray(denyRaw) || denyRaw.length === 0) {
+    return [];
+  }
+  const denyList = denyRaw.map(normalizeNodeCommand).filter(Boolean);
+  if (denyList.length === 0) {
+    return [];
+  }
+  const known = listKnownNodeCommandsForConfig(params.config);
+  const patternLike = denyList.filter((entry) => looksLikeNodeCommandPattern(entry));
+  const unknownExact = denyList.filter(
+    (entry) => !looksLikeNodeCommandPattern(entry) && !known.has(entry),
+  );
+  if (patternLike.length === 0 && unknownExact.length === 0) {
+    return [];
+  }
+  const warnings: string[] = [];
+  if (patternLike.length > 0) {
+    warnings.push(
+      `gateway.nodes.denyCommands pattern-like entries are not exact command names and may be ineffective: ${patternLike.join(", ")}`,
+    );
+  }
+  if (unknownExact.length > 0) {
+    const details = unknownExact.map((entry) => {
+      const suggestions = suggestKnownNodeCommands(entry, known);
+      if (suggestions.length === 0) {
+        return entry;
+      }
+      return `${entry} (did you mean: ${suggestions.join(", ")})`;
+    });
+    warnings.push(
+      `gateway.nodes.denyCommands includes unknown command names: ${details.join(", ")}`,
+    );
+  }
+  return warnings;
 }
 
 function ensureValidOllamaProviderForApiKeySet(
@@ -1050,6 +1195,13 @@ export async function runConfigSet(opts: {
       return;
     }
 
+    const denyCommandWarnings = collectNodeDenyCommandWarnings({
+      config: nextConfig,
+      operations,
+    });
+    for (const warning of denyCommandWarnings) {
+      runtime.log(info(`Warning: ${warning}`));
+    }
     await writeConfigFile(next);
     if (operations.length === 1) {
       runtime.log(

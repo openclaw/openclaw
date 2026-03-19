@@ -344,6 +344,12 @@ export async function resolveApiKeyForProvider(params: {
 
   const envResolved = resolveEnvApiKey(provider);
   if (envResolved) {
+    if (isGoogleVertexAdcSentinel({ provider, envResolved })) {
+      return {
+        source: envResolved.source,
+        mode: "oauth",
+      };
+    }
     return {
       apiKey: envResolved.apiKey,
       source: envResolved.source,
@@ -395,6 +401,17 @@ export async function resolveApiKeyForProvider(params: {
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
+const GOOGLE_VERTEX_ADC_SENTINEL = "<authenticated>";
+
+function isGoogleVertexAdcSentinel(params: {
+  provider: string;
+  envResolved: EnvApiKeyResult;
+}): boolean {
+  return (
+    normalizeProviderIdForAuth(params.provider) === "google-vertex" &&
+    params.envResolved.apiKey === GOOGLE_VERTEX_ADC_SENTINEL
+  );
+}
 
 export function resolveEnvApiKey(
   provider: string,
@@ -477,6 +494,9 @@ export function resolveModelAuthMode(
 
   const envKey = resolveEnvApiKey(resolved);
   if (envKey?.apiKey) {
+    if (isGoogleVertexAdcSentinel({ provider: resolved, envResolved: envKey })) {
+      return "oauth";
+    }
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
   }
 

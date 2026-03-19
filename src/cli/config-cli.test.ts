@@ -209,6 +209,55 @@ describe("config cli", () => {
         apiKey: "ollama-local", // pragma: allowlist secret
       });
     });
+
+    it("warns when gateway.nodes.denyCommands includes unknown names", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "gateway.nodes.denyCommands",
+        '["camera.snap","system.runx"]',
+        "--strict-json",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expect(
+        mockLog.mock.calls.some(
+          (call) =>
+            String(call[0]).includes(
+              "Warning: gateway.nodes.denyCommands includes unknown command names",
+            ) &&
+            String(call[0]).includes("camera.snap") &&
+            String(call[0]).includes("system.runx"),
+        ),
+      ).toBe(true);
+    });
+
+    it("does not warn when gateway.nodes.denyCommands uses known command names", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "gateway.nodes.denyCommands",
+        '["system.run"]',
+        "--strict-json",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expect(
+        mockLog.mock.calls.some((call) =>
+          String(call[0]).includes("Warning: gateway.nodes.denyCommands"),
+        ),
+      ).toBe(false);
+    });
   });
 
   describe("config get", () => {
