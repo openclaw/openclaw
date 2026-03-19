@@ -5,8 +5,15 @@ import type { GeneratedImageAsset } from "../types.js";
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
 const DEFAULT_FAL_EDIT_SUBPATH = "image-to-image";
-const DEFAULT_OUTPUT_SIZE = "square_hd";
 const DEFAULT_OUTPUT_FORMAT = "png";
+const FAL_SUPPORTED_SIZES = [
+  "1024x1024",
+  "1024x1536",
+  "1536x1024",
+  "1024x1792",
+  "1792x1024",
+] as const;
+const FAL_SUPPORTED_ASPECT_RATIOS = ["1:1", "4:3", "3:4", "16:9", "9:16"] as const;
 
 type FalGeneratedImage = {
   url?: string;
@@ -57,23 +64,96 @@ function parseSize(raw: string | undefined): { width: number; height: number } |
   return { width, height };
 }
 
-function mapResolutionToSize(resolution: "1K" | "2K" | "4K" | undefined): FalImageSize | undefined {
+function mapResolutionToEdge(resolution: "1K" | "2K" | "4K" | undefined): number | undefined {
   if (!resolution) {
     return undefined;
   }
-  const edge = resolution === "4K" ? 4096 : resolution === "2K" ? 2048 : 1024;
-  return { width: edge, height: edge };
+  return resolution === "4K" ? 4096 : resolution === "2K" ? 2048 : 1024;
+}
+
+function aspectRatioToEnum(aspectRatio: string | undefined): string | undefined {
+  const normalized = aspectRatio?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "1:1") {
+    return "square_hd";
+  }
+  if (normalized === "4:3") {
+    return "landscape_4_3";
+  }
+  if (normalized === "3:4") {
+    return "portrait_4_3";
+  }
+  if (normalized === "16:9") {
+    return "landscape_16_9";
+  }
+  if (normalized === "9:16") {
+    return "portrait_16_9";
+  }
+  return undefined;
+}
+
+function aspectRatioToDimensions(
+  aspectRatio: string,
+  edge: number,
+): { width: number; height: number } {
+  const match = /^(\d+):(\d+)$/u.exec(aspectRatio.trim());
+  if (!match) {
+    throw new Error(`Invalid fal aspect ratio: ${aspectRatio}`);
+  }
+  const widthRatio = Number.parseInt(match[1] ?? "", 10);
+  const heightRatio = Number.parseInt(match[2] ?? "", 10);
+  if (
+    !Number.isFinite(widthRatio) ||
+    !Number.isFinite(heightRatio) ||
+    widthRatio <= 0 ||
+    heightRatio <= 0
+  ) {
+    throw new Error(`Invalid fal aspect ratio: ${aspectRatio}`);
+  }
+  if (widthRatio >= heightRatio) {
+    return {
+      width: edge,
+      height: Math.max(1, Math.round((edge * heightRatio) / widthRatio)),
+    };
+  }
+  return {
+    width: Math.max(1, Math.round((edge * widthRatio) / heightRatio)),
+    height: edge,
+  };
 }
 
 function resolveFalImageSize(params: {
   size?: string;
   resolution?: "1K" | "2K" | "4K";
-}): FalImageSize {
+  aspectRatio?: string;
+  hasInputImages: boolean;
+}): FalImageSize | undefined {
   const parsed = parseSize(params.size);
   if (parsed) {
     return parsed;
   }
-  return mapResolutionToSize(params.resolution) ?? DEFAULT_OUTPUT_SIZE;
+
+  const normalizedAspectRatio = params.aspectRatio?.trim();
+  if (normalizedAspectRatio && params.hasInputImages) {
+    throw new Error("fal image edit endpoint does not support aspectRatio overrides");
+  }
+
+  const edge = mapResolutionToEdge(params.resolution);
+  if (normalizedAspectRatio && edge) {
+    return aspectRatioToDimensions(normalizedAspectRatio, edge);
+  }
+  if (edge) {
+    return { width: edge, height: edge };
+  }
+  if (normalizedAspectRatio) {
+    return (
+      aspectRatioToEnum(normalizedAspectRatio) ??
+      aspectRatioToDimensions(normalizedAspectRatio, 1024)
+    );
+  }
+  return undefined;
 }
 
 function toDataUri(buffer: Buffer, mimeType: string): string {
@@ -111,9 +191,27 @@ export function buildFalImageGenerationProvider(): ImageGenerationProviderPlugin
     label: "fal",
     defaultModel: DEFAULT_FAL_IMAGE_MODEL,
     models: [DEFAULT_FAL_IMAGE_MODEL, `${DEFAULT_FAL_IMAGE_MODEL}/${DEFAULT_FAL_EDIT_SUBPATH}`],
-    supportedSizes: ["1024x1024", "1024x1536", "1536x1024", "1024x1792", "1792x1024"],
-    supportedResolutions: ["1K", "2K", "4K"],
-    supportsImageEditing: true,
+    capabilities: {
+      generate: {
+        maxCount: 4,
+        supportsSize: true,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+      },
+      edit: {
+        enabled: true,
+        maxCount: 4,
+        maxInputImages: 1,
+        supportsSize: true,
+        supportsAspectRatio: false,
+        supportsResolution: true,
+      },
+      geometry: {
+        sizes: [...FAL_SUPPORTED_SIZES],
+        aspectRatios: [...FAL_SUPPORTED_ASPECT_RATIOS],
+        resolutions: ["1K", "2K", "4K"],
+      },
+    },
     async generateImage(req) {
       const auth = await resolveApiKeyForProvider({
         provider: "fal",
@@ -128,18 +226,22 @@ export function buildFalImageGenerationProvider(): ImageGenerationProviderPlugin
         throw new Error("fal image generation currently supports at most one reference image");
       }
 
+      const hasInputImages = (req.inputImages?.length ?? 0) > 0;
       const imageSize = resolveFalImageSize({
         size: req.size,
         resolution: req.resolution,
+        aspectRatio: req.aspectRatio,
+        hasInputImages,
       });
-      const hasInputImages = (req.inputImages?.length ?? 0) > 0;
       const model = ensureFalModelPath(req.model, hasInputImages);
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
-        image_size: imageSize,
         num_images: req.count ?? 1,
         output_format: DEFAULT_OUTPUT_FORMAT,
       };
+      if (imageSize !== undefined) {
+        requestBody.image_size = imageSize;
+      }
 
       if (hasInputImages) {
         const [input] = req.inputImages ?? [];

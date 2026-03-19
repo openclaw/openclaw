@@ -2,7 +2,7 @@
  * Upload an image from a URL to Tlon storage.
  */
 import { uploadFile } from "@tloncorp/api";
-import { fetchWithSsrFGuard } from "../../api.js";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/infra-runtime";
 import { getDefaultSsrFPolicy } from "./context.js";
 
 /**

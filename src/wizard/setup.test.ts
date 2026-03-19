@@ -92,6 +92,9 @@ const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true }))
 const buildPluginCompatibilityNotices = vi.hoisted(() =>
   vi.fn((): PluginCompatibilityNotice[] => []),
 );
+const formatPluginCompatibilityNotice = vi.hoisted(() =>
+  vi.fn((notice: PluginCompatibilityNotice) => `${notice.pluginId} ${notice.message}`),
+);
 
 vi.mock("../commands/onboard-channels.js", () => ({
   setupChannels,
@@ -178,6 +181,7 @@ vi.mock("../infra/control-ui-assets.js", () => ({
 
 vi.mock("../plugins/status.js", () => ({
   buildPluginCompatibilityNotices,
+  formatPluginCompatibilityNotice,
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -406,6 +410,33 @@ describe("runSetupWizard", () => {
     }
   });
 
+  it("prompts for a model during explicit interactive Ollama setup", async () => {
+    promptDefaultModel.mockClear();
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "ollama",
+        installDaemon: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(promptDefaultModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowKeep: false,
+      }),
+    );
+  });
+
   it("shows plugin compatibility notices for an existing valid config", async () => {
     buildPluginCompatibilityNotices.mockReturnValue([
       {
@@ -413,7 +444,7 @@ describe("runSetupWizard", () => {
         code: "legacy-before-agent-start",
         severity: "warn",
         message:
-          "still relies on legacy before_agent_start; keep upgrade coverage on this plugin and prefer before_model_resolve/before_prompt_build for new work.",
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
       },
     ]);
     readConfigFileSnapshot.mockResolvedValueOnce({

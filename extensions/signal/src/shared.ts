@@ -1,22 +1,22 @@
 import {
-  collectAllowlistProviderRestrictSendersWarnings,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createAllowlistProviderRestrictSendersWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  normalizeE164,
-  SignalConfigSchema,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/signal";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
   type ResolvedSignalAccount,
 } from "./accounts.js";
+import {
+  buildChannelConfigSchema,
+  getChatChannelMeta,
+  normalizeE164,
+  SignalConfigSchema,
+  type ChannelPlugin,
+} from "./runtime-api.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 export const SIGNAL_CHANNEL = "signal" as const;
@@ -53,21 +53,16 @@ export const signalResolveDmPolicy = createScopedDmSecurityResolver<ResolvedSign
   normalizeEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
 });
 
-export function collectSignalSecurityWarnings(params: {
-  account: ResolvedSignalAccount;
-  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
-}) {
-  return collectAllowlistProviderRestrictSendersWarnings({
-    cfg: params.cfg,
-    providerConfigPresent: params.cfg.channels?.signal !== undefined,
-    configuredGroupPolicy: params.account.config.groupPolicy,
+export const collectSignalSecurityWarnings =
+  createAllowlistProviderRestrictSendersWarningCollector<ResolvedSignalAccount>({
+    providerConfigPresent: (cfg) => cfg.channels?.signal !== undefined,
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
     surface: "Signal groups",
     openScope: "any member",
     groupPolicyPath: "channels.signal.groupPolicy",
     groupAllowFromPath: "channels.signal.groupAllowFrom",
     mentionGated: false,
   });
-}
 
 export function createSignalPluginBase(params: {
   setupWizard?: NonNullable<ChannelPlugin<ResolvedSignalAccount>["setupWizard"]>;
