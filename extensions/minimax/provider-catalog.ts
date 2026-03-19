@@ -68,6 +68,11 @@ function buildMinimaxCatalog(): ModelDefinitionConfig[] {
       name: "MiniMax M2.5 Highspeed",
       reasoning: true,
     }),
+    buildMinimaxTextModel({
+      id: "MiniMax-M2.5-Lightning",
+      name: "MiniMax M2.5 Lightning",
+      reasoning: true,
+    }),
   ];
 }
 
