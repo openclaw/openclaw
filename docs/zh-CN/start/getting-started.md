@@ -60,13 +60,13 @@ x-i18n:
     </Note>
 
   </Step>
-  <Step title="运行设置向导">
+  <Step title="运行新手引导">
     ```bash
     openclaw onboard --install-daemon
     ```
 
-    向导会配置认证、Gateway 网关设置和可选渠道。
-    详情请参见 [Setup Wizard](/start/wizard)。
+    新手引导会配置认证、Gateway 网关设置和可选渠道。
+    详情请参见 [CLI 新手引导](/start/wizard)。
 
   </Step>
   <Step title="检查 Gateway 网关">
@@ -122,8 +122,8 @@ x-i18n:
 ## 深入了解
 
 <Columns>
-  <Card title="设置向导（详情）" href="/start/wizard">
-    完整的 CLI 向导参考和高级选项。
+  <Card title="CLI 新手引导" href="/start/wizard">
+    完整的 CLI 新手引导参考和高级选项。
   </Card>
   <Card title="macOS 应用新手引导" href="/start/onboarding">
     macOS 应用的首次运行流程。

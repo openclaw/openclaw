@@ -26,7 +26,7 @@ x-i18n:
 - [入门指南](/start/getting-started)
 - [快速开始](/start/quickstart)
 - [新手引导](/start/onboarding)
-- [向导](/start/wizard)
+- [CLI 新手引导](/start/wizard)
 - [安装配置](/start/setup)
 - [仪表盘（本地 Gateway 网关）](http://127.0.0.1:18789/)
 - [帮助](/help)
@@ -182,12 +182,6 @@ x-i18n:
 - [模板：SOUL](/reference/templates/SOUL)
 - [模板：TOOLS](/reference/templates/TOOLS)
 - [模板：USER](/reference/templates/USER)
-
-## 实验（探索性）
-
-- [新手引导配置协议](/experiments/onboarding-config-protocol)
-- [研究：记忆](/experiments/research/memory)
-- [模型配置探索](/experiments/proposals/model-config)
 
 ## 项目
 
