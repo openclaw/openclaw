@@ -107,6 +107,10 @@
 - Format check: `pnpm format` (oxfmt --check)
 - Format fix: `pnpm format:fix` (oxfmt --write)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
+- Hard gate: before any commit, `pnpm check` MUST be run and MUST pass for the change being committed.
+- Hard gate: before any push to `main`, `pnpm check` MUST be run and MUST pass, and `pnpm test` MUST be run and MUST pass.
+- Hard gate: if the change can affect build output, packaging, lazy-loading/module boundaries, or published surfaces, `pnpm build` MUST be run and MUST pass before pushing `main`.
+- Hard gate: do not commit or push with failing format, lint, type, build, or required test checks.
 
 ## Coding Style & Naming Conventions
 
