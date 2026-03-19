@@ -319,12 +319,16 @@ export function applyJobResult(
   };
   job.state.runningAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
-  job.state.lastRunStatus = result.status;
-  job.state.lastStatus = result.status;
+  // If primary delivery succeeded, don't let follow-up failures (e.g. a second
+  // message chunk or Canvas render) taint the overall run status. See #50170.
+  const effectiveStatus: CronRunStatus =
+    result.status === "error" && result.delivered === true ? "ok" : result.status;
+  job.state.lastRunStatus = effectiveStatus;
+  job.state.lastStatus = effectiveStatus;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
   job.state.lastError = result.error;
   job.state.lastErrorReason =
-    result.status === "error" && typeof result.error === "string"
+    effectiveStatus === "error" && typeof result.error === "string"
       ? (resolveFailoverReasonFromError(result.error) ?? undefined)
       : undefined;
   job.state.lastDelivered = result.delivered;
@@ -335,7 +339,7 @@ export function applyJobResult(
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
-  if (result.status === "error") {
+  if (effectiveStatus === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     const alertConfig = resolveFailureAlert(state, job);
     if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
@@ -367,15 +371,15 @@ export function applyJobResult(
   }
 
   const shouldDelete =
-    job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
+    job.schedule.kind === "at" && job.deleteAfterRun === true && effectiveStatus === "ok";
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
-      if (result.status === "ok" || result.status === "skipped") {
+      if (effectiveStatus === "ok" || effectiveStatus === "skipped") {
         // One-shot done or skipped: disable to prevent tight-loop (#11452).
         job.enabled = false;
         job.state.nextRunAtMs = undefined;
-      } else if (result.status === "error") {
+      } else if (effectiveStatus === "error") {
         const retryConfig = resolveRetryConfig(state.deps.cronConfig);
         const transient = isTransientCronError(result.error, retryConfig.retryOn);
         // consecutiveErrors is always set to ≥1 by the increment block above.
