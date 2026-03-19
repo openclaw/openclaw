@@ -40,8 +40,6 @@ export function renderSkills(props: SkillsProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Skills</div>
-          <div class="card-sub">Installed skills and their status.</div>
         </div>
         <button class="btn" ?disabled=${props.loading || !props.connected} @click=${props.onRefresh}>
           ${props.loading ? "Loading…" : "Refresh"}

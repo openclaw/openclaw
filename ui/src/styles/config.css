@@ -315,6 +315,12 @@
   animation: badge-enter 0.2s var(--ease-out);
 }
 
+/* Top variant (above config-actions) */
+.config-diff--top {
+  margin: 0 0 12px;
+  border-radius: var(--radius-lg);
+}
+
 .config-diff__summary {
   display: flex;
   align-items: center;

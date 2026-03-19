@@ -146,6 +146,14 @@
   min-width: 0;
 }
 
+.topnav-shell .dashboard-header__content {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .topnav-shell .dashboard-header__breadcrumb {
   display: flex;
   align-items: center;
@@ -166,6 +174,20 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.topnav-shell .dashboard-header__subtitle {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topnav-shell .dashboard-header__subtitle-sep {
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .topbar-status {
@@ -880,76 +902,35 @@
   margin-top: 0;
 }
 
-/* Content header */
-.content-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 4px 8px;
-  overflow: hidden;
-  transform-origin: top center;
-  transition:
-    opacity var(--shell-focus-duration) var(--shell-focus-ease),
-    transform var(--shell-focus-duration) var(--shell-focus-ease),
-    max-height var(--shell-focus-duration) var(--shell-focus-ease),
-    padding var(--shell-focus-duration) var(--shell-focus-ease);
-  max-height: 80px;
-}
-
-.shell--chat-focus .content-header {
-  opacity: 0;
-  transform: translateY(-8px);
-  max-height: 0px;
-  padding: 0;
-  pointer-events: none;
-}
-
-.page-title {
-  font-size: 22px;
-  font-weight: 650;
-  letter-spacing: -0.03em;
-  line-height: 1.2;
-  color: var(--text-strong);
-}
-
-.page-sub {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 400;
-  margin-top: 4px;
-  letter-spacing: -0.005em;
-}
-
-.page-meta {
-  display: flex;
-  gap: 8px;
-}
-
-/* Chat view header adjustments */
-.content--chat .content-header {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 0;
-}
-
-.content--chat .content-header > div:first-child {
-  text-align: left;
-}
-
-.content--chat .page-meta {
-  justify-content: flex-start;
-}
-
-.content--chat .chat-controls {
-  flex-shrink: 0;
-}
-
 /* ===========================================
    Grid Utilities
    =========================================== */
+
+/* Chat content header - clean single row with dropdowns + controls */
+.content-header--chat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.content-header--chat .content-header__start {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.content-header--chat .content-header__end {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
 
 .grid {
   display: grid;
@@ -1048,4 +1029,9 @@
 
 .chat-controls-dropdown {
   display: none;
+}
+
+/* Hide mobile-only chat toggle on desktop */
+.topbar-status .chat-mobile-controls-wrapper {
+  display: none !important;
 }

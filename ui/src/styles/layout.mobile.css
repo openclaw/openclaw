@@ -99,6 +99,15 @@
     border-radius: 0;
   }
 
+  /* Hide subtitle on mobile to keep header compact */
+  .topnav-shell .dashboard-header__subtitle {
+    display: none;
+  }
+
+  .topnav-shell .dashboard-header__breadcrumb {
+    font-size: 14px;
+  }
+
   .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-shell,
   .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .sidebar-shell {
     padding: 12px 8px 10px;
@@ -326,15 +335,6 @@
   }
 
   /* Content */
-  .content-header {
-    display: none;
-  }
-
-  /* Hide the entire content-header on mobile chat — controls are in mobile gear menu */
-  .content--chat .content-header {
-    display: none;
-  }
-
   .content--chat {
     gap: 2px;
   }

@@ -81,7 +81,7 @@ import {
 import "./components/dashboard-header.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
-import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import { normalizeBasePath, TAB_GROUPS } from "./navigation.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -443,6 +443,7 @@ export function renderApp(state: AppViewState) {
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
             <div class="topbar-status">
+              ${isChat ? nothing : state.lastError ? html`<div class="pill danger">${state.lastError}</div>` : nothing}
               ${isChat ? renderChatMobileToggle(state) : nothing}
               ${renderTopbarThemeModeToggle(state)}
             </div>
@@ -595,23 +596,19 @@ export function renderApp(state: AppViewState) {
             </div>`
             : nothing
         }
+
         ${
-          state.tab === "config"
-            ? nothing
-            : html`<section class="content-header">
-              <div>
-                ${
-                  isChat
-                    ? renderChatSessionSelect(state)
-                    : html`<div class="page-title">${titleForTab(state.tab)}</div>`
-                }
-                ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
+          isChat
+            ? html`<section class="content-header content-header--chat">
+              <div class="content-header__start">
+                ${renderChatSessionSelect(state)}
               </div>
-              <div class="page-meta">
+              <div class="content-header__end">
                 ${state.lastError ? html`<div class="pill danger">${state.lastError}</div>` : nothing}
-                ${isChat ? renderChatControls(state) : nothing}
+                ${renderChatControls(state)}
               </div>
             </section>`
+            : nothing
         }
 
         ${

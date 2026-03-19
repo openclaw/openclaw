@@ -750,23 +750,49 @@ export function renderConfig(props: ConfigProps) {
   return html`
     <div class="config-layout">
       <main class="config-main">
+        ${
+          hasChanges && formMode === "form"
+            ? html`
+              <details class="config-diff config-diff--top">
+                <summary class="config-diff__summary">
+                  <span
+                    >View ${diff.length} pending
+                    change${diff.length !== 1 ? "s" : ""}</span
+                  >
+                  <svg
+                    class="config-diff__chevron"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </summary>
+                <div class="config-diff__content">
+                  ${diff.map(
+                    (change) => html`
+                      <div class="config-diff__item">
+                        <div class="config-diff__path">${change.path}</div>
+                        <div class="config-diff__values">
+                          <span class="config-diff__from"
+                            >${renderDiffValue(change.path, change.from, props.uiHints)}</span
+                          >
+                          <span class="config-diff__arrow">→</span>
+                          <span class="config-diff__to"
+                            >${renderDiffValue(change.path, change.to, props.uiHints)}</span
+                          >
+                        </div>
+                      </div>
+                    `,
+                  )}
+                </div>
+              </details>
+            `
+            : nothing
+        }
         <div class="config-actions">
           <div class="config-actions__left">
-            ${
-              hasChanges
-                ? html`
-	                  <span class="config-changes-badge"
-	                    >${
-                        formMode === "raw"
-                          ? "Unsaved changes"
-                          : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`
-                      }</span
-	                  >
-	                `
-                : html`
-                    <span class="config-status muted">No changes</span>
-                  `
-            }
           </div>
           <div class="config-actions__right">
             ${
@@ -919,52 +945,10 @@ export function renderConfig(props: ConfigProps) {
             : nothing
         }
 
-        <!-- Diff panel (form mode only - raw mode doesn't have granular diff) -->
         ${
-          hasChanges && formMode === "form"
+          activeSectionMeta && formMode === "form"
             ? html`
-              <details class="config-diff">
-                <summary class="config-diff__summary">
-                  <span
-                    >View ${diff.length} pending
-                    change${diff.length !== 1 ? "s" : ""}</span
-                  >
-                  <svg
-                    class="config-diff__chevron"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
-                </summary>
-                <div class="config-diff__content">
-                  ${diff.map(
-                    (change) => html`
-                      <div class="config-diff__item">
-                        <div class="config-diff__path">${change.path}</div>
-                        <div class="config-diff__values">
-                          <span class="config-diff__from"
-                            >${renderDiffValue(change.path, change.from, props.uiHints)}</span
-                          >
-                          <span class="config-diff__arrow">→</span>
-                          <span class="config-diff__to"
-                            >${renderDiffValue(change.path, change.to, props.uiHints)}</span
-                          >
-                        </div>
-                      </div>
-                    `,
-                  )}
-                </div>
-              </details>
-            `
-            : nothing
-        }
-	        ${
-            activeSectionMeta && formMode === "form"
-              ? html`
-	              <div class="config-section-hero">
+                  <div class="config-section-hero">
 	                <div class="config-section-hero__icon">
 	                  ${getSectionIcon(props.activeSection ?? "")}
                 </div>
@@ -1000,10 +984,10 @@ export function renderConfig(props: ConfigProps) {
                     `
                     : nothing
                 }
-              </div>
+              div>
             `
-              : nothing
-          }
+            : nothing
+        }
         <!-- Form content -->
         <div class="config-content">
           ${
