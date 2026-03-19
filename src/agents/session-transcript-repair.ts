@@ -19,7 +19,12 @@ function isRawToolCallBlock(block: unknown): block is RawToolCallBlock {
   const type = (block as { type?: unknown }).type;
   return (
     typeof type === "string" &&
-    (type === "toolCall" || type === "toolUse" || type === "functionCall")
+    (type === "toolCall" ||
+      type === "toolUse" ||
+      type === "functionCall" ||
+      type === "tool_call" ||
+      type === "tool_use" ||
+      type === "function_call")
   );
 }
 

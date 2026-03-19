@@ -8,7 +8,14 @@ import {
 } from "./session-transcript-repair.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 
-const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 function getAssistantToolCallBlocks(messages: AgentMessage[]) {
   const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
@@ -272,6 +279,43 @@ describe("sanitizeToolCallInputs", () => {
     ]);
 
     const out = sanitizeToolCallInputs(input);
+    expect(out.map((m) => m.role)).toEqual(["user"]);
+  });
+
+  it("recognizes snake_case tool call block types (tool_use, tool_call, function_call)", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "call_1", name: "read", input: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    // Both messages should be preserved (tool_use is recognized)
+    expect(out).toHaveLength(2);
+    expect(out[0]?.role).toBe("assistant");
+    const blocks = getAssistantToolCallBlocks(out);
+    expect(blocks).toHaveLength(1);
+  });
+
+  it("drops snake_case tool_use blocks missing input", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "call_1", name: "read" }],
+      },
+      { role: "user", content: "hello" },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    // The broken tool_use block should be dropped
     expect(out.map((m) => m.role)).toEqual(["user"]);
   });
 
