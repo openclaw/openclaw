@@ -606,6 +606,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       ctx,
       (acc, next) => ({
         content: next.content ?? acc?.content,
+        interactive: next.interactive ?? acc?.interactive,
+        channelData: next.channelData ?? acc?.channelData,
         cancel: next.cancel ?? acc?.cancel,
       }),
     );

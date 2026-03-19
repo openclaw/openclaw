@@ -408,23 +408,56 @@ async function applyMessageSendingHook(params: {
   to: string;
   channel: Exclude<OutboundChannel, "none">;
   accountId?: string;
+  sessionKey?: string;
+  cfg: OpenClawConfig;
 }): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
   payloadSummary: NormalizedOutboundPayload;
 }> {
+  // Trigger internal message:sending hook
+  const internalEvent = createInternalHookEvent(
+    "message",
+    "sending",
+    params.sessionKey ?? "unknown",
+    {
+      to: params.to,
+      content: params.payloadSummary.text,
+      channelId: params.channel,
+      accountId: params.accountId,
+      interactive: params.payloadSummary.interactive,
+      metadata: params.payloadSummary.metadata,
+      cfg: params.cfg,
+    },
+  );
+  await triggerInternalHook(internalEvent);
+
+  const internalContext = internalEvent.context as any;
+  const contentAfterInternal = internalContext.content ?? params.payloadSummary.text;
+  const interactiveAfterInternal = internalContext.interactive ?? params.payloadSummary.interactive;
+
   if (!params.enabled) {
+    const payload = {
+      ...params.payload,
+      text: contentAfterInternal,
+      interactive: interactiveAfterInternal,
+    };
     return {
       cancelled: false,
-      payload: params.payload,
-      payloadSummary: params.payloadSummary,
+      payload,
+      payloadSummary: {
+        ...params.payloadSummary,
+        text: contentAfterInternal,
+        interactive: interactiveAfterInternal,
+      },
     };
   }
+
   try {
     const sendingResult = await params.hookRunner!.runMessageSending(
       {
         to: params.to,
-        content: params.payloadSummary.text,
+        content: contentAfterInternal,
         metadata: {
           channel: params.channel,
           accountId: params.accountId,
@@ -443,23 +476,24 @@ async function applyMessageSendingHook(params: {
         payloadSummary: params.payloadSummary,
       };
     }
-    if (sendingResult?.content == null) {
-      return {
-        cancelled: false,
-        payload: params.payload,
-        payloadSummary: params.payloadSummary,
-      };
-    }
+    const finalContent = sendingResult?.content ?? contentAfterInternal;
+    const finalInteractive = sendingResult?.interactive ?? interactiveAfterInternal;
+    const finalChannelData = sendingResult?.channelData ?? params.payloadSummary.channelData;
+
     const payload = {
       ...params.payload,
-      text: sendingResult.content,
+      text: finalContent,
+      interactive: finalInteractive,
+      channelData: finalChannelData,
     };
     return {
       cancelled: false,
       payload,
       payloadSummary: {
         ...params.payloadSummary,
-        text: sendingResult.content,
+        text: finalContent,
+        interactive: finalInteractive,
+        channelData: finalChannelData,
       },
     };
   } catch {
@@ -637,7 +671,7 @@ async function deliverOutboundPayloadsCore(
     try {
       throwIfAborted(abortSignal);
 
-      // Run message_sending plugin hook (may modify content or cancel)
+      // Run message_sending hook (may modify content or cancel)
       const hookResult = await applyMessageSendingHook({
         hookRunner,
         enabled: hasMessageSendingHooks,
@@ -646,6 +680,8 @@ async function deliverOutboundPayloadsCore(
         to,
         channel,
         accountId,
+        sessionKey: sessionKeyForInternalHooks,
+        cfg,
       });
       if (hookResult.cancelled) {
         continue;

@@ -9,8 +9,32 @@ import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { InteractiveReply } from "../interactive/payload.js";
 
 export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+
+export type MessageSendingHookContext = {
+  /** Recipient identifier */
+  to: string;
+  /** Message content (can be modified by hooks) */
+  content: string;
+  /** Channel identifier */
+  channelId: string;
+  /** Provider account ID */
+  accountId?: string;
+  /** Interactive elements (can be added/modified by hooks) */
+  interactive?: InteractiveReply;
+  /** Additional metadata */
+  metadata?: Record<string, unknown>;
+  /** Config object */
+  cfg?: OpenClawConfig;
+};
+
+export type MessageSendingHookEvent = InternalHookEvent & {
+  type: "message";
+  action: "sending";
+  context: MessageSendingHookContext;
+};
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;

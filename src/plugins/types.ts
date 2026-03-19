@@ -44,6 +44,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { InteractiveReply } from "../interactive/payload.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
@@ -1661,6 +1662,8 @@ export type PluginHookMessageSendingEvent = {
 
 export type PluginHookMessageSendingResult = {
   content?: string;
+  interactive?: InteractiveReply;
+  channelData?: Record<string, unknown>;
   cancel?: boolean;
 };
 
