@@ -1,4 +1,3 @@
-import { killProcessTree } from "../../kill-tree.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -155,11 +154,14 @@ export async function createPtyAdapter(params: {
 
   const kill = (signal: NodeJS.Signals = "SIGKILL") => {
     try {
-      if (signal === "SIGKILL" && typeof pty.pid === "number" && pty.pid > 0) {
-        killProcessTree(pty.pid);
-      } else if (process.platform === "win32") {
+      if (process.platform === "win32") {
         pty.kill();
       } else {
+        // Use pty.kill() instead of killProcessTree to avoid cascade kills.
+        // killProcessTree sends to -pid (process group), which can kill
+        // unrelated pty=false sessions that share the same process group.
+        // The PTY's child processes are cleaned up by the OS when the PTY
+        // itself is killed, so we don't need explicit tree killing.
         pty.kill(signal);
       }
     } catch {
