@@ -280,6 +280,9 @@ export const TelegramAccountSchemaBase = z
     silentErrorReplies: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    unknownGroupAction: z.enum(["ignore", "warn", "leave"]).optional(),
+    unknownGroupMessage: z.string().optional(),
+    unknownGroupCooldownMs: z.number().int().nonnegative().optional(),
   })
   .strict();
 

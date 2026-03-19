@@ -305,6 +305,7 @@ const grammySpies = vi.hoisted(() => ({
   sendAnimationSpy: vi.fn(async () => ({ message_id: 78 })) as AnyAsyncMock,
   sendPhotoSpy: vi.fn(async () => ({ message_id: 79 })) as AnyAsyncMock,
   getFileSpy: vi.fn(async () => ({ file_path: "media/file.jpg" })) as AnyAsyncMock,
+  leaveChatSpy: vi.fn(async () => undefined) as AnyAsyncMock,
 }));
 
 export const useSpy: MockFn<(arg: unknown) => void> = grammySpies.useSpy;
@@ -327,6 +328,7 @@ export const sendMessageSpy: AnyAsyncMock = grammySpies.sendMessageSpy;
 export const sendAnimationSpy: AnyAsyncMock = grammySpies.sendAnimationSpy;
 export const sendPhotoSpy: AnyAsyncMock = grammySpies.sendPhotoSpy;
 export const getFileSpy: AnyAsyncMock = grammySpies.getFileSpy;
+export const leaveChatSpy: AnyAsyncMock = grammySpies.leaveChatSpy;
 
 const runnerHoisted = vi.hoisted(() => ({
   sequentializeMiddleware: vi.fn(async (_ctx: unknown, next?: () => Promise<void>) => {
@@ -356,6 +358,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
       sendAnimation: grammySpies.sendAnimationSpy,
       sendPhoto: grammySpies.sendPhotoSpy,
       getFile: grammySpies.getFileSpy,
+      leaveChat: grammySpies.leaveChatSpy,
     };
     use = grammySpies.middlewareUseSpy;
     on = grammySpies.onSpy;
@@ -507,6 +510,8 @@ beforeEach(() => {
   sendMessageSpy.mockResolvedValue({ message_id: 77 });
   getFileSpy.mockReset();
   getFileSpy.mockResolvedValue({ file_path: "media/file.jpg" });
+  leaveChatSpy.mockReset();
+  leaveChatSpy.mockResolvedValue(undefined);
 
   setMessageReactionSpy.mockReset();
   setMessageReactionSpy.mockResolvedValue(undefined);

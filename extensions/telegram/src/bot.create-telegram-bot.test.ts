@@ -20,6 +20,7 @@ const {
   middlewareUseSpy,
   onSpy,
   replySpy,
+  leaveChatSpy,
   sendAnimationSpy,
   sendChatActionSpy,
   sendMessageSpy,
@@ -885,6 +886,135 @@ describe("createTelegramBot", () => {
     }
   });
 
+
+  it("ignores unknown groups when unknownGroupAction is ignore", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          unknownGroupAction: "ignore",
+          groups: {
+            "-100999": { requireMention: false },
+          },
+        },
+      },
+    });
+
+    await dispatchMessage({
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Unknown Group" },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 1101,
+      },
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(leaveChatSpy).not.toHaveBeenCalled();
+  });
+
+  it("warns once for unknown groups when unknownGroupAction is warn", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          unknownGroupAction: "warn",
+          unknownGroupMessage: "Not allowed here.",
+          unknownGroupCooldownMs: 60_000,
+          groups: {
+            "-100999": { requireMention: false },
+          },
+        },
+      },
+    });
+
+    const message = {
+      chat: { id: -100123456789, type: "group", title: "Unknown Group" },
+      from: { id: 123456789, username: "testuser" },
+      text: "hello",
+      date: 1736380800,
+      message_id: 1102,
+    };
+
+    await dispatchMessage({ message });
+    await dispatchMessage({ message: { ...message, message_id: 1103 } });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy).toHaveBeenCalledWith(-100123456789, "Not allowed here.", undefined);
+    expect(leaveChatSpy).not.toHaveBeenCalled();
+  });
+
+  it("warns and leaves unknown groups when unknownGroupAction is leave", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          unknownGroupAction: "leave",
+          unknownGroupMessage: "Leaving.",
+          groups: {
+            "-100999": { requireMention: false },
+          },
+        },
+      },
+    });
+
+    await dispatchMessage({
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Unknown Group" },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 1104,
+      },
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledWith(-100123456789, "Leaving.", undefined);
+    expect(leaveChatSpy).toHaveBeenCalledWith(-100123456789);
+  });
+
+
+  it("warns unknown forum topics in-thread before leaving", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          unknownGroupAction: "leave",
+          unknownGroupMessage: "Leaving topic group.",
+          groups: {
+            "-100999": { requireMention: false },
+          },
+        },
+      },
+    });
+
+    await dispatchMessage({
+      message: {
+        chat: { id: -100123456789, type: "supergroup", title: "Unknown Forum", is_forum: true },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 1105,
+        message_thread_id: 36,
+      },
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      -100123456789,
+      "Leaving topic group.",
+      { message_thread_id: 36 },
+    );
+    expect(leaveChatSpy).toHaveBeenCalledWith(-100123456789);
+  });
+
   it("routes DMs by telegram accountId binding", async () => {
     const config = {
       channels: {
@@ -1302,6 +1432,7 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     replySpy.mockClear();
     sendMessageSpy.mockClear();
+    leaveChatSpy.mockClear();
     setMessageReactionSpy.mockClear();
     setMyCommandsSpy.mockClear();
   }
