@@ -887,11 +887,21 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!relPath) {
       throw new Error("path required");
     }
-    const absPath = this.resolveReadPath(relPath);
+    let absPath = this.resolveReadPath(relPath);
     if (!absPath.endsWith(".md")) {
       throw new Error("path required");
     }
-    const statResult = await statRegularFile(absPath);
+    let statResult = await statRegularFile(absPath);
+    if (statResult.missing) {
+      // The path stored by QMD may be normalized (e.g. lowercase, hyphens instead of
+      // spaces). Try to resolve the actual filesystem path via realpath, then fall back
+      // to a fuzzy directory-walk that treats hyphens and spaces as equivalent.
+      const resolvedAbs = await this.tryResolveNormalizedPath(absPath);
+      if (resolvedAbs) {
+        absPath = resolvedAbs;
+        statResult = await statRegularFile(absPath);
+      }
+    }
     if (statResult.missing) {
       return { text: "", path: relPath };
     }
@@ -914,6 +924,59 @@ export class QmdMemoryManager implements MemorySearchManager {
     const count = Math.max(1, params.lines ?? lines.length);
     const slice = lines.slice(start - 1, start - 1 + count);
     return { text: slice.join("\n"), path: relPath };
+  }
+
+  /**
+   * Try to resolve a normalized path (e.g., lowercase with hyphens) back to the
+   * actual filesystem path. QMD may store paths with case or space normalization
+   * (e.g. "Category/Sub Section.md" stored as "category/sub-section.md"). This
+   * method first tries `fs.realpath` (handles symlinks and case-insensitive
+   * filesystems), then falls back to a fuzzy segment-by-segment directory walk that
+   * treats hyphens and spaces as interchangeable during case-insensitive comparison.
+   *
+   * Returns the resolved absolute path on success, or `null` if no matching file
+   * could be found.
+   */
+  private async tryResolveNormalizedPath(absPath: string): Promise<string | null> {
+    try {
+      return await fs.realpath(absPath);
+    } catch {
+      // realpath fails when the path does not exist as given; fall through to fuzzy walk.
+    }
+    // Walk the path segment by segment, doing a case-insensitive + space↔hyphen
+    // equivalent comparison at each directory level.
+    const normalizeSegment = (s: string): string => s.toLowerCase().replace(/[\s-]+/g, "-");
+    const sep = path.sep;
+    const parts = absPath.split(sep);
+    // The first element is the filesystem root ("/" on POSIX, "C:" on Windows).
+    let current = parts[0] ?? sep;
+    for (let i = 1; i < parts.length; i++) {
+      const part = parts[i];
+      if (!part) {
+        continue;
+      }
+      const exactPath = path.join(current, part);
+      try {
+        await fs.access(exactPath);
+        current = exactPath;
+        continue;
+      } catch {
+        // Not found at exact path; try fuzzy match inside current directory.
+      }
+      let entries: string[];
+      try {
+        entries = await fs.readdir(current);
+      } catch {
+        return null;
+      }
+      const target = normalizeSegment(part);
+      const match = entries.find((e) => normalizeSegment(e) === target);
+      if (!match) {
+        return null;
+      }
+      current = path.join(current, match);
+    }
+    return current;
   }
 
   status(): MemoryProviderStatus {
