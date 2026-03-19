@@ -1399,11 +1399,18 @@ export const chatHandlers: GatewayRequestHandlers = {
             );
             if (connId && wantsToolEvents) {
               context.registerToolEventRecipient(runId, connId);
-              // Register for any other active runs *in the same session* so
-              // late-joining clients (e.g. page refresh mid-response) receive
-              // in-progress tool events without leaking cross-session data.
+              // Backfill registration for other active runs in the same session
+              // (late-joining / page-refresh case). Restrict to runs owned by
+              // this connection or device so a second tab sharing p.sessionKey
+              // cannot receive another client's tool-event stream.
+              const deviceId = normalizeOptionalText(client?.connect?.device?.id);
               for (const [activeRunId, active] of context.chatAbortControllers) {
-                if (activeRunId !== runId && active.sessionKey === p.sessionKey) {
+                if (
+                  activeRunId !== runId &&
+                  active.sessionKey === p.sessionKey &&
+                  (active.ownerConnId === connId ||
+                    (deviceId && active.ownerDeviceId === deviceId))
+                ) {
                   context.registerToolEventRecipient(activeRunId, connId);
                 }
               }
@@ -1413,10 +1420,17 @@ export const chatHandlers: GatewayRequestHandlers = {
               GATEWAY_CLIENT_CAPS.THINKING_EVENTS,
             );
             if (connId && wantsThinkingEvents) {
-              // Eager registration above covered clientRunId; register any other
-              // active runs in the same session (late-joining / page-refresh case).
+              // Eager registration above covered clientRunId; backfill other
+              // active runs in the same session, but only for runs this client
+              // owns (same connId or deviceId) to preserve per-run stream privacy.
+              const deviceId = normalizeOptionalText(client?.connect?.device?.id);
               for (const [activeRunId, active] of context.chatAbortControllers) {
-                if (activeRunId !== runId && active.sessionKey === p.sessionKey) {
+                if (
+                  activeRunId !== runId &&
+                  active.sessionKey === p.sessionKey &&
+                  (active.ownerConnId === connId ||
+                    (deviceId && active.ownerDeviceId === deviceId))
+                ) {
                   context.registerThinkingEventRecipient(activeRunId, connId);
                 }
               }

@@ -266,13 +266,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.agentRunId = "run-current";
     const respond = vi.fn();
     const context = createChatContext();
+    // Owned by the same connId — should be backfilled.
     context.chatAbortControllers.set("run-same-session", {
       controller: new AbortController(),
       sessionId: "sess-prev",
       sessionKey: "main",
       startedAtMs: Date.now(),
       expiresAtMs: Date.now() + 10_000,
+      ownerConnId: "conn-1",
     });
+    // Different session — should never be registered.
     context.chatAbortControllers.set("run-other-session", {
       controller: new AbortController(),
       sessionId: "sess-other",
@@ -296,6 +299,43 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(register).toHaveBeenCalledWith("run-current", "conn-1");
     expect(register).toHaveBeenCalledWith("run-same-session", "conn-1");
     expect(register).not.toHaveBeenCalledWith("run-other-session", "conn-1");
+  });
+
+  it("does not backfill tool-event recipients for same-session runs owned by a different client", async () => {
+    createTranscriptFixture("openclaw-chat-send-tool-events-owner-");
+    mockState.finalText = "ok";
+    mockState.triggerAgentRunStart = true;
+    mockState.agentRunId = "run-current";
+    const respond = vi.fn();
+    const context = createChatContext();
+    // Same sessionKey but owned by a *different* connection — must not be backfilled.
+    context.chatAbortControllers.set("run-other-owner", {
+      controller: new AbortController(),
+      sessionId: "sess-other-owner",
+      sessionKey: "main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 10_000,
+      ownerConnId: "conn-other",
+      ownerDeviceId: "dev-other",
+    });
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-tool-events-other-owner",
+      client: {
+        connId: "conn-1",
+        connect: {
+          caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+          device: { id: "dev-1" },
+        },
+      },
+      expectBroadcast: false,
+    });
+
+    const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    expect(register).toHaveBeenCalledWith("run-current", "conn-1");
+    expect(register).not.toHaveBeenCalledWith("run-other-owner", "conn-1");
   });
 
   it("does not register tool-event recipients without tool-events capability", async () => {
