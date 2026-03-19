@@ -9,15 +9,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  resolveDefaultAgentId,
-  resolveAgentWorkspaceDir,
-  resolveAgentDir,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
 const log = createSubsystemLogger("session-synthesizer");
 
@@ -52,12 +49,15 @@ Conversation:
 export async function synthesizeSessionContent(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
-  sessionKey?: string;
+  /** Session key used to resolve the correct agent scope in multi-agent setups. */
+  sessionKey: string;
 }): Promise<string | null> {
   let tempSessionFile: string | null = null;
 
   try {
-    const agentId = resolveDefaultAgentId(params.cfg);
+    // Resolve the agent from the session key so multi-agent setups use the
+    // correct workspace, model, and provider (not always the default agent).
+    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     const agentDir = resolveAgentDir(params.cfg, agentId);
 
@@ -77,7 +77,7 @@ export async function synthesizeSessionContent(params: {
 
     const result = await runEmbeddedPiAgent({
       sessionId: `session-synthesis-${Date.now()}`,
-      sessionKey: "temp:session-synthesis",
+      sessionKey: params.sessionKey,
       agentId,
       sessionFile: tempSessionFile,
       workspaceDir,

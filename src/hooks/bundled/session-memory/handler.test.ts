@@ -284,7 +284,7 @@ describe("session-memory hook", () => {
       });
 
       expect(files).toEqual(["2025-12-31-2330.md", "2025-12-31.md"]);
-      expect(memoryContent).toMatch(/^# Session: 2025-12-31 23:30:15(?: EST| GMT-5)?/);
+      expect(memoryContent).toMatch(/^# Session: 2025-12-31 23:30:15 \(America\/New_York\)/);
       expect(memoryContent).not.toContain("# Session: 2026-01-01 04:30:15 UTC");
     });
   });
@@ -639,9 +639,11 @@ describe("session-memory hook", () => {
     const memoryDir = path.join(tempDir, "memory");
     const files = await fs.readdir(memoryDir);
 
-    // Should have at least 2 files: the slug file and the canonical daily file
-    const canonicalFile = files.find((file) => /^\d{4}-\d{2}-\d{2}\.md$/.test(file));
-    const slugFile = files.find((file) => file !== canonicalFile && file.endsWith(".md"));
+    // Find canonical file (YYYY-MM-DD.md — no slug suffix) and slug file
+    const canonicalFile = files.find((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f));
+    const slugFile = files.find(
+      (f) => f.endsWith(".md") && f !== canonicalFile && /^\d{4}-\d{2}-\d{2}-.+\.md$/.test(f),
+    );
 
     expect(canonicalFile).toBeDefined();
     expect(slugFile).toBeDefined();
@@ -693,13 +695,13 @@ describe("session-memory hook", () => {
       previousSessionEntry: { sessionId: "session-2", sessionFile: sessionFile2 },
     });
 
-    // Check canonical file has both sessions separated
+    // Check canonical file has both sessions separated — find by pattern,
+    // not by constructing the date (which could differ from handler's timezone)
     const memoryDir = path.join(tempDir, "memory");
-    const canonicalFile = (await fs.readdir(memoryDir)).find((file) =>
-      /^\d{4}-\d{2}-\d{2}\.md$/.test(file),
-    );
-    expect(canonicalFile).toBeDefined();
-    const canonicalContent = await fs.readFile(path.join(memoryDir, canonicalFile!), "utf-8");
+    const allFiles = await fs.readdir(memoryDir);
+    const canonFile = allFiles.find((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f));
+    expect(canonFile).toBeDefined();
+    const canonicalContent = await fs.readFile(path.join(memoryDir, canonFile!), "utf-8");
 
     expect(canonicalContent).toContain("First session content");
     expect(canonicalContent).toContain("Second session content");

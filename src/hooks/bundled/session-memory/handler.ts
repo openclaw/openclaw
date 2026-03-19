@@ -20,9 +20,10 @@ import {
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
+import { resolveUserTimezone } from "../../../agents/date-time.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
+import { appendFileWithinRoot, writeFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   parseAgentSessionKey,
@@ -37,34 +38,14 @@ import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } fro
 
 const log = createSubsystemLogger("hooks/session-memory");
 
-function pickDateTimePart(
-  parts: Intl.DateTimeFormatPart[],
-  type: Intl.DateTimeFormatPartTypes,
-): string | undefined {
-  return parts.find((part) => part.type === type)?.value;
-}
-
-function resolveLocalTimeZone(): string | undefined {
-  const timeZone = process.env.TZ?.trim();
-  if (!timeZone) {
-    return undefined;
-  }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
-    return timeZone;
-  } catch {
-    return undefined;
-  }
-}
-
-function formatLocalSessionTimestamp(date: Date): {
-  date: string;
-  time: string;
-  timeSlug: string;
-  timeZoneName?: string;
-} {
+function resolveSessionTimestamp(
+  timestamp: number,
+  cfg?: OpenClawConfig,
+): { dateStr: string; timeStr: string; timeSlug: string; timezone: string } {
+  const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone ?? process.env.TZ);
+  const date = new Date(timestamp);
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: resolveLocalTimeZone(),
+    timeZone: timezone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -72,25 +53,22 @@ function formatLocalSessionTimestamp(date: Date): {
     minute: "2-digit",
     second: "2-digit",
     hourCycle: "h23",
-    timeZoneName: "short",
   }).formatToParts(date);
 
-  const year = pickDateTimePart(parts, "year") ?? String(date.getFullYear()).padStart(4, "0");
-  const month = pickDateTimePart(parts, "month") ?? String(date.getMonth() + 1).padStart(2, "0");
-  const day = pickDateTimePart(parts, "day") ?? String(date.getDate()).padStart(2, "0");
-  const hour = pickDateTimePart(parts, "hour") ?? String(date.getHours()).padStart(2, "0");
-  const minute = pickDateTimePart(parts, "minute") ?? String(date.getMinutes()).padStart(2, "0");
-  const second = pickDateTimePart(parts, "second") ?? String(date.getSeconds()).padStart(2, "0");
-  const timeZoneName = [...parts]
-    .toReversed()
-    .find((part) => part.type === "timeZoneName")
-    ?.value?.trim();
+  const value = (type: Intl.DateTimeFormatPartTypes): string | undefined =>
+    parts.find((part) => part.type === type)?.value;
+  const year = value("year") ?? String(date.getUTCFullYear()).padStart(4, "0");
+  const month = value("month") ?? String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = value("day") ?? String(date.getUTCDate()).padStart(2, "0");
+  const hour = value("hour") ?? String(date.getUTCHours()).padStart(2, "0");
+  const minute = value("minute") ?? String(date.getUTCMinutes()).padStart(2, "0");
+  const second = value("second") ?? String(date.getUTCSeconds()).padStart(2, "0");
 
   return {
-    date: `${year}-${month}-${day}`,
-    time: `${hour}:${minute}:${second}`,
+    dateStr: `${year}-${month}-${day}`,
+    timeStr: `${hour}:${minute}:${second}`,
     timeSlug: `${hour}${minute}`,
-    timeZoneName,
+    timezone,
   };
 }
 
@@ -146,10 +124,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Use the user's local timezone for memory artifact names and headings.
-    const now = new Date(event.timestamp);
-    const localTimestamp = formatLocalSessionTimestamp(now);
-    const dateStr = localTimestamp.date;
+    const { dateStr, timeStr, timeSlug, timezone } = resolveSessionTimestamp(event.timestamp, cfg);
 
     // Generate descriptive slug from session using LLM
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
@@ -227,7 +202,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // If no slug, use timestamp
     if (!slug) {
-      slug = localTimestamp.timeSlug;
+      slug = timeSlug;
       log.debug("Using fallback timestamp slug", { slug });
     }
 
@@ -239,9 +214,6 @@ const saveSessionToMemory: HookHandler = async (event) => {
       path: memoryFilePath.replace(os.homedir(), "~"),
     });
 
-    const timeStr = localTimestamp.time;
-    const timeZoneSuffix = localTimestamp.timeZoneName ? ` ${localTimestamp.timeZoneName}` : "";
-
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const source = (context.commandSource as string) || "unknown";
@@ -250,6 +222,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     // it into a concise summary. Falls back to raw content on failure.
     const synthesisEnabled = hookConfig?.synthesis === true;
     let outputContent = sessionContent;
+    let synthesisSucceeded = false;
 
     if (synthesisEnabled && sessionContent && cfg) {
       const isTestEnv =
@@ -267,6 +240,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
         });
         if (synthesized) {
           outputContent = synthesized;
+          synthesisSucceeded = true;
           log.debug("Synthesis complete", { length: synthesized.length });
         } else {
           log.debug("Synthesis returned empty or failed, using raw content");
@@ -274,9 +248,10 @@ const saveSessionToMemory: HookHandler = async (event) => {
       }
     }
 
-    // Build Markdown entry
+    // Build Markdown entry — date and time use the same timezone
+    const timezoneLabel = timezone === "UTC" ? "UTC" : timezone;
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr}${timeZoneSuffix}`,
+      `# Session: ${dateStr} ${timeStr} (${timezoneLabel})`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
@@ -286,7 +261,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Include conversation content if available
     if (outputContent) {
-      if (synthesisEnabled && outputContent !== sessionContent) {
+      if (synthesisEnabled && synthesisSucceeded) {
         entryParts.push("## Summary", "", outputContent, "");
       } else {
         entryParts.push("## Conversation Summary", "", outputContent, "");
@@ -306,26 +281,16 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Also append to canonical daily file (memory/YYYY-MM-DD.md) so the boot
     // sequence can find session memories without relying on memory_search.
+    // Uses atomic appendFileWithinRoot to avoid TOCTOU races when multiple
+    // /new commands fire in rapid succession on the same day.
     const canonicalFilename = `${dateStr}.md`;
-    const canonicalPath = path.join(memoryDir, canonicalFilename);
     try {
-      const separator = "\n---\n\n";
-      let existingContent = "";
-      try {
-        existingContent = await fs.readFile(canonicalPath, "utf-8");
-      } catch {
-        // File doesn't exist yet — will be created.
-      }
-
-      const appendContent = existingContent
-        ? `${existingContent.trimEnd()}${separator}${entry}`
-        : entry;
-
-      await writeFileWithinRoot({
+      await appendFileWithinRoot({
         rootDir: memoryDir,
         relativePath: canonicalFilename,
-        data: appendContent,
+        data: `\n---\n\n${entry}`,
         encoding: "utf-8",
+        prependNewlineIfNeeded: false,
       });
       log.debug("Appended to canonical daily file", { canonicalFilename });
     } catch (err) {
