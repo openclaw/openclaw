@@ -94,6 +94,7 @@ export const SessionsResetParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     reason: Type.Optional(Type.Union([Type.Literal("new"), Type.Literal("reset")])),
+    hookSourceKey: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

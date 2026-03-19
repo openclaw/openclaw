@@ -250,10 +250,11 @@ export class GatewayChatClient {
     return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
   }
 
-  async resetSession(key: string, reason?: "new" | "reset") {
+  async resetSession(key: string, reason?: "new" | "reset", hookSourceKey?: string) {
     return await this.client.request("sessions.reset", {
       key,
       ...(reason ? { reason } : {}),
+      ...(hookSourceKey ? { hookSourceKey } : {}),
     });
   }
 

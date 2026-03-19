@@ -1253,6 +1253,35 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.reset can use a separate hookSourceKey for command:new context", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+      key: "agent:main:tui-hook-target",
+      reason: "new",
+      hookSourceKey: "main",
+    });
+    expect(reset.ok).toBe(true);
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    const event = (
+      sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as { sessionKey?: string; context?: { previousSessionEntry?: unknown } } | undefined;
+    if (!event) {
+      throw new Error("expected session hook event");
+    }
+    expect(event.sessionKey).toBe("agent:main:tui-hook-target");
+    expect(event.context?.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
+    ws.close();
+  });
+
   test("sessions.reset returns unavailable when active run does not stop", async () => {
     const { dir, storePath } = await seedActiveMainSession();
     const waitCallCountAtSnapshotClear: number[] = [];

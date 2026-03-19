@@ -5,7 +5,7 @@ type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
 type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
 type ResetSessionMock = ReturnType<typeof vi.fn> &
-  ((key: string, reason?: "new" | "reset") => Promise<{ ok: true }>);
+  ((key: string, reason?: "new" | "reset", hookSourceKey?: string) => Promise<{ ok: true }>);
 
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
@@ -166,6 +166,7 @@ describe("tui command handlers", () => {
         /^agent:main:tui-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/,
       ),
       "new",
+      "agent:main:main",
     );
     // /reset still resets the shared session in place.
     expect(resetSession).toHaveBeenNthCalledWith(2, "agent:main:main", "reset");

@@ -242,6 +242,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       key,
       reason,
       commandSource: "gateway:sessions.reset",
+      hookSourceKey: typeof p.hookSourceKey === "string" ? p.hookSourceKey : undefined,
     });
     if (!result.ok) {
       respond(false, undefined, result.error);

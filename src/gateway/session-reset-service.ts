@@ -254,6 +254,7 @@ export async function performGatewaySessionReset(params: {
   key: string;
   reason: "new" | "reset";
   commandSource: string;
+  hookSourceKey?: string;
 }): Promise<
   | { ok: true; key: string; entry: SessionEntry }
   | { ok: false; error: ReturnType<typeof errorShape> }
@@ -265,13 +266,19 @@ export async function performGatewaySessionReset(params: {
   })();
   const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key);
   const hadExistingEntry = Boolean(entry);
+  const hookSourceEntry =
+    typeof params.hookSourceKey === "string" &&
+    params.hookSourceKey.trim() &&
+    params.hookSourceKey !== params.key
+      ? loadSessionEntry(params.hookSourceKey).entry
+      : entry;
   const hookEvent = createInternalHookEvent(
     "command",
     params.reason,
     target.canonicalKey ?? params.key,
     {
-      sessionEntry: entry,
-      previousSessionEntry: entry,
+      sessionEntry: hookSourceEntry,
+      previousSessionEntry: hookSourceEntry,
       commandSource: params.commandSource,
       cfg,
     },
