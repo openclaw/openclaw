@@ -116,7 +116,7 @@ describe("local session timestamps", () => {
       timestamp: 2,
     });
 
-    const branchedFile = sessionManager.createBranchedSession(sessionManager.getLeafId());
+    const branchedFile = sessionManager.createBranchedSession(sessionManager.getLeafId()!);
     expect(branchedFile).toBeTruthy();
     const entries = readJsonl(String(branchedFile));
 

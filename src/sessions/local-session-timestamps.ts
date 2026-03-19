@@ -7,23 +7,21 @@ type SessionEntryLike = {
   type?: string;
 };
 
-type MutableSessionManager = SessionManager & {
+// Declared as a standalone interface (not intersected with SessionManager)
+// because SessionManager has private members like `flushed` that cause
+// the intersection to collapse to `never` under strict type checkers.
+interface MutableSessionManagerInternals {
   flushed?: boolean;
   fileEntries?: SessionEntryLike[];
   _appendEntry?: (entry: SessionEntryLike) => unknown;
   _rewriteFile?: () => void;
   createBranchedSession?: (leafId?: string | null) => string | undefined;
-};
+  [key: symbol]: unknown;
+}
 
 const SESSION_MANAGER_WRAPPED = Symbol("openclaw.session-manager-local-timestamps");
 const NORMALIZE_ON_REWRITE = Symbol("openclaw.session-manager-normalize-on-rewrite");
 const HEADER_NORMALIZED = Symbol("openclaw.session-manager-header-normalized");
-
-type MutableSessionManagerWithFlags = MutableSessionManager & {
-  [SESSION_MANAGER_WRAPPED]?: boolean;
-  [NORMALIZE_ON_REWRITE]?: boolean;
-  [HEADER_NORMALIZED]?: boolean;
-};
 
 function toDate(value: SessionTimestampInput): Date {
   const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
@@ -63,7 +61,7 @@ function normalizeEntryTimestamp(entry: SessionEntryLike | undefined): void {
   entry.timestamp = formatLocalSessionTimestamp(value);
 }
 
-function normalizePendingHeader(sessionManager: MutableSessionManagerWithFlags): void {
+function normalizePendingHeader(sessionManager: MutableSessionManagerInternals): void {
   if (sessionManager.flushed || sessionManager[HEADER_NORMALIZED]) {
     return;
   }
@@ -72,14 +70,14 @@ function normalizePendingHeader(sessionManager: MutableSessionManagerWithFlags):
   sessionManager[HEADER_NORMALIZED] = true;
 }
 
-function normalizeAllEntries(sessionManager: MutableSessionManagerWithFlags): void {
+function normalizeAllEntries(sessionManager: MutableSessionManagerInternals): void {
   sessionManager.fileEntries?.forEach((entry) => normalizeEntryTimestamp(entry));
 }
 
 export function wrapSessionManagerWithLocalTimestamps(
   sessionManager: SessionManager,
 ): SessionManager {
-  const mutableSessionManager = sessionManager as MutableSessionManagerWithFlags;
+  const mutableSessionManager = sessionManager as unknown as MutableSessionManagerInternals;
   if (mutableSessionManager[SESSION_MANAGER_WRAPPED]) {
     return sessionManager;
   }
