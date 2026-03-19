@@ -812,37 +812,40 @@ describe("chat view", () => {
         ok: false,
       } satisfies Partial<Response>),
     );
-    const { state } = createChatHeaderState({
-      model: "gemini-2.0-flash-lite",
-      modelProvider: "google",
-      preservePreviousProviderOnQualifiedPatch: true,
-      models: [
-        { id: "gemini-2.0-flash-lite", name: "Gemini 2.0 Flash Lite", provider: "google" },
-        { id: "qwen3.5-9b", name: "Qwen 3.5 9B", provider: "lmstudio_mbp" },
-      ],
-    });
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
+    try {
+      const { state } = createChatHeaderState({
+        model: "gemini-2.0-flash-lite",
+        modelProvider: "google",
+        preservePreviousProviderOnQualifiedPatch: true,
+        models: [
+          { id: "gemini-2.0-flash-lite", name: "Gemini 2.0 Flash Lite", provider: "google" },
+          { id: "qwen3.5-9b", name: "Qwen 3.5 9B", provider: "lmstudio_mbp" },
+        ],
+      });
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state), container);
 
-    const modelSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(modelSelect?.value).toBe("google/gemini-2.0-flash-lite");
+      const modelSelect = container.querySelector<HTMLSelectElement>(
+        'select[data-chat-model-select="true"]',
+      );
+      expect(modelSelect?.value).toBe("google/gemini-2.0-flash-lite");
 
-    modelSelect!.value = "lmstudio_mbp/qwen3.5-9b";
-    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await flushTasks();
-    render(renderChatSessionSelect(state), container);
+      modelSelect!.value = "lmstudio_mbp/qwen3.5-9b";
+      modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+      await flushTasks();
+      render(renderChatSessionSelect(state), container);
 
-    const rerendered = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(rerendered?.value).toBe("lmstudio_mbp/qwen3.5-9b");
-    const optionValues = Array.from(rerendered?.querySelectorAll("option") ?? []).map(
-      (option) => option.value,
-    );
-    expect(optionValues).not.toContain("google/lmstudio_mbp/qwen3.5-9b");
-    vi.unstubAllGlobals();
+      const rerendered = container.querySelector<HTMLSelectElement>(
+        'select[data-chat-model-select="true"]',
+      );
+      expect(rerendered?.value).toBe("lmstudio_mbp/qwen3.5-9b");
+      const optionValues = Array.from(rerendered?.querySelectorAll("option") ?? []).map(
+        (option) => option.value,
+      );
+      expect(optionValues).not.toContain("google/lmstudio_mbp/qwen3.5-9b");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("prefers the session label over displayName in the grouped chat session selector", () => {
