@@ -87,7 +87,7 @@ async function runExaSearch(params: {
           url,
           description:
             highlights.length > 0 ? wrapWebContent(highlights.join(" … "), "web_search") : "",
-          published: entry.publishedDate ?? undefined,
+          published: entry.publishedDate,
           siteName: resolveSiteName(url) || undefined,
         };
       });
