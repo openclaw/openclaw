@@ -112,6 +112,14 @@ function getJiti() {
   return jitiLoader;
 }
 
+function canRetryWithJiti(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const code = "code" in error ? (error as { code?: unknown }).code : undefined;
+  return code === "ERR_MODULE_NOT_FOUND" || code === "ERR_UNKNOWN_FILE_EXTENSION";
+}
+
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -159,9 +167,19 @@ export async function loadMatrixLegacyCryptoInspector(params: {
   }
 
   const pending = (async () => {
-    const loaded: unknown = shouldPreferNativeJiti(helperPath)
-      ? await import(pathToFileURL(helperPath).href)
-      : getJiti()(helperPath);
+    let loaded: unknown;
+    if (shouldPreferNativeJiti(helperPath)) {
+      try {
+        loaded = await import(pathToFileURL(helperPath).href);
+      } catch (error) {
+        if (!canRetryWithJiti(error)) {
+          throw error;
+        }
+        loaded = getJiti()(helperPath);
+      }
+    } else {
+      loaded = getJiti()(helperPath);
+    }
     const inspectLegacyMatrixCryptoStore = resolveInspectorExport(loaded);
     if (!inspectLegacyMatrixCryptoStore) {
       throw new Error(
