@@ -154,6 +154,14 @@ function resolveBinEntry(
     if (typeof preferred === "string" && preferred.trim()) {
       return preferred.trim();
     }
+    // For scoped packages like `@scope/pkg`, also try the unscoped `pkg` name.
+    const unscopedName = packageName.includes("/") ? packageName.split("/").pop() : undefined;
+    if (unscopedName) {
+      const unscopedEntry = binField[unscopedName];
+      if (typeof unscopedEntry === "string" && unscopedEntry.trim()) {
+        return unscopedEntry.trim();
+      }
+    }
   }
 
   for (const value of Object.values(binField)) {

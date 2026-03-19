@@ -419,6 +419,47 @@ describe("wrapToolMutationLock", () => {
     ]);
   });
 
+  it("serializes @-prefixed and plain paths to the same lock key", async () => {
+    const gate = deferred();
+    const events: string[] = [];
+
+    const base: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "test write",
+      parameters: {},
+      execute: async (_toolCallId, params) => {
+        const record = params as Record<string, unknown>;
+        const filePath = typeof record.path === "string" ? record.path : "";
+        events.push(`start:${filePath}`);
+        if (filePath === "notes.txt") {
+          await gate.promise;
+        }
+        events.push(`end:${filePath}`);
+        return textResult(filePath);
+      },
+    };
+
+    const wrapped = wrapToolMutationLock(base, process.cwd());
+
+    const p1 = wrapped.execute("call-1", { path: "notes.txt", content: "one" });
+    const p2 = wrapped.execute("call-2", { path: "@notes.txt", content: "two" });
+
+    await waitUntil(() => {
+      expect(events).toEqual(["start:notes.txt"]);
+    });
+
+    gate.resolve();
+    await Promise.all([p1, p2]);
+    // p2 should have waited for p1 because both resolve to the same file
+    expect(events).toEqual([
+      "start:notes.txt",
+      "end:notes.txt",
+      "start:@notes.txt",
+      "end:@notes.txt",
+    ]);
+  });
+
   it("canonicalizes symlink aliases for missing-file mutation lock keys", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mutation-lock-"));
     try {

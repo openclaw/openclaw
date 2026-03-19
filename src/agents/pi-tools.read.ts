@@ -383,8 +383,10 @@ export function wrapToolMutationLock(
         return tool.execute(toolCallId, params, signal, onUpdate);
       }
 
+      // Strip leading `@` alias so `@file.txt` and `file.txt` produce the same lock key.
+      const filePathNormalized = filePathRaw.startsWith("@") ? filePathRaw.slice(1) : filePathRaw;
       const resolvedPath = mapContainerPathToWorkspaceRoot({
-        filePath: filePathRaw,
+        filePath: filePathNormalized,
         root,
         containerWorkdir: options?.containerWorkdir,
         bindMounts: options?.bindMounts,

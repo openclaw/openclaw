@@ -55,4 +55,42 @@ describe("resolveWindowsSpawnProgramCandidate", () => {
     expect(candidate.resolution).toBe("node-entrypoint");
     expect(candidate.windowsHide).toBe(true);
   });
+
+  it("resolves correct bin for scoped package with multiple binaries", async () => {
+    const root = await createTempDir();
+    const binDir = path.join(root, "bin");
+    const packageDir = path.join(root, "node_modules", "@scope", "tools");
+    const distDir = path.join(packageDir, "dist");
+    const wrapperPath = path.join(binDir, "tools.cmd");
+    const correctEntry = path.join(distDir, "tools-cli.js");
+    const wrongEntry = path.join(distDir, "other-cli.js");
+
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(correctEntry, "#!/usr/bin/env node\n", "utf8");
+    await fs.writeFile(wrongEntry, "#!/usr/bin/env node\n", "utf8");
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@scope/tools",
+        bin: { "other-thing": "dist/other-cli.js", tools: "dist/tools-cli.js" },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(wrapperPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
+
+    const candidate = resolveWindowsSpawnProgramCandidate({
+      command: wrapperPath,
+      platform: "win32",
+      env: {},
+      execPath: "C:\\node\\node.exe",
+      packageName: "@scope/tools",
+    });
+
+    expect(candidate.command).toBe("C:\\node\\node.exe");
+    expect(candidate.leadingArgv).toHaveLength(1);
+    // Should pick `tools` entry, not `other-thing` (first in object)
+    expect(await fs.realpath(candidate.leadingArgv[0])).toBe(await fs.realpath(correctEntry));
+    expect(candidate.resolution).toBe("node-entrypoint");
+  });
 });
