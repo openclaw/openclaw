@@ -117,4 +117,37 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
       },
     );
   });
+
+  it("rejects Basic-shaped GIGACHAT_CREDENTIALS in the OAuth onboarding path", async () => {
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const runtime = {
+      error: vi.fn(),
+      exit: vi.fn(),
+      log: vi.fn(),
+    } as never;
+    const resolveApiKey = vi.fn(async () => ({
+      key: "basic-user:basic-pass",
+      source: "env" as const,
+    }));
+    const maybeSetResolvedApiKey = vi.fn();
+
+    const result = await applySimpleNonInteractiveApiKeyChoice({
+      authChoice: "gigachat-api-key",
+      nextConfig,
+      baseConfig: nextConfig,
+      opts: {} as never,
+      runtime,
+      apiKeyStorageOptions: undefined,
+      resolveApiKey,
+      maybeSetResolvedApiKey,
+    });
+
+    expect(result).toBeNull();
+    expect(maybeSetResolvedApiKey).not.toHaveBeenCalled();
+    expect(setGigachatApiKey).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Basic user:password credentials"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
 });

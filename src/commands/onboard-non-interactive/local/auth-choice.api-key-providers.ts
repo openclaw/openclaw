@@ -1,3 +1,4 @@
+import { resolveGigachatAuthMode } from "../../../agents/gigachat-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { applyAuthProfileConfig } from "../../../plugins/provider-auth-helpers.js";
@@ -48,6 +49,17 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
     allowProfile: false,
   });
   if (!resolved) {
+    return null;
+  }
+  if (resolveGigachatAuthMode({ apiKey: resolved.key }) === "basic") {
+    params.runtime.error(
+      [
+        "GIGACHAT_CREDENTIALS looks like Basic user:password credentials.",
+        'Non-interactive "--gigachat-api-key" only supports personal OAuth credentials keys.',
+        "Set GIGACHAT_CREDENTIALS to a real OAuth credentials key and retry.",
+      ].join("\n"),
+    );
+    params.runtime.exit(1);
     return null;
   }
   if (

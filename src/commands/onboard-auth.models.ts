@@ -218,6 +218,7 @@ export function buildXaiModelDefinition(): ModelDefinitionConfig {
 }
 
 export const GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1";
+export const GIGACHAT_BASIC_BASE_URL = "https://gigachat.ift.sberdevices.ru/v1";
 export const GIGACHAT_DEFAULT_MODEL_ID = "GigaChat-2-Max";
 export const GIGACHAT_DEFAULT_MODEL_REF = `gigachat/${GIGACHAT_DEFAULT_MODEL_ID}`;
 export const GIGACHAT_DEFAULT_CONTEXT_WINDOW = 128000;

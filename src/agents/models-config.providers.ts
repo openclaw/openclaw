@@ -4,6 +4,7 @@ import {
 } from "../../extensions/qianfan/provider-catalog.js";
 import { XIAOMI_DEFAULT_MODEL_ID } from "../../extensions/xiaomi/provider-catalog.js";
 import {
+  GIGACHAT_BASIC_BASE_URL,
   buildGigachatModelDefinition,
   GIGACHAT_BASE_URL,
 } from "../commands/onboard-auth.models.js";
@@ -13,6 +14,11 @@ import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
+import {
+  type GigachatAuthMetadata,
+  resolveGigachatAuthMode,
+  resolveGigachatAuthProfileMetadata,
+} from "./gigachat-auth.js";
 import { normalizeGoogleModelId } from "./model-id-normalization.js";
 import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 export { buildKimiCodingProvider } from "../../extensions/kimi-coding/provider-catalog.js";
@@ -95,6 +101,25 @@ function buildGigachatProvider(params: { apiKey?: string; baseUrl?: string }): P
     ...(params.apiKey ? { apiKey: params.apiKey } : {}),
     models: [buildGigachatModelDefinition()],
   } satisfies ProviderConfig;
+}
+
+export function resolveImplicitGigachatBaseUrl(params: {
+  envBaseUrl?: string;
+  metadata?: GigachatAuthMetadata;
+  apiKey?: string;
+  authProfileId?: string;
+}): string {
+  const envBaseUrl = params.envBaseUrl?.trim();
+  if (envBaseUrl) {
+    return envBaseUrl;
+  }
+  return resolveGigachatAuthMode({
+    metadata: params.metadata,
+    apiKey: params.apiKey,
+    authProfileId: params.authProfileId,
+  }) === "basic"
+    ? GIGACHAT_BASIC_BASE_URL
+    : GIGACHAT_BASE_URL;
 }
 
 function withStreamingUsageCompat(provider: ProviderConfig): ProviderConfig {
@@ -712,10 +737,16 @@ function resolveImplicitGigachatProvider(ctx: ImplicitProviderContext): Provider
   if (!auth.apiKey) {
     return null;
   }
+  const metadata = resolveGigachatAuthProfileMetadata(ctx.authStore, auth.profileId);
 
   return buildGigachatProvider({
     apiKey: auth.apiKey,
-    baseUrl: ctx.env.GIGACHAT_BASE_URL,
+    baseUrl: resolveImplicitGigachatBaseUrl({
+      envBaseUrl: ctx.env.GIGACHAT_BASE_URL,
+      metadata,
+      apiKey: auth.discoveryApiKey ?? auth.apiKey,
+      authProfileId: auth.profileId,
+    }),
   });
 }
 
