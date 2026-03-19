@@ -115,6 +115,7 @@ function createLifecycleConfig(): ClawdbotConfig {
 function createLifecycleAccount(): ResolvedFeishuAccount {
   return {
     accountId: "acct-acp",
+    selectionSource: "explicit",
     enabled: true,
     configured: true,
     appId: "cli_test",
@@ -135,7 +136,7 @@ function createLifecycleAccount(): ResolvedFeishuAccount {
       },
       allowFrom: ["ou_sender_1"],
     },
-  } as ResolvedFeishuAccount;
+  } as unknown as ResolvedFeishuAccount;
 }
 
 function createRuntimeEnv(): RuntimeEnv {
