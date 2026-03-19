@@ -45,7 +45,7 @@ function retainTeamMessages(db: DatabaseSync): RetentionResult {
           )`,
         )
         .run(team_id, team_id);
-      total += info.changes;
+      total += Number(info.changes);
     }
     return total;
   });
@@ -61,7 +61,7 @@ function retainDeliveryQueue(db: DatabaseSync): RetentionResult {
          AND created_at < unixepoch() - (7 * 86400)`,
       )
       .run();
-    return info.changes;
+    return Number(info.changes);
   });
 }
 
@@ -86,7 +86,7 @@ function retainCronRuns(db: DatabaseSync): RetentionResult {
           )`,
         )
         .run(job_id, job_id);
-      total += info.changes;
+      total += Number(info.changes);
     }
     return total;
   });
@@ -105,7 +105,7 @@ function retainSubagentRuns(db: DatabaseSync): RetentionResult {
          AND finished_at < unixepoch() - (30 * 86400)`,
       )
       .run();
-    return info.changes;
+    return Number(info.changes);
   });
 }
 
@@ -118,7 +118,7 @@ function retainAuditState(db: DatabaseSync): RetentionResult {
     const info = db
       .prepare("DELETE FROM audit_state WHERE created_at < unixepoch() - (90 * 86400)")
       .run();
-    return info.changes;
+    return Number(info.changes);
   });
 }
 
@@ -131,7 +131,7 @@ function retainAuditConfig(db: DatabaseSync): RetentionResult {
     const info = db
       .prepare("DELETE FROM audit_config WHERE created_at < unixepoch() - (90 * 86400)")
       .run();
-    return info.changes;
+    return Number(info.changes);
   });
 }
 
@@ -142,10 +142,10 @@ function tableExists(db: DatabaseSync, name: string): boolean {
   return row != null;
 }
 
-function safeRetain(job: string, db: DatabaseSync, fn: () => number): RetentionResult {
+function safeRetain(job: string, _db: DatabaseSync, fn: () => number | bigint): RetentionResult {
   try {
     const deleted = fn();
-    return { job, deleted };
+    return { job, deleted: Number(deleted) };
   } catch (err) {
     return {
       job,
