@@ -10,6 +10,7 @@ import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
+  getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStore,
   loadSessionEntry,
@@ -138,6 +139,27 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
     expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:main:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toBe("agent:main:thread-1");
+  });
+
+  test("getSessionDefaults prefers the default agent primary model over the hardcoded fallback", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            model: {
+              primary: "minimax/MiniMax-M2.5",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(getSessionDefaults(cfg)).toMatchObject({
+      modelProvider: "minimax",
+      model: "MiniMax-M2.5",
+    });
   });
 
   test("resolveSessionStoreKey normalizes session key casing", () => {

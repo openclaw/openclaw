@@ -1021,10 +1021,9 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
 }
 
 export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
-  const resolved = resolveConfiguredModelRef({
+  const resolved = resolveDefaultModelForAgent({
     cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    agentId: resolveDefaultAgentId(cfg),
   });
   const contextTokens =
     cfg.agents?.defaults?.contextTokens ??
