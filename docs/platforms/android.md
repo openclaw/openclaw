@@ -164,4 +164,5 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
   - `contacts.search`, `contacts.add`
   - `calendar.events`, `calendar.add`
   - `callLog.search`
+  - `sms.search`
   - `motion.activity`, `motion.pedometer`

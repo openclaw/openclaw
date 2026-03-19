@@ -247,12 +247,16 @@ fun SettingsSheet(viewModel: MainViewModel) {
     remember {
       mutableStateOf(
         ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
+          PackageManager.PERMISSION_GRANTED &&
+          ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
           PackageManager.PERMISSION_GRANTED,
       )
     }
   val smsPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      smsPermissionGranted = granted
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
+      val sendOk = perms[Manifest.permission.SEND_SMS] == true
+      val readOk = perms[Manifest.permission.READ_SMS] == true
+      smsPermissionGranted = sendOk && readOk
       viewModel.refreshGatewayConnection()
     }
 
@@ -287,6 +291,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
               PackageManager.PERMISSION_GRANTED
           smsPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
+              PackageManager.PERMISSION_GRANTED &&
+              ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
               PackageManager.PERMISSION_GRANTED
         }
       }
@@ -507,7 +513,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               colors = listItemColors,
               headlineContent = { Text("SMS", style = mobileHeadline) },
               supportingContent = {
-                Text("Send SMS from this device.", style = mobileCallout)
+                Text("Send and search SMS from this device.", style = mobileCallout)
               },
               trailingContent = {
                 Button(
@@ -515,7 +521,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
                     if (smsPermissionGranted) {
                       openAppSettings(context)
                     } else {
-                      smsPermissionLauncher.launch(Manifest.permission.SEND_SMS)
+                      smsPermissionLauncher.launch(arrayOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS))
                     }
                   },
                   colors = settingsPrimaryButtonColors(),

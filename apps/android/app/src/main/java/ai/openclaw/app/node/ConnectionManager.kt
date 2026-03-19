@@ -17,7 +17,8 @@ class ConnectionManager(
   private val voiceWakeMode: () -> VoiceWakeMode,
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
-  private val smsAvailable: () -> Boolean,
+  private val sendSmsAvailable: () -> Boolean,
+  private val readSmsAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
   private val manualTls: () -> Boolean,
 ) {
@@ -78,7 +79,8 @@ class ConnectionManager(
     NodeRuntimeFlags(
       cameraEnabled = cameraEnabled(),
       locationEnabled = locationMode() != LocationMode.Off,
-      smsAvailable = smsAvailable(),
+      sendSmsAvailable = sendSmsAvailable(),
+      readSmsAvailable = readSmsAvailable(),
       voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
       motionActivityAvailable = motionActivityAvailable(),
       motionPedometerAvailable = motionPedometerAvailable(),
