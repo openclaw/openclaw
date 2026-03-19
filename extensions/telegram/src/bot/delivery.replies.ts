@@ -505,6 +505,7 @@ function emitMessageSentHooks(params: {
   groupId?: string;
 }): void {
   if (!params.enabled && !params.sessionKeyForInternalHooks) {
+    logVerbose(`telegram: emitMessageSentHooks skipped (no hooks enabled and no sessionKey)`);
     return;
   }
   const canonical = buildCanonicalSentMessageHookContext({
@@ -531,6 +532,9 @@ function emitMessageSentHooks(params: {
     );
   }
   if (!params.sessionKeyForInternalHooks) {
+    logVerbose(
+      `telegram: message:sent internal hook skipped (sessionKeyForInternalHooks is empty)`,
+    );
     return;
   }
   fireAndForgetHook(
@@ -573,6 +577,9 @@ export async function deliverReplies(params: {
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
 }): Promise<{ delivered: boolean }> {
+  logVerbose(
+    `telegram: deliverReplies called (replies=${params.replies.length}, sessionKey=${params.sessionKeyForInternalHooks}, chatId=${params.chatId})`,
+  );
   const progress: DeliveryProgress = {
     hasReplied: false,
     hasDelivered: false,
@@ -698,6 +705,9 @@ export async function deliverReplies(params: {
         isGroup: params.mirrorIsGroup,
         groupId: params.mirrorGroupId,
       });
+      logVerbose(
+        `telegram: emitMessageSentHooks called (success=${progress.deliveredCount > deliveredCountBeforeReply}, sessionKey=${params.sessionKeyForInternalHooks}, messageId=${firstDeliveredMessageId})`,
+      );
     } catch (error) {
       emitMessageSentHooks({
         hookRunner,

@@ -446,7 +446,7 @@ export const dispatchTelegramMessage = async ({
   const deliveryBaseOptions = {
     chatId: String(chatId),
     accountId: route.accountId,
-    sessionKeyForInternalHooks: ctxPayload.SessionKey,
+    sessionKeyForInternalHooks: ctxPayload.SessionKey ?? route.sessionKey,
     mirrorIsGroup: isGroup,
     mirrorGroupId: isGroup ? String(chatId) : undefined,
     token: opts.token,
