@@ -837,16 +837,8 @@
             "tab": "Get started",
             "groups": [
               {
-                "group": "Home",
-                "pages": ["index"]
-              },
-              {
                 "group": "Overview",
-                "pages": ["start/showcase"]
-              },
-              {
-                "group": "Core concepts",
-                "pages": ["concepts/features"]
+                "pages": ["index", "start/showcase", "concepts/features"]
               },
               {
                 "group": "First steps",
