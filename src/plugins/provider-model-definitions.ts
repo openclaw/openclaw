@@ -1,7 +1,6 @@
-import { KIMI_CODING_MODEL_REF } from "../../extensions/kimi-coding/onboard.js";
 import {
-  KIMI_DEFAULT_MODEL_ID as KIMI_CODING_MODEL_ID,
   KIMI_CODING_BASE_URL,
+  KIMI_CODING_DEFAULT_MODEL_ID as KIMI_CODING_MODEL_ID,
 } from "../../extensions/kimi-coding/provider-catalog.js";
 import {
   DEFAULT_MINIMAX_BASE_URL,
@@ -16,11 +15,11 @@ import {
   buildMinimaxModelDefinition,
 } from "../../extensions/minimax/model-definitions.js";
 import {
-  buildMistralModelDefinition,
   MISTRAL_BASE_URL,
   MISTRAL_DEFAULT_COST,
   MISTRAL_DEFAULT_MODEL_ID,
   MISTRAL_DEFAULT_MODEL_REF,
+  buildMistralModelDefinition,
 } from "../../extensions/mistral/model-definitions.js";
 import {
   MODELSTUDIO_CN_BASE_URL,
@@ -31,16 +30,12 @@ import {
   buildModelStudioDefaultModelDefinition,
   buildModelStudioModelDefinition,
 } from "../../extensions/modelstudio/model-definitions.js";
+import { MOONSHOT_CN_BASE_URL } from "../../extensions/moonshot/onboard.js";
 import {
-  MOONSHOT_CN_BASE_URL,
-  MOONSHOT_DEFAULT_MODEL_REF,
-} from "../../extensions/moonshot/onboard.js";
-import {
-  buildMoonshotProvider,
   MOONSHOT_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
+  buildMoonshotProvider,
 } from "../../extensions/moonshot/provider-catalog.js";
-import { QIANFAN_DEFAULT_MODEL_REF } from "../../extensions/qianfan/onboard.js";
 import {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
@@ -53,14 +48,14 @@ import {
   buildXaiModelDefinition,
 } from "../../extensions/xai/model-definitions.js";
 import {
-  buildZaiModelDefinition,
-  resolveZaiBaseUrl,
   ZAI_CN_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
   ZAI_DEFAULT_COST,
   ZAI_DEFAULT_MODEL_ID,
   ZAI_GLOBAL_BASE_URL,
+  buildZaiModelDefinition,
+  resolveZaiBaseUrl,
 } from "../../extensions/zai/model-definitions.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
@@ -70,6 +65,10 @@ import {
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_MODEL_NAME,
 } from "../providers/kilocode-shared.js";
+
+const KIMI_CODING_MODEL_REF = `kimi/${KIMI_CODING_MODEL_ID}`;
+const MOONSHOT_DEFAULT_MODEL_REF = `moonshot/${MOONSHOT_DEFAULT_MODEL_ID}`;
+const QIANFAN_DEFAULT_MODEL_REF = `qianfan/${QIANFAN_DEFAULT_MODEL_ID}`;
 
 export {
   DEFAULT_MINIMAX_BASE_URL,

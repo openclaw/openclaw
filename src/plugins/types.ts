@@ -866,6 +866,19 @@ export type WebSearchProviderContext = {
   runtimeMetadata?: RuntimeWebSearchMetadata;
 };
 
+export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+
+export type WebSearchRuntimeMetadataContext = {
+  config?: OpenClawConfig;
+  searchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebSearchMetadata;
+  resolvedCredential?: {
+    value?: string;
+    source: WebSearchCredentialResolutionSource;
+    fallbackEnvVar?: string;
+  };
+};
+
 export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
@@ -875,8 +888,16 @@ export type WebSearchProviderPlugin = {
   signupUrl: string;
   docsUrl?: string;
   autoDetectOrder?: number;
+  credentialPath: string;
+  inactiveSecretPaths?: string[];
   getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
   setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  resolveRuntimeMetadata?: (
+    ctx: WebSearchRuntimeMetadataContext,
+  ) => Partial<RuntimeWebSearchMetadata> | Promise<Partial<RuntimeWebSearchMetadata>>;
   createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
 };
 
@@ -1266,6 +1287,12 @@ export type OpenClawPluginApi = {
   registrationMode: PluginRegistrationMode;
   config: OpenClawConfig;
   pluginConfig?: Record<string, unknown>;
+  /**
+   * In-process runtime helpers for trusted native plugins.
+   *
+   * This surface is broader than hooks. Prefer hooks for third-party
+   * automation/integration unless you need native registry integration.
+   */
   runtime: PluginRuntime;
   logger: PluginLogger;
   registerTool: (
@@ -1278,14 +1305,20 @@ export type OpenClawPluginApi = {
     opts?: OpenClawPluginHookOptions,
   ) => void;
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
+  /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
+  /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
+  /** Register a speech synthesis provider (speech capability). */
   registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
+  /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
+  /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
+  /** Register a web search provider (web search capability). */
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
   onConversationBindingResolved: (

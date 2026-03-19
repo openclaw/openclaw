@@ -1,6 +1,8 @@
 // Narrow plugin-sdk surface for the bundled matrix plugin.
 // Keep this list additive and scoped to symbols used under extensions/matrix.
 
+import { createOptionalChannelSetupSurface } from "./channel-setup.js";
+
 export {
   createActionGate,
   jsonResult,
@@ -55,8 +57,8 @@ export type {
   ChannelToolSend,
 } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
-export { createTypingCallbacks } from "../channels/typing.js";
+export { createChannelReplyPipeline, createReplyPrefixOptions } from "./channel-reply-pipeline.js";
+export { createTypingCallbacks } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
@@ -70,13 +72,13 @@ export type {
   GroupToolPolicyConfig,
   MarkdownTableMode,
 } from "../config/types.js";
-export type { SecretInput } from "../config/types.secrets.js";
+export type { SecretInput } from "./secret-input.js";
 export {
+  buildSecretInputSchema,
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-} from "../config/types.secrets.js";
-export { buildSecretInputSchema } from "./secret-input-schema.js";
+} from "./secret-input.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -98,7 +100,7 @@ export {
   evaluateGroupRouteAccessForPolicy,
   resolveSenderScopedGroupPolicy,
 } from "./group-access.js";
-export { createScopedPairingAccess } from "./pairing-access.js";
+export { createChannelPairingController, createScopedPairingAccess } from "./channel-pairing.js";
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { runPluginCommandWithTimeout } from "./run-command.js";
 export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-dispatch.js";
@@ -108,5 +110,13 @@ export {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";
-export { matrixSetupWizard } from "../../extensions/matrix/api.js";
-export { matrixSetupAdapter } from "../../extensions/matrix/api.js";
+
+const matrixSetup = createOptionalChannelSetupSurface({
+  channel: "matrix",
+  label: "Matrix",
+  npmSpec: "@openclaw/matrix",
+  docsPath: "/channels/matrix",
+});
+
+export const matrixSetupWizard = matrixSetup.setupWizard;
+export const matrixSetupAdapter = matrixSetup.setupAdapter;

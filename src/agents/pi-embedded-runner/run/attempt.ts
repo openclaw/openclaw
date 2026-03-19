@@ -7,6 +7,10 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import {
+  resolveTelegramInlineButtonsScope,
+  resolveTelegramReactionLevel,
+} from "openclaw/plugin-sdk/telegram";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -17,10 +21,6 @@ import {
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
-import {
-  resolveTelegramInlineButtonsScope,
-  resolveTelegramReactionLevel,
-} from "../../../plugin-sdk/telegram.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -55,11 +55,13 @@ import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
+import { resolveToolCallArgumentsEncoding } from "../../model-compat.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
+import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -77,7 +79,6 @@ import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
-import { isXaiProvider } from "../../schema/clean-for-xai.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
@@ -101,6 +102,7 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
+import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
@@ -111,6 +113,7 @@ import {
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
+import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import { buildModelAliasLines } from "../model.js";
 import {
   clearActiveEmbeddedRun,
@@ -1280,9 +1283,13 @@ export function buildAfterTurnRuntimeContext(params: {
     | "messageChannel"
     | "messageProvider"
     | "agentAccountId"
+    | "currentChannelId"
+    | "currentThreadTs"
+    | "currentMessageId"
     | "config"
     | "skillsSnapshot"
     | "senderIsOwner"
+    | "senderId"
     | "provider"
     | "modelId"
     | "thinkLevel"
@@ -1295,25 +1302,29 @@ export function buildAfterTurnRuntimeContext(params: {
   workspaceDir: string;
   agentDir: string;
 }): Partial<CompactEmbeddedPiSessionParams> {
-  return {
+  return buildEmbeddedCompactionRuntimeContext({
     sessionKey: params.attempt.sessionKey,
     messageChannel: params.attempt.messageChannel,
     messageProvider: params.attempt.messageProvider,
     agentAccountId: params.attempt.agentAccountId,
+    currentChannelId: params.attempt.currentChannelId,
+    currentThreadTs: params.attempt.currentThreadTs,
+    currentMessageId: params.attempt.currentMessageId,
     authProfileId: params.attempt.authProfileId,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     config: params.attempt.config,
     skillsSnapshot: params.attempt.skillsSnapshot,
     senderIsOwner: params.attempt.senderIsOwner,
+    senderId: params.attempt.senderId,
     provider: params.attempt.provider,
-    model: params.attempt.modelId,
+    modelId: params.attempt.modelId,
     thinkLevel: params.attempt.thinkLevel,
     reasoningLevel: params.attempt.reasoningLevel,
     bashElevated: params.attempt.bashElevated,
     extraSystemPrompt: params.attempt.extraSystemPrompt,
     ownerNumbers: params.attempt.ownerNumbers,
-  };
+  });
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -1524,6 +1535,7 @@ export async function runEmbeddedAttempt(
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,
           modelId: params.modelId,
+          modelCompat: params.model.compat,
           modelContextWindowTokens: params.model.contextWindow,
           modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
           currentChannelId: params.currentChannelId,
@@ -1559,10 +1571,22 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
-    const effectiveTools =
-      bundleMcpRuntime && bundleMcpRuntime.tools.length > 0
-        ? [...tools, ...bundleMcpRuntime.tools]
-        : tools;
+    const bundleLspRuntime = toolsEnabled
+      ? await createBundleLspToolRuntime({
+          workspaceDir: effectiveWorkspace,
+          cfg: params.config,
+          reservedToolNames: [
+            ...tools.map((tool) => tool.name),
+            ...(clientTools?.map((tool) => tool.function.name) ?? []),
+            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+          ],
+        })
+      : undefined;
+    const effectiveTools = [
+      ...tools,
+      ...(bundleMcpRuntime?.tools ?? []),
+      ...(bundleLspRuntime?.tools ?? []),
+    ];
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
@@ -1620,10 +1644,20 @@ export async function runEmbeddedAttempt(
     const reasoningTagHint = isReasoningTagProvider(params.provider);
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
-      ? listChannelSupportedActions({
-          cfg: params.config,
-          channel: runtimeChannel,
-        })
+      ? listChannelSupportedActions(
+          buildEmbeddedMessageActionDiscoveryInput({
+            cfg: params.config,
+            channel: runtimeChannel,
+            currentChannelId: params.currentChannelId,
+            currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
+            accountId: params.agentAccountId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            agentId: sessionAgentId,
+            senderId: params.senderId,
+          }),
+        )
       : undefined;
     const messageToolHints = runtimeChannel
       ? resolveChannelMessageToolHints({
@@ -1967,6 +2001,7 @@ export async function runEmbeddedAttempt(
         },
         params.thinkLevel,
         sessionAgentId,
+        effectiveWorkspace,
       );
 
       if (cacheTrace) {
@@ -2079,7 +2114,7 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      if (isXaiProvider(params.provider, params.modelId)) {
+      if (resolveToolCallArgumentsEncoding(params.model) === "html-entities") {
         activeSession.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(
           activeSession.agent.streamFn,
         );
@@ -2891,6 +2926,7 @@ export async function runEmbeddedAttempt(
       session?.dispose();
       releaseWsSession(params.sessionId);
       await bundleMcpRuntime?.dispose();
+      await bundleLspRuntime?.dispose();
       await sessionLock.release();
     }
   } finally {

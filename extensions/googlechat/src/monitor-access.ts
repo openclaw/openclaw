@@ -1,8 +1,7 @@
 import {
   GROUP_POLICY_BLOCKED_LABEL,
-  createScopedPairingAccess,
+  createChannelPairingController,
   evaluateGroupRouteAccessForPolicy,
-  issuePairingChallenge,
   isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -10,8 +9,8 @@ import {
   resolveMentionGatingWithBypass,
   resolveSenderScopedGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/googlechat";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
+  type OpenClawConfig,
+} from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
@@ -166,7 +165,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   } = params;
   const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
   const spaceId = space.name ?? "";
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: "googlechat",
     accountId: account.accountId,
@@ -311,12 +310,10 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
 
     if (access.decision !== "allow") {
       if (access.decision === "pairing") {
-        await issuePairingChallenge({
-          channel: "googlechat",
+        await pairing.issueChallenge({
           senderId,
           senderIdLine: `Your Google Chat user id: ${senderId}`,
           meta: { name: senderName || undefined, email: senderEmail },
-          upsertPairingRequest: pairing.upsertPairingRequest,
           onCreated: () => {
             logVerbose(`googlechat pairing request sender=${senderId}`);
           },
