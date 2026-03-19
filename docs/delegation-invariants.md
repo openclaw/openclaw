@@ -73,11 +73,12 @@ This draft defines only **three primitives** and their **minimal required fields
     "step_ids": ["step_2", "step_3"],
     "targets": ["airline_portal/account_123"],
     "capabilities": ["purchase", "submit_form"]
-  },
-  "limits": {
-    "budget_usd": 800,
-    "max_side_effects": 1
-  },
+**Example (minimal JSON):**
+```json
+{
+  "type": "confirm",
+  "scope": "purchase",
+  "limits": { "max_amount_usd": 200, "merchant_allowlist": ["United Airlines"] },
   "ttl_seconds": 900,
   "revocable": true,
   "risk_level": "high"
