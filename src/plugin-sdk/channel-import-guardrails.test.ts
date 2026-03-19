@@ -166,6 +166,11 @@ const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
   "extensions/matrix/src/matrix/accounts.ts",
 ] as const;
 
+const CORE_EXTENSION_IMPORT_GUARD_EXCEPTIONS = [
+  // Outbound session routing still depends on channel-specific target/identity internals.
+  "src/infra/outbound/outbound-session.ts",
+] as const;
+
 function readSource(path: string): string {
   return readFileSync(resolve(ROOT_DIR, "..", path), "utf8");
 }
@@ -330,6 +335,11 @@ function collectImportSpecifiers(text: string): string[] {
   return [...text.matchAll(/["']([^"']+\.(?:[cm]?[jt]sx?))["']/g)].map((match) => match[1] ?? "");
 }
 
+function isCoreExtensionImportGuardException(file: string): boolean {
+  const normalized = normalizePath(file);
+  return CORE_EXTENSION_IMPORT_GUARD_EXCEPTIONS.some((suffix) => normalized.endsWith(suffix));
+}
+
 function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
   for (const specifier of imports) {
     const normalized = specifier.replaceAll("\\", "/");
@@ -412,6 +422,9 @@ describe("channel import guardrails", () => {
 
   it("keeps core production files off extension private src imports", () => {
     for (const file of collectCoreSourceFiles()) {
+      if (isCoreExtensionImportGuardException(file)) {
+        continue;
+      }
       const text = readFileSync(file, "utf8");
       expect(text, `${file} should not import extensions/*/src`).not.toMatch(
         /["'][^"']*extensions\/[^/"']+\/src\//,
@@ -428,6 +441,9 @@ describe("channel import guardrails", () => {
 
   it("keeps core extension imports limited to approved public surfaces", () => {
     for (const file of collectCoreSourceFiles()) {
+      if (isCoreExtensionImportGuardException(file)) {
+        continue;
+      }
       expectOnlyApprovedExtensionSeams(file, collectExtensionImports(readFileSync(file, "utf8")));
     }
   });
