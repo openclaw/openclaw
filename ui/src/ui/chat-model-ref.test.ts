@@ -47,4 +47,20 @@ describe("chat-model-ref helpers", () => {
     expect(resolveServerChatModelValue("gpt-5-mini", "openai")).toBe("openai/gpt-5-mini");
     expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");
   });
+
+  it("prefers an existing catalog option when the server model is already qualified", () => {
+    expect(resolveServerChatModelValue("anthropic/claude-sonnet-4-5", "openai", catalog)).toBe(
+      "anthropic/claude-sonnet-4-5",
+    );
+  });
+
+  it("still prefixes providers for slash-containing model ids when that is the catalog key", () => {
+    const slashCatalog: ModelCatalogEntry[] = [
+      { id: "hf:moonshotai/Kimi-K2.5", name: "Kimi K2.5", provider: "synthetic" },
+    ];
+
+    expect(resolveServerChatModelValue("hf:moonshotai/Kimi-K2.5", "synthetic", slashCatalog)).toBe(
+      "synthetic/hf:moonshotai/Kimi-K2.5",
+    );
+  });
 });
