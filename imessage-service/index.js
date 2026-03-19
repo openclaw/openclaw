@@ -5,7 +5,8 @@ const path = require('path');
 const { execFile } = require('child_process');
 
 const PORT = 3008;
-const POLL_INTERVAL_MS = 1000;
+const DEBOUNCE_MS = 500;
+const STALE_REQUEST_MS = 30000;
 const SQLITE_TIMEOUT_MS = 10000;
 const APPLESCRIPT_TIMEOUT_MS = 60000;
 const LOG_PREFIX = '[imessage-service]';
@@ -13,7 +14,8 @@ const RECORD_SEPARATOR = String.fromCharCode(30);
 const FIELD_SEPARATOR = String.fromCharCode(31);
 const HOME_DIR = process.env.HOME || os.homedir();
 const DATA_DIR = path.join(HOME_DIR, '.openclaw', 'workspace', 'imessage');
-const REQUEST_FILE = path.join(DATA_DIR, 'imessage-request.json');
+const REQUEST_FILENAME = 'imessage-request.json';
+const REQUEST_FILE = path.join(DATA_DIR, REQUEST_FILENAME);
 const RESPONSE_FILE = path.join(DATA_DIR, 'imessage-response.json');
 const CHAT_DB = path.join(HOME_DIR, 'Library', 'Messages', 'chat.db');
 const ADDRESS_BOOK_DIR = path.join(HOME_DIR, 'Library', 'Application Support', 'AddressBook');
@@ -33,7 +35,7 @@ const PHONE_DIGITS_SQL = [
 ].join('');
 const PHONE_SQL_NORMALIZER = `CASE WHEN length(${PHONE_DIGITS_SQL}) = 10 THEN '1' || ${PHONE_DIGITS_SQL} ELSE ${PHONE_DIGITS_SQL} END`;
 
-let lastProcessedMtimeMs = 0;
+let lastProcessedAt = 0;
 let isProcessing = false;
 let hasPendingRun = false;
 
@@ -692,16 +694,17 @@ async function processRequestFile() {
       return;
     }
 
-    const stats = fs.statSync(REQUEST_FILE);
-    if (stats.mtimeMs <= lastProcessedMtimeMs) {
-      return;
-    }
-
-    lastProcessedMtimeMs = stats.mtimeMs;
-
     const raw = fs.readFileSync(REQUEST_FILE, 'utf8');
     const request = JSON.parse(raw);
     const action = request?.action || null;
+
+    if (request.requested_at) {
+      const requestAge = Date.now() - new Date(request.requested_at).getTime();
+      if (requestAge > STALE_REQUEST_MS) {
+        log(`skipping stale ${action || 'unknown'} request (${Math.round(requestAge / 1000)}s old)`);
+        return;
+      }
+    }
 
     log(`processing ${action || 'unknown'} request`);
 
@@ -727,10 +730,12 @@ async function processRequestFile() {
   }
 }
 
-fs.watchFile(REQUEST_FILE, { interval: POLL_INTERVAL_MS }, (current, previous) => {
-  if (current.mtimeMs === 0 || current.mtimeMs === previous.mtimeMs) {
-    return;
-  }
+fs.watch(DATA_DIR, (eventType, filename) => {
+  if (filename !== REQUEST_FILENAME) return;
+
+  const now = Date.now();
+  if (now - lastProcessedAt < DEBOUNCE_MS) return;
+  lastProcessedAt = now;
 
   processRequestFile().catch((error) => logError(`processing failed: ${error.message}`));
 });

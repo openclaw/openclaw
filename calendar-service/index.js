@@ -5,7 +5,8 @@ const path = require('path');
 const { execFile } = require('child_process');
 
 const PORT = 3007;
-const POLL_INTERVAL_MS = 1000;
+const DEBOUNCE_MS = 500;
+const STALE_REQUEST_MS = 30000;
 const APPLESCRIPT_TIMEOUT_MS = 30000;
 const READ_APPLESCRIPT_TIMEOUT_MS = 15000;
 const DEFAULT_UPCOMING_DAYS = 7;
@@ -15,10 +16,11 @@ const RECORD_SEPARATOR = String.fromCharCode(30);
 const FIELD_SEPARATOR = String.fromCharCode(31);
 const HOME_DIR = process.env.HOME || os.homedir();
 const DATA_DIR = path.join(HOME_DIR, '.openclaw', 'workspace', 'calendar');
-const REQUEST_FILE = path.join(DATA_DIR, 'calendar-request.json');
+const REQUEST_FILENAME = 'calendar-request.json';
+const REQUEST_FILE = path.join(DATA_DIR, REQUEST_FILENAME);
 const RESPONSE_FILE = path.join(DATA_DIR, 'calendar-response.json');
 
-let lastProcessedMtimeMs = 0;
+let lastProcessedAt = 0;
 let isProcessing = false;
 let hasPendingRun = false;
 const eventCalendarCache = new Map();
@@ -667,16 +669,17 @@ async function processRequestFile() {
       return;
     }
 
-    const stats = fs.statSync(REQUEST_FILE);
-    if (stats.mtimeMs <= lastProcessedMtimeMs) {
-      return;
-    }
-
-    lastProcessedMtimeMs = stats.mtimeMs;
-
     const raw = fs.readFileSync(REQUEST_FILE, 'utf8');
     const request = JSON.parse(raw);
     const action = request?.action || null;
+
+    if (request.requested_at) {
+      const requestAge = Date.now() - new Date(request.requested_at).getTime();
+      if (requestAge > STALE_REQUEST_MS) {
+        log(`skipping stale ${action || 'unknown'} request (${Math.round(requestAge / 1000)}s old)`);
+        return;
+      }
+    }
 
     log(`processing ${action || 'unknown'} request`);
 
@@ -702,10 +705,13 @@ async function processRequestFile() {
   }
 }
 
-fs.watchFile(REQUEST_FILE, { interval: POLL_INTERVAL_MS }, (current, previous) => {
-  if (current.mtimeMs === 0 || current.mtimeMs === previous.mtimeMs) {
-    return;
-  }
+fs.watch(DATA_DIR, (eventType, filename) => {
+  if (filename !== REQUEST_FILENAME) return;
+
+  const now = Date.now();
+  if (now - lastProcessedAt < DEBOUNCE_MS) return;
+  lastProcessedAt = now;
+
   processRequestFile().catch((err) => logError(`processing failed: ${err.message}`));
 });
 
