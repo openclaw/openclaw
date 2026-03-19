@@ -9,6 +9,7 @@ import android.hardware.SensorManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.compose.foundation.BorderStroke
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -60,6 +61,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Link
@@ -1519,6 +1521,12 @@ private fun FinalStep(
   enabledPermissions: String,
   methodLabel: String,
 ) {
+  val context = androidx.compose.ui.platform.LocalContext.current
+  val gatewayAddress = parsedGateway?.displayUrl ?: "Invalid gateway URL"
+  val statusLabel = gatewayStatusForDisplay(statusText)
+  val showDiagnostics = gatewayStatusHasDiagnostics(statusText)
+  val pairingRequired = gatewayStatusLooksLikePairing(statusText)
+
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Text("Review", style = onboardingTitle1Style, color = onboardingText)
 
@@ -1531,7 +1539,7 @@ private fun FinalStep(
     SummaryCard(
       icon = Icons.Default.Cloud,
       label = "Gateway",
-      value = parsedGateway?.displayUrl ?: "Invalid gateway URL",
+      value = gatewayAddress,
       accentColor = Color(0xFF7C5AC7),
     )
     SummaryCard(
@@ -1615,7 +1623,7 @@ private fun FinalStep(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
         color = onboardingWarningSoft,
-        border = androidx.compose.foundation.BorderStroke(1.dp, onboardingWarning.copy(alpha = 0.2f)),
+        border = BorderStroke(1.dp, onboardingWarning.copy(alpha = 0.2f)),
       ) {
         Column(
           modifier = Modifier.padding(14.dp),
@@ -1640,13 +1648,66 @@ private fun FinalStep(
               )
             }
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-              Text("Pairing Required", style = onboardingHeadlineStyle, color = onboardingWarning)
-              Text("Run these on your gateway host:", style = onboardingCalloutStyle, color = onboardingTextSecondary)
+              Text(
+                  if (pairingRequired) "Pairing Required" else "Connection Failed",
+                  style = onboardingHeadlineStyle,
+                  color = onboardingWarning,
+              )
+              Text(
+                  if (pairingRequired) {
+                    "Approve this phone on the gateway host, or copy the report below."
+                  } else {
+                    "Copy this report and give it to your Claw."
+                  },
+                  style = onboardingCalloutStyle,
+                  color = onboardingTextSecondary,
+              )
             }
           }
-          CommandBlock("openclaw devices list")
-          CommandBlock("openclaw devices approve <requestId>")
-          Text("Then tap Connect again.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
+          if (showDiagnostics) {
+            Text("Error", style = onboardingCaption1Style.copy(fontWeight = FontWeight.Bold), color = onboardingTextSecondary)
+            Surface(
+              modifier = Modifier.fillMaxWidth(),
+              shape = RoundedCornerShape(12.dp),
+              color = onboardingCommandBg,
+              border = BorderStroke(1.dp, onboardingCommandBorder),
+            ) {
+              Text(
+                statusLabel,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                style = onboardingCalloutStyle.copy(fontFamily = FontFamily.Monospace),
+                color = onboardingCommandText,
+              )
+            }
+            Text(
+              "OpenClaw Android ${openClawAndroidVersionLabel()}",
+              style = onboardingCaption1Style,
+              color = onboardingTextSecondary,
+            )
+            Button(
+              onClick = {
+                copyGatewayDiagnosticsReport(
+                  context = context,
+                  screen = "onboarding final check",
+                  gatewayAddress = gatewayAddress,
+                  statusText = statusLabel,
+                )
+              },
+              modifier = Modifier.fillMaxWidth().height(48.dp),
+              shape = RoundedCornerShape(12.dp),
+              colors = ButtonDefaults.buttonColors(containerColor = onboardingSurface, contentColor = onboardingWarning),
+              border = BorderStroke(1.dp, onboardingWarning.copy(alpha = 0.3f)),
+            ) {
+              Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+              Spacer(modifier = Modifier.width(8.dp))
+              Text("Copy Report for Claw", style = onboardingCalloutStyle.copy(fontWeight = FontWeight.Bold))
+            }
+          }
+          if (pairingRequired) {
+            CommandBlock("openclaw devices list")
+            CommandBlock("openclaw devices approve <requestId>")
+            Text("Then tap Connect again.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
+          }
         }
       }
     }
