@@ -88,4 +88,15 @@ describe("qianfan provider plugin", () => {
       QIANFAN_DEFAULT_MODEL_REF,
     );
   });
+
+  it("drops replayed thinking for Qianfan Code models only", async () => {
+    const provider = await registerSingleProviderPlugin(qianfanPlugin);
+
+    expect(
+      provider.buildReplayPolicy?.({
+        modelId: "baiduqianfancodingplan/qianfan-code-latest",
+      } as never),
+    ).toEqual({ dropThinkingBlocks: true });
+    expect(provider.buildReplayPolicy?.({ modelId: "deepseek-v3.2" } as never)).toBeUndefined();
+  });
 });

@@ -4,6 +4,10 @@ import { buildQianfanProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "qianfan";
 
+function isQianfanCodeModel(modelId?: string | null): boolean {
+  return (modelId ?? "").toLowerCase().includes("qianfan-code");
+}
+
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Qianfan Provider",
@@ -27,5 +31,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildQianfanProvider,
     },
+    buildReplayPolicy: ({ modelId }) =>
+      isQianfanCodeModel(modelId) ? { dropThinkingBlocks: true } : undefined,
   },
 });

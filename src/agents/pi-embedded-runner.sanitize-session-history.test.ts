@@ -61,6 +61,13 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => ({
             return undefined;
           },
         }
+      : provider === "qianfan"
+        ? {
+            buildReplayPolicy: (context?: { modelId?: string | null }) =>
+              (context?.modelId ?? "").toLowerCase().includes("qianfan-code")
+                ? { dropThinkingBlocks: true }
+                : undefined,
+          }
       : undefined,
   ),
   wrapProviderStreamFn: vi.fn(() => undefined),
@@ -131,6 +138,20 @@ describe("sanitizeSessionHistory", () => {
       modelApi: params.modelApi ?? "openai-completions",
       provider: "github-copilot",
       modelId: params.modelId ?? "claude-opus-4.6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+  const sanitizeQianfanHistory = async (params: {
+    messages: AgentMessage[];
+    modelApi?: string;
+    modelId?: string;
+  }) =>
+    sanitizeSessionHistory({
+      messages: params.messages,
+      modelApi: params.modelApi ?? "openai-completions",
+      provider: "qianfan",
+      modelId: params.modelId ?? "baiduqianfancodingplan/qianfan-code-latest",
       sessionManager: makeMockSessionManager(),
       sessionId: TEST_SESSION_ID,
     });
@@ -1335,6 +1356,29 @@ describe("sanitizeSessionHistory", () => {
     expect(types).toContain("text");
   });
 
+  it("drops assistant thinking blocks for qianfan code tool-call replay", async () => {
+    setNonGoogleModelApi();
+
+    const messages: AgentMessage[] = [
+      makeUserMessage("read a file"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "I should use the read tool",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
+        { type: "text", text: "Let me read that file." },
+      ]),
+    ];
+
+    const result = await sanitizeQianfanHistory({ messages });
+    const types = getAssistantContentTypes(result);
+    expect(types).toContain("toolCall");
+    expect(types).toContain("text");
+    expect(types).not.toContain("thinking");
+  });
+
   it("preserves latest assistant thinking blocks for anthropic replay", async () => {
     setNonGoogleModelApi();
 
@@ -1914,6 +1958,16 @@ describe("sanitizeSessionHistory", () => {
     const messages = makeThinkingAndTextAssistantMessages();
 
     const result = await sanitizeGithubCopilotHistory({ messages, modelId: "gpt-5.4" });
+    const types = getAssistantContentTypes(result);
+    expect(types).toContain("thinking");
+  });
+
+  it("does not drop thinking blocks for non-qianfan-code qianfan models", async () => {
+    setNonGoogleModelApi();
+
+    const messages = makeThinkingAndTextAssistantMessages("reasoning_content");
+
+    const result = await sanitizeQianfanHistory({ messages, modelId: "deepseek-v3.2" });
     const types = getAssistantContentTypes(result);
     expect(types).toContain("thinking");
   });
