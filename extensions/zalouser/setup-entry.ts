@@ -1,4 +1,6 @@
 import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
-import { zalouserPlugin } from "./src/channel.js";
+import { zalouserSetupPlugin } from "./src/channel.setup.js";
 
-export default defineSetupPluginEntry(zalouserPlugin);
+export { zalouserSetupPlugin } from "./src/channel.setup.js";
+
+export default defineSetupPluginEntry(zalouserSetupPlugin);

@@ -46,7 +46,7 @@ See the [full reference](/gateway/configuration-reference) for every available f
     ```bash
     openclaw config get agents.defaults.workspace
     openclaw config set agents.defaults.heartbeat.every "2h"
-    openclaw config unset tools.web.search.apiKey
+    openclaw config unset plugins.entries.brave.config.webSearch.apiKey
     ```
   </Tab>
   <Tab title="Control UI">
@@ -597,11 +597,11 @@ Rules:
   },
   skills: {
     entries: {
-      "nano-banana-pro": {
+      "image-lab": {
         apiKey: {
           source: "file",
           provider: "filemain",
-          id: "/skills/entries/nano-banana-pro/apiKey",
+          id: "/skills/entries/image-lab/apiKey",
         },
       },
     },

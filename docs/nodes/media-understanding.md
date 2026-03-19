@@ -6,7 +6,7 @@ read_when:
 title: "Media Understanding"
 ---
 
-# Media Understanding (Inbound) — 2026-01-17
+# Media Understanding - Inbound (2026-01-17)
 
 OpenClaw can **summarize inbound media** (image/audio/video) before the reply pipeline runs. It auto‑detects when local tools or provider keys are available, and can be disabled or customized. If understanding is off, models still receive the original files/URLs as usual.
 
@@ -21,7 +21,7 @@ integration.
 - Support **provider APIs** and **CLI fallbacks**.
 - Allow multiple models with ordered fallback (error/size/timeout).
 
-## High‑level behavior
+## High-level behavior
 
 1. Collect inbound attachments (`MediaPaths`, `MediaUrls`, `MediaTypes`).
 2. For each enabled capability (image/audio/video), select attachments per policy (default: **first**).
@@ -334,7 +334,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 }
 ```
 
-### 4) Multi‑modal single entry (explicit capabilities)
+### 4) Multi-modal single entry (explicit capabilities)
 
 ```json5
 {

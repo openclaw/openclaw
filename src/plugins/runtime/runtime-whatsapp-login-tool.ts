@@ -1,1 +1,1 @@
-export { createWhatsAppLoginTool as createRuntimeWhatsAppLoginTool } from "../../../extensions/whatsapp/src/agent-tools-login.js";
+export { createRuntimeWhatsAppLoginTool } from "./runtime-whatsapp-boundary.js";

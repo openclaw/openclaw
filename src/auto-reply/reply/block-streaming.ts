@@ -3,26 +3,22 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
 import { resolveAccountEntry } from "../../routing/account-lookup.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  listDeliverableMessageChannels,
-} from "../../utils/message-channel.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveChunkMode, resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
 
 const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
 const DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS = 1000;
-const getBlockChunkProviders = () =>
-  new Set<TextChunkProvider>([...listDeliverableMessageChannels(), INTERNAL_MESSAGE_CHANNEL]);
 
 function normalizeChunkProvider(provider?: string): TextChunkProvider | undefined {
   if (!provider) {
     return undefined;
   }
-  const cleaned = provider.trim().toLowerCase();
-  return getBlockChunkProviders().has(cleaned as TextChunkProvider)
-    ? (cleaned as TextChunkProvider)
-    : undefined;
+  const normalized = normalizeMessageChannel(provider);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized as TextChunkProvider;
 }
 
 function resolveProviderChunkContext(
@@ -70,7 +66,7 @@ export type BlockStreamingCoalescing = {
   maxChars: number;
   idleMs: number;
   joiner: string;
-  /** When true, the coalescer flushes the buffer on each enqueue (paragraph-boundary flush). */
+  /** Internal escape hatch for transports that truly need per-enqueue flushing. */
   flushOnEnqueue?: boolean;
 };
 
@@ -151,7 +147,7 @@ export function resolveEffectiveBlockStreamingConfig(params: {
         : chunking.breakPreference === "newline"
           ? "\n"
           : "\n\n"),
-    flushOnEnqueue: coalescingDefaults?.flushOnEnqueue ?? chunking.flushOnParagraph === true,
+    ...(coalescingDefaults?.flushOnEnqueue === true ? { flushOnEnqueue: true } : {}),
   };
 
   return { chunking, coalescing };
@@ -165,9 +161,9 @@ export function resolveBlockStreamingChunking(
   const { providerKey, textLimit } = resolveProviderChunkContext(cfg, provider, accountId);
   const chunkCfg = cfg?.agents?.defaults?.blockStreamingChunk;
 
-  // When chunkMode="newline", the outbound delivery splits on paragraph boundaries.
-  // The block chunker should flush eagerly on \n\n boundaries during streaming,
-  // regardless of minChars, so each paragraph is sent as its own message.
+  // When chunkMode="newline", outbound delivery prefers paragraph boundaries.
+  // Keep the chunker paragraph-aware during streaming, but still let minChars
+  // control when a buffered paragraph is ready to flush.
   const chunkMode = resolveChunkMode(cfg, providerKey, accountId);
 
   const maxRequested = Math.max(1, Math.floor(chunkCfg?.maxChars ?? DEFAULT_BLOCK_STREAM_MAX));
@@ -196,7 +192,6 @@ export function resolveBlockStreamingCoalescing(
     maxChars: number;
     breakPreference: "paragraph" | "newline" | "sentence";
   },
-  opts?: { chunkMode?: "length" | "newline" },
 ): BlockStreamingCoalescing | undefined {
   const { providerKey, providerId, textLimit } = resolveProviderChunkContext(
     cfg,
@@ -204,9 +199,6 @@ export function resolveBlockStreamingCoalescing(
     accountId,
   );
 
-  // Resolve the outbound chunkMode so the coalescer can flush on paragraph boundaries
-  // when chunkMode="newline", matching the delivery-time splitting behavior.
-  const chunkMode = opts?.chunkMode ?? resolveChunkMode(cfg, providerKey, accountId);
   const providerDefaults = providerId
     ? getChannelPlugin(providerId)?.streaming?.blockStreamingCoalesceDefaults
     : undefined;
@@ -241,6 +233,5 @@ export function resolveBlockStreamingCoalescing(
     maxChars,
     idleMs,
     joiner,
-    flushOnEnqueue: chunkMode === "newline",
   };
 }

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
+import { shouldBuildBundledCluster } from "./scripts/lib/optional-bundled-clusters.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -79,6 +80,9 @@ function listBundledPluginBuildEntries(): Record<string, string> {
 
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
+      continue;
+    }
+    if (!shouldBuildBundledCluster(dirent.name, process.env)) {
       continue;
     }
 
@@ -160,17 +164,12 @@ function buildCoreDistEntries(): Record<string, string> {
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
-    // Keep sync lazy-runtime channel modules as concrete dist files.
-    "channels/plugins/agent-tools/whatsapp-login":
-      "src/channels/plugins/agent-tools/whatsapp-login.ts",
-    "channels/plugins/actions/discord": "src/channels/plugins/actions/discord.ts",
-    "channels/plugins/actions/signal": "src/channels/plugins/actions/signal.ts",
-    "channels/plugins/actions/telegram": "src/channels/plugins/actions/telegram.ts",
     "telegram/audit": "extensions/telegram/src/audit.ts",
     "telegram/token": "extensions/telegram/src/token.ts",
     "line/accounts": "src/line/accounts.ts",
     "line/send": "src/line/send.ts",
     "line/template-messages": "src/line/template-messages.ts",
+    "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
   };

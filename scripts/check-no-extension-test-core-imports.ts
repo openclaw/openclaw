@@ -7,16 +7,24 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
     hint: "Use openclaw/plugin-sdk/<subpath> instead of the monolithic root entry.",
   },
   {
+    pattern: /["']openclaw\/plugin-sdk\/test-utils["']/,
+    hint: "Use openclaw/plugin-sdk/testing for the public extension test surface.",
+  },
+  {
     pattern: /["']openclaw\/plugin-sdk\/compat["']/,
     hint: "Use a focused public plugin-sdk subpath instead of compat.",
   },
   {
+    pattern: /["'](?:\.\.\/)+(?:test-utils\/)[^"']+["']/,
+    hint: "Use test/helpers/extensions/* for repo-only bundled extension test helpers.",
+  },
+  {
     pattern: /["'](?:\.\.\/)+(?:src\/test-utils\/)[^"']+["']/,
-    hint: "Use extensions/test-utils/* bridges for shared extension test helpers.",
+    hint: "Use test/helpers/extensions/* for repo-only helpers, or openclaw/plugin-sdk/testing for public surfaces.",
   },
   {
     pattern: /["'](?:\.\.\/)+(?:src\/plugins\/types\.js)["']/,
-    hint: "Use public plugin-sdk/core types or extensions/test-utils bridges instead.",
+    hint: "Use public plugin-sdk/core types or test/helpers/extensions/* instead.",
   },
 ];
 
@@ -73,7 +81,7 @@ function main() {
 
   if (offenders.length > 0) {
     console.error(
-      "Extension test files must stay on extension test bridges or public plugin-sdk seams.",
+      "Extension test files must stay on extension test bridges or public plugin-sdk surfaces.",
     );
     for (const offender of offenders.toSorted((a, b) => a.file.localeCompare(b.file))) {
       const relative = path.relative(process.cwd(), offender.file) || offender.file;

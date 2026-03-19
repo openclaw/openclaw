@@ -98,7 +98,6 @@ export function stageBundledPluginRuntime(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const distRoot = path.join(repoRoot, "dist");
   const runtimeRoot = path.join(repoRoot, "dist-runtime");
-  const sourceExtensionsRoot = path.join(repoRoot, "extensions");
   const distExtensionsRoot = path.join(distRoot, "extensions");
   const runtimeExtensionsRoot = path.join(runtimeRoot, "extensions");
 
@@ -116,12 +115,12 @@ export function stageBundledPluginRuntime(params = {}) {
     }
     const distPluginDir = path.join(distExtensionsRoot, dirent.name);
     const runtimePluginDir = path.join(runtimeExtensionsRoot, dirent.name);
-    const sourcePluginNodeModulesDir = path.join(sourceExtensionsRoot, dirent.name, "node_modules");
+    const distPluginNodeModulesDir = path.join(distPluginDir, "node_modules");
 
     stagePluginRuntimeOverlay(distPluginDir, runtimePluginDir);
     linkPluginNodeModules({
       runtimePluginDir,
-      sourcePluginNodeModulesDir,
+      sourcePluginNodeModulesDir: distPluginNodeModulesDir,
     });
   }
 }

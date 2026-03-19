@@ -13,8 +13,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 ## Table of contents
 
 - [Quick start and first-run setup]
-  - [Im stuck what's the fastest way to get unstuck?](#im-stuck-whats-the-fastest-way-to-get-unstuck)
-  - [What's the recommended way to install and set up OpenClaw?](#whats-the-recommended-way-to-install-and-set-up-openclaw)
+  - [I am stuck - fastest way to get unstuck](#i-am-stuck---fastest-way-to-get-unstuck)
+  - [Recommended way to install and set up OpenClaw](#recommended-way-to-install-and-set-up-openclaw)
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
   - [What runtime do I need?](#what-runtime-do-i-need)
@@ -23,15 +23,15 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [It is stuck on "wake up my friend" / onboarding will not hatch. What now?](#it-is-stuck-on-wake-up-my-friend-onboarding-will-not-hatch-what-now)
   - [Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?](#can-i-migrate-my-setup-to-a-new-machine-mac-mini-without-redoing-onboarding)
   - [Where do I see what is new in the latest version?](#where-do-i-see-what-is-new-in-the-latest-version)
-  - [I can't access docs.openclaw.ai (SSL error). What now?](#i-cant-access-docsopenclawai-ssl-error-what-now)
-  - [What's the difference between stable and beta?](#whats-the-difference-between-stable-and-beta)
-  - [How do I install the beta version, and what's the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
+  - [Cannot access docs.openclaw.ai (SSL error)](#cannot-access-docsopenclawai-ssl-error)
+  - [Difference between stable and beta](#difference-between-stable-and-beta)
+  - [How do I install the beta version and what is the difference between beta and dev](#how-do-i-install-the-beta-version-and-what-is-the-difference-between-beta-and-dev)
   - [How do I try the latest bits?](#how-do-i-try-the-latest-bits)
   - [How long does install and onboarding usually take?](#how-long-does-install-and-onboarding-usually-take)
   - [Installer stuck? How do I get more feedback?](#installer-stuck-how-do-i-get-more-feedback)
   - [Windows install says git not found or openclaw not recognized](#windows-install-says-git-not-found-or-openclaw-not-recognized)
   - [Windows exec output shows garbled Chinese text what should I do](#windows-exec-output-shows-garbled-chinese-text-what-should-i-do)
-  - [The docs didn't answer my question - how do I get a better answer?](#the-docs-didnt-answer-my-question-how-do-i-get-a-better-answer)
+  - [The docs did not answer my question - how do I get a better answer](#the-docs-did-not-answer-my-question---how-do-i-get-a-better-answer)
   - [How do I install OpenClaw on Linux?](#how-do-i-install-openclaw-on-linux)
   - [How do I install OpenClaw on a VPS?](#how-do-i-install-openclaw-on-a-vps)
   - [Where are the cloud/VPS install guides?](#where-are-the-cloudvps-install-guides)
@@ -57,7 +57,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can multiple people use one WhatsApp number with different OpenClaw instances?](#can-multiple-people-use-one-whatsapp-number-with-different-openclaw-instances)
   - [Can I run a "fast chat" agent and an "Opus for coding" agent?](#can-i-run-a-fast-chat-agent-and-an-opus-for-coding-agent)
   - [Does Homebrew work on Linux?](#does-homebrew-work-on-linux)
-  - [What's the difference between the hackable (git) install and npm install?](#whats-the-difference-between-the-hackable-git-install-and-npm-install)
+  - [Difference between the hackable git install and npm install](#difference-between-the-hackable-git-install-and-npm-install)
   - [Can I switch between npm and git installs later?](#can-i-switch-between-npm-and-git-installs-later)
   - [Should I run the Gateway on my laptop or a VPS?](#should-i-run-the-gateway-on-my-laptop-or-a-vps)
   - [How important is it to run OpenClaw on a dedicated machine?](#how-important-is-it-to-run-openclaw-on-a-dedicated-machine)
@@ -65,7 +65,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I run OpenClaw in a VM and what are the requirements](#can-i-run-openclaw-in-a-vm-and-what-are-the-requirements)
 - [What is OpenClaw?](#what-is-openclaw)
   - [What is OpenClaw, in one paragraph?](#what-is-openclaw-in-one-paragraph)
-  - [What's the value proposition?](#whats-the-value-proposition)
+  - [Value proposition](#value-proposition)
   - [I just set it up what should I do first](#i-just-set-it-up-what-should-i-do-first)
   - [What are the top five everyday use cases for OpenClaw](#what-are-the-top-five-everyday-use-cases-for-openclaw)
   - [Can OpenClaw help with lead gen outreach ads and blogs for a SaaS](#can-openclaw-help-with-lead-gen-outreach-ads-and-blogs-for-a-saas)
@@ -92,7 +92,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Is all data used with OpenClaw saved locally?](#is-all-data-used-with-openclaw-saved-locally)
   - [Where does OpenClaw store its data?](#where-does-openclaw-store-its-data)
   - [Where should AGENTS.md / SOUL.md / USER.md / MEMORY.md live?](#where-should-agentsmd-soulmd-usermd-memorymd-live)
-  - [What's the recommended backup strategy?](#whats-the-recommended-backup-strategy)
+  - [Recommended backup strategy](#recommended-backup-strategy)
   - [How do I completely uninstall OpenClaw?](#how-do-i-completely-uninstall-openclaw)
   - [Can agents work outside the workspace?](#can-agents-work-outside-the-workspace)
   - [I'm in remote mode - where is the session store?](#im-in-remote-mode-where-is-the-session-store)
@@ -116,7 +116,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?](#is-there-a-benefit-to-using-a-node-on-my-personal-laptop-instead-of-ssh-from-a-vps)
   - [Do nodes run a gateway service?](#do-nodes-run-a-gateway-service)
   - [Is there an API / RPC way to apply config?](#is-there-an-api-rpc-way-to-apply-config)
-  - [What's a minimal "sane" config for a first install?](#whats-a-minimal-sane-config-for-a-first-install)
+  - [Minimal sane config for a first install](#minimal-sane-config-for-a-first-install)
   - [How do I set up Tailscale on a VPS and connect from my Mac?](#how-do-i-set-up-tailscale-on-a-vps-and-connect-from-my-mac)
   - [How do I connect a Mac node to a remote Gateway (Tailscale Serve)?](#how-do-i-connect-a-mac-node-to-a-remote-gateway-tailscale-serve)
   - [Should I install on a second laptop or just add a node?](#should-i-install-on-a-second-laptop-or-just-add-a-node)
@@ -135,7 +135,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Why am I getting heartbeat messages every 30 minutes?](#why-am-i-getting-heartbeat-messages-every-30-minutes)
   - [Do I need to add a "bot account" to a WhatsApp group?](#do-i-need-to-add-a-bot-account-to-a-whatsapp-group)
   - [How do I get the JID of a WhatsApp group?](#how-do-i-get-the-jid-of-a-whatsapp-group)
-  - [Why doesn't OpenClaw reply in a group?](#why-doesnt-openclaw-reply-in-a-group)
+  - [Why does OpenClaw not reply in a group](#why-does-openclaw-not-reply-in-a-group)
   - [Do groups/threads share context with DMs?](#do-groupsthreads-share-context-with-dms)
   - [How many workspaces and agents can I create?](#how-many-workspaces-and-agents-can-i-create)
   - [Can I run multiple bots or chats at the same time (Slack), and how should I set that up?](#can-i-run-multiple-bots-or-chats-at-the-same-time-slack-and-how-should-i-set-that-up)
@@ -162,7 +162,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [What is an auth profile?](#what-is-an-auth-profile)
   - [What are typical profile IDs?](#what-are-typical-profile-ids)
   - [Can I control which auth profile is tried first?](#can-i-control-which-auth-profile-is-tried-first)
-  - [OAuth vs API key: what's the difference?](#oauth-vs-api-key-whats-the-difference)
+  - [OAuth vs API key - what is the difference](#oauth-vs-api-key---what-is-the-difference)
 - [Gateway: ports, "already running", and remote mode](#gateway-ports-already-running-and-remote-mode)
   - [What port does the Gateway use?](#what-port-does-the-gateway-use)
   - [Why does `openclaw gateway status` say `Runtime: running` but `RPC probe: failed`?](#why-does-openclaw-gateway-status-say-runtime-running-but-rpc-probe-failed)
@@ -170,7 +170,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [What does "another gateway instance is already listening" mean?](#what-does-another-gateway-instance-is-already-listening-mean)
   - [How do I run OpenClaw in remote mode (client connects to a Gateway elsewhere)?](#how-do-i-run-openclaw-in-remote-mode-client-connects-to-a-gateway-elsewhere)
   - [The Control UI says "unauthorized" (or keeps reconnecting). What now?](#the-control-ui-says-unauthorized-or-keeps-reconnecting-what-now)
-  - [I set `gateway.bind: "tailnet"` but it can't bind / nothing listens](#i-set-gatewaybind-tailnet-but-it-cant-bind-nothing-listens)
+  - [I set gateway.bind tailnet but it cannot bind and nothing listens](#i-set-gatewaybind-tailnet-but-it-cannot-bind-and-nothing-listens)
   - [Can I run multiple Gateways on the same host?](#can-i-run-multiple-gateways-on-the-same-host)
   - [What does "invalid handshake" / code 1008 mean?](#what-does-invalid-handshake-code-1008-mean)
 - [Logging and debugging](#logging-and-debugging)
@@ -183,7 +183,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [TUI shows no output. What should I check?](#tui-shows-no-output-what-should-i-check)
   - [How do I completely stop then start the Gateway?](#how-do-i-completely-stop-then-start-the-gateway)
   - [ELI5: `openclaw gateway restart` vs `openclaw gateway`](#eli5-openclaw-gateway-restart-vs-openclaw-gateway)
-  - [What's the fastest way to get more details when something fails?](#whats-the-fastest-way-to-get-more-details-when-something-fails)
+  - [Fastest way to get more details when something fails](#fastest-way-to-get-more-details-when-something-fails)
 - [Media and attachments](#media-and-attachments)
   - [My skill generated an image/PDF, but nothing was sent](#my-skill-generated-an-imagepdf-but-nothing-was-sent)
 - [Security and access control](#security-and-access-control)
@@ -192,15 +192,15 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Should my bot have its own email GitHub account or phone number](#should-my-bot-have-its-own-email-github-account-or-phone-number)
   - [Can I give it autonomy over my text messages and is that safe](#can-i-give-it-autonomy-over-my-text-messages-and-is-that-safe)
   - [Can I use cheaper models for personal assistant tasks?](#can-i-use-cheaper-models-for-personal-assistant-tasks)
-  - [I ran `/start` in Telegram but didn't get a pairing code](#i-ran-start-in-telegram-but-didnt-get-a-pairing-code)
+  - [I ran /start in Telegram but did not get a pairing code](#i-ran-start-in-telegram-but-did-not-get-a-pairing-code)
   - [WhatsApp: will it message my contacts? How does pairing work?](#whatsapp-will-it-message-my-contacts-how-does-pairing-work)
-- [Chat commands, aborting tasks, and "it won't stop"](#chat-commands-aborting-tasks-and-it-wont-stop)
+- [Chat commands, aborting tasks, and "it will not stop"](#chat-commands-aborting-tasks-and-it-will-not-stop)
   - [How do I stop internal system messages from showing in chat](#how-do-i-stop-internal-system-messages-from-showing-in-chat)
   - [How do I stop/cancel a running task?](#how-do-i-stopcancel-a-running-task)
   - [How do I send a Discord message from Telegram? ("Cross-context messaging denied")](#how-do-i-send-a-discord-message-from-telegram-crosscontext-messaging-denied)
   - [Why does it feel like the bot "ignores" rapid-fire messages?](#why-does-it-feel-like-the-bot-ignores-rapidfire-messages)
 
-## First 60 seconds if something's broken
+## First 60 seconds if something is broken
 
 1. **Quick status (first check)**
 
@@ -267,7 +267,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## Quick start and first-run setup
 
-### Im stuck what's the fastest way to get unstuck
+### I am stuck - fastest way to get unstuck
 
 Use a local AI agent that can **see your machine**. That is far more effective than asking
 in Discord, because most "I'm stuck" cases are **local config or environment issues** that
@@ -312,10 +312,10 @@ What they do:
 Other useful CLI checks: `openclaw status --all`, `openclaw logs --follow`,
 `openclaw gateway status`, `openclaw health --verbose`.
 
-Quick debug loop: [First 60 seconds if something's broken](#first-60-seconds-if-somethings-broken).
+Quick debug loop: [First 60 seconds if something is broken](#first-60-seconds-if-something-is-broken).
 Install docs: [Install](/install), [Installer flags](/install/installer), [Updating](/install/updating).
 
-### What's the recommended way to install and set up OpenClaw
+### Recommended way to install and set up OpenClaw
 
 The repo recommends running from source and using onboarding:
 
@@ -445,7 +445,7 @@ Newest entries are at the top. If the top section is marked **Unreleased**, the 
 section is the latest shipped version. Entries are grouped by **Highlights**, **Changes**, and
 **Fixes** (plus docs/other sections when needed).
 
-### I can't access docs.openclaw.ai SSL error What now
+### Cannot access docs.openclaw.ai (SSL error)
 
 Some Comcast/Xfinity connections incorrectly block `docs.openclaw.ai` via Xfinity
 Advanced Security. Disable it or allowlist `docs.openclaw.ai`, then retry. More
@@ -455,7 +455,7 @@ Please help us unblock it by reporting here: [https://spa.xfinity.com/check_url_
 If you still can't reach the site, the docs are mirrored on GitHub:
 [https://github.com/openclaw/openclaw/tree/main/docs](https://github.com/openclaw/openclaw/tree/main/docs)
 
-### What's the difference between stable and beta
+### Difference between stable and beta
 
 **Stable** and **beta** are **npm dist-tags**, not separate code lines:
 
@@ -469,7 +469,7 @@ that same version to `latest`**. That's why beta and stable can point at the
 See what changed:
 [https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md](https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md)
 
-### How do I install the beta version and what's the difference between beta and dev
+### How do I install the beta version and what is the difference between beta and dev
 
 **Beta** is the npm dist-tag `beta` (may match `latest`).
 **Dev** is the moving head of `main` (git); when published, it uses the npm dist-tag `dev`.
@@ -497,7 +497,7 @@ Rough guide:
 - **Onboarding:** 5-15 minutes depending on how many channels/models you configure
 
 If it hangs, use [Installer stuck](/help/faq#installer-stuck-how-do-i-get-more-feedback)
-and the fast debug loop in [Im stuck](/help/faq#im-stuck--whats-the-fastest-way-to-get-unstuck).
+and the fast debug loop in [I am stuck](/help/faq#i-am-stuck---fastest-way-to-get-unstuck).
 
 ### How do I try the latest bits
 
@@ -614,7 +614,7 @@ If you still reproduce this on latest OpenClaw, track/report it in:
 
 - [Issue #30640](https://github.com/openclaw/openclaw/issues/30640)
 
-### The docs didn't answer my question how do I get a better answer
+### The docs did not answer my question - how do I get a better answer
 
 Use the **hackable (git) install** so you have the full source and docs locally, then ask
 your bot (or Claude/Codex) _from that folder_ so it can read the repo and answer precisely.
@@ -882,7 +882,7 @@ brew install <formula>
 If you run OpenClaw via systemd, ensure the service PATH includes `/home/linuxbrew/.linuxbrew/bin` (or your brew prefix) so `brew`-installed tools resolve in non-login shells.
 Recent builds also prepend common user bin dirs on Linux systemd services (for example `~/.local/bin`, `~/.npm-global/bin`, `~/.local/share/pnpm`, `~/.bun/bin`) and honor `PNPM_HOME`, `NPM_CONFIG_PREFIX`, `BUN_INSTALL`, `VOLTA_HOME`, `ASDF_DATA_DIR`, `NVM_DIR`, and `FNM_DIR` when set.
 
-### What's the difference between the hackable git install and npm install
+### Difference between the hackable git install and npm install
 
 - **Hackable (git) install:** full source checkout, editable, best for contributors.
   You run builds locally and can patch code/docs.
@@ -918,7 +918,7 @@ openclaw gateway restart
 
 Doctor detects a gateway service entrypoint mismatch and offers to rewrite the service config to match the current install (use `--repair` in automation).
 
-Backup tips: see [Backup strategy](/help/faq#whats-the-recommended-backup-strategy).
+Backup tips: see [Backup strategy](/help/faq#recommended-backup-strategy).
 
 ### Should I run the Gateway on my laptop or a VPS
 
@@ -981,7 +981,7 @@ If you are running macOS in a VM, see [macOS VM](/install/macos-vm).
 
 OpenClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Mattermost (plugin), Discord, Google Chat, Signal, iMessage, WebChat) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
 
-### What's the value proposition
+### Value proposition
 
 OpenClaw is not "just a Claude wrapper." It's a **local-first control plane** that lets you run a
 capable assistant on **your own hardware**, reachable from the chat apps you already use, with
@@ -1381,7 +1381,7 @@ AGENTS.md or MEMORY.md** rather than relying on chat history.
 
 See [Agent workspace](/concepts/agent-workspace) and [Memory](/concepts/memory).
 
-### What's the recommended backup strategy
+### Recommended backup strategy
 
 Put your **agent workspace** in a **private** git repo and back it up somewhere
 private (for example GitHub private). This captures memory + AGENTS/SOUL/USER
@@ -1505,12 +1505,22 @@ Environment alternatives:
 
 ```json5
 {
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: {
+            apiKey: "BRAVE_API_KEY_HERE",
+          },
+        },
+      },
+    },
+  },
   tools: {
     web: {
       search: {
         enabled: true,
         provider: "brave",
-        apiKey: "BRAVE_API_KEY_HERE",
         maxResults: 5,
       },
       fetch: {
@@ -1520,6 +1530,9 @@ Environment alternatives:
   },
 }
 ```
+
+Provider-specific web-search config now lives under `plugins.entries.<plugin>.config.webSearch.*`.
+Legacy `tools.web.search.*` provider paths still load temporarily for compatibility, but they should not be used for new configs.
 
 Notes:
 
@@ -1714,7 +1727,7 @@ Avoid it:
 
 Docs: [Config](/cli/config), [Configure](/cli/configure), [Doctor](/gateway/doctor).
 
-### What's a minimal sane config for a first install
+### Minimal sane config for a first install
 
 ```json5
 {
@@ -2006,7 +2019,7 @@ openclaw directory groups list --channel whatsapp
 
 Docs: [WhatsApp](/channels/whatsapp), [Directory](/cli/directory), [Logs](/cli/logs).
 
-### Why doesn't OpenClaw reply in a group
+### Why does OpenClaw not reply in a group
 
 Two common causes:
 
@@ -2449,7 +2462,7 @@ To target a specific agent:
 openclaw models auth order set --provider anthropic --agent main anthropic:default
 ```
 
-### OAuth vs API key what's the difference
+### OAuth vs API key - what is the difference
 
 OpenClaw supports both:
 
@@ -2541,7 +2554,7 @@ Fix:
   - `openclaw devices rotate --device <id> --role operator`
 - Still stuck? Run `openclaw status --all` and follow [Troubleshooting](/gateway/troubleshooting). See [Dashboard](/web/dashboard) for auth details.
 
-### I set gatewaybind tailnet but it can't bind nothing listens
+### I set gateway.bind tailnet but it cannot bind and nothing listens
 
 `tailnet` bind picks a Tailscale IP from your network interfaces (100.64.0.0/10). If the machine isn't on Tailscale (or the interface is down), there's nothing to bind to.
 
@@ -2772,7 +2785,7 @@ Docs: [Gateway service runbook](/gateway).
 If you installed the service, use the gateway commands. Use `openclaw gateway` when
 you want a one-off, foreground run.
 
-### What's the fastest way to get more details when something fails
+### Fastest way to get more details when something fails
 
 Start the Gateway with `--verbose` to get more console detail. Then inspect the log file for channel auth, model routing, and RPC errors.
 
@@ -2854,7 +2867,7 @@ more susceptible to instruction hijacking, so avoid them for tool-enabled agents
 or when reading untrusted content. If you must use a smaller model, lock down
 tools and run inside a sandbox. See [Security](/gateway/security).
 
-### I ran start in Telegram but didn't get a pairing code
+### I ran start in Telegram but did not get a pairing code
 
 Pairing codes are sent **only** when an unknown sender messages the bot and
 `dmPolicy: "pairing"` is enabled. `/start` by itself doesn't generate a code.
@@ -2886,7 +2899,7 @@ openclaw pairing list whatsapp
 
 Wizard phone number prompt: it's used to set your **allowlist/owner** so your own DMs are permitted. It's not used for auto-sending. If you run on your personal WhatsApp number, use that number and enable `channels.whatsapp.selfChatMode`.
 
-## Chat commands, aborting tasks, and "it won't stop"
+## Chat commands, aborting tasks, and "it will not stop"
 
 ### How do I stop internal system messages from showing in chat
 

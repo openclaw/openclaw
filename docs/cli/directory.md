@@ -40,7 +40,7 @@ openclaw message send --channel slack --target user:U012ABCDEF --message "hello"
 - Zalo (plugin): user id (Bot API)
 - Zalo Personal / `zalouser` (plugin): thread id (DM/group) from `zca` (`me`, `friend list`, `group list`)
 
-## Self (“me”)
+## Self ("me")
 
 ```bash
 openclaw directory self --channel zalouser

@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+import type { OpenClawConfig } from "../runtime-api.js";
 import {
   evaluateSenderGroupAccessForPolicy,
   isDangerousNameMatchingEnabled,
   resolveAllowlistMatchSimple,
   resolveControlCommandGate,
   resolveEffectiveAllowFromLists,
-} from "openclaw/plugin-sdk/mattermost";
+} from "../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";
 

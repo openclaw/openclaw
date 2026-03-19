@@ -11,13 +11,20 @@ describe("image-generation runtime helpers", () => {
 
   it("generates images through the active image-generation registry", async () => {
     const pluginRegistry = createEmptyPluginRegistry();
+    const authStore = { version: 1, profiles: {} } as const;
+    let seenAuthStore: unknown;
     pluginRegistry.imageGenerationProviders.push({
       pluginId: "image-plugin",
       pluginName: "Image Plugin",
       source: "test",
       provider: {
         id: "image-plugin",
-        async generateImage() {
+        capabilities: {
+          generate: {},
+          edit: { enabled: false },
+        },
+        async generateImage(req) {
+          seenAuthStore = req.authStore;
           return {
             images: [
               {
@@ -47,11 +54,13 @@ describe("image-generation runtime helpers", () => {
       cfg,
       prompt: "draw a cat",
       agentDir: "/tmp/agent",
+      authStore,
     });
 
     expect(result.provider).toBe("image-plugin");
     expect(result.model).toBe("img-v1");
     expect(result.attempts).toEqual([]);
+    expect(seenAuthStore).toEqual(authStore);
     expect(result.images).toEqual([
       {
         buffer: Buffer.from("png-bytes"),
@@ -69,6 +78,20 @@ describe("image-generation runtime helpers", () => {
       source: "test",
       provider: {
         id: "image-plugin",
+        defaultModel: "img-v1",
+        models: ["img-v1", "img-v2"],
+        capabilities: {
+          generate: {
+            supportsResolution: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 3,
+          },
+          geometry: {
+            resolutions: ["1K", "2K"],
+          },
+        },
         generateImage: async () => ({
           images: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
         }),
@@ -76,6 +99,24 @@ describe("image-generation runtime helpers", () => {
     });
     setActivePluginRegistry(pluginRegistry);
 
-    expect(listRuntimeImageGenerationProviders()).toMatchObject([{ id: "image-plugin" }]);
+    expect(listRuntimeImageGenerationProviders()).toMatchObject([
+      {
+        id: "image-plugin",
+        defaultModel: "img-v1",
+        models: ["img-v1", "img-v2"],
+        capabilities: {
+          generate: {
+            supportsResolution: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 3,
+          },
+          geometry: {
+            resolutions: ["1K", "2K"],
+          },
+        },
+      },
+    ]);
   });
 });

@@ -1,6 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveFetch } from "../../../src/infra/fetch.js";
-import { resolveTelegramFetch, resolveTelegramTransport } from "./fetch.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
@@ -55,6 +53,15 @@ vi.mock("undici", () => ({
   fetch: undiciFetch,
   setGlobalDispatcher,
 }));
+
+let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
+let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
+let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
+
+beforeEach(async () => {
+  ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
+  ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
+});
 
 function resolveTelegramFetchOrThrow(
   proxyFetch?: typeof fetch,
@@ -150,6 +157,24 @@ function expectPinnedIpv4ConnectDispatcher(args: {
   if (args.followupCall) {
     expect(getDispatcherFromUndiciCall(args.followupCall)).toBe(pinnedDispatcher);
   }
+}
+
+function expectPinnedFallbackIpDispatcher(callIndex: number) {
+  const dispatcher = getDispatcherFromUndiciCall(callIndex);
+  expect(dispatcher?.options?.connect).toEqual(
+    expect.objectContaining({
+      family: 4,
+      autoSelectFamily: false,
+      lookup: expect.any(Function),
+    }),
+  );
+  const callback = vi.fn();
+  (
+    dispatcher?.options?.connect?.lookup as
+      | ((hostname: string, callback: (err: null, address: string, family: number) => void) => void)
+      | undefined
+  )?.("api.telegram.org", callback);
+  expect(callback).toHaveBeenCalledWith(null, "149.154.167.220", 4);
 }
 
 function expectCallerDispatcherPreserved(callIndexes: number[], dispatcher: unknown) {
@@ -395,7 +420,7 @@ describe("resolveTelegramFetch", () => {
       pinnedCall: 2,
       followupCall: 3,
     });
-    expect(transport.pinnedDispatcherPolicy).toEqual(
+    expect(transport.dispatcherAttempts?.[0]?.dispatcherPolicy).toEqual(
       expect.objectContaining({
         mode: "direct",
       }),
@@ -531,6 +556,34 @@ describe("resolveTelegramFetch", () => {
         autoSelectFamily: false,
       }),
     );
+  });
+
+  it("escalates from IPv4 fallback to pinned Telegram IP and keeps it sticky", async () => {
+    undiciFetch
+      .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
+      .mockRejectedValueOnce(buildFetchFallbackError("EHOSTUNREACH"))
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/sendMessage");
+    await resolved("https://api.telegram.org/botx/sendChatAction");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(4);
+
+    const secondDispatcher = getDispatcherFromUndiciCall(2);
+    const thirdDispatcher = getDispatcherFromUndiciCall(3);
+    const fourthDispatcher = getDispatcherFromUndiciCall(4);
+
+    expect(secondDispatcher).not.toBe(thirdDispatcher);
+    expect(thirdDispatcher).toBe(fourthDispatcher);
+    expectPinnedFallbackIpDispatcher(3);
   });
 
   it("preserves caller-provided dispatcher across fallback retry", async () => {

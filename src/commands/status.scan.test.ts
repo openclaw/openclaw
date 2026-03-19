@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   probeGateway: vi.fn(),
   resolveGatewayProbeAuthResolution: vi.fn(),
   ensurePluginRegistryLoaded: vi.fn(),
+  buildPluginCompatibilityNotices: vi.fn(() => []),
 }));
 
 beforeEach(() => {
@@ -42,8 +43,10 @@ vi.mock("./status-all/channels.js", () => ({
 }));
 
 vi.mock("./status.scan.runtime.js", () => ({
-  buildChannelsTable: mocks.buildChannelsTable,
-  collectChannelStatusIssues: vi.fn(() => []),
+  statusScanRuntime: {
+    buildChannelsTable: mocks.buildChannelsTable,
+    collectChannelStatusIssues: vi.fn(() => []),
+  },
 }));
 
 vi.mock("./status.update.js", () => ({
@@ -87,6 +90,10 @@ vi.mock("../process/exec.js", () => ({
 
 vi.mock("../cli/plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: mocks.ensurePluginRegistryLoaded,
+}));
+
+vi.mock("../plugins/status.js", () => ({
+  buildPluginCompatibilityNotices: mocks.buildPluginCompatibilityNotices,
 }));
 
 import { scanStatus } from "./status.scan.js";

@@ -1,6 +1,6 @@
-import { auditTelegramGroupMembership as auditTelegramGroupMembershipImpl } from "../../../extensions/telegram/src/audit.js";
-import { monitorTelegramProvider as monitorTelegramProviderImpl } from "../../../extensions/telegram/src/monitor.js";
-import { probeTelegram as probeTelegramImpl } from "../../../extensions/telegram/src/probe.js";
+import { auditTelegramGroupMembership as auditTelegramGroupMembershipImpl } from "openclaw/plugin-sdk/telegram";
+import { monitorTelegramProvider as monitorTelegramProviderImpl } from "openclaw/plugin-sdk/telegram";
+import { probeTelegram as probeTelegramImpl } from "openclaw/plugin-sdk/telegram";
 import {
   deleteMessageTelegram as deleteMessageTelegramImpl,
   editMessageReplyMarkupTelegram as editMessageReplyMarkupTelegramImpl,
@@ -11,7 +11,7 @@ import {
   sendPollTelegram as sendPollTelegramImpl,
   sendTypingTelegram as sendTypingTelegramImpl,
   unpinMessageTelegram as unpinMessageTelegramImpl,
-} from "../../../extensions/telegram/src/send.js";
+} from "openclaw/plugin-sdk/telegram";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
 type RuntimeTelegramOps = Pick<
