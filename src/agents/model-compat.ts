@@ -89,7 +89,32 @@ function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-
 
 function shouldKeepStreamingUsageOptInDisabled(model: Model<"openai-completions">): boolean {
   const provider = normalizeProviderId(model.provider);
-  return provider === "moonshot" || provider === "modelstudio";
+  return (
+    provider === "moonshot" ||
+    provider === "modelstudio" ||
+    usesLegacyAzureChatCompletionsApiVersion(model.baseUrl)
+  );
+}
+
+function usesLegacyAzureChatCompletionsApiVersion(baseUrl: string | undefined): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    const url = new URL(baseUrl);
+    const host = url.hostname.toLowerCase();
+    if (!host.endsWith(".services.ai.azure.com") && !host.endsWith(".openai.azure.com")) {
+      return false;
+    }
+    const apiVersion = url.searchParams.get("api-version")?.trim().toLowerCase();
+    if (!apiVersion) {
+      return false;
+    }
+    const date = /^(\d{4}-\d{2}-\d{2})/.exec(apiVersion)?.[1];
+    return !!date && date < "2024-09-01";
+  } catch {
+    return false;
+  }
 }
 
 /**
