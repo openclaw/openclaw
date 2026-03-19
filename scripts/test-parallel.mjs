@@ -739,9 +739,7 @@ const heapSnapshotIntervalMs = Math.max(
 );
 const heapSnapshotMinIntervalMs = 5000;
 const heapSnapshotEnabled =
-  process.platform !== "win32" &&
-  heapSnapshotIntervalMs >= heapSnapshotMinIntervalMs;
-const heapSnapshotEnabled = process.platform !== "win32" && heapSnapshotIntervalMs > 0;
+  process.platform !== "win32" && heapSnapshotIntervalMs >= heapSnapshotMinIntervalMs;
 const heapSnapshotSignal = process.env.OPENCLAW_TEST_HEAPSNAPSHOT_SIGNAL?.trim() || "SIGUSR2";
 const heapSnapshotBaseDir = heapSnapshotEnabled
   ? path.resolve(
@@ -794,7 +792,9 @@ const runOnce = (entry, extraArgs = []) =>
       try {
         fs.mkdirSync(heapSnapshotDir, { recursive: true });
       } catch (err) {
-        console.error(`[test-parallel] failed to create heap snapshot dir ${heapSnapshotDir}: ${String(err)}`);
+        console.error(
+          `[test-parallel] failed to create heap snapshot dir ${heapSnapshotDir}: ${String(err)}`,
+        );
         resolve(1);
         return;
       }
@@ -808,7 +808,6 @@ const runOnce = (entry, extraArgs = []) =>
         "--heapsnapshot-signal=",
         `--heapsnapshot-signal=${heapSnapshotSignal}`,
       );
-    }
     }
     let output = "";
     let fatalSeen = false;
