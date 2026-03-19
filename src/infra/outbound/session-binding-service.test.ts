@@ -199,7 +199,7 @@ describe("session binding service", () => {
     });
   });
 
-  it("rejects duplicate adapter registration for the same channel account", () => {
+  it("allows idempotent re-registration for the same channel account", () => {
     registerSessionBindingAdapter({
       channel: "discord",
       accountId: "default",
@@ -208,6 +208,8 @@ describe("session binding service", () => {
       resolveByConversation: () => null,
     });
 
+    // Re-registration with a different adapter instance should not throw —
+    // dist vs jiti module copies produce different objects for the same adapter.
     expect(() =>
       registerSessionBindingAdapter({
         channel: "Discord",
@@ -216,6 +218,6 @@ describe("session binding service", () => {
         listBySession: () => [],
         resolveByConversation: () => null,
       }),
-    ).toThrow("Session binding adapter already registered for discord:default");
+    ).not.toThrow();
   });
 });

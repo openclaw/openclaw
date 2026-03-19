@@ -651,7 +651,16 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   try {
     const eventDispatcher = createEventDispatcher(account);
     const chatHistories = new Map<string, HistoryEntry[]>();
-    threadBindingManager = createFeishuThreadBindingManager({ accountId, cfg });
+    const { resolveThreadBindingSpawnPolicy } = await import("openclaw/plugin-sdk/feishu");
+    const tbPolicy = resolveThreadBindingSpawnPolicy({
+      cfg,
+      channel: "feishu",
+      accountId,
+      kind: "subagent",
+    });
+    if (tbPolicy.enabled) {
+      threadBindingManager = createFeishuThreadBindingManager({ accountId, cfg });
+    }
 
     registerEventHandlers(eventDispatcher, {
       cfg,

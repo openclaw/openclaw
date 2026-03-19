@@ -45,6 +45,10 @@ import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupAdapter } from "./setup-core.js";
 import { feishuSetupWizard } from "./setup-surface.js";
 import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
+import {
+  createFeishuThreadBindingManager,
+  getFeishuThreadBindingManager,
+} from "./thread-bindings.js";
 import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 
 const meta: ChannelMeta = {
@@ -966,18 +970,44 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       const { monitorFeishuProvider } = await import("./monitor.js");
+      const { resolveThreadBindingSpawnPolicy } = await import("openclaw/plugin-sdk/feishu");
       const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
       const port = account.config?.webhookPort ?? null;
       ctx.setStatus({ accountId: ctx.accountId, port });
       ctx.log?.info(
         `starting feishu[${ctx.accountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
       );
-      return monitorFeishuProvider({
-        config: ctx.cfg,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
+      // Initialize thread binding manager so /focus can bind sessions to Feishu conversations.
+      const threadBindingPolicy = resolveThreadBindingSpawnPolicy({
+        cfg: ctx.cfg,
+        channel: "feishu",
         accountId: ctx.accountId,
+        kind: "subagent",
       });
+      let tbManager: Awaited<ReturnType<typeof createFeishuThreadBindingManager>> | null = null;
+      if (threadBindingPolicy.enabled) {
+        tbManager = createFeishuThreadBindingManager({
+          accountId: ctx.accountId,
+          cfg: ctx.cfg,
+        });
+      }
+      try {
+        return await monitorFeishuProvider({
+          config: ctx.cfg,
+          runtime: ctx.runtime,
+          abortSignal: ctx.abortSignal,
+          accountId: ctx.accountId,
+        });
+      } catch (err) {
+        tbManager?.stop();
+        throw err;
+      }
+    },
+    stopAccount: async (ctx) => {
+      const manager = getFeishuThreadBindingManager(ctx.accountId);
+      if (manager) {
+        manager.stop();
+      }
     },
   },
 };

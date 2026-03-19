@@ -377,14 +377,53 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
           if (info?.kind === "block") {
-            // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content.
-            if (!(streamingEnabled && useCard)) {
-              return;
+            if (streamingEnabled && useCard) {
+              startStreaming();
+              if (streamingStartPromise) {
+                await streamingStartPromise;
+              }
             }
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
+            // When streaming is active, the block is consumed via streaming card
+            // update below. Otherwise deliver as a plain message so ACP block
+            // payloads still reach the user even with disableBlockStreaming.
+            if (!streaming?.isActive()) {
+              await sendChunkedTextReply({
+                text,
+                useCard,
+                infoKind: "block",
+                sendChunk: async ({ chunk, isFirst }) => {
+                  if (useCard) {
+                    const cardHeader = resolveCardHeader(agentId, identity);
+                    const cardNote = resolveCardNote(
+                      agentId,
+                      identity,
+                      prefixContext.prefixContext,
+                    );
+                    await sendStructuredCardFeishu({
+                      cfg,
+                      to: chatId,
+                      text: chunk,
+                      replyToMessageId: sendReplyToMessageId,
+                      replyInThread: effectiveReplyInThread,
+                      mentions: isFirst ? mentionTargets : undefined,
+                      accountId,
+                      header: cardHeader,
+                      note: cardNote,
+                    });
+                  } else {
+                    await sendMessageFeishu({
+                      cfg,
+                      to: chatId,
+                      text: chunk,
+                      replyToMessageId: sendReplyToMessageId,
+                      replyInThread: effectiveReplyInThread,
+                      mentions: isFirst ? mentionTargets : undefined,
+                      accountId,
+                    });
+                  }
+                },
+              });
+              return;
             }
           }
 

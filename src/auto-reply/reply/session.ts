@@ -40,6 +40,7 @@ import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { parseDiscordParentChannelFromSessionKey } from "./discord-parent-channel.js";
+import { isFeishuSenderScopedTopic, resolveFeishuConversationId } from "./feishu-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import {
@@ -113,6 +114,31 @@ function resolveAcpResetBindingContext(ctx: MsgContext): {
     };
   }
 
+  if (channelRaw === "feishu") {
+    const conversationId = resolveFeishuConversationId({
+      ctx: {
+        MessageThreadId: normalizedThreadId || undefined,
+        ChatType: ctx.ChatType || undefined,
+        OriginatingTo: ctx.OriginatingTo || undefined,
+        To: ctx.To || undefined,
+      },
+      command: {},
+    });
+    if (!conversationId) {
+      return null;
+    }
+    let parentConversationId: string | undefined;
+    if (normalizedThreadId && conversationId.includes(":topic:")) {
+      parentConversationId = conversationId.split(":topic:")[0];
+    }
+    return {
+      channel: channelRaw,
+      accountId,
+      conversationId,
+      ...(parentConversationId ? { parentConversationId } : {}),
+    };
+  }
+
   const conversationId = resolveConversationIdFromTargets({
     threadId: normalizedThreadId || undefined,
     targets: [ctx.OriginatingTo, ctx.To],
@@ -153,16 +179,39 @@ function resolveBoundAcpSessionForReset(params: {
 }): string | undefined {
   const activeSessionKey = normalizeConversationText(params.ctx.SessionKey);
   const bindingContext = resolveAcpResetBindingContext(params.ctx);
-  return resolveEffectiveResetTargetSessionKey({
+  if (!bindingContext) {
+    return undefined;
+  }
+  const resolveOpts = {
     cfg: params.cfg,
-    channel: bindingContext?.channel,
-    accountId: bindingContext?.accountId,
-    conversationId: bindingContext?.conversationId,
-    parentConversationId: bindingContext?.parentConversationId,
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    parentConversationId: bindingContext.parentConversationId,
     activeSessionKey,
     allowNonAcpBindingSessionKey: false,
     skipConfiguredFallbackWhenActiveSessionNonAcp: true,
     fallbackToActiveAcpWhenUnbound: false,
+  } as const;
+  // Only group_topic_sender scope uses sender-scoped conversation IDs.
+  if (
+    bindingContext.channel === "feishu" &&
+    bindingContext.conversationId &&
+    isFeishuSenderScopedTopic({ cfg: params.cfg, conversationId: bindingContext.conversationId })
+  ) {
+    const senderId = normalizeConversationText(params.ctx.SenderId);
+    if (senderId) {
+      const senderScoped = resolveEffectiveResetTargetSessionKey({
+        ...resolveOpts,
+        conversationId: `${bindingContext.conversationId}:sender:${senderId}`,
+      });
+      if (senderScoped) {
+        return senderScoped;
+      }
+    }
+  }
+  return resolveEffectiveResetTargetSessionKey({
+    ...resolveOpts,
+    conversationId: bindingContext.conversationId,
   });
 }
 
