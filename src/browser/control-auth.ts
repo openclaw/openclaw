@@ -1,5 +1,6 @@
+import crypto from "node:crypto";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 
@@ -58,8 +59,13 @@ export async function ensureBrowserControlAuth(params: {
     return { auth };
   }
 
-  if (params.cfg.gateway?.auth?.mode === "none") {
-    return { auth };
+  // When gateway auth mode is "none", the gateway intentionally runs without
+  // authentication — but the browser control surface must always be protected.
+  // Generate a browser-specific token directly instead of delegating to
+  // ensureGatewayStartupAuth (which would resolve mode="none" and skip token
+  // generation).
+  if (params.cfg.gateway?.auth?.mode === "none" || loadConfig().gateway?.auth?.mode === "none") {
+    return generateBrowserToken(params.cfg);
   }
 
   if (params.cfg.gateway?.auth?.mode === "trusted-proxy") {
@@ -73,9 +79,6 @@ export async function ensureBrowserControlAuth(params: {
     return { auth: latestAuth };
   }
   if (latestCfg.gateway?.auth?.mode === "password") {
-    return { auth: latestAuth };
-  }
-  if (latestCfg.gateway?.auth?.mode === "none") {
     return { auth: latestAuth };
   }
   if (latestCfg.gateway?.auth?.mode === "trusted-proxy") {
@@ -94,5 +97,31 @@ export async function ensureBrowserControlAuth(params: {
   return {
     auth: ensuredAuth,
     generatedToken: ensured.generatedToken,
+  };
+}
+
+/**
+ * Generate and persist a browser-specific auth token.  Used when the gateway
+ * runs with auth.mode="none" so the browser control surface is still protected.
+ */
+async function generateBrowserToken(
+  cfg: OpenClawConfig,
+): Promise<{ auth: BrowserControlAuth; generatedToken: string }> {
+  const generatedToken = crypto.randomBytes(24).toString("hex");
+  const nextCfg: OpenClawConfig = {
+    ...cfg,
+    gateway: {
+      ...cfg.gateway,
+      auth: {
+        ...cfg.gateway?.auth,
+        mode: "token",
+        token: generatedToken,
+      },
+    },
+  };
+  await writeConfigFile(nextCfg);
+  return {
+    auth: { token: generatedToken },
+    generatedToken,
   };
 }

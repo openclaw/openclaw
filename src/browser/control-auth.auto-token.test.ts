@@ -108,8 +108,19 @@ describe("ensureBrowserControlAuth", () => {
     await expectExplicitModeSkipsAutoAuth("password");
   });
 
-  it("respects explicit none mode", async () => {
-    await expectExplicitModeSkipsAutoAuth("none");
+  it("auto-generates token even when gateway mode is none", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: { mode: "none" },
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
+
+    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+    expectGeneratedTokenPersisted(result);
   });
 
   it("reuses auth from latest config snapshot", async () => {
