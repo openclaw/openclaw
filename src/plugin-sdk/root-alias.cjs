@@ -113,6 +113,13 @@ const fastExports = {
 const target = { ...fastExports };
 let rootExports = null;
 
+function shouldResolveMonolithic(prop) {
+  if (typeof prop !== "string") {
+    return false;
+  }
+  return prop !== "then";
+}
+
 function getMonolithicSdk() {
   const loaded = tryLoadMonolithicSdk();
   if (loaded && typeof loaded === "object") {
@@ -125,6 +132,9 @@ function getExportValue(prop) {
   if (Reflect.has(target, prop)) {
     return Reflect.get(target, prop);
   }
+  if (!shouldResolveMonolithic(prop)) {
+    return undefined;
+  }
   const monolithic = getMonolithicSdk();
   if (!monolithic) {
     return undefined;
@@ -136,6 +146,9 @@ function getExportDescriptor(prop) {
   const ownDescriptor = Reflect.getOwnPropertyDescriptor(target, prop);
   if (ownDescriptor) {
     return ownDescriptor;
+  }
+  if (!shouldResolveMonolithic(prop)) {
+    return undefined;
   }
 
   const monolithic = getMonolithicSdk();
@@ -165,6 +178,9 @@ rootExports = new Proxy(target, {
   has(_target, prop) {
     if (Reflect.has(target, prop)) {
       return true;
+    }
+    if (!shouldResolveMonolithic(prop)) {
+      return false;
     }
     const monolithic = getMonolithicSdk();
     return monolithic ? Reflect.has(monolithic, prop) : false;
