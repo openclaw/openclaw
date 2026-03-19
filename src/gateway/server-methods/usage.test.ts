@@ -22,6 +22,10 @@ import { __test } from "./usage.js";
 
 describe("gateway usage helpers", () => {
   const dayMs = 24 * 60 * 60 * 1000;
+  const expectDateRange = (range: ReturnType<typeof __test.parseDateRange>) => {
+    expect(range).toBeDefined();
+    return range!;
+  };
 
   beforeEach(() => {
     __test.costUsageCache.clear();
@@ -59,28 +63,34 @@ describe("gateway usage helpers", () => {
   });
 
   it("parseDateRange uses explicit start/end as UTC when mode is missing (backward compatible)", () => {
-    const range = __test.parseDateRange({ startDate: "2026-02-01", endDate: "2026-02-02" });
+    const range = expectDateRange(
+      __test.parseDateRange({ startDate: "2026-02-01", endDate: "2026-02-02" }),
+    );
     expect(range.startMs).toBe(Date.UTC(2026, 1, 1));
     expect(range.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
   });
 
   it("parseDateRange uses explicit UTC mode", () => {
-    const range = __test.parseDateRange({
-      startDate: "2026-02-01",
-      endDate: "2026-02-02",
-      mode: "utc",
-    });
+    const range = expectDateRange(
+      __test.parseDateRange({
+        startDate: "2026-02-01",
+        endDate: "2026-02-02",
+        mode: "utc",
+      }),
+    );
     expect(range.startMs).toBe(Date.UTC(2026, 1, 1));
     expect(range.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
   });
 
   it("parseDateRange uses specific UTC offset for explicit dates", () => {
-    const range = __test.parseDateRange({
-      startDate: "2026-02-01",
-      endDate: "2026-02-02",
-      mode: "specific",
-      utcOffset: "UTC+5:30",
-    });
+    const range = expectDateRange(
+      __test.parseDateRange({
+        startDate: "2026-02-01",
+        endDate: "2026-02-02",
+        mode: "specific",
+        utcOffset: "UTC+5:30",
+      }),
+    );
     const start = Date.UTC(2026, 1, 1) - 5.5 * 60 * 60 * 1000;
     const endStart = Date.UTC(2026, 1, 2) - 5.5 * 60 * 60 * 1000;
     expect(range.startMs).toBe(start);
@@ -88,23 +98,27 @@ describe("gateway usage helpers", () => {
   });
 
   it("parseDateRange uses IANA time zones for DST-shortened days", () => {
-    const range = __test.parseDateRange({
-      startDate: "2026-03-08",
-      endDate: "2026-03-08",
-      mode: "specific",
-      timeZone: "America/New_York",
-    });
+    const range = expectDateRange(
+      __test.parseDateRange({
+        startDate: "2026-03-08",
+        endDate: "2026-03-08",
+        mode: "specific",
+        timeZone: "America/New_York",
+      }),
+    );
     expect(range.startMs).toBe(Date.UTC(2026, 2, 8, 5, 0, 0, 0));
     expect(range.endMs).toBe(Date.UTC(2026, 2, 9, 3, 59, 59, 999));
   });
 
   it("parseDateRange uses IANA time zones for DST-lengthened days", () => {
-    const range = __test.parseDateRange({
-      startDate: "2026-11-01",
-      endDate: "2026-11-01",
-      mode: "specific",
-      timeZone: "America/New_York",
-    });
+    const range = expectDateRange(
+      __test.parseDateRange({
+        startDate: "2026-11-01",
+        endDate: "2026-11-01",
+        mode: "specific",
+        timeZone: "America/New_York",
+      }),
+    );
     expect(range.startMs).toBe(Date.UTC(2026, 10, 1, 4, 0, 0, 0));
     expect(range.endMs).toBe(Date.UTC(2026, 10, 2, 4, 59, 59, 999));
   });
@@ -112,41 +126,48 @@ describe("gateway usage helpers", () => {
   it("parseDateRange keeps rolling day windows aligned across DST changes", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
-    const range = __test.parseDateRange({
-      days: 2,
-      mode: "specific",
-      timeZone: "America/New_York",
-    });
+    const range = expectDateRange(
+      __test.parseDateRange({
+        days: 2,
+        mode: "specific",
+        timeZone: "America/New_York",
+      }),
+    );
     expect(range.startMs).toBe(Date.UTC(2026, 2, 8, 5, 0, 0, 0));
     expect(range.endMs).toBe(Date.UTC(2026, 2, 10, 3, 59, 59, 999));
   });
 
-  it("parseDateRange falls back to UTC when specific mode offset is missing or invalid", () => {
-    const missingOffset = __test.parseDateRange({
-      startDate: "2026-02-01",
-      endDate: "2026-02-02",
-      mode: "specific",
-    });
-    const invalidOffset = __test.parseDateRange({
-      startDate: "2026-02-01",
-      endDate: "2026-02-02",
-      mode: "specific",
-      utcOffset: "bad-value",
-    });
-    expect(missingOffset.startMs).toBe(Date.UTC(2026, 1, 1));
-    expect(missingOffset.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
-    expect(invalidOffset.startMs).toBe(Date.UTC(2026, 1, 1));
-    expect(invalidOffset.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
+  it("parseDateRange rejects specific mode when time zone and offset are both missing or invalid", () => {
+    expect(
+      __test.parseDateRange({
+        startDate: "2026-02-01",
+        endDate: "2026-02-02",
+        mode: "specific",
+      }),
+    ).toBeUndefined();
+    expect(
+      __test.parseDateRange({
+        startDate: "2026-02-01",
+        endDate: "2026-02-02",
+        mode: "specific",
+        utcOffset: "bad-value",
+      }),
+    ).toBeUndefined();
+    expect(
+      __test.resolveDateInterpretation({ mode: "specific", timeZone: "Mars/Base" }),
+    ).toBeUndefined();
   });
 
   it("parseDateRange uses specific offset for today/day math after UTC midnight", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-17T03:57:00.000Z"));
-    const range = __test.parseDateRange({
-      days: 1,
-      mode: "specific",
-      utcOffset: "UTC-5",
-    });
+    const range = expectDateRange(
+      __test.parseDateRange({
+        days: 1,
+        mode: "specific",
+        utcOffset: "UTC-5",
+      }),
+    );
     expect(range.startMs).toBe(Date.UTC(2026, 1, 16, 5, 0, 0, 0));
     expect(range.endMs).toBe(Date.UTC(2026, 1, 17, 4, 59, 59, 999));
   });
@@ -154,7 +175,7 @@ describe("gateway usage helpers", () => {
   it("parseDateRange uses gateway local day boundaries in gateway mode", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
-    const range = __test.parseDateRange({ days: 1, mode: "gateway" });
+    const range = expectDateRange(__test.parseDateRange({ days: 1, mode: "gateway" }));
     const expectedStart = new Date(2026, 1, 5).getTime();
     expect(range.startMs).toBe(expectedStart);
     expect(range.endMs).toBe(expectedStart + dayMs - 1);
@@ -163,13 +184,24 @@ describe("gateway usage helpers", () => {
   it("parseDateRange clamps days to at least 1 and defaults to 30 days", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
-    const oneDay = __test.parseDateRange({ days: 0 });
+    const oneDay = expectDateRange(__test.parseDateRange({ days: 0 }));
     expect(oneDay.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
     expect(oneDay.startMs).toBe(Date.UTC(2026, 1, 5));
 
-    const def = __test.parseDateRange({});
+    const def = expectDateRange(__test.parseDateRange({}));
     expect(def.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
     expect(def.startMs).toBe(Date.UTC(2026, 1, 5) - 29 * dayMs);
+  });
+
+  it("parseDateRange rejects skipped civil days in IANA time zones", () => {
+    expect(
+      __test.parseDateRange({
+        startDate: "2011-12-30",
+        endDate: "2011-12-30",
+        mode: "specific",
+        timeZone: "Pacific/Apia",
+      }),
+    ).toBeUndefined();
   });
 
   it("loadCostUsageSummaryCached caches within TTL", async () => {

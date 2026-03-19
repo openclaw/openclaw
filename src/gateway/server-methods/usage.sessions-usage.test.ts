@@ -109,6 +109,15 @@ async function runSessionsUsageLogs(params: Record<string, unknown>) {
   return respond;
 }
 
+async function runUsageCost(params: Record<string, unknown>) {
+  const respond = vi.fn();
+  await usageHandlers["usage.cost"]({
+    respond,
+    params,
+  } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+  return respond;
+}
+
 const BASE_USAGE_RANGE = {
   startDate: "2026-02-01",
   endDate: "2026-02-02",
@@ -159,17 +168,50 @@ describe("sessions.usage", () => {
     expectSuccessfulSessionsUsage(respond);
     expect(vi.mocked(loadSessionCostSummary)).toHaveBeenCalled();
     expect(
-      vi.mocked(loadSessionCostSummary).mock.calls.every(
-        (call) => {
-          const interpretation = call[0]?.dayKeyInterpretation;
-          return (
-            interpretation?.mode === "specific" &&
-            "timeZone" in interpretation &&
-            interpretation.timeZone === "America/New_York"
-          );
-        },
-      ),
+      vi.mocked(loadSessionCostSummary).mock.calls.every((call) => {
+        const interpretation = call[0]?.dayKeyInterpretation;
+        return (
+          interpretation?.mode === "specific" &&
+          "timeZone" in interpretation &&
+          interpretation.timeZone === "America/New_York"
+        );
+      }),
     ).toBe(true);
+  });
+
+  it("rejects specific mode when time zone and offset are both invalid", async () => {
+    const respond = await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      mode: "specific",
+      timeZone: "Mars/Base",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("specific mode requires a valid timeZone or utcOffset"),
+      }),
+    );
+  });
+
+  it("rejects usage.cost when specific mode cannot be resolved", async () => {
+    const respond = await runUsageCost({
+      startDate: "2026-02-01",
+      endDate: "2026-02-02",
+      mode: "specific",
+      timeZone: "Mars/Base",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("specific mode requires a valid timeZone or utcOffset"),
+      }),
+    );
   });
 
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {

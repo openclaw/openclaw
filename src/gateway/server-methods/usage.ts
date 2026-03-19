@@ -45,6 +45,9 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const INVALID_SPECIFIC_DATE_INTERPRETATION_MESSAGE =
+  "specific mode requires a valid timeZone or utcOffset";
+const INVALID_DATE_RANGE_MESSAGE = "invalid date range for the requested date interpretation";
 
 type DateRange = { startMs: number; endMs: number };
 type DateParts = { year: number; monthIndex: number; day: number };
@@ -189,10 +192,7 @@ const getTimeZoneDateTimeFormatter = (timeZone: string): Intl.DateTimeFormat => 
   return formatter;
 };
 
-const parseDateTimePartsInTimeZone = (
-  date: Date,
-  timeZone: string,
-): DateTimeParts | undefined => {
+const parseDateTimePartsInTimeZone = (date: Date, timeZone: string): DateTimeParts | undefined => {
   try {
     const parts = getTimeZoneDateTimeFormatter(timeZone).formatToParts(date);
     const map: Record<string, string> = {};
@@ -248,19 +248,25 @@ const getTimeZoneStartOfDayMs = (parts: DateParts, timeZone: string): number | u
       return undefined;
     }
     const offsetMs =
-      Date.UTC(
-        zoned.year,
-        zoned.monthIndex,
-        zoned.day,
-        zoned.hour,
-        zoned.minute,
-        zoned.second,
-      ) - candidateMs;
+      Date.UTC(zoned.year, zoned.monthIndex, zoned.day, zoned.hour, zoned.minute, zoned.second) -
+      candidateMs;
     const nextCandidateMs = targetUtcMidnight - offsetMs;
     if (nextCandidateMs === candidateMs) {
-      return candidateMs;
+      break;
     }
     candidateMs = nextCandidateMs;
+  }
+  const resolved = parseDateTimePartsInTimeZone(new Date(candidateMs), timeZone);
+  if (
+    !resolved ||
+    resolved.year !== parts.year ||
+    resolved.monthIndex !== parts.monthIndex ||
+    resolved.day !== parts.day ||
+    resolved.hour !== 0 ||
+    resolved.minute !== 0 ||
+    resolved.second !== 0
+  ) {
+    return undefined;
   }
   return candidateMs;
 };
@@ -334,7 +340,7 @@ const resolveDateInterpretation = (params: {
   mode?: unknown;
   timeZone?: unknown;
   utcOffset?: unknown;
-}): DateInterpretation => {
+}): DateInterpretation | undefined => {
   if (params.mode === "gateway") {
     return { mode: "gateway" };
   }
@@ -347,6 +353,7 @@ const resolveDateInterpretation = (params: {
     if (utcOffsetMinutes !== undefined) {
       return { mode: "specific", utcOffsetMinutes };
     }
+    return undefined;
   }
   // Backward compatibility: when mode is missing (or invalid), keep current UTC interpretation.
   return { mode: "utc" };
@@ -395,16 +402,21 @@ const parseDays = (raw: unknown): number | undefined => {
  * Get date range from params (startDate/endDate or days).
  * Falls back to last 30 days if not provided.
  */
-const parseDateRange = (params: {
-  startDate?: unknown;
-  endDate?: unknown;
-  days?: unknown;
-  mode?: unknown;
-  timeZone?: unknown;
-  utcOffset?: unknown;
-}): DateRange => {
+const parseDateRange = (
+  params: {
+    startDate?: unknown;
+    endDate?: unknown;
+    days?: unknown;
+    mode?: unknown;
+    timeZone?: unknown;
+    utcOffset?: unknown;
+  },
+  interpretation: DateInterpretation | undefined = resolveDateInterpretation(params),
+): DateRange | undefined => {
+  if (!interpretation) {
+    return undefined;
+  }
   const now = new Date();
-  const interpretation = resolveDateInterpretation(params);
   const todayParts = getDatePartsForInstant(now, interpretation);
 
   const startParts = parseDateParts(params.startDate);
@@ -415,6 +427,7 @@ const parseDateRange = (params: {
     if (startMs !== undefined && endExclusiveMs !== undefined) {
       return { startMs, endMs: endExclusiveMs - 1 };
     }
+    return undefined;
   }
 
   const days = parseDays(params.days);
@@ -444,6 +457,29 @@ const parseDateRange = (params: {
 
   // Default to last 30 days.
   return { startMs: todayStartMs - 29 * DAY_MS, endMs: todayEndMs };
+};
+
+const resolveUsageRequestContext = (params: {
+  startDate?: unknown;
+  endDate?: unknown;
+  days?: unknown;
+  mode?: unknown;
+  timeZone?: unknown;
+  utcOffset?: unknown;
+}): { interpretation: DateInterpretation; range: DateRange } | { error: string } => {
+  const interpretation = resolveDateInterpretation(params);
+  if (params.mode === "specific" && !interpretation) {
+    return { error: INVALID_SPECIFIC_DATE_INTERPRETATION_MESSAGE };
+  }
+  const effectiveInterpretation = interpretation ?? { mode: "utc" as const };
+  const range = parseDateRange(params, effectiveInterpretation);
+  if (!range) {
+    return { error: INVALID_DATE_RANGE_MESSAGE };
+  }
+  return {
+    interpretation: effectiveInterpretation,
+    range,
+  };
 };
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
@@ -561,13 +597,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, summary, undefined);
   },
   "usage.cost": async ({ respond, params }) => {
-    const config = loadConfig();
-    const dayKeyInterpretation = resolveDateInterpretation({
-      mode: params?.mode,
-      timeZone: params?.timeZone,
-      utcOffset: params?.utcOffset,
-    });
-    const { startMs, endMs } = parseDateRange({
+    const resolved = resolveUsageRequestContext({
       startDate: params?.startDate,
       endDate: params?.endDate,
       days: params?.days,
@@ -575,6 +605,16 @@ export const usageHandlers: GatewayRequestHandlers = {
       timeZone: params?.timeZone,
       utcOffset: params?.utcOffset,
     });
+    if ("error" in resolved) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
+      return;
+    }
+
+    const config = loadConfig();
+    const {
+      interpretation: dayKeyInterpretation,
+      range: { startMs, endMs },
+    } = resolved;
     const summary = await loadCostUsageSummaryCached({
       startMs,
       endMs,
@@ -597,19 +637,23 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
 
     const p = params;
-    const config = loadConfig();
-    const dayKeyInterpretation = resolveDateInterpretation({
-      mode: p.mode,
-      timeZone: p.timeZone,
-      utcOffset: p.utcOffset,
-    });
-    const { startMs, endMs } = parseDateRange({
+    const resolved = resolveUsageRequestContext({
       startDate: p.startDate,
       endDate: p.endDate,
       mode: p.mode,
       timeZone: p.timeZone,
       utcOffset: p.utcOffset,
     });
+    if ("error" in resolved) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
+      return;
+    }
+
+    const config = loadConfig();
+    const {
+      interpretation: dayKeyInterpretation,
+      range: { startMs, endMs },
+    } = resolved;
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = typeof p.key === "string" ? p.key.trim() : null;
