@@ -19,6 +19,7 @@ import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import {
   appendBaseUrlBit,
+  appendDirectMessageRoutingBits,
   appendEnabledConfiguredLinkedBits,
   appendModeBit,
   appendTokenSourceBits,
@@ -56,6 +57,7 @@ export async function formatConfigChannelsStatusLines(
       const bits: string[] = [];
       appendEnabledConfiguredLinkedBits(bits, account);
       appendModeBit(bits, account);
+      appendDirectMessageRoutingBits(bits, account);
       appendTokenSourceBits(bits, account);
       appendBaseUrlBit(bits, account);
       return buildChannelAccountLine(plugin.id, account, bits, {

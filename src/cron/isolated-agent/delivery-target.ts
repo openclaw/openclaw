@@ -238,6 +238,7 @@ export async function resolveDeliveryTarget(
   }
 
   let effectiveAllowFrom: string[] | undefined;
+  let effectiveAllowSendTo: string[] | undefined;
   if (mode === "implicit") {
     const { getLoadedChannelPluginForRead, mapAllowFromEntries } =
       await loadDeliveryTargetRuntime();
@@ -253,7 +254,20 @@ export async function resolveDeliveryTarget(
     const allowFromOverride = [...new Set(configuredAllowFrom)];
     effectiveAllowFrom = allowFromOverride;
 
-    if (toCandidate && allowFromOverride.length > 0) {
+    const configuredAllowSendToRaw = channelPlugin?.config.resolveAllowSendTo?.({
+      cfg,
+      accountId: resolvedAccountId,
+    });
+    if (configuredAllowSendToRaw != null) {
+      effectiveAllowSendTo = [...new Set(mapAllowFromEntries(configuredAllowSendToRaw))];
+    }
+    const sendList = effectiveAllowSendTo ?? allowFromOverride;
+    const hasSendWildcard = sendList.some((entry) => entry.trim() === "*");
+    const fallbackSendList = sendList.filter((entry) => entry.trim() && entry.trim() !== "*");
+
+    if (!toCandidate && fallbackSendList.length > 0) {
+      toCandidate = fallbackSendList[0];
+    } else if (toCandidate && fallbackSendList.length > 0 && !hasSendWildcard) {
       const currentTargetResolution = await resolveOutboundTargetWithRuntime({
         channel,
         to: toCandidate,
@@ -261,9 +275,10 @@ export async function resolveDeliveryTarget(
         accountId,
         mode,
         allowFrom: effectiveAllowFrom,
+        allowSendTo: effectiveAllowSendTo,
       });
       if (!currentTargetResolution.ok) {
-        toCandidate = allowFromOverride[0];
+        toCandidate = fallbackSendList[0];
       }
     }
   }
@@ -275,6 +290,7 @@ export async function resolveDeliveryTarget(
     accountId,
     mode,
     allowFrom: effectiveAllowFrom,
+    allowSendTo: effectiveAllowSendTo,
   });
   if (!docked.ok) {
     return {

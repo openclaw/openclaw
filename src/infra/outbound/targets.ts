@@ -56,6 +56,7 @@ export function resolveOutboundTarget(params: {
   channel: GatewayMessageChannel;
   to?: string;
   allowFrom?: string[];
+  allowSendTo?: string[];
   cfg?: OpenClawConfig;
   accountId?: string | null;
   mode?: ChannelOutboundTargetMode;
@@ -138,11 +139,11 @@ export function resolveHeartbeatDeliveryTarget(params: {
   let effectiveAccountId = heartbeatAccountId || resolvedTarget.accountId;
 
   if (heartbeatAccountId && resolvedTarget.channel) {
-    const plugin = resolveOutboundChannelPlugin({
+    const accountPlugin = resolveOutboundChannelPlugin({
       channel: resolvedTarget.channel,
       cfg,
     });
-    const listAccountIds = plugin?.config.listAccountIds;
+    const listAccountIds = accountPlugin?.config.listAccountIds;
     const accountIds = listAccountIds ? listAccountIds(cfg) : [];
     if (accountIds.length > 0) {
       const normalizedAccountId = normalizeAccountId(heartbeatAccountId);
@@ -161,7 +162,28 @@ export function resolveHeartbeatDeliveryTarget(params: {
     }
   }
 
-  if (!resolvedTarget.channel || !resolvedTarget.to) {
+  const plugin = resolvedTarget.channel
+    ? resolveOutboundChannelPlugin({
+        channel: resolvedTarget.channel,
+        cfg,
+      })
+    : undefined;
+  const configuredFallback =
+    resolvedTarget.channel && !heartbeat?.to
+      ? resolveHeartbeatConfiguredFallbackTarget({
+          plugin,
+          cfg,
+          accountId: effectiveAccountId,
+        })
+      : undefined;
+  let toCandidate = resolvedTarget.to;
+  let reason =
+    configuredFallback && !toCandidate ? `${configuredFallback.source}-fallback` : undefined;
+  if (!toCandidate && configuredFallback) {
+    toCandidate = configuredFallback.to;
+  }
+
+  if (!resolvedTarget.channel || !toCandidate) {
     return buildNoHeartbeatDeliveryTarget({
       reason: "no-target",
       accountId: effectiveAccountId,
@@ -172,12 +194,26 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   const resolved = resolveOutboundTarget({
     channel: resolvedTarget.channel,
-    to: resolvedTarget.to,
+    to: toCandidate,
     cfg,
     accountId: effectiveAccountId,
     mode: "heartbeat",
   });
-  if (!resolved.ok) {
+  const fallbackResolved =
+    !resolved.ok && configuredFallback && toCandidate !== configuredFallback.to
+      ? resolveOutboundTarget({
+          channel: resolvedTarget.channel,
+          to: configuredFallback.to,
+          cfg,
+          accountId: effectiveAccountId,
+          mode: "heartbeat",
+        })
+      : undefined;
+  const docked = fallbackResolved?.ok ? fallbackResolved : resolved;
+  if (fallbackResolved?.ok) {
+    reason = `${configuredFallback?.source}-fallback`;
+  }
+  if (!docked.ok) {
     return buildNoHeartbeatDeliveryTarget({
       reason: "no-target",
       accountId: effectiveAccountId,
@@ -190,7 +226,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     target === "last" && !heartbeat?.to ? normalizeChatType(entry?.chatType) : undefined;
   const deliveryChatType = resolveHeartbeatDeliveryChatType({
     channel: resolvedTarget.channel,
-    to: resolved.to,
+    to: docked.to,
     sessionChatType: sessionChatTypeHint,
   });
   if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
@@ -202,12 +238,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     });
   }
 
-  let reason: string | undefined;
-  const plugin = resolveOutboundChannelPlugin({
-    channel: resolvedTarget.channel,
-    cfg,
-  });
-  if (plugin?.config.resolveAllowFrom) {
+  if (!reason && resolvedTarget.to && plugin?.config.resolveAllowFrom) {
     const explicit = resolveOutboundTarget({
       channel: resolvedTarget.channel,
       to: resolvedTarget.to,
@@ -215,7 +246,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
       accountId: effectiveAccountId,
       mode: "explicit",
     });
-    if (explicit.ok && explicit.to !== resolved.to) {
+    if (explicit.ok && explicit.to !== docked.to) {
       reason = "allowFrom-fallback";
     }
   }
@@ -233,7 +264,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   return {
     channel: resolvedTarget.channel,
-    to: resolved.to,
+    to: docked.to,
     reason,
     accountId: effectiveAccountId,
     // Heartbeats normally avoid inheriting session reply-thread IDs, but some
@@ -242,6 +273,28 @@ export function resolveHeartbeatDeliveryTarget(params: {
     lastChannel: resolvedTarget.lastChannel,
     lastAccountId: resolvedTarget.lastAccountId,
   };
+}
+
+function resolveHeartbeatConfiguredFallbackTarget(params: {
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin> | undefined;
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): { to: string; source: "allowSendTo" | "allowFrom" } | undefined {
+  const allowSendToRaw = params.plugin?.config.resolveAllowSendTo?.({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const hasAllowSendTo = allowSendToRaw != null;
+  const entries = hasAllowSendTo
+    ? allowSendToRaw
+    : params.plugin?.config.resolveAllowFrom?.({
+        cfg: params.cfg,
+        accountId: params.accountId,
+      });
+  const to = mapAllowFromEntries(entries)
+    .map((entry) => entry.trim())
+    .find((entry) => entry && entry !== "*");
+  return to ? { to, source: hasAllowSendTo ? "allowSendTo" : "allowFrom" } : undefined;
 }
 
 function buildNoHeartbeatDeliveryTarget(params: {
