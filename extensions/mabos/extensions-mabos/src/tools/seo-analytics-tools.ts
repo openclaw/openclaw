@@ -136,7 +136,7 @@ export function createSeoAnalyticsTools(api: OpenClawPluginApi): AnyAgentTool[] 
         const store = (await readJson(seoPath(params.business_id))) || { audits: [] };
 
         if (params.action === "audit_page") {
-          const url = params.url || "https://vividwalls.co";
+          const url = params.url || "https://example.com";
           // Simulate page audit — in production would use headless browser
           const audit = {
             id: `SEO-${Date.now().toString(36)}`,

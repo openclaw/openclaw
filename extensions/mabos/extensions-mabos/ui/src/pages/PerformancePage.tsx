@@ -1,8 +1,9 @@
 import { AlertCircle, BarChart3 } from "lucide-react";
-import { useMetrics } from "@/hooks/useMetrics";
-import { useAgents } from "@/hooks/useAgents";
-import { MetricsCharts } from "@/components/performance/MetricsCharts";
 import { AgentPerformance } from "@/components/performance/AgentPerformance";
+import { MetricsCharts } from "@/components/performance/MetricsCharts";
+import { useActiveBusinessId } from "@/contexts/BusinessContext";
+import { useAgents } from "@/hooks/useAgents";
+import { useMetrics } from "@/hooks/useMetrics";
 
 type MetricsData = {
   revenue?: { date: string; value: number }[];
@@ -15,15 +16,14 @@ type MetricsData = {
   bdiCycles?: { date: string; cycles: number }[];
 };
 
-const BUSINESS_ID = "vividwalls";
-
 export function PerformancePage() {
+  const businessId = useActiveBusinessId();
   const {
     data: metricsRaw,
     isLoading: metricsLoading,
     error: metricsError,
-  } = useMetrics(BUSINESS_ID);
-  const { isLoading: agentsLoading } = useAgents(BUSINESS_ID);
+  } = useMetrics(businessId);
+  const { isLoading: agentsLoading } = useAgents(businessId);
 
   const metrics = metricsRaw as MetricsData | undefined;
 
@@ -43,13 +43,9 @@ export function PerformancePage() {
           <BarChart3 className="w-5 h-5 text-[var(--accent-purple)]" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-[var(--text-primary)]">
-            Performance
-          </h1>
+          <h1 className="text-2xl font-bold text-[var(--text-primary)]">Performance</h1>
           <p className="text-sm text-[var(--text-secondary)]">
-            {isLoading
-              ? "Loading metrics..."
-              : "Business metrics and agent analytics"}
+            {isLoading ? "Loading metrics..." : "Business metrics and agent analytics"}
           </p>
         </div>
       </div>
@@ -59,12 +55,9 @@ export function PerformancePage() {
         <div className="flex items-center gap-3 p-4 rounded-lg bg-[color-mix(in_srgb,var(--accent-red)_10%,var(--bg-card))] border border-[var(--accent-red)]/20">
           <AlertCircle className="w-5 h-5 text-[var(--accent-red)] shrink-0" />
           <div>
-            <p className="text-sm font-medium text-[var(--text-primary)]">
-              Failed to load metrics
-            </p>
+            <p className="text-sm font-medium text-[var(--text-primary)]">Failed to load metrics</p>
             <p className="text-xs text-[var(--text-secondary)]">
-              Unable to fetch performance data from the API. Showing placeholder
-              data.
+              Unable to fetch performance data from the API. Showing placeholder data.
             </p>
           </div>
         </div>
@@ -74,10 +67,7 @@ export function PerformancePage() {
       <MetricsCharts data={metrics} isLoading={isLoading} />
 
       {/* Agent Performance Table */}
-      <AgentPerformance
-        agentMetrics={metrics?.agentEfficiency}
-        isLoading={isLoading}
-      />
+      <AgentPerformance agentMetrics={metrics?.agentEfficiency} isLoading={isLoading} />
     </div>
   );
 }

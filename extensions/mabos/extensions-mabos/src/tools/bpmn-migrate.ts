@@ -17,7 +17,7 @@ import { getTypeDBClient } from "../knowledge/typedb-client.js";
 import { textResult } from "./common.js";
 
 const BpmnMigrateParams = Type.Object({
-  business_id: Type.String({ description: "Business ID (e.g., 'vividwalls')" }),
+  business_id: Type.String({ description: "Business ID (e.g., 'acme-co')" }),
   database: Type.Optional(
     Type.String({ description: "TypeDB database name (defaults to 'mabos')" }),
   ),
@@ -74,7 +74,7 @@ export function createBpmnMigrateTools(_api: OpenClawPluginApi): AnyAgentTool[] 
         }
 
         const goals = goalModel.goals || [];
-        const defaultAgent = "vw-ceo";
+        const defaultAgent = "ceo";
 
         for (const goal of goals) {
           const goalWorkflows = goal.workflows || [];

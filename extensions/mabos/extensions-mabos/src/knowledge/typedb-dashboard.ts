@@ -54,16 +54,35 @@ interface TroposGoalModel {
   dependencies: { from: string; to: string; type: string; goalId: string }[];
 }
 
-// ── Business prefix ─────────────────────────────────────────────────────
-
-const BIZ_PREFIX = "vw-";
-
 function toDashboardId(typedbId: string): string {
-  return typedbId.startsWith(BIZ_PREFIX) ? typedbId.slice(BIZ_PREFIX.length) : typedbId;
+  return typedbId;
 }
 
-function toTypeDBId(dashboardId: string): string {
-  return dashboardId.startsWith(BIZ_PREFIX) ? dashboardId : BIZ_PREFIX + dashboardId;
+function formatBusinessName(businessId: string): string {
+  return businessId
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function inferBusinessContextFromAgentId(agentId: string): {
+  businessId: string;
+  businessName: string;
+} {
+  const separators = [agentId.lastIndexOf("-"), agentId.lastIndexOf("_")];
+  const splitAt = Math.max(...separators);
+  if (splitAt > 0) {
+    const businessId = agentId.slice(0, splitAt);
+    return {
+      businessId,
+      businessName: formatBusinessName(businessId),
+    };
+  }
+  return {
+    businessId: "default",
+    businessName: "Default Business",
+  };
 }
 
 // ── Response Parsing ────────────────────────────────────────────────────
@@ -80,6 +99,46 @@ function getRows(response: QueryResponse | null): ConceptRowAnswer[] {
     return response.answers;
   }
   return [];
+}
+
+function matchesAgentAlias(requestedAgentId: string, typedbAgentId: string): boolean {
+  if (requestedAgentId === typedbAgentId) {
+    return true;
+  }
+  if (requestedAgentId.includes("-") || requestedAgentId.includes("_")) {
+    return false;
+  }
+  return (
+    typedbAgentId.endsWith(`-${requestedAgentId}`) || typedbAgentId.endsWith(`_${requestedAgentId}`)
+  );
+}
+
+async function resolveTypeDBAgentUid(
+  client: ReturnType<typeof getTypeDBClient>,
+  dbName: string,
+  requestedAgentId: string,
+): Promise<string | null> {
+  const exactRes = await client
+    .matchQuery(`match $agent isa agent, has uid ${JSON.stringify(requestedAgentId)};`, dbName)
+    .catch(() => null);
+  if (getRows(exactRes).length > 0) {
+    return requestedAgentId;
+  }
+
+  const agentRes = await client
+    .matchQuery(`match $agent isa agent, has uid $id;`, dbName)
+    .catch(() => null);
+  const candidates = getRows(agentRes)
+    .map((row) => getConceptValue(row.data["id"]))
+    .filter((uid): uid is string => typeof uid === "string");
+  const matched = candidates.filter((uid) => matchesAgentAlias(requestedAgentId, uid));
+  if (matched.length === 0) {
+    return null;
+  }
+
+  // Deterministic selection when multiple business-specific matches exist.
+  matched.sort((a, b) => a.localeCompare(b));
+  return matched[0] ?? null;
 }
 
 // ── Query Functions ─────────────────────────────────────────────────────
@@ -166,14 +225,8 @@ export async function queryAgentDetailFromTypeDB(
       if (!ok) return null;
     }
 
-    const typedbId = toTypeDBId(agentId);
-
-    // Verify the agent exists
-    const agentCheck = await client.matchQuery(
-      `match $agent isa agent, has uid "${typedbId}";`,
-      dbName,
-    );
-    if (getRows(agentCheck).length === 0) return null;
+    const typedbId = await resolveTypeDBAgentUid(client, dbName, agentId);
+    if (!typedbId) return null;
 
     // Query beliefs, goals, desires, intentions with their text content
     const [beliefRes, goalRes, desireRes, intentionRes] = await Promise.all([
@@ -221,14 +274,14 @@ export async function queryAgentDetailFromTypeDB(
       | { facts: number; rules: number; memories: number; cases: number }
       | undefined;
     try {
-      const stats = await queryKnowledgeStatsFromTypeDB(agentId, dbName);
+      const stats = await queryKnowledgeStatsFromTypeDB(typedbId, dbName);
       if (stats) knowledgeStats = stats;
     } catch {
       /* non-blocking */
     }
 
     return {
-      agentId,
+      agentId: toDashboardId(typedbId),
       beliefCount: beliefs.length,
       goalCount: goals.length,
       intentionCount: intentions.length,
@@ -314,6 +367,7 @@ export async function queryDecisionsFromTypeDB(dbName: string): Promise<Decision
       const aname = getConceptValue(row.data["aname"]) as string;
 
       if (!did || !name) continue;
+      const businessContext = inferBusinessContextFromAgentId(aid || "");
 
       let options: any[] = [];
       try {
@@ -329,8 +383,8 @@ export async function queryDecisionsFromTypeDB(dbName: string): Promise<Decision
         urgency: urg || "medium",
         agentId: aid ? toDashboardId(aid) : "",
         agentName: aname || "",
-        businessId: "vividwalls",
-        businessName: "VividWalls",
+        businessId: businessContext.businessId,
+        businessName: businessContext.businessName,
         options,
         createdAt: ca || new Date().toISOString(),
         status: st || "pending",
@@ -494,7 +548,8 @@ export async function writeBdiCycleResultToTypeDB(
     const client = getTypeDBClient();
     if (!client.isAvailable()) return false;
 
-    const typedbId = toTypeDBId(agentId);
+    const typedbId = await resolveTypeDBAgentUid(client, dbName, agentId);
+    if (!typedbId) return false;
 
     // Insert new intentions
     if (result.newIntentions && result.newIntentions.length > 0) {
@@ -547,7 +602,8 @@ export async function queryKnowledgeStatsFromTypeDB(
       if (!ok) return null;
     }
 
-    const typedbId = toTypeDBId(agentId);
+    const typedbId = await resolveTypeDBAgentUid(client, dbName, agentId);
+    if (!typedbId) return null;
 
     const [factRes, ruleRes, memRes, caseRes] = await Promise.all([
       client

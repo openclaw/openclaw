@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { type OpenClawConfig, createConfigIO, writeConfigFile } from "../config/config.js";
 import { formatConfigPath, logConfigUpdated } from "../config/logging.js";
+import { ensureMabosProductPluginConfig } from "../config/mabos-plugin-config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -33,6 +36,11 @@ export async function setupCommand(
       ? opts.workspace.trim()
       : undefined;
 
+  // Ensure the state directory exists before config IO resolves paths.
+  // For MABOS product this creates ~/.mabos/ on first run.
+  const stateDir = resolveStateDir();
+  await fs.mkdir(stateDir, { recursive: true });
+
   const io = createConfigIO();
   const configPath = io.configPath;
   const existingRaw = await readConfigFileRaw(configPath);
@@ -50,30 +58,18 @@ export async function setupCommand(
         workspace,
       },
     },
-    gateway: {
-      ...cfg.gateway,
-      mode: cfg.gateway?.mode ?? "local",
-    },
   };
+  const nextWithMabosPlugin = ensureMabosProductPluginConfig(next);
+  const shouldWriteConfig = !existingRaw.exists || !isDeepStrictEqual(cfg, nextWithMabosPlugin);
 
-  if (
-    !existingRaw.exists ||
-    defaults.workspace !== workspace ||
-    cfg.gateway?.mode !== next.gateway?.mode
-  ) {
-    await writeConfigFile(next);
+  if (shouldWriteConfig) {
+    await writeConfigFile(nextWithMabosPlugin);
     if (!existingRaw.exists) {
       runtime.log(`Wrote ${formatConfigPath(configPath)}`);
+    } else if (defaults.workspace !== workspace) {
+      logConfigUpdated(runtime, { path: configPath, suffix: "(set agents.defaults.workspace)" });
     } else {
-      const updates: string[] = [];
-      if (defaults.workspace !== workspace) {
-        updates.push("set agents.defaults.workspace");
-      }
-      if (cfg.gateway?.mode !== next.gateway?.mode) {
-        updates.push("set gateway.mode");
-      }
-      const suffix = updates.length > 0 ? `(${updates.join(", ")})` : undefined;
-      logConfigUpdated(runtime, { path: configPath, suffix });
+      logConfigUpdated(runtime, { path: configPath, suffix: "(normalized MABOS plugin config)" });
     }
   } else {
     runtime.log(`Config OK: ${formatConfigPath(configPath)}`);
@@ -81,7 +77,7 @@ export async function setupCommand(
 
   const ws = await ensureAgentWorkspace({
     dir: workspace,
-    ensureBootstrapFiles: !next.agents?.defaults?.skipBootstrap,
+    ensureBootstrapFiles: !nextWithMabosPlugin.agents?.defaults?.skipBootstrap,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 

@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useActiveBusinessId } from "@/contexts/BusinessContext";
 import { useGoalModel } from "@/hooks/useGoalModel";
 import {
   goalsToPhases,
@@ -12,8 +13,6 @@ import {
   calculateTotalWeeks,
   calculateCurrentWeek,
 } from "@/lib/goal-transforms";
-
-const BUSINESS_ID = "vividwalls";
 
 // Legend items matching the design token colors used in the Gantt chart
 const legendItems = [
@@ -25,7 +24,8 @@ const legendItems = [
 ];
 
 export function TimelinePage() {
-  const { data: goalModel, isLoading, error } = useGoalModel(BUSINESS_ID);
+  const businessId = useActiveBusinessId();
+  const { data: goalModel, isLoading, error } = useGoalModel(businessId);
 
   const phases = useMemo(() => {
     if (!goalModel) return [];

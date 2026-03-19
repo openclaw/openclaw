@@ -4,11 +4,9 @@
  * Reads credentials from integrations.json → "twilio-sms" entry.
  */
 
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
-import { httpRequest, textResult, resolveWorkspaceDir } from "./common.js";
+import { httpRequest, textResult, resolveWorkspaceIntegrationEntry } from "./common.js";
 
 // ── Credential loader ──────────────────────────────────────────────────
 
@@ -18,26 +16,32 @@ interface TwilioCreds {
   phoneNumber: string;
 }
 
-async function loadTwilioCreds(api: OpenClawPluginApi): Promise<TwilioCreds | null> {
-  const ws = resolveWorkspaceDir(api);
-  const paths = [
-    join(ws, "businesses", "vividwalls", "integrations.json"),
-    join(ws, "integrations.json"),
-  ];
-  for (const p of paths) {
-    try {
-      const data = JSON.parse(await readFile(p, "utf-8"));
-      const entry = (data.integrations || []).find((i: any) => i.id === "twilio-sms" && i.enabled);
-      if (entry?.api_key && entry?.metadata?.account_sid) {
-        return {
-          accountSid: entry.metadata.account_sid,
-          authToken: entry.api_key,
-          phoneNumber: entry.metadata.phone_number || "+18568884216",
-        };
-      }
-    } catch {}
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
   }
-  return null;
+  return value as Record<string, unknown>;
+}
+
+async function loadTwilioCreds(api: OpenClawPluginApi): Promise<TwilioCreds | null> {
+  const resolved = await resolveWorkspaceIntegrationEntry(api, "twilio-sms");
+  if (!resolved) {
+    return null;
+  }
+
+  const metadata = asRecord(resolved.entry.metadata) ?? {};
+  const accountSid = typeof metadata.account_sid === "string" ? metadata.account_sid : "";
+  const authToken = typeof resolved.entry.api_key === "string" ? resolved.entry.api_key : "";
+
+  if (!accountSid || !authToken) {
+    return null;
+  }
+
+  return {
+    accountSid,
+    authToken,
+    phoneNumber: typeof metadata.phone_number === "string" ? metadata.phone_number : "+18568884216",
+  };
 }
 
 async function twilioPost(
@@ -296,15 +300,13 @@ export function createTwilioTools(api: OpenClawPluginApi): AnyAgentTool[] {
           body = params.custom_message;
         } else {
           const templates: Record<string, string> = {
-            confirmed: `Hi ${name}! Your VividWalls order #${params.order_id} has been confirmed. We're preparing your items!`,
-            shipped: `Hi ${name}! Great news - your VividWalls order #${params.order_id} has shipped!${params.tracking_number ? ` Track it: ${params.tracking_number}` : ""}${params.estimated_delivery ? ` Est. delivery: ${params.estimated_delivery}` : ""}`,
-            out_for_delivery: `Hi ${name}! Your VividWalls order #${params.order_id} is out for delivery today!`,
-            delivered: `Hi ${name}! Your VividWalls order #${params.order_id} has been delivered. Enjoy your new wall art! Questions? Reply to this text.`,
-            delayed: `Hi ${name}, we wanted to let you know your VividWalls order #${params.order_id} is experiencing a slight delay.${params.estimated_delivery ? ` New est. delivery: ${params.estimated_delivery}.` : ""} We apologize for the inconvenience.`,
+            confirmed: `Hi ${name}! Your order #${params.order_id} has been confirmed. We're preparing your items!`,
+            shipped: `Hi ${name}! Great news - your order #${params.order_id} has shipped!${params.tracking_number ? ` Track it: ${params.tracking_number}` : ""}${params.estimated_delivery ? ` Est. delivery: ${params.estimated_delivery}` : ""}`,
+            out_for_delivery: `Hi ${name}! Your order #${params.order_id} is out for delivery today!`,
+            delivered: `Hi ${name}! Your order #${params.order_id} has been delivered. Questions? Reply to this text.`,
+            delayed: `Hi ${name}, we wanted to let you know your order #${params.order_id} is experiencing a slight delay.${params.estimated_delivery ? ` New est. delivery: ${params.estimated_delivery}.` : ""} We apologize for the inconvenience.`,
           };
-          body =
-            templates[params.status] ||
-            `VividWalls order #${params.order_id} update: ${params.status}`;
+          body = templates[params.status] || `Order #${params.order_id} update: ${params.status}`;
         }
 
         const res = await twilioPost(creds, "/Messages.json", {

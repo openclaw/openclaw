@@ -2,10 +2,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { TroposGoalModel } from "@/lib/types";
 
-export function useGoalModel(businessId: string) {
+export function useGoalModel(businessId: string | undefined) {
   return useQuery({
     queryKey: ["goals", businessId],
-    queryFn: () => api.getGoals(businessId),
+    queryFn: () => {
+      if (!businessId) throw new Error("Missing business ID");
+      return api.getGoals(businessId);
+    },
+    enabled: !!businessId,
   });
 }
 

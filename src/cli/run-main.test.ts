@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
+  shouldDeferCorePrimaryToMabosPlugin,
   shouldRegisterPrimarySubcommand,
   shouldSkipPluginCommandRegistration,
 } from "./run-main.js";
@@ -50,6 +51,30 @@ describe("shouldRegisterPrimarySubcommand", () => {
   it("keeps eager primary registration for regular command runs", () => {
     expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "status"])).toBe(true);
     expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "acp", "-v"])).toBe(true);
+  });
+});
+
+describe("shouldDeferCorePrimaryToMabosPlugin", () => {
+  it("defers conflicting core commands in MABOS mode", () => {
+    const env = { MABOS_PRODUCT: "1" } as NodeJS.ProcessEnv;
+    expect(shouldDeferCorePrimaryToMabosPlugin({ primary: "onboard", env })).toBe(true);
+    expect(shouldDeferCorePrimaryToMabosPlugin({ primary: "agents", env })).toBe(true);
+    expect(shouldDeferCorePrimaryToMabosPlugin({ primary: "dashboard", env })).toBe(true);
+  });
+
+  it("does not defer non-conflicting commands in MABOS mode", () => {
+    const env = { MABOS_PRODUCT: "1" } as NodeJS.ProcessEnv;
+    expect(shouldDeferCorePrimaryToMabosPlugin({ primary: "gateway", env })).toBe(false);
+    expect(shouldDeferCorePrimaryToMabosPlugin({ primary: "status", env })).toBe(false);
+  });
+
+  it("does not defer commands outside MABOS mode", () => {
+    expect(
+      shouldDeferCorePrimaryToMabosPlugin({
+        primary: "onboard",
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toBe(false);
   });
 });
 

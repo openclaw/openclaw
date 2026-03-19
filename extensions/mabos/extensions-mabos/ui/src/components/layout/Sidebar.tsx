@@ -10,12 +10,20 @@ import {
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useBusinessContext } from "@/contexts/BusinessContext";
 import { usePanels } from "@/contexts/PanelContext";
 import { navSections } from "@/lib/navigation";
 import { ThemeToggle } from "./ThemeToggle";
 
 export function Sidebar() {
   const { sidebarMode, toggleSidebar } = usePanels();
+  const {
+    businesses,
+    activeBusiness,
+    activeBusinessId,
+    isLoading: businessesLoading,
+    setActiveBusinessId,
+  } = useBusinessContext();
   const routerState = useRouterState();
   const currentPath = routerState.location.pathname;
   const navigate = useNavigate();
@@ -81,7 +89,12 @@ export function Sidebar() {
             className="flex items-center gap-3 px-3 py-2 w-full rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-mabos)] hover:border-[var(--border-hover)] transition-colors text-sm"
           >
             <Palette className="w-4 h-4 text-[var(--accent-purple)]" />
-            <span className="flex-1 text-left text-[var(--text-primary)]">VividWalls</span>
+            <span className="flex-1 text-left text-[var(--text-primary)]">
+              {businessesLoading
+                ? "Loading..."
+                : activeBusiness?.name ||
+                  (businesses.length > 0 ? "Select business" : "No business")}
+            </span>
             {switcherOpen ? (
               <ChevronUp className="w-4 h-4 text-[var(--text-muted)]" />
             ) : (
@@ -93,10 +106,32 @@ export function Sidebar() {
               <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] border-b border-[var(--border-mabos)]">
                 Businesses
               </div>
-              <div className="flex items-center gap-3 px-3 py-2 text-sm text-[var(--accent-green)] bg-[color-mix(in_srgb,var(--accent-green)_8%,transparent)]">
-                <Palette className="w-4 h-4 text-[var(--accent-purple)]" />
-                <span>VividWalls</span>
-              </div>
+              {businesses.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-[var(--text-secondary)]">
+                  No businesses yet
+                </div>
+              ) : (
+                businesses.map((business) => {
+                  const isActive = business.id === activeBusinessId;
+                  return (
+                    <button
+                      key={business.id}
+                      onClick={() => {
+                        setActiveBusinessId(business.id);
+                        setSwitcherOpen(false);
+                      }}
+                      className={`flex items-center gap-3 px-3 py-2 text-sm w-full text-left transition-colors ${
+                        isActive
+                          ? "text-[var(--accent-green)] bg-[color-mix(in_srgb,var(--accent-green)_8%,transparent)]"
+                          : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]"
+                      }`}
+                    >
+                      <Palette className="w-4 h-4 text-[var(--accent-purple)]" />
+                      <span>{business.name}</span>
+                    </button>
+                  );
+                })
+              )}
               <button
                 onClick={() => {
                   setSwitcherOpen(false);

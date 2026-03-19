@@ -1,9 +1,9 @@
 /**
- * VividWalls Business Goal Seeding — Populates the mabos knowledge graph
+ * Case-study business goal seeding — populates the MABOS knowledge graph.
  *
  * Programmatically inserts agents, desires, goals (3-tier TOGAF hierarchy),
- * beliefs, and Tropos dependency relations derived from VividWalls' BRD,
- * 5-year financial model, and Business Model Canvas.
+ * beliefs, and Tropos dependency relations derived from the default VividWalls
+ * case-study BRD, financial model, and Business Model Canvas.
  *
  * Goal structure follows TOGAF Driver/Goal/Objective catalog:
  *   Strategic (5-year vision) → Tactical (Year 1-2 milestones) → Operational (monthly/weekly)
@@ -2477,8 +2477,64 @@ const WORKFLOWS: WorkflowSeed[] = [
 
 // ── Tool Parameters ─────────────────────────────────────────────────────
 
+const CASE_STUDY_BUSINESS_ID = "vividwalls";
+const CASE_STUDY_BUSINESS_NAME = "VividWalls";
+const CASE_STUDY_AGENT_PREFIX = "vw";
+
+function sanitizeBusinessId(input: string): string {
+  const normalized = input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return normalized || CASE_STUDY_BUSINESS_ID;
+}
+
+function formatBusinessName(businessId: string): string {
+  return businessId
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function sanitizeAgentPrefix(input: string | undefined, businessId: string): string {
+  const fallback = businessId.replace(/[^a-z0-9]/g, "").slice(0, 2) || CASE_STUDY_AGENT_PREFIX;
+  const normalized = (input || fallback)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, 8);
+  return normalized || CASE_STUDY_AGENT_PREFIX;
+}
+
+function applyCaseStudyText(value: string, businessName: string, businessId: string): string {
+  return value
+    .replaceAll(CASE_STUDY_BUSINESS_NAME, businessName)
+    .replaceAll(CASE_STUDY_BUSINESS_ID, businessId);
+}
+
+function remapAgentId(agentId: string, agentPrefix: string): string {
+  if (!agentId.startsWith(`${CASE_STUDY_AGENT_PREFIX}-`)) return agentId;
+  return `${agentPrefix}-${agentId.slice(CASE_STUDY_AGENT_PREFIX.length + 1)}`;
+}
+
 const GoalSeedParams = Type.Object({
-  business_id: Type.String({ description: "Business ID (e.g., 'vividwalls')" }),
+  business_id: Type.String({
+    description: "Target business ID to receive this case-study dataset",
+  }),
+  business_name: Type.Optional(
+    Type.String({
+      description: "Display name override for case-study text replacement",
+    }),
+  ),
+  agent_prefix: Type.Optional(
+    Type.String({
+      description:
+        "Agent ID prefix override (default: first 2 chars of business_id, e.g., 'ac-ceo')",
+    }),
+  ),
   database: Type.Optional(
     Type.String({ description: "TypeDB database name (defaults to 'mabos')" }),
   ),
@@ -2492,8 +2548,8 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
       name: "goal_seed_business",
       label: "Seed Business Goals",
       description:
-        "Seed the TypeDB knowledge graph with VividWalls business goals, desires, and beliefs " +
-        "from the BRD/financial model. Uses TOGAF 3-tier goal hierarchy with Tropos agent mapping.",
+        "Seed TypeDB using the built-in case-study goal/desire/belief dataset. " +
+        "Text and agent IDs are remapped to the target business context.",
       parameters: GoalSeedParams,
       async execute(_id: string, params: Static<typeof GoalSeedParams>) {
         const client = getTypeDBClient();
@@ -2505,6 +2561,14 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
         }
 
         const dbName = params.database || "mabos";
+        const businessId = sanitizeBusinessId(params.business_id);
+        const businessName =
+          params.business_name?.trim() ||
+          formatBusinessName(businessId) ||
+          CASE_STUDY_BUSINESS_NAME;
+        const agentPrefix = sanitizeAgentPrefix(params.agent_prefix, businessId);
+        const mapAgentId = (agentId: string) => remapAgentId(agentId, agentPrefix);
+        const mapText = (value: string) => applyCaseStudyText(value, businessName, businessId);
         const counts = {
           agents: 0,
           desires: 0,
@@ -2526,8 +2590,9 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
         // 1. Insert agents
         for (const agent of AGENTS) {
           try {
+            const agentId = mapAgentId(agent.id);
             await client.insertData(
-              `insert $agent isa agent, has uid ${JSON.stringify(agent.id)}, has name ${JSON.stringify(agent.name)};`,
+              `insert $agent isa agent, has uid ${JSON.stringify(agentId)}, has name ${JSON.stringify(mapText(agent.name))};`,
               dbName,
             );
             counts.agents++;
@@ -2539,10 +2604,10 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
         // 2. Insert desires
         for (const d of DESIRES) {
           try {
-            const typeql = DesireStoreQueries.createDesire(d.agentId, {
+            const typeql = DesireStoreQueries.createDesire(mapAgentId(d.agentId), {
               id: d.id,
-              name: d.name,
-              description: d.description,
+              name: mapText(d.name),
+              description: mapText(d.description),
               priority: d.priority,
               importance: d.importance,
               urgency: d.urgency,
@@ -2559,13 +2624,13 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
         // 3. Insert goals
         for (const g of GOALS) {
           try {
-            const typeql = GoalStoreQueries.createGoal(g.agentId, {
+            const typeql = GoalStoreQueries.createGoal(mapAgentId(g.agentId), {
               id: g.id,
-              name: g.name,
-              description: g.description,
+              name: mapText(g.name),
+              description: mapText(g.description),
               hierarchy_level: g.hierarchy_level,
               priority: g.priority,
-              success_criteria: g.success_criteria,
+              success_criteria: g.success_criteria ? mapText(g.success_criteria) : undefined,
               deadline: g.deadline,
               parent_goal_id: g.parent_goal_id,
               goal_type: g.goal_type,
@@ -2581,7 +2646,11 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
         for (const g of GOALS) {
           for (const desireId of g.desire_ids) {
             try {
-              const typeql = GoalStoreQueries.linkDesireToGoal(g.agentId, desireId, g.id);
+              const typeql = GoalStoreQueries.linkDesireToGoal(
+                mapAgentId(g.agentId),
+                desireId,
+                g.id,
+              );
               await client.insertData(typeql, dbName);
               counts.desire_goal_links++;
             } catch (e) {
@@ -2595,13 +2664,13 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
         // 5. Insert beliefs
         for (const b of BELIEFS) {
           try {
-            const typeql = BeliefStoreQueries.createBelief(b.agentId, {
+            const typeql = BeliefStoreQueries.createBelief(mapAgentId(b.agentId), {
               id: b.id,
-              category: b.category,
+              category: mapText(b.category),
               certainty: b.certainty,
-              subject: b.subject,
-              content: b.content,
-              source: b.source,
+              subject: mapText(b.subject),
+              content: mapText(b.content),
+              source: mapText(b.source),
             });
             await client.insertData(typeql, dbName);
             counts.beliefs++;
@@ -2614,7 +2683,11 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
         for (const b of BELIEFS) {
           for (const goalId of b.supports_goals) {
             try {
-              const typeql = BeliefStoreQueries.linkBeliefToGoal(b.agentId, b.id, goalId);
+              const typeql = BeliefStoreQueries.linkBeliefToGoal(
+                mapAgentId(b.agentId),
+                b.id,
+                goalId,
+              );
               await client.insertData(typeql, dbName);
               counts.belief_goal_links++;
             } catch (e) {
@@ -2629,12 +2702,12 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
         let preconditionCount = 0;
         for (const pc of PRECONDITIONS) {
           try {
-            const typeql = GoalStoreQueries.createPrecondition(pc.agentId, {
+            const typeql = GoalStoreQueries.createPrecondition(mapAgentId(pc.agentId), {
               id: pc.id,
               goalId: pc.goalId,
-              name: pc.name,
+              name: mapText(pc.name),
               type: pc.type,
-              expression: pc.expression,
+              expression: mapText(pc.expression),
               referencedGoalId: pc.referencedGoalId,
               satisfied: pc.satisfied,
             });
@@ -2652,14 +2725,18 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
         for (const del of DELEGATIONS) {
           for (const goalId of del.goalIds) {
             try {
+              const fromAgentId = mapAgentId(del.from);
+              const toAgentId = mapAgentId(del.to);
               await client.insertData(
-                GoalStoreQueries.createDelegation(del.from, del.to, goalId),
+                GoalStoreQueries.createDelegation(fromAgentId, toAgentId, goalId),
                 dbName,
               );
               delegationCount++;
             } catch (e) {
               counts.errors.push(
-                `Delegation ${del.from}→${del.to}/${goalId}: ${e instanceof Error ? e.message : String(e)}`,
+                `Delegation ${mapAgentId(del.from)}→${mapAgentId(del.to)}/${goalId}: ${
+                  e instanceof Error ? e.message : String(e)
+                }`,
               );
             }
           }
@@ -2670,13 +2747,19 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
         let decisionGoalLinks = 0;
         for (const d of DECISIONS) {
           try {
-            const typeql = DecisionStoreQueries.createDecision(d.agentId, {
+            const typeql = DecisionStoreQueries.createDecision(mapAgentId(d.agentId), {
               id: d.id,
-              name: d.name,
-              description: d.description,
+              name: mapText(d.name),
+              description: mapText(d.description),
               urgency: d.urgency,
-              options: JSON.stringify(d.options),
-              recommendation: d.recommendation,
+              options: JSON.stringify(
+                d.options.map((option) => ({
+                  ...option,
+                  label: mapText(option.label),
+                  description: mapText(option.description),
+                })),
+              ),
+              recommendation: mapText(d.recommendation),
             });
             await client.insertData(typeql, dbName);
             decisionCount++;
@@ -2707,13 +2790,15 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
         let planStepLinks = 0;
 
         for (const wf of WORKFLOWS) {
+          const workflowAgentId = mapAgentId(wf.agentId);
+
           // Insert workflow
           try {
-            const typeql = WorkflowStoreQueries.createWorkflow(wf.agentId, {
+            const typeql = WorkflowStoreQueries.createWorkflow(workflowAgentId, {
               id: wf.id,
-              name: wf.name,
+              name: mapText(wf.name),
               workflowType: wf.workflowType,
-              trigger: wf.trigger,
+              trigger: mapText(wf.trigger),
               cronExpression: wf.schedule,
               cronEnabled: wf.schedule ? true : undefined,
               cronTimezone: wf.scheduleTimezone,
@@ -2728,8 +2813,8 @@ export function createGoalSeedTools(_api: OpenClawPluginApi): AnyAgentTool[] {
           try {
             const now = new Date().toISOString();
             await client.insertData(
-              `match $agent isa agent, has uid ${JSON.stringify(wf.agentId)};
-insert $plan isa plan, has uid ${JSON.stringify(wf.planId)}, has name ${JSON.stringify(wf.planName)}, has description ${JSON.stringify(`Plan for ${wf.name}`)}, has plan_source "seed", has step_count ${wf.steps.length}, has confidence 0.8, has status "active", has created_at ${JSON.stringify(now)}, has updated_at ${JSON.stringify(now)}; (owner: $agent, owned: $plan) isa agent_owns;`,
+              `match $agent isa agent, has uid ${JSON.stringify(workflowAgentId)};
+insert $plan isa plan, has uid ${JSON.stringify(wf.planId)}, has name ${JSON.stringify(mapText(wf.planName))}, has description ${JSON.stringify(mapText(`Plan for ${wf.name}`))}, has plan_source "seed", has step_count ${wf.steps.length}, has confidence 0.8, has status "active", has created_at ${JSON.stringify(now)}, has updated_at ${JSON.stringify(now)}; (owner: $agent, owned: $plan) isa agent_owns;`,
               dbName,
             );
             planCount++;
@@ -2739,7 +2824,7 @@ insert $plan isa plan, has uid ${JSON.stringify(wf.planId)}, has name ${JSON.str
 
           // Link goal → plan
           try {
-            const typeql = GoalStoreQueries.linkGoalToPlan(wf.agentId, wf.goalId, wf.planId);
+            const typeql = GoalStoreQueries.linkGoalToPlan(workflowAgentId, wf.goalId, wf.planId);
             await client.insertData(typeql, dbName);
             goalPlanLinks++;
           } catch (e) {
@@ -2756,11 +2841,11 @@ insert $plan isa plan, has uid ${JSON.stringify(wf.planId)}, has name ${JSON.str
                 ? `, has cron_expression ${JSON.stringify(step.schedule)}, has cron_enabled true`
                 : "";
               const toolClause = step.action
-                ? `, has tool_binding ${JSON.stringify(step.action)}`
+                ? `, has tool_binding ${JSON.stringify(mapText(step.action))}`
                 : "";
               await client.insertData(
-                `match $agent isa agent, has uid ${JSON.stringify(wf.agentId)};
-insert $ps isa plan_step, has uid ${JSON.stringify(step.id)}, has name ${JSON.stringify(step.name)}, has step_type ${JSON.stringify(step.stepType)}, has estimated_duration ${JSON.stringify(step.estimatedDuration)}, has status "proposed", has sequence_order ${step.order}${cronClause}${toolClause}, has created_at ${JSON.stringify(now)}; (owner: $agent, owned: $ps) isa agent_owns;`,
+                `match $agent isa agent, has uid ${JSON.stringify(workflowAgentId)};
+insert $ps isa plan_step, has uid ${JSON.stringify(step.id)}, has name ${JSON.stringify(mapText(step.name))}, has step_type ${JSON.stringify(step.stepType)}, has estimated_duration ${JSON.stringify(step.estimatedDuration)}, has status "proposed", has sequence_order ${step.order}${cronClause}${toolClause}, has created_at ${JSON.stringify(now)}; (owner: $agent, owned: $ps) isa agent_owns;`,
                 dbName,
               );
               planStepCount++;
@@ -2786,12 +2871,12 @@ insert (container: $plan, contained: $step) isa plan_contains_step;`,
           // Insert tasks
           for (const task of wf.tasks) {
             try {
-              const typeql = TaskStoreQueries.createTask(wf.agentId, {
+              const typeql = TaskStoreQueries.createTask(workflowAgentId, {
                 id: task.id,
-                name: task.name,
-                description: task.description,
+                name: mapText(task.name),
+                description: mapText(task.description),
                 taskType: task.taskType,
-                assignedAgentId: task.assignedAgentId,
+                assignedAgentId: mapAgentId(task.assignedAgentId),
                 priority: task.priority,
                 estimatedDuration: task.estimatedDuration,
                 dependsOnIds: task.dependsOnIds,
@@ -2814,10 +2899,12 @@ insert (container: $plan, contained: $step) isa plan_contains_step;`,
                 )}${counts.errors.length > 10 ? `\n- ... and ${counts.errors.length - 10} more` : ""}`
             : "";
 
-        return textResult(`## VividWalls Knowledge Graph Seeded
+        return textResult(`## ${businessName} Case-Study Knowledge Graph Seeded
 
 **Database:** ${dbName}
-**Business:** ${params.business_id}
+**Business:** ${businessId}
+**Business Name:** ${businessName}
+**Agent Prefix:** ${agentPrefix}
 
 ### Entities Inserted
 - Agents: ${counts.agents}/${AGENTS.length}

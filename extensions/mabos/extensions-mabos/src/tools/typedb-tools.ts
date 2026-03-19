@@ -5,7 +5,7 @@
  * - typedb_sync_schema: Re-generate and push TypeQL schema from ontologies
  * - typedb_query: Run raw TypeQL match query
  * - typedb_sync_agent_data: Bulk import agent's JSON files into TypeDB
- * - goal_seed_business: Seed VividWalls business goals into knowledge graph
+ * - goal_seed_business: Seed case-study business goals into the knowledge graph
  */
 
 import { readFile } from "node:fs/promises";

@@ -13,10 +13,11 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import WebSocket from "ws";
+import { resolveDefaultAgentWorkspaceDir } from "../../../src/agents/workspace.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,6 +66,7 @@ type ParentCronJobCreate = {
 type ParentCronJob = {
   id: string;
   name: string;
+  description?: string;
   enabled: boolean;
   [key: string]: unknown;
 };
@@ -201,7 +203,44 @@ export async function callGatewayRpc<T = Record<string, unknown>>(
 // Mapping: MABOS → Parent CronJobCreate
 // ---------------------------------------------------------------------------
 
-function mapToParentCreate(job: MabosCronJob): ParentCronJobCreate {
+const BRIDGE_JOB_NAME_PREFIX = "[mabos:";
+const BRIDGE_JOB_LEGACY_PREFIX = "[mabos] ";
+const BRIDGE_DESC_BUSINESS_RE = /\[business:([^\]]+)\]/;
+
+function buildBridgeJobName(businessId: string, jobName: string): string {
+  return `${BRIDGE_JOB_NAME_PREFIX}${businessId}] ${jobName}`;
+}
+
+function buildBridgeDescription(businessId: string, jobId: string, workflowLabel: string): string {
+  return `MABOS bridge [business:${businessId}] [job:${jobId}]${workflowLabel}`;
+}
+
+function resolveParentJobBusinessId(job: ParentCronJob): string | null {
+  if (typeof job.description === "string") {
+    const match = job.description.match(BRIDGE_DESC_BUSINESS_RE);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  if (typeof job.name === "string" && job.name.startsWith(BRIDGE_JOB_NAME_PREFIX)) {
+    const closingBracket = job.name.indexOf("]");
+    if (closingBracket > BRIDGE_JOB_NAME_PREFIX.length) {
+      return job.name.slice(BRIDGE_JOB_NAME_PREFIX.length, closingBracket);
+    }
+  }
+  return null;
+}
+
+function isBridgeManagedJob(job: ParentCronJob): boolean {
+  if (typeof job.name !== "string") {
+    return false;
+  }
+  return (
+    job.name.startsWith(BRIDGE_JOB_NAME_PREFIX) || job.name.startsWith(BRIDGE_JOB_LEGACY_PREFIX)
+  );
+}
+
+function mapToParentCreate(businessId: string, job: MabosCronJob): ParentCronJobCreate {
   const actionLabel = job.action || "execute_workflow";
   const workflowLabel = job.workflowId ? ` for workflow ${job.workflowId}` : "";
   const stepLabel = job.stepId ? ` (step ${job.stepId})` : "";
@@ -220,8 +259,8 @@ function mapToParentCreate(job: MabosCronJob): ParentCronJobCreate {
 
   const result: ParentCronJobCreate = {
     agentId: job.agentId || undefined,
-    name: `[mabos] ${job.name}`,
-    description: `MABOS bridge: ${job.id}${workflowLabel}`,
+    name: buildBridgeJobName(businessId, job.name),
+    description: buildBridgeDescription(businessId, job.id, workflowLabel),
     enabled: job.enabled,
     schedule: {
       kind: "cron",
@@ -289,12 +328,17 @@ export class CronBridge {
   private readonly workspaceDir: string;
   private readonly authToken?: string;
   private readonly logger: { info: (msg: string) => void; warn: (msg: string) => void };
+  private readonly rpcCall: <T = Record<string, unknown>>(
+    method: string,
+    params?: unknown,
+  ) => Promise<T>;
 
   constructor(opts: {
     gatewayUrl: string;
     workspaceDir: string;
     authToken?: string;
     logger?: { info: (msg: string) => void; warn: (msg: string) => void };
+    rpcCall?: <T = Record<string, unknown>>(method: string, params?: unknown) => Promise<T>;
   }) {
     this.gatewayUrl = opts.gatewayUrl;
     this.workspaceDir = opts.workspaceDir;
@@ -303,11 +347,34 @@ export class CronBridge {
       info: (msg: string) => console.log(`[mabos-cron-bridge] ${msg}`),
       warn: (msg: string) => console.warn(`[mabos-cron-bridge] ${msg}`),
     };
+    this.rpcCall =
+      opts.rpcCall ??
+      (async <T = Record<string, unknown>>(method: string, params?: unknown) =>
+        await callGatewayRpc<T>(this.gatewayUrl, method, params, this.authToken));
   }
 
   /** Resolve path to a business's cron-jobs.json. */
   private cronPath(businessId: string): string {
     return join(this.workspaceDir, "businesses", businessId, "cron-jobs.json");
+  }
+
+  /** Resolve the root businesses directory in the workspace. */
+  private businessesRootPath(): string {
+    return join(this.workspaceDir, "businesses");
+  }
+
+  /** Enumerate business IDs from workspace directories. */
+  async listBusinessIds(): Promise<string[]> {
+    try {
+      const entries = await readdir(this.businessesRootPath(), { withFileTypes: true });
+      return entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .filter((name) => name.length > 0)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      return [];
+    }
   }
 
   /** Read all MABOS cron jobs for a business. */
@@ -341,13 +408,13 @@ export class CronBridge {
       try {
         if (!job.parentCronId) {
           // New job — add to parent.
-          const parentJob = await this.addToParent(job);
+          const parentJob = await this.addToParent(businessId, job);
           job.parentCronId = parentJob.id;
           added++;
           activeParentIds.add(parentJob.id);
         } else {
           // Existing job — update parent.
-          await this.updateInParent(job);
+          await this.updateInParent(businessId, job);
           updated++;
           activeParentIds.add(job.parentCronId);
         }
@@ -359,25 +426,22 @@ export class CronBridge {
 
     // Remove orphaned parent jobs (MABOS job was deleted but parent still exists).
     try {
-      const parentList = await callGatewayRpc<{ jobs: ParentCronJob[] }>(
-        this.gatewayUrl,
-        "cron.list",
-        { includeDisabled: true },
-        this.authToken,
-      );
+      const parentList = await this.rpcCall<{ jobs: ParentCronJob[] }>("cron.list", {
+        includeDisabled: true,
+      });
       for (const pj of parentList.jobs ?? []) {
-        // Only remove jobs created by this bridge (identified by [mabos] prefix).
-        if (
-          typeof pj.name === "string" &&
-          pj.name.startsWith("[mabos] ") &&
-          !activeParentIds.has(pj.id)
-        ) {
-          try {
-            await callGatewayRpc(this.gatewayUrl, "cron.remove", { id: pj.id }, this.authToken);
-            removed++;
-          } catch {
-            // Ignore removal errors — job may already be gone.
-          }
+        if (!isBridgeManagedJob(pj)) {
+          continue;
+        }
+        const ownerBusinessId = resolveParentJobBusinessId(pj);
+        if (ownerBusinessId !== businessId || activeParentIds.has(pj.id)) {
+          continue;
+        }
+        try {
+          await this.rpcCall("cron.remove", { id: pj.id });
+          removed++;
+        } catch {
+          // Ignore removal errors — job may already be gone.
         }
       }
     } catch (err) {
@@ -392,24 +456,51 @@ export class CronBridge {
     return { added, updated, removed };
   }
 
-  /** Add a single MABOS job to the parent CronService. */
-  private async addToParent(job: MabosCronJob): Promise<ParentCronJob> {
-    const create = mapToParentCreate(job);
-    const result = await callGatewayRpc<ParentCronJob>(
-      this.gatewayUrl,
-      "cron.add",
-      create,
-      this.authToken,
+  /** Sync every business found in the workspace independently. */
+  async syncAllBusinesses(): Promise<{
+    businesses: number;
+    added: number;
+    updated: number;
+    removed: number;
+  }> {
+    const businessIds = await this.listBusinessIds();
+    let added = 0;
+    let updated = 0;
+    let removed = 0;
+    let processed = 0;
+
+    for (const businessId of businessIds) {
+      try {
+        const result = await this.syncAll(businessId);
+        processed++;
+        added += result.added;
+        updated += result.updated;
+        removed += result.removed;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`sync failed for business ${businessId}: ${msg}`);
+      }
+    }
+
+    this.logger.info(
+      `sync all businesses complete (${processed}/${businessIds.length}): +${added} ~${updated} -${removed}`,
     );
+    return { businesses: processed, added, updated, removed };
+  }
+
+  /** Add a single MABOS job to the parent CronService. */
+  private async addToParent(businessId: string, job: MabosCronJob): Promise<ParentCronJob> {
+    const create = mapToParentCreate(businessId, job);
+    const result = await this.rpcCall<ParentCronJob>("cron.add", create);
     this.logger.info(`added parent job ${result.id} for MABOS ${job.id}`);
     return result;
   }
 
   /** Update an existing parent job to match current MABOS state. */
-  private async updateInParent(job: MabosCronJob): Promise<void> {
+  private async updateInParent(businessId: string, job: MabosCronJob): Promise<void> {
     if (!job.parentCronId) return;
 
-    const create = mapToParentCreate(job);
+    const create = mapToParentCreate(businessId, job);
     const patch: Record<string, unknown> = {
       enabled: job.enabled,
       schedule: create.schedule,
@@ -419,20 +510,15 @@ export class CronBridge {
       patch.delivery = create.delivery;
     }
 
-    await callGatewayRpc(
-      this.gatewayUrl,
-      "cron.update",
-      {
-        id: job.parentCronId,
-        patch,
-      },
-      this.authToken,
-    );
+    await this.rpcCall("cron.update", {
+      id: job.parentCronId,
+      patch,
+    });
   }
 
   /** Remove a parent job when its MABOS source is deleted. */
   async removeFromParent(parentCronId: string): Promise<void> {
-    await callGatewayRpc(this.gatewayUrl, "cron.remove", { id: parentCronId }, this.authToken);
+    await this.rpcCall("cron.remove", { id: parentCronId });
     this.logger.info(`removed parent job ${parentCronId}`);
   }
 }
@@ -442,7 +528,6 @@ export class CronBridge {
 // ---------------------------------------------------------------------------
 
 const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-const DEFAULT_BUSINESS_ID = "vividwalls";
 
 /**
  * Create the MABOS cron bridge as an OpenClaw plugin service.
@@ -456,10 +541,15 @@ export function createCronBridgeService(api: OpenClawPluginApi) {
 
   // Resolve workspace directory using same logic as tools.
   const pluginCfg = (api as any).pluginConfig ?? {};
+  const defaultMabosWorkspace = resolveDefaultAgentWorkspaceDir({
+    ...process.env,
+    MABOS_PRODUCT: "1",
+  } as NodeJS.ProcessEnv);
   const workspaceDir =
     pluginCfg.workspaceDir ??
     pluginCfg.agents?.defaults?.workspace ??
-    join(process.env.HOME || "/tmp", ".openclaw", "mabos");
+    (api.config as any)?.agents?.defaults?.workspace ??
+    defaultMabosWorkspace;
 
   const authToken = process.env.OPENCLAW_GATEWAY_TOKEN;
 
@@ -480,7 +570,7 @@ export function createCronBridgeService(api: OpenClawPluginApi) {
     if (running) return;
     running = true;
     try {
-      await bridge.syncAll(DEFAULT_BUSINESS_ID);
+      await bridge.syncAllBusinesses();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       (api.logger.warn ?? api.logger.info)(`[mabos-cron-bridge] sync error: ${msg}`);

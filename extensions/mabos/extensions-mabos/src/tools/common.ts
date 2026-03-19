@@ -3,6 +3,8 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 /**
@@ -25,7 +27,6 @@ export interface MabosPluginConfig {
   inboxContextEnabled?: boolean;
   inboxWakeUpEnabled?: boolean;
   inboxWakeUpCooldownMinutes?: number;
-  cognitiveRouterEnabled?: boolean;
 }
 
 /**
@@ -114,44 +115,87 @@ export function getPluginConfig(api: OpenClawPluginApi): MabosPluginConfig {
   return (api.pluginConfig ?? api.config ?? {}) as MabosPluginConfig;
 }
 
-/**
- * Check whether agent-to-agent messaging is allowed between two agents.
- * Reads `tools.agentToAgent.enabled` and `tools.agentToAgent.allow` from config.
- * Returns null if allowed, or an error string if blocked.
- */
-export function checkAgentToAgentPolicy(
+export type ResolvedIntegrationEntry = {
+  entry: Record<string, unknown>;
+  sourcePath: string;
+  businessId: string | null;
+};
+
+function isSafePathSegment(value: string): boolean {
+  return !!value && !value.includes("..") && !value.includes("/") && !value.includes("\\");
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+export async function listWorkspaceBusinessIds(workspaceDir: string): Promise<string[]> {
+  try {
+    const entries = await readdir(join(workspaceDir, "businesses"), { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory() && isSafePathSegment(entry.name))
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+}
+
+export async function resolveWorkspaceIntegrationEntry(
   api: OpenClawPluginApi,
-  fromAgentId: string,
-  toAgentId: string,
-): string | null {
-  const a2a = (api.config as any)?.tools?.agentToAgent;
+  integrationId: string,
+  preferredBusinessId?: string,
+): Promise<ResolvedIntegrationEntry | null> {
+  const workspaceDir = resolveWorkspaceDir(api);
+  const orderedBusinessIds = new Set<string>();
 
-  // Same agent always allowed
-  if (fromAgentId === toAgentId) return null;
-
-  // Feature flag check — default to enabled when config section is missing
-  // (MABOS is a multi-agent system; blocking by default breaks all coordination)
-  if (a2a && a2a.enabled === false) {
-    return `Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent messages.`;
+  if (preferredBusinessId && isSafePathSegment(preferredBusinessId)) {
+    orderedBusinessIds.add(preferredBusinessId);
   }
 
-  // Allow patterns check
-  const allowPatterns: string[] = Array.isArray(a2a.allow) ? a2a.allow : [];
-  if (allowPatterns.length === 0) return null; // No allowlist = all allowed
+  for (const businessId of await listWorkspaceBusinessIds(workspaceDir)) {
+    orderedBusinessIds.add(businessId);
+  }
 
-  const matchesAllow = (agentId: string): boolean =>
-    allowPatterns.some((pattern: string) => {
-      const raw = String(pattern ?? "").trim();
-      if (!raw) return false;
-      if (raw === "*") return true;
-      if (!raw.includes("*")) return raw === agentId;
-      const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const re = new RegExp(`^${escaped.split("\\*").join(".*")}$`, "i");
-      return re.test(agentId);
-    });
+  const candidateSources = [
+    ...Array.from(orderedBusinessIds, (businessId) => ({
+      sourcePath: join(workspaceDir, "businesses", businessId, "integrations.json"),
+      businessId,
+    })),
+    {
+      sourcePath: join(workspaceDir, "integrations.json"),
+      businessId: null,
+    },
+  ];
 
-  if (!matchesAllow(fromAgentId) || !matchesAllow(toAgentId)) {
-    return `Agent-to-agent messaging denied by tools.agentToAgent.allow: ${fromAgentId} → ${toAgentId} not permitted.`;
+  for (const source of candidateSources) {
+    try {
+      const parsed = JSON.parse(await readFile(source.sourcePath, "utf-8")) as unknown;
+      const store = asRecord(parsed);
+      const integrations = store && Array.isArray(store.integrations) ? store.integrations : [];
+      for (const integration of integrations) {
+        const entry = asRecord(integration);
+        if (!entry) {
+          continue;
+        }
+        if (entry.id !== integrationId) {
+          continue;
+        }
+        if (entry.enabled === false) {
+          continue;
+        }
+        return {
+          entry,
+          sourcePath: source.sourcePath,
+          businessId: source.businessId,
+        };
+      }
+    } catch {
+      // Skip unreadable files; continue scanning remaining business scopes.
+    }
   }
 
   return null;

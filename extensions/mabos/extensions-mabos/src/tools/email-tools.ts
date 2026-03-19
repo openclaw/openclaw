@@ -140,7 +140,7 @@ export function createEmailTools(api: OpenClawPluginApi): AnyAgentTool[] {
               subject: campaign.subject || "",
               template_id: campaign.template_id,
               segment_id: campaign.segment_id,
-              from_name: campaign.from_name || "VividWalls",
+              from_name: campaign.from_name || "Business Team",
               reply_to: campaign.reply_to,
               body_html: campaign.body_html,
               body_text: campaign.body_text,

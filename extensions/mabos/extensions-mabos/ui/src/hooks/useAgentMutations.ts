@@ -12,7 +12,10 @@ export function useCreateAgent(businessId: string) {
       type: "core" | "domain";
       autonomy_level: "low" | "medium" | "high";
       approval_threshold_usd: number;
-    }) => api.createAgent(businessId, body),
+    }) => {
+      if (!businessId) throw new Error("Missing business ID");
+      return api.createAgent(businessId, body);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["agents", businessId] });
     },
@@ -23,8 +26,10 @@ export function useUpdateAgent(businessId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ agentId, body }: { agentId: string; body: Partial<AgentListItem> }) =>
-      api.updateAgent(businessId, agentId, body),
+    mutationFn: ({ agentId, body }: { agentId: string; body: Partial<AgentListItem> }) => {
+      if (!businessId) throw new Error("Missing business ID");
+      return api.updateAgent(businessId, agentId, body);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["agents", businessId] });
     },
@@ -35,7 +40,10 @@ export function useArchiveAgent(businessId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (agentId: string) => api.archiveAgent(businessId, agentId),
+    mutationFn: (agentId: string) => {
+      if (!businessId) throw new Error("Missing business ID");
+      return api.archiveAgent(businessId, agentId);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["agents", businessId] });
     },

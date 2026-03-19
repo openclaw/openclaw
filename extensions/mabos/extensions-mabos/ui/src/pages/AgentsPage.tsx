@@ -1,17 +1,14 @@
 import { AlertCircle, Users, Plus } from "lucide-react";
-import { useState } from "react";
 import { AgentCard } from "@/components/agents/AgentCard";
-import { AgentFormDialog } from "@/components/agents/AgentFormDialog";
 import { AgentViewSwitcher } from "@/components/agents/AgentViewSwitcher";
 import { ChatBlurOverlay } from "@/components/agents/ChatBlurOverlay";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useActiveBusinessId } from "@/contexts/BusinessContext";
 import { usePanels } from "@/contexts/PanelContext";
 import { useAgents } from "@/hooks/useAgents";
 import type { AgentListResponse } from "@/lib/types";
-
-const BUSINESS_ID = "vividwalls";
 
 function AgentCardSkeleton() {
   return (
@@ -40,8 +37,8 @@ function AgentCardSkeleton() {
 }
 
 export function AgentsPage() {
-  const { data: agentsRaw, isLoading, error } = useAgents(BUSINESS_ID);
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const businessId = useActiveBusinessId();
+  const { data: agentsRaw, isLoading, error } = useAgents(businessId);
   const { openDetailPanel } = usePanels();
 
   // The API wraps agents in { agents: [...] }
@@ -69,7 +66,7 @@ export function AgentsPage() {
           </div>
         </div>
         <Button
-          onClick={() => setShowCreateDialog(true)}
+          onClick={() => openDetailPanel("agent", "__new__", null, "create")}
           className="bg-[var(--accent-green)] text-white hover:bg-[var(--accent-green)]/90 gap-1.5"
         >
           <Plus className="w-4 h-4" />
@@ -120,13 +117,6 @@ export function AgentsPage() {
           )}
         </>
       </AgentViewSwitcher>
-
-      {/* Create Dialog */}
-      <AgentFormDialog
-        open={showCreateDialog}
-        onOpenChange={setShowCreateDialog}
-        businessId={BUSINESS_ID}
-      />
 
       {/* Blur overlay between grid and chat */}
       <ChatBlurOverlay />

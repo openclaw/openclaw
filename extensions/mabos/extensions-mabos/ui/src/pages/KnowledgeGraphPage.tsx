@@ -14,11 +14,10 @@ import { ActorNode } from "@/components/knowledge-graph/ActorNode";
 import { DependencyEdge } from "@/components/knowledge-graph/DependencyEdge";
 import { GoalNode } from "@/components/knowledge-graph/GoalNode";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useActiveBusinessId } from "@/contexts/BusinessContext";
 import { usePanels } from "@/contexts/PanelContext";
 import { useGoalModel } from "@/hooks/useGoalModel";
 import { troposToFlowGraph } from "@/lib/graph-layout";
-
-const BUSINESS_ID = "vividwalls";
 
 const nodeTypes: NodeTypes = {
   actorNode: ActorNode,
@@ -30,7 +29,8 @@ const edgeTypes: EdgeTypes = {
 };
 
 export function KnowledgeGraphPage() {
-  const { data: goalModel, isLoading, error } = useGoalModel(BUSINESS_ID);
+  const businessId = useActiveBusinessId();
+  const { data: goalModel, isLoading, error } = useGoalModel(businessId);
   const { openDetailPanel } = usePanels();
 
   const { nodes, edges } = useMemo(() => {

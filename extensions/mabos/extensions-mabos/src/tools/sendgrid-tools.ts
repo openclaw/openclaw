@@ -4,11 +4,9 @@
  * Reads credentials from integrations.json → "sendgrid-main" entry.
  */
 
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
-import { httpRequest, textResult, resolveWorkspaceDir } from "./common.js";
+import { httpRequest, textResult, resolveWorkspaceIntegrationEntry } from "./common.js";
 
 // ── Credential loader ──────────────────────────────────────────────────
 
@@ -18,28 +16,37 @@ interface SendGridCreds {
   fromEmail: string;
 }
 
-async function loadSendGridCreds(api: OpenClawPluginApi): Promise<SendGridCreds | null> {
-  const ws = resolveWorkspaceDir(api);
-  const paths = [
-    join(ws, "businesses", "vividwalls", "integrations.json"),
-    join(ws, "integrations.json"),
-  ];
-  for (const p of paths) {
-    try {
-      const data = JSON.parse(await readFile(p, "utf-8"));
-      const entry = (data.integrations || []).find(
-        (i: any) => i.id === "sendgrid-main" && i.enabled,
-      );
-      if (entry?.api_key) {
-        return {
-          apiKey: entry.api_key,
-          baseUrl: (entry.base_url || "https://api.sendgrid.com").replace(/\/$/, ""),
-          fromEmail: entry.metadata?.from_email || "noreply@vividwalls.co",
-        };
-      }
-    } catch {}
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
   }
-  return null;
+  return value as Record<string, unknown>;
+}
+
+async function loadSendGridCreds(api: OpenClawPluginApi): Promise<SendGridCreds | null> {
+  const resolved = await resolveWorkspaceIntegrationEntry(api, "sendgrid-main");
+  if (!resolved) {
+    return null;
+  }
+
+  const apiKey = typeof resolved.entry.api_key === "string" ? resolved.entry.api_key : "";
+  if (!apiKey) {
+    return null;
+  }
+
+  const metadata = asRecord(resolved.entry.metadata) ?? {};
+  const fromEmail =
+    typeof metadata.from_email === "string" ? metadata.from_email : "noreply@example.com";
+  const baseUrl =
+    typeof resolved.entry.base_url === "string"
+      ? resolved.entry.base_url
+      : "https://api.sendgrid.com";
+
+  return {
+    apiKey,
+    baseUrl: baseUrl.replace(/\/$/, ""),
+    fromEmail,
+  };
 }
 
 function sgHeaders(apiKey: string) {
@@ -125,7 +132,7 @@ export function createSendGridTools(api: OpenClawPluginApi): AnyAgentTool[] {
           ],
           from: {
             email: params.from_email || creds.fromEmail,
-            name: params.from_name || "VividWalls",
+            name: params.from_name || "Business Operations",
           },
           template_id: params.template_id,
         };
@@ -163,7 +170,7 @@ export function createSendGridTools(api: OpenClawPluginApi): AnyAgentTool[] {
           personalizations: [{ to: [{ email: params.to }] }],
           from: {
             email: params.from_email || creds.fromEmail,
-            name: params.from_name || "VividWalls",
+            name: params.from_name || "Business Operations",
           },
           subject: params.subject,
           content,

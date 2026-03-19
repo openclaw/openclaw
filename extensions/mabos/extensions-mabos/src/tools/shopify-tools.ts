@@ -9,7 +9,7 @@ export function createShopifyTools(_api: OpenClawPluginApi): AnyAgentTool[] {
       name: "shopify_catalog",
       label: "Shopify Product Catalog",
       description:
-        "List products from the VividWalls Shopify store. Returns title, handle, price, and image URL for content creation.",
+        "List products from the configured Shopify store. Returns title, handle, price, and image URL for content creation.",
       parameters: Type.Object({
         limit: Type.Optional(Type.Number({ description: "Max products (default 50)" })),
       }),
@@ -25,7 +25,7 @@ export function createShopifyTools(_api: OpenClawPluginApi): AnyAgentTool[] {
       name: "branded_post_preview",
       label: "Branded Post Preview",
       description:
-        "Generate a branded VividWalls social media caption for a Shopify product using brand templates (socialPost, adCopy, instagramCaption).",
+        "Generate a branded social media caption for a Shopify product using configured templates (socialPost, adCopy, instagramCaption).",
       parameters: Type.Object({
         product_handle: Type.String({ description: "Shopify product handle" }),
         template: Type.Optional(

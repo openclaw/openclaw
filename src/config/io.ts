@@ -42,6 +42,7 @@ import {
   resolveConfigIncludes,
 } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
+import { ensureMabosProductPluginConfig } from "./mabos-plugin-config.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
@@ -718,7 +719,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
           });
         }
-        return {};
+        return ensureMabosProductPluginConfig({}, deps.env);
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
@@ -840,7 +841,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.delete(configPath);
       }
 
-      return applyConfigOverrides(cfgWithOwnerDisplaySecret);
+      const cfgWithMabosPlugin = ensureMabosProductPluginConfig(
+        cfgWithOwnerDisplaySecret,
+        deps.env,
+      );
+      return applyConfigOverrides(cfgWithMabosPlugin);
     } catch (err) {
       if (err instanceof DuplicateAgentDirError) {
         deps.logger.error(err.message);

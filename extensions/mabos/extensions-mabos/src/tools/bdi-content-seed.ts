@@ -1,8 +1,9 @@
 #!/usr/bin/env ts-node
 /**
  * BDI Content Seed Script
- * Populates all 17 VividWalls agent BDI markdown files with rich domain-specific content.
- * Run: ts-node bdi-content-seed.ts [workspaceDir]
+ * Populates all 17 case-study agent BDI markdown files with rich domain-specific content.
+ * Defaults target the VividWalls case study.
+ * Run: ts-node bdi-content-seed.ts [workspaceDir] [businessId] [businessName]
  */
 
 import * as fs from "fs";
@@ -13,7 +14,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const WORKSPACE = process.argv[2] || path.join(process.env.HOME || "~", ".openclaw/workspace");
-const BIZ_DIR = path.join(WORKSPACE, "businesses/vividwalls");
+const BUSINESS_ID = process.argv[3] || process.env.MABOS_CASE_STUDY_BUSINESS_ID || "vividwalls";
+const BUSINESS_NAME = process.argv[4] || process.env.MABOS_CASE_STUDY_BUSINESS_NAME || "VividWalls";
+const BIZ_DIR = path.join(WORKSPACE, `businesses/${BUSINESS_ID}`);
 const AGENTS_DIR = path.join(BIZ_DIR, "agents");
 const TEMPLATES_DIR = path.resolve(__dirname, "../../templates/base");
 
@@ -44,16 +47,20 @@ type AgentId = (typeof ALL_AGENTS)[number];
 
 // ── Helpers ──
 
+function applyCaseStudyBranding(content: string): string {
+  return content.replaceAll("VividWalls", BUSINESS_NAME).replaceAll("vividwalls", BUSINESS_ID);
+}
+
 function writeFile(agentId: string, filename: string, content: string) {
   const dir = path.join(AGENTS_DIR, agentId);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, filename), content, "utf-8");
+  fs.writeFileSync(path.join(dir, filename), applyCaseStudyBranding(content), "utf-8");
 }
 
 function readTemplate(role: string): string {
   const p = path.join(TEMPLATES_DIR, `desires-${role}.md`);
   if (fs.existsSync(p))
-    return fs.readFileSync(p, "utf-8").replace(/\{business_name\}/g, "VividWalls");
+    return fs.readFileSync(p, "utf-8").replace(/\{business_name\}/g, BUSINESS_NAME);
   return "";
 }
 
@@ -2112,6 +2119,15 @@ function generateKnowledge(agentId: AgentId): string {
 - **Content Creation:** Photography direction, social media design, ad creative
 - **AI Art Curation:** Quality assessment, style consistency, print reproduction
 
+## Lifestyle Gallery Tools
+- \`lifestyle_gallery_generate\` — Generate a single lifestyle room-scene image
+- \`lifestyle_gallery_batch\` — Batch generate images across collections/segments/scenes
+- \`lifestyle_gallery_upload\` — Upload generated image to Shopify CDN
+- \`lifestyle_gallery_status\` — Check pipeline progress
+- \`lifestyle_gallery_set_metafields\` — Set CDN URLs as Shopify page metafields
+
+**Skill:** Use the \`art-director\` skill for art direction workflows, color-theory-driven staging, and lifestyle gallery image generation.
+
 ## Key Metrics
 | Metric | Target |
 |--------|--------|
@@ -2520,8 +2536,9 @@ function generatePlaybooks(agentId: AgentId): string {
 // ── Main Execution ──
 
 function main() {
-  console.log("BDI Content Seed — VividWalls");
+  console.log(`BDI Content Seed — ${BUSINESS_NAME}`);
   console.log(`Workspace: ${WORKSPACE}`);
+  console.log(`Business ID: ${BUSINESS_ID}`);
   console.log(`Agents dir: ${AGENTS_DIR}`);
   console.log(`Templates dir: ${TEMPLATES_DIR}`);
   console.log("");
@@ -2540,7 +2557,7 @@ function main() {
       if (coreRole) {
         const template = readTemplate(coreRole);
         if (template) {
-          desiresContent = template.replace("(Template)", `— VividWalls`);
+          desiresContent = template.replace("(Template)", `— ${BUSINESS_NAME}`);
         } else {
           desiresContent = `# Desires — ${agentId.toUpperCase()}\n\n_Desire template not found for role: ${coreRole}_\n`;
         }

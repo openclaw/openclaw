@@ -1,4 +1,5 @@
 import { Card, CardContent } from "@/components/ui/card";
+import { useBusinessContext } from "@/contexts/BusinessContext";
 import type { ExpenseCategory } from "@/lib/types";
 
 function fmt(n: number) {
@@ -45,6 +46,7 @@ type Props = {
 };
 
 export function ExpenseReportView({ from, to, data, isLoading }: Props) {
+  const { activeBusiness } = useBusinessContext();
   if (isLoading) {
     return (
       <Card className="border-[var(--border-mabos)] bg-[var(--bg-card)] shadow-none">
@@ -63,7 +65,7 @@ export function ExpenseReportView({ from, to, data, isLoading }: Props) {
         {/* Document header */}
         <div className="text-center mb-6">
           <p className="text-xs uppercase tracking-widest text-[var(--text-secondary)]">
-            VividWalls LLC
+            {activeBusiness?.name || "Business"}
           </p>
           <h2 className="text-lg font-bold text-[var(--text-primary)] mt-1">Expense Report</h2>
           <p className="text-xs text-[var(--text-secondary)] mt-1">

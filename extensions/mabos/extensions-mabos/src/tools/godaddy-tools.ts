@@ -4,11 +4,9 @@
  * Reads credentials from integrations.json → "godaddy-dns" entry.
  */
 
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
-import { httpRequest, textResult, resolveWorkspaceDir } from "./common.js";
+import { httpRequest, textResult, resolveWorkspaceIntegrationEntry } from "./common.js";
 
 // ── Credential loader ──────────────────────────────────────────────────
 
@@ -18,26 +16,36 @@ interface GoDaddyCreds {
   baseUrl: string;
 }
 
-async function loadGoDaddyCreds(api: OpenClawPluginApi): Promise<GoDaddyCreds | null> {
-  const ws = resolveWorkspaceDir(api);
-  const paths = [
-    join(ws, "businesses", "vividwalls", "integrations.json"),
-    join(ws, "integrations.json"),
-  ];
-  for (const p of paths) {
-    try {
-      const data = JSON.parse(await readFile(p, "utf-8"));
-      const entry = (data.integrations || []).find((i: any) => i.id === "godaddy-dns" && i.enabled);
-      if (entry?.api_key && entry?.metadata?.api_secret) {
-        return {
-          apiKey: entry.api_key,
-          apiSecret: entry.metadata.api_secret,
-          baseUrl: (entry.base_url || "https://api.godaddy.com").replace(/\/$/, ""),
-        };
-      }
-    } catch {}
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
   }
-  return null;
+  return value as Record<string, unknown>;
+}
+
+async function loadGoDaddyCreds(api: OpenClawPluginApi): Promise<GoDaddyCreds | null> {
+  const resolved = await resolveWorkspaceIntegrationEntry(api, "godaddy-dns");
+  if (!resolved) {
+    return null;
+  }
+
+  const metadata = asRecord(resolved.entry.metadata) ?? {};
+  const apiKey = typeof resolved.entry.api_key === "string" ? resolved.entry.api_key : "";
+  const apiSecret = typeof metadata.api_secret === "string" ? metadata.api_secret : "";
+  if (!apiKey || !apiSecret) {
+    return null;
+  }
+
+  const baseUrl =
+    typeof resolved.entry.base_url === "string"
+      ? resolved.entry.base_url
+      : "https://api.godaddy.com";
+
+  return {
+    apiKey,
+    apiSecret,
+    baseUrl: baseUrl.replace(/\/$/, ""),
+  };
 }
 
 function gdHeaders(key: string, secret: string) {

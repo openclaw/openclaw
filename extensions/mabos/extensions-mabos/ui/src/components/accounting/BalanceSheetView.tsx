@@ -1,4 +1,5 @@
 import { Card, CardContent } from "@/components/ui/card";
+import { useBusinessContext } from "@/contexts/BusinessContext";
 import { useBalanceSheet } from "@/hooks/useAccounting";
 import type { BalanceSheet } from "@/lib/types";
 
@@ -38,6 +39,7 @@ function Section({
 }
 
 export function BalanceSheetView() {
+  const { activeBusiness } = useBusinessContext();
   const { data, isLoading } = useBalanceSheet();
 
   if (isLoading) {
@@ -61,7 +63,7 @@ export function BalanceSheetView() {
         {/* Document header */}
         <div className="text-center mb-6">
           <p className="text-xs uppercase tracking-widest text-[var(--text-secondary)]">
-            VividWalls LLC
+            {activeBusiness?.name || "Business"}
           </p>
           <h2 className="text-lg font-bold text-[var(--text-primary)] mt-1">Balance Sheet</h2>
           <p className="text-xs text-[var(--text-secondary)] mt-1">

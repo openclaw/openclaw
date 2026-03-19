@@ -1,8 +1,10 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Palette, Plus } from "lucide-react";
+import { useBusinessContext } from "@/contexts/BusinessContext";
 import { navSections } from "@/lib/navigation";
 
 export function MobileNav({ compact }: { compact?: boolean }) {
+  const { activeBusiness, isLoading: businessesLoading } = useBusinessContext();
   const routerState = useRouterState();
   const currentPath = routerState.location.pathname;
 
@@ -19,7 +21,9 @@ export function MobileNav({ compact }: { compact?: boolean }) {
       <div className="flex items-center gap-1 shrink-0 pr-2 mr-1 border-r border-[var(--border-mabos)]">
         <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-full bg-[var(--bg-tertiary)] text-xs text-[var(--text-primary)]">
           <Palette className="w-3 h-3 text-[var(--accent-purple)]" />
-          {!compact && <span>VividWalls</span>}
+          {!compact && (
+            <span>{businessesLoading ? "Loading..." : activeBusiness?.name || "No business"}</span>
+          )}
         </div>
         <Link
           to="/onboarding"

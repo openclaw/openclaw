@@ -8,11 +8,19 @@ import {
   type NodeTypes,
   type EdgeTypes,
 } from "@xyflow/react";
-import { GitBranch, AlertCircle, LayoutGrid, Network, Clock, Plus, Pencil } from "lucide-react";
-import { api } from "@/lib/api";
+import {
+  GitBranch,
+  AlertCircle,
+  LayoutGrid,
+  Network,
+  Clock,
+  Plus,
+  Pencil,
+  Timer,
+} from "lucide-react";
 import { useState, useMemo, useCallback } from "react";
-import "@xyflow/react/dist/style.css";
 import { CronBadge } from "@/components/cron/CronBadge";
+import "@xyflow/react/dist/style.css";
 import { WorkflowSteps } from "@/components/goals/WorkflowSteps";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,18 +29,19 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { WorkflowEdge } from "@/components/workflows/WorkflowEdge";
 import { WorkflowGoalNode } from "@/components/workflows/WorkflowGoalNode";
 import { WorkflowStepNode } from "@/components/workflows/WorkflowStepNode";
+import { useActiveBusinessId } from "@/contexts/BusinessContext";
 import { usePanels } from "@/contexts/PanelContext";
+import { useCronJobs, useToggleCronJob } from "@/hooks/useCronJobs";
 import { useGoalModel } from "@/hooks/useGoalModel";
-import { nextRunFromNow } from "@/lib/cron-utils";
-import type { EntityType, Workflow, WorkflowStatus } from "@/lib/types";
+import { api } from "@/lib/api";
+import { cronToHuman, nextRunFromNow } from "@/lib/cron-utils";
+import type { CronJob, EntityType, Workflow, WorkflowStatus } from "@/lib/types";
 import { workflowsToFlowGraph } from "@/lib/workflow-layout";
 import type { WorkflowGoalNodeData, WorkflowStepNodeData } from "@/lib/workflow-layout";
 
-const BUSINESS_ID = "vividwalls";
-
 const statusOptions: WorkflowStatus[] = ["active", "pending", "paused", "completed"];
 
-type ViewMode = "graph" | "list";
+type ViewMode = "graph" | "list" | "cron";
 
 const nodeTypes: NodeTypes = {
   workflowGoalNode: WorkflowGoalNode,
@@ -204,8 +213,162 @@ function NewWorkflowButton() {
   );
 }
 
+export function CronJobsView() {
+  const businessId = useActiveBusinessId();
+  const { data: cronJobs, isLoading } = useCronJobs(businessId);
+  const toggleMutation = useToggleCronJob(businessId);
+  const [sourceFilter, setSourceFilter] = useState<"all" | "local" | "gateway">("all");
+
+  const filtered = useMemo(() => {
+    if (!cronJobs) return [];
+    if (sourceFilter === "all") return cronJobs;
+    return cronJobs.filter((j) => j.source === sourceFilter);
+  }, [cronJobs, sourceFilter]);
+
+  const localCount = cronJobs?.filter((j) => j.source === "local").length ?? 0;
+  const gatewayCount = cronJobs?.filter((j) => j.source === "gateway").length ?? 0;
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} className="h-16 w-full rounded-lg" />
+        ))}
+      </div>
+    );
+  }
+
+  const statusColor = (job: CronJob) => {
+    if (job.status === "error" || (job.consecutiveErrors && job.consecutiveErrors > 0))
+      return "var(--accent-red)";
+    if (!job.enabled || job.status === "paused") return "var(--text-muted)";
+    return "var(--accent-green)";
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Source filter */}
+      <div className="flex items-center gap-3 text-xs">
+        <button
+          onClick={() => setSourceFilter("all")}
+          className={`px-2.5 py-1 rounded-md transition-colors ${sourceFilter === "all" ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"}`}
+        >
+          All ({cronJobs?.length ?? 0})
+        </button>
+        <button
+          onClick={() => setSourceFilter("local")}
+          className={`px-2.5 py-1 rounded-md transition-colors ${sourceFilter === "local" ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"}`}
+        >
+          MABOS ({localCount})
+        </button>
+        <button
+          onClick={() => setSourceFilter("gateway")}
+          className={`px-2.5 py-1 rounded-md transition-colors ${sourceFilter === "gateway" ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"}`}
+        >
+          Gateway ({gatewayCount})
+        </button>
+      </div>
+
+      {/* Jobs list */}
+      <div className="space-y-2">
+        {filtered.map((job) => (
+          <div
+            key={job.id}
+            className="flex items-center gap-3 px-4 py-3 rounded-lg border bg-[var(--bg-card)] border-[var(--border-mabos)] hover:border-[var(--border-hover)] transition-colors"
+          >
+            {/* Status dot */}
+            <span
+              className="w-2 h-2 rounded-full shrink-0"
+              style={{ backgroundColor: statusColor(job) }}
+            />
+
+            {/* Name + schedule */}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-[var(--text-primary)] truncate font-medium">
+                  {job.name}
+                </span>
+                {job.source === "gateway" && (
+                  <Badge
+                    variant="outline"
+                    className="text-[9px] border-[var(--accent-orange)]/30 text-[var(--accent-orange)]"
+                  >
+                    gateway
+                  </Badge>
+                )}
+                {job.agentId && (
+                  <span className="text-[10px] text-[var(--accent-purple)] bg-[color-mix(in_srgb,var(--accent-purple)_8%,transparent)] px-1.5 py-0.5 rounded font-mono shrink-0">
+                    {job.agentId}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3 mt-0.5 text-[10px] text-[var(--text-muted)]">
+                <span className="flex items-center gap-1">
+                  <Clock className="w-2.5 h-2.5" />
+                  {cronToHuman(job.schedule)}
+                </span>
+                {job.action && <span className="font-mono">{job.action}</span>}
+                {job.lastStatus && (
+                  <span
+                    style={{
+                      color: job.lastStatus === "error" ? "var(--accent-red)" : "var(--text-muted)",
+                    }}
+                  >
+                    last: {job.lastStatus}
+                  </span>
+                )}
+                {job.consecutiveErrors != null && job.consecutiveErrors > 0 && (
+                  <span style={{ color: "var(--accent-red)" }}>
+                    {job.consecutiveErrors} error{job.consecutiveErrors !== 1 ? "s" : ""}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Next run */}
+            <div className="text-right shrink-0">
+              {job.nextRun && (
+                <span className="text-[10px] text-[var(--text-muted)]">
+                  Next: {nextRunFromNow(job.schedule)}
+                </span>
+              )}
+              {job.lastRun && (
+                <div className="text-[10px] text-[var(--text-muted)]">
+                  Last: {new Date(job.lastRun).toLocaleDateString()}
+                </div>
+              )}
+            </div>
+
+            {/* Toggle */}
+            <button
+              onClick={() => toggleMutation.mutate({ jobId: job.id, enabled: !job.enabled })}
+              className="shrink-0 px-2 py-1 text-[10px] rounded border transition-colors"
+              style={{
+                borderColor: job.enabled
+                  ? "color-mix(in srgb, var(--accent-green) 40%, transparent)"
+                  : "color-mix(in srgb, var(--text-muted) 30%, transparent)",
+                color: job.enabled ? "var(--accent-green)" : "var(--text-muted)",
+              }}
+            >
+              {job.enabled ? "Enabled" : "Disabled"}
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {filtered.length === 0 && (
+        <div className="text-center py-12">
+          <Timer className="w-12 h-12 text-[var(--text-muted)] mx-auto mb-4" />
+          <p className="text-sm text-[var(--text-secondary)]">No cron jobs found.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function WorkflowsPage() {
-  const { data: goalModel, isLoading, error } = useGoalModel(BUSINESS_ID);
+  const businessId = useActiveBusinessId();
+  const { data: goalModel, isLoading, error } = useGoalModel(businessId);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [statusFilter, setStatusFilter] = useState<WorkflowStatus | "all">("all");
   const [agentFilter, setAgentFilter] = useState("all");
@@ -293,7 +456,7 @@ export function WorkflowsPage() {
 
         {/* View toggle + New Workflow */}
         <div className="flex items-center gap-2">
-          {!isLoading && workflows.length > 0 && (
+          {!isLoading && (
             <div className="flex items-center rounded-lg border border-[var(--border-mabos)] overflow-hidden">
               <button
                 onClick={() => setViewMode("graph")}
@@ -316,6 +479,17 @@ export function WorkflowsPage() {
               >
                 <LayoutGrid className="w-3.5 h-3.5" />
                 List
+              </button>
+              <button
+                onClick={() => setViewMode("cron")}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors"
+                style={{
+                  backgroundColor: viewMode === "cron" ? "var(--bg-secondary)" : "transparent",
+                  color: viewMode === "cron" ? "var(--text-primary)" : "var(--text-muted)",
+                }}
+              >
+                <Timer className="w-3.5 h-3.5" />
+                Cron Jobs
               </button>
             </div>
           )}
@@ -475,6 +649,9 @@ export function WorkflowsPage() {
           openDetailPanel={openDetailPanel}
         />
       )}
+
+      {/* Cron Jobs View */}
+      {viewMode === "cron" && <CronJobsView />}
 
       {/* Empty state for graph view */}
       {!isLoading && !error && viewMode === "graph" && nodes.length === 0 && (

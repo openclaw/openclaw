@@ -10,11 +10,10 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
+import { useActiveBusinessId } from "@/contexts/BusinessContext";
 import { getAgentIcon, getAgentName } from "@/lib/agent-icons";
 import { api } from "@/lib/api";
 import type { Task } from "@/lib/types";
-
-const BUSINESS_ID = "vividwalls";
 
 const statusOrder: Task["status"][] = ["backlog", "todo", "in_progress", "review", "done"];
 
@@ -48,13 +47,16 @@ interface TaskDetailProps {
 }
 
 export function TaskDetail({ task, open, onOpenChange, sheetSide = "right" }: TaskDetailProps) {
+  const businessId = useActiveBusinessId();
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
-    mutationFn: (newStatus: Task["status"]) =>
-      api.updateTask(BUSINESS_ID, task!.id, { status: newStatus }),
+    mutationFn: (newStatus: Task["status"]) => {
+      if (!businessId) throw new Error("Missing business ID");
+      return api.updateTask(businessId, task!.id, { status: newStatus });
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tasks", BUSINESS_ID] });
+      queryClient.invalidateQueries({ queryKey: ["tasks", businessId] });
     },
   });
 
@@ -192,7 +194,7 @@ export function TaskDetail({ task, open, onOpenChange, sheetSide = "right" }: Ta
             {nextStatus && (
               <Button
                 onClick={() => mutation.mutate(nextStatus)}
-                disabled={mutation.isPending}
+                disabled={mutation.isPending || !businessId}
                 className="w-full"
                 style={{
                   backgroundColor: statusColors[nextStatus],
@@ -207,7 +209,7 @@ export function TaskDetail({ task, open, onOpenChange, sheetSide = "right" }: Ta
               <Button
                 variant="outline"
                 onClick={() => mutation.mutate(prevStatus)}
-                disabled={mutation.isPending}
+                disabled={mutation.isPending || !businessId}
                 className="w-full border-[var(--border-mabos)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
               >
                 Move back to {statusLabels[prevStatus]}

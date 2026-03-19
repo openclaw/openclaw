@@ -4,11 +4,9 @@
  * Reads credentials from integrations.json → "cloudflare-dns" entry.
  */
 
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
-import { httpRequest, textResult, resolveWorkspaceDir } from "./common.js";
+import { httpRequest, textResult, resolveWorkspaceIntegrationEntry } from "./common.js";
 
 // ── Credential loader ──────────────────────────────────────────────────
 
@@ -17,27 +15,29 @@ interface CloudflareCreds {
   accountId: string;
 }
 
-async function loadCloudflareCreds(api: OpenClawPluginApi): Promise<CloudflareCreds | null> {
-  const ws = resolveWorkspaceDir(api);
-  const paths = [
-    join(ws, "businesses", "vividwalls", "integrations.json"),
-    join(ws, "integrations.json"),
-  ];
-  for (const p of paths) {
-    try {
-      const data = JSON.parse(await readFile(p, "utf-8"));
-      const entry = (data.integrations || []).find(
-        (i: any) => i.id === "cloudflare-dns" && i.enabled,
-      );
-      if (entry?.api_key) {
-        return {
-          apiToken: entry.api_key,
-          accountId: entry.metadata?.account_id || "",
-        };
-      }
-    } catch {}
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
   }
-  return null;
+  return value as Record<string, unknown>;
+}
+
+async function loadCloudflareCreds(api: OpenClawPluginApi): Promise<CloudflareCreds | null> {
+  const resolved = await resolveWorkspaceIntegrationEntry(api, "cloudflare-dns");
+  if (!resolved) {
+    return null;
+  }
+
+  const apiToken = typeof resolved.entry.api_key === "string" ? resolved.entry.api_key : "";
+  if (!apiToken) {
+    return null;
+  }
+
+  const metadata = asRecord(resolved.entry.metadata) ?? {};
+  return {
+    apiToken,
+    accountId: typeof metadata.account_id === "string" ? metadata.account_id : "",
+  };
 }
 
 function cfHeaders(token: string) {

@@ -2,12 +2,11 @@ import { AlertCircle, FolderKanban } from "lucide-react";
 import { useMemo } from "react";
 import { ProjectSection } from "@/components/projects/ProjectSection";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useActiveBusinessId } from "@/contexts/BusinessContext";
 import { usePanels } from "@/contexts/PanelContext";
 import { useTasks } from "@/hooks/useTasks";
 import { perspectives } from "@/lib/sla-perspectives";
 import type { Task, Project, ProjectSLA } from "@/lib/types";
-
-const BUSINESS_ID = "vividwalls";
 
 function deriveSLA(tasks: Task[]): ProjectSLA {
   const hasHighPriority = tasks.some((t) => t.priority === "high");
@@ -26,7 +25,8 @@ function deriveSLA(tasks: Task[]): ProjectSLA {
 }
 
 export function ProjectsPage() {
-  const { data: tasks = [], isLoading, error } = useTasks(BUSINESS_ID);
+  const businessId = useActiveBusinessId();
+  const { data: tasks = [], isLoading, error } = useTasks(businessId);
   const { openDetailPanel } = usePanels();
 
   // Group tasks by plan_name into projects

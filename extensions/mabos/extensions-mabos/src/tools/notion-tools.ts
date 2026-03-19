@@ -1,7 +1,7 @@
 /**
  * Notion Tools — Content calendar, campaigns, ad sets, blog, creatives
  *
- * Provides CRUD access to VividWalls marketing Notion databases.
+ * Provides CRUD access to configured marketing Notion databases.
  */
 
 import { Type, type Static } from "@sinclair/typebox";
@@ -104,7 +104,7 @@ export function createNotionTools(api: OpenClawPluginApi): AnyAgentTool[] {
       name: "notion_query",
       label: "Query Notion Database",
       description:
-        "Query a VividWalls Notion marketing database (content_calendar, campaigns, ad_sets, blog, creatives). Returns matching pages with properties.",
+        "Query a marketing Notion database (content_calendar, campaigns, ad_sets, blog, creatives). Returns matching pages with properties.",
       parameters: NotionQueryParams,
       async execute(_id: string, params: Static<typeof NotionQueryParams>) {
         const body: any = { page_size: params.page_size || 20 };
@@ -144,7 +144,7 @@ export function createNotionTools(api: OpenClawPluginApi): AnyAgentTool[] {
       name: "notion_create",
       label: "Create Notion Page",
       description:
-        "Create a new page in a VividWalls Notion marketing database. Properties must match the database schema.",
+        "Create a new page in a marketing Notion database. Properties must match the database schema.",
       parameters: NotionCreateParams,
       async execute(_id: string, params: Static<typeof NotionCreateParams>) {
         const data = await notionFetch("/pages", "POST", {

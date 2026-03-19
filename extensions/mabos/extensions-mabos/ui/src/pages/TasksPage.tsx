@@ -1,11 +1,10 @@
-import { useState, useMemo } from "react";
 import { AlertCircle, ClipboardList } from "lucide-react";
-import { useTasks } from "@/hooks/useTasks";
+import { useState, useMemo } from "react";
 import { KanbanBoard } from "@/components/tasks/KanbanBoard";
 import { TaskDetail } from "@/components/tasks/TaskDetail";
+import { useActiveBusinessId } from "@/contexts/BusinessContext";
+import { useTasks } from "@/hooks/useTasks";
 import type { Task } from "@/lib/types";
-
-const BUSINESS_ID = "vividwalls";
 
 const statusLabels: Record<Task["status"], string> = {
   backlog: "Backlog",
@@ -24,7 +23,8 @@ const statusColors: Record<Task["status"], string> = {
 };
 
 export function TasksPage() {
-  const { data: tasksRaw, isLoading, error } = useTasks(BUSINESS_ID);
+  const businessId = useActiveBusinessId();
+  const { data: tasksRaw, isLoading, error } = useTasks(businessId);
   const tasks = (tasksRaw as Task[] | undefined) ?? [];
 
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -73,13 +73,9 @@ export function TasksPage() {
           <ClipboardList className="w-5 h-5 text-[var(--accent-orange)]" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-[var(--text-primary)]">
-            Task Management
-          </h1>
+          <h1 className="text-2xl font-bold text-[var(--text-primary)]">Task Management</h1>
           <p className="text-sm text-[var(--text-secondary)]">
-            {isLoading
-              ? "Loading tasks..."
-              : `${tasks.length} tasks across all departments`}
+            {isLoading ? "Loading tasks..." : `${tasks.length} tasks across all departments`}
           </p>
         </div>
       </div>
@@ -89,9 +85,7 @@ export function TasksPage() {
         <div className="flex items-center gap-3 p-4 rounded-lg bg-[color-mix(in_srgb,var(--accent-red)_10%,var(--bg-card))] border border-[var(--accent-red)]/20">
           <AlertCircle className="w-5 h-5 text-[var(--accent-red)] shrink-0" />
           <div>
-            <p className="text-sm font-medium text-[var(--text-primary)]">
-              Failed to load tasks
-            </p>
+            <p className="text-sm font-medium text-[var(--text-primary)]">Failed to load tasks</p>
             <p className="text-xs text-[var(--text-secondary)]">
               Unable to fetch task data from the API. Please try again later.
             </p>
@@ -111,13 +105,8 @@ export function TasksPage() {
                 className="w-2 h-2 rounded-full shrink-0"
                 style={{ backgroundColor: statusColors[status] }}
               />
-              <span className="text-xs text-[var(--text-secondary)]">
-                {statusLabels[status]}
-              </span>
-              <span
-                className="text-xs font-semibold"
-                style={{ color: statusColors[status] }}
-              >
+              <span className="text-xs text-[var(--text-secondary)]">{statusLabels[status]}</span>
+              <span className="text-xs font-semibold" style={{ color: statusColors[status] }}>
                 {statusCounts[status]}
               </span>
             </div>
@@ -126,18 +115,10 @@ export function TasksPage() {
       )}
 
       {/* Kanban Board */}
-      <KanbanBoard
-        tasks={tasks}
-        isLoading={isLoading}
-        onTaskClick={handleTaskClick}
-      />
+      <KanbanBoard tasks={tasks} isLoading={isLoading} onTaskClick={handleTaskClick} />
 
       {/* Task Detail Sheet */}
-      <TaskDetail
-        task={selectedTask}
-        open={detailOpen}
-        onOpenChange={handleDetailOpenChange}
-      />
+      <TaskDetail task={selectedTask} open={detailOpen} onOpenChange={handleDetailOpenChange} />
     </div>
   );
 }
