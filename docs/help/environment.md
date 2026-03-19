@@ -90,7 +90,7 @@ You can reference env vars directly in config string values using `${VAR_NAME}` 
 }
 ```
 
-See [Configuration: Env var substitution](/gateway/configuration#env-var-substitution-in-config) for full details.
+See [Configuration: Env var substitution](/gateway/configuration-reference#env-var-substitution) for full details.
 
 ## Secret refs vs `${ENV}` strings
 

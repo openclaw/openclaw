@@ -58,7 +58,7 @@ Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize
 to `zai/*`.
 
 Provider configuration examples (including OpenCode) live in
-[/gateway/configuration](/gateway/configuration#opencode).
+[/providers/opencode](/providers/opencode).
 
 ## "Model is not allowed" (and why replies stop)
 
@@ -82,9 +82,9 @@ Example allowlist config:
 ```json5
 {
   agent: {
-    model: { primary: "anthropic/claude-sonnet-4-5" },
+    model: { primary: "anthropic/claude-sonnet-4-6" },
     models: {
-      "anthropic/claude-sonnet-4-5": { alias: "Sonnet" },
+      "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
       "anthropic/claude-opus-4-6": { alias: "Opus" },
     },
   },

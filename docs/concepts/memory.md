@@ -208,7 +208,7 @@ out to QMD for retrieval. Key points:
   `commandTimeoutMs`, `updateTimeoutMs`, `embedTimeoutMs`).
 - `limits`: clamp recall payload (`maxResults`, `maxSnippetChars`,
   `maxInjectedChars`, `timeoutMs`).
-- `scope`: same schema as [`session.sendPolicy`](/gateway/configuration#session).
+- `scope`: same schema as [`session.sendPolicy`](/gateway/configuration-reference#session).
   Default is DM-only (`deny` all, `allow` direct chats); loosen it to surface QMD
   hits in groups/channels.
   - `match.keyPrefix` matches the **normalized** session key (lowercased, with any
