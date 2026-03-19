@@ -11,6 +11,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.j
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -34,7 +35,6 @@ import {
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
-import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
@@ -1249,21 +1249,14 @@ export const chatHandlers: GatewayRequestHandlers = {
     // Persist webchat inbound images to disk (parity with WhatsApp/Telegram handlers).
     // Runs after sendPolicy/stop/dedupe checks so only accepted requests write files.
     // Fire-and-forget: don't block chat.send on disk I/O; log failures but proceed.
-    const persistedImages: SavedMedia[] = [];
-    if (parsedImages.length > 0) {
-      await Promise.all(
-        parsedImages.map((img) =>
-          saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound")
-            .then((saved) => {
-              persistedImages.push(saved);
-            })
-            .catch((err) => {
-              context.logGateway.warn(
-                `webchat: failed to persist inbound image (${img.mimeType}): ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
-              );
-            }),
-        ),
-      );
+    // NOTE: saved file paths are intentionally not captured here — wiring persisted paths
+    // into the session transcript (for compaction survival) is a follow-up task.
+    for (const img of parsedImages) {
+      saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound").catch((err) => {
+        context.logGateway.warn(
+          `webchat: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
+        );
+      });
     }
 
     try {
