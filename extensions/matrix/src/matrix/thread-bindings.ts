@@ -62,7 +62,12 @@ export type MatrixThreadBindingManager = {
   stop: () => void;
 };
 
-const MANAGERS_BY_ACCOUNT_ID = new Map<string, MatrixThreadBindingManager>();
+type MatrixThreadBindingManagerCacheEntry = {
+  filePath: string;
+  manager: MatrixThreadBindingManager;
+};
+
+const MANAGERS_BY_ACCOUNT_ID = new Map<string, MatrixThreadBindingManagerCacheEntry>();
 const BINDINGS_BY_ACCOUNT_CONVERSATION = new Map<string, MatrixThreadBindingRecord>();
 
 function normalizeDurationMs(raw: unknown, fallback: number): number {
@@ -354,17 +359,19 @@ export async function createMatrixThreadBindingManager(params: {
       `Matrix thread binding account mismatch: requested ${params.accountId}, auth resolved ${params.auth.accountId}`,
     );
   }
-  const existing = MANAGERS_BY_ACCOUNT_ID.get(params.accountId);
-  if (existing) {
-    return existing;
-  }
-
   const filePath = resolveBindingsPath({
     auth: params.auth,
     accountId: params.accountId,
     env: params.env,
     stateDir: params.stateDir,
   });
+  const existingEntry = MANAGERS_BY_ACCOUNT_ID.get(params.accountId);
+  if (existingEntry) {
+    if (existingEntry.filePath === filePath) {
+      return existingEntry.manager;
+    }
+    existingEntry.manager.stop();
+  }
   const loaded = await loadBindingsFromDisk(filePath, params.accountId);
   for (const record of loaded) {
     setBindingRecord(record);
@@ -499,7 +506,7 @@ export async function createMatrixThreadBindingManager(params: {
         channel: "matrix",
         accountId: params.accountId,
       });
-      if (MANAGERS_BY_ACCOUNT_ID.get(params.accountId) === manager) {
+      if (MANAGERS_BY_ACCOUNT_ID.get(params.accountId)?.manager === manager) {
         MANAGERS_BY_ACCOUNT_ID.delete(params.accountId);
       }
       for (const record of listBindingsForAccount(params.accountId)) {
@@ -698,14 +705,17 @@ export async function createMatrixThreadBindingManager(params: {
     sweepTimer.unref?.();
   }
 
-  MANAGERS_BY_ACCOUNT_ID.set(params.accountId, manager);
+  MANAGERS_BY_ACCOUNT_ID.set(params.accountId, {
+    filePath,
+    manager,
+  });
   return manager;
 }
 
 export function getMatrixThreadBindingManager(
   accountId: string,
 ): MatrixThreadBindingManager | null {
-  return MANAGERS_BY_ACCOUNT_ID.get(accountId) ?? null;
+  return MANAGERS_BY_ACCOUNT_ID.get(accountId)?.manager ?? null;
 }
 
 export function setMatrixThreadBindingIdleTimeoutBySessionKey(params: {
@@ -713,7 +723,7 @@ export function setMatrixThreadBindingIdleTimeoutBySessionKey(params: {
   targetSessionKey: string;
   idleTimeoutMs: number;
 }): SessionBindingRecord[] {
-  const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId);
+  const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId)?.manager;
   if (!manager) {
     return [];
   }
@@ -730,7 +740,7 @@ export function setMatrixThreadBindingMaxAgeBySessionKey(params: {
   targetSessionKey: string;
   maxAgeMs: number;
 }): SessionBindingRecord[] {
-  const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId);
+  const manager = MANAGERS_BY_ACCOUNT_ID.get(params.accountId)?.manager;
   if (!manager) {
     return [];
   }
@@ -743,7 +753,7 @@ export function setMatrixThreadBindingMaxAgeBySessionKey(params: {
 }
 
 export function resetMatrixThreadBindingsForTests(): void {
-  for (const manager of MANAGERS_BY_ACCOUNT_ID.values()) {
+  for (const { manager } of MANAGERS_BY_ACCOUNT_ID.values()) {
     manager.stop();
   }
   MANAGERS_BY_ACCOUNT_ID.clear();
