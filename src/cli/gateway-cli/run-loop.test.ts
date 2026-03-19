@@ -394,6 +394,27 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("logs lock acquisition before waiting for the gateway lock", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const lockRelease = vi.fn(async () => {});
+      acquireGatewayLock.mockResolvedValueOnce({
+        release: lockRelease,
+      });
+
+      const { start, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+
+      expect(gatewayLog.info).toHaveBeenCalledWith("checking gateway lock");
+      expect(acquireGatewayLock).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledTimes(1);
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
   it("exits when lock reacquire fails during in-process restart fallback", async () => {
     vi.clearAllMocks();
 
