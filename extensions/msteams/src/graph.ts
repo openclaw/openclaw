@@ -3,6 +3,7 @@ import { GRAPH_ROOT } from "./attachments/shared.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveMSTeamsCredentials } from "./token.js";
+import { buildUserAgent } from "./user-agent.js";
 
 export type GraphUser = {
   id?: string;
@@ -38,6 +39,7 @@ export async function fetchGraphJson<T>(params: {
 }): Promise<T> {
   const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
     headers: {
+      "User-Agent": buildUserAgent(),
       Authorization: `Bearer ${params.token}`,
       ...params.headers,
     },

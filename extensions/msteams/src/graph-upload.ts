@@ -10,6 +10,7 @@
  */
 
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
@@ -41,6 +42,7 @@ export async function uploadToOneDrive(params: {
   const res = await fetchFn(`${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`, {
     method: "PUT",
     headers: {
+      "User-Agent": buildUserAgent(),
       Authorization: `Bearer ${token}`,
       "Content-Type": params.contentType ?? "application/octet-stream",
     },
@@ -90,6 +92,7 @@ export async function createSharingLink(params: {
   const res = await fetchFn(`${GRAPH_ROOT}/me/drive/items/${params.itemId}/createLink`, {
     method: "POST",
     headers: {
+      "User-Agent": buildUserAgent(),
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
@@ -186,6 +189,7 @@ export async function uploadToSharePoint(params: {
     {
       method: "PUT",
       headers: {
+        "User-Agent": buildUserAgent(),
         Authorization: `Bearer ${token}`,
         "Content-Type": params.contentType ?? "application/octet-stream",
       },
@@ -251,7 +255,7 @@ export async function getDriveItemProperties(params: {
 
   const res = await fetchFn(
     `${GRAPH_ROOT}/sites/${params.siteId}/drive/items/${params.itemId}?$select=eTag,webDavUrl,name`,
-    { headers: { Authorization: `Bearer ${token}` } },
+    { headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` } },
   );
 
   if (!res.ok) {
@@ -289,7 +293,7 @@ export async function getChatMembers(params: {
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
   const res = await fetchFn(`${GRAPH_ROOT}/chats/${params.chatId}/members`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
   });
 
   if (!res.ok) {
@@ -349,6 +353,7 @@ export async function createSharePointSharingLink(params: {
     {
       method: "POST",
       headers: {
+        "User-Agent": buildUserAgent(),
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },

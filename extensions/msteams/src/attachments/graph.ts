@@ -1,4 +1,5 @@
 import { getMSTeamsRuntime } from "../runtime.js";
+import { buildUserAgent } from "../user-agent.js";
 import { downloadMSTeamsAttachments } from "./download.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
@@ -122,7 +123,7 @@ async function fetchGraphCollection<T>(params: {
 }): Promise<{ status: number; items: T[] }> {
   const fetchFn = params.fetchFn ?? fetch;
   const res = await fetchFn(params.url, {
-    headers: { Authorization: `Bearer ${params.accessToken}` },
+    headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${params.accessToken}` },
   });
   const status = res.status;
   if (!res.ok) {
@@ -242,7 +243,7 @@ export async function downloadMSTeamsGraphMedia(params: {
   const downloadedReferenceUrls = new Set<string>();
   try {
     const msgRes = await fetchFn(messageUrl, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${accessToken}` },
     });
     if (msgRes.ok) {
       const msgData = (await msgRes.json()) as {
