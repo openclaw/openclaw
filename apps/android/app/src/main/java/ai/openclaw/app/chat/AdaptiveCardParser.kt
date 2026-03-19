@@ -12,20 +12,35 @@ data class ParsedAdaptiveCard(
 private val cardMarkerRegex =
   Regex("<!--adaptive-card-->(.*?)<!--/adaptive-card-->", RegexOption.DOT_MATCHES_ALL)
 
+private val dataMarkerRegex =
+  Regex("<!--adaptive-card-data-->(.*?)<!--/adaptive-card-data-->", RegexOption.DOT_MATCHES_ALL)
+
 /**
  * Extract the first adaptive card JSON from marker-delimited text.
- * Returns null when no markers are present.
+ * Template data is extracted from separate `<!--adaptive-card-data-->` markers.
+ * Returns null when no card markers are present.
  */
 fun parseAdaptiveCardMarkers(text: String): ParsedAdaptiveCard? {
   val match = cardMarkerRegex.find(text) ?: return null
   val jsonStr = match.groupValues[1].trim()
-  val fallback = text.substring(0, match.range.first).trim()
+
+  // Extract template data from separate data markers
+  val dataMatch = dataMarkerRegex.find(text)
+  val templateData = dataMatch?.let {
+    try {
+      val dataJson = JSONObject(it.groupValues[1].trim())
+      jsonObjectToMap(dataJson)
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  // Strip both card and data markers to get fallback text
+  val fallback = stripCardMarkers(stripDataMarkers(text))
 
   return try {
     val json = JSONObject(jsonStr)
     val card = jsonObjectToMap(json)
-    val templateData = (card["templateData"] as? Map<*, *>)
-      ?.let { @Suppress("UNCHECKED_CAST") (it as Map<String, Any>) }
     ParsedAdaptiveCard(card = card, fallbackText = fallback, templateData = templateData)
   } catch (_: Exception) {
     null
@@ -35,6 +50,11 @@ fun parseAdaptiveCardMarkers(text: String): ParsedAdaptiveCard? {
 /** Remove adaptive card marker blocks, leaving only surrounding text. */
 fun stripCardMarkers(text: String): String {
   return cardMarkerRegex.replace(text, "").trim()
+}
+
+/** Remove adaptive card data marker blocks, leaving only surrounding text. */
+fun stripDataMarkers(text: String): String {
+  return dataMarkerRegex.replace(text, "").trim()
 }
 
 // -- JSON-to-Map helpers using Android built-in org.json --
