@@ -38,8 +38,15 @@ function normalizeMentionPattern(pattern: string): string {
   return pattern.split(BACKSPACE_CHAR).join("\\b");
 }
 
-function normalizeMentionPatterns(patterns: string[]): string[] {
-  return patterns.map(normalizeMentionPattern);
+function normalizeMentionPatterns(patterns: ReadonlyArray<unknown>): string[] {
+  const normalized: string[] = [];
+  for (const pattern of patterns) {
+    if (typeof pattern !== "string") {
+      continue;
+    }
+    normalized.push(normalizeMentionPattern(pattern));
+  }
+  return normalized;
 }
 
 function warnRejectedMentionPattern(
@@ -100,18 +107,25 @@ function compileMentionPatternsCached(params: {
   return cacheMentionRegexes(params.cache, cacheKey, compiled.regexes);
 }
 
-function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: string): string[] {
+function resolveMentionPatterns(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string,
+): ReadonlyArray<unknown> {
   if (!cfg) {
     return [];
   }
   const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
   const agentGroupChat = agentConfig?.groupChat;
   if (agentGroupChat && Object.hasOwn(agentGroupChat, "mentionPatterns")) {
-    return agentGroupChat.mentionPatterns ?? [];
+    return Array.isArray(agentGroupChat.mentionPatterns)
+      ? agentGroupChat.mentionPatterns
+      : [];
   }
   const globalGroupChat = cfg.messages?.groupChat;
   if (globalGroupChat && Object.hasOwn(globalGroupChat, "mentionPatterns")) {
-    return globalGroupChat.mentionPatterns ?? [];
+    return Array.isArray(globalGroupChat.mentionPatterns)
+      ? globalGroupChat.mentionPatterns
+      : [];
   }
   const derived = deriveMentionPatterns(agentConfig?.identity);
   return derived.length > 0 ? derived : [];

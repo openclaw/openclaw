@@ -405,6 +405,21 @@ describe("mention helpers", () => {
     expect(regexes[0]?.test("openclaw")).toBe(true);
   });
 
+  it("ignores non-string mention patterns", () => {
+    const mentionPatterns = [
+      "\\bopenclaw\\b",
+      undefined,
+      null,
+      42,
+    ] as unknown as string[];
+    const regexes = buildMentionRegexes({
+      messages: {
+        groupChat: { mentionPatterns },
+      },
+    } as OpenClawConfig);
+    expect(regexes.some((re) => re.test("openclaw"))).toBe(true);
+  });
+
   it("normalizes zero-width characters", () => {
     expect(normalizeMentionText("open\u200bclaw")).toBe("openclaw");
   });
