@@ -82,6 +82,25 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
   });
 
+  it("can skip async warmup for read-only callers", async () => {
+    const { ensureOpenClawModelsJson } = mockContextModuleDeps(() => ({
+      models: {
+        providers: {
+          openrouter: {
+            models: [{ id: "openrouter/claude-sonnet", contextWindow: 321_000 }],
+          },
+        },
+      },
+    }));
+
+    const { lookupContextTokens } = await import("./context.js");
+    expect(
+      lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false }),
+    ).toBeUndefined();
+    await flushAsyncWarmup();
+    expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
   it("only warms eagerly for real openclaw startup commands that need model metadata", async () => {
     const argvSnapshot = process.argv;
     try {
