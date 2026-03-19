@@ -21,8 +21,9 @@ deployments work at a high level.
 - **GCP (Compute Engine)**: [GCP](/install/gcp)
 - **Azure (Linux VM)**: [Azure](/install/azure)
 - **exe.dev** (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
-- **AWS (EC2/Lightsail/free tier)**: works well too. Video guide:
+- **AWS (EC2/Lightsail/free tier)**: works well too. Community video guide:
   [https://x.com/techfrenAJ/status/2014934471095812547](https://x.com/techfrenAJ/status/2014934471095812547)
+  (community resource, may become unavailable)
 
 ## How cloud setups work
 
