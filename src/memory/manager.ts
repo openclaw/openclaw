@@ -348,6 +348,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       await this.sync({ reason: "search" }).catch((err) => {
         log.warn(`memory sync failed (search): ${String(err)}`);
       });
+      if (this.closed) {
+        return [];
+      }
     }
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
