@@ -155,6 +155,47 @@ function makeUnavailableHttpSlackPlugin(): ChannelPlugin {
   });
 }
 
+function makeWhatsAppConfigOnlyStatusPlugin(): ChannelPlugin {
+  return {
+    id: "whatsapp",
+    meta: {
+      id: "whatsapp",
+      label: "WhatsApp",
+      selectionLabel: "WhatsApp",
+      docsPath: "/channels/whatsapp",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct", "group"] },
+    config: {
+      listAccountIds: () => ["default"],
+      defaultAccountId: () => "default",
+      resolveAccount: () => ({
+        name: "Primary",
+        enabled: true,
+        configured: true,
+        dmPolicy: "allowlist",
+        allowFrom: ["+111"],
+        allowSendTo: [],
+      }),
+      isConfigured: () => true,
+      isEnabled: () => true,
+    },
+    status: {
+      buildAccountSnapshot: async ({ account }) => ({
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        dmPolicy: (account as { dmPolicy?: string }).dmPolicy,
+        allowFrom: (account as { allowFrom?: string[] }).allowFrom,
+        allowSendTo: (account as { allowSendTo?: string[] }).allowSendTo,
+      }),
+    },
+    actions: {
+      describeMessageTool: () => ({ actions: ["send"] }),
+    },
+  };
+}
+
 function expectResolvedTokenStatusSummary(
   summary: string,
   options?: { includeUnavailableTokenLine?: boolean },
@@ -215,5 +256,15 @@ describe("config-only channels status output", () => {
     expect(joined).toContain("mode:http");
     expect(joined).toContain("bot:config");
     expect(joined).toContain("signing:config (unavailable)");
+  });
+
+  it("renders explicit empty allowSendTo in config-only status output", async () => {
+    registerSingleTestPlugin("whatsapp", makeWhatsAppConfigOnlyStatusPlugin());
+
+    const joined = await formatLocalStatusSummary({ channels: {} });
+    expect(joined).toContain("WhatsApp");
+    expect(joined).toContain("dm:allowlist");
+    expect(joined).toContain("allow:+111");
+    expect(joined).toContain("sendTo:none");
   });
 });
