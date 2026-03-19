@@ -356,6 +356,9 @@ importers:
       google-auth-library:
         specifier: ^10.6.2
         version: 10.6.2
+      openclaw:
+        specifier: '>=2026.3.11'
+        version: 2026.3.13(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(jimp@1.6.0)(node-llama-cpp@3.16.2(typescript@5.9.3))
 
   extensions/huggingface: {}
 
@@ -541,9 +544,6 @@ importers:
       '@urbit/aura':
         specifier: ^3.0.0
         version: 3.0.0
-      openclaw:
-        specifier: '>=2026.3.11'
-        version: 2026.3.13(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(jimp@1.6.0)(node-llama-cpp@3.16.2(typescript@5.9.3))
       zod:
         specifier: ^4.3.6
         version: 4.3.6
