@@ -56,6 +56,10 @@
         "reason": "Snapshot restore coverage retains a broad schema/redaction graph and is safer outside the shared lane."
       },
       {
+        "file": "src/config/redact-snapshot.schema.test.ts",
+        "reason": "Schema-backed redaction round-trip coverage loads the full config schema graph and is safer outside the shared lane."
+      },
+      {
         "file": "src/infra/outbound/message-action-runner.media.test.ts",
         "reason": "Outbound media action coverage retained a large media/plugin graph in unit-fast."
       },
