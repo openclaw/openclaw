@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { channelTestPrefixes } from "../vitest.channel-paths.mjs";
 import { isUnitConfigTestFile } from "../vitest.unit-paths.mjs";
-import { parseCompletedTestFileLines, sampleProcessTreeRssKb } from "./test-parallel-memory.mjs";
+import {
+  getProcessTreeRecords,
+  parseCompletedTestFileLines,
+  sampleProcessTreeRssKb,
+} from "./test-parallel-memory.mjs";
 import {
   appendCapturedOutput,
   hasFatalTestRunOutput,
@@ -47,17 +51,6 @@ const hostMemoryGiB = Math.floor(os.totalmem() / 1024 ** 3);
 const highMemLocalHost = !isCI && hostMemoryGiB >= 96;
 const lowMemLocalHost = !isCI && hostMemoryGiB < 64;
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
-// vmForks is a big win for transform/import heavy suites. Node 24 is stable again
-// for the default unit-fast lane after moving the known flaky files to fork-only
-// isolation, but Node 25+ still falls back to process forks until re-validated.
-// Keep it opt-out via OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
-const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor <= 24 : true;
-const useVmForks =
-  process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
-  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks && !lowMemLocalHost);
-const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
-const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
-const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
 const rawTestProfile = process.env.OPENCLAW_TEST_PROFILE?.trim().toLowerCase();
 const testProfile =
   rawTestProfile === "low" ||
@@ -68,6 +61,21 @@ const testProfile =
     ? rawTestProfile
     : "normal";
 const isMacMiniProfile = testProfile === "macmini";
+// vmForks is a big win for transform/import heavy suites. Node 24 is stable again
+// for the default unit-fast lane after moving the known flaky files to fork-only
+// isolation, but Node 25+ still falls back to process forks until re-validated.
+// Keep it opt-out via OPENCLAW_TEST_VM_FORKS=0, and let users force-enable with =1.
+const supportsVmForks = Number.isFinite(nodeMajor) ? nodeMajor <= 24 : true;
+const useVmForks =
+  process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
+  (process.env.OPENCLAW_TEST_VM_FORKS !== "0" &&
+    !isWindows &&
+    supportsVmForks &&
+    !lowMemLocalHost &&
+    (isCI || testProfile !== "low"));
+const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
+const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
+const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
 // Even on low-memory hosts, keep the isolated lane split so files like
 // git-commit.test.ts still get the worker/process isolation they require.
 const shouldSplitUnitRuns = testProfile !== "serial";
@@ -725,6 +733,23 @@ const memoryTraceEnabled =
     (rawMemoryTrace !== "0" && rawMemoryTrace !== "false" && isCI));
 const memoryTracePollMs = Math.max(250, parseEnvNumber("OPENCLAW_TEST_MEMORY_TRACE_POLL_MS", 1000));
 const memoryTraceTopCount = Math.max(1, parseEnvNumber("OPENCLAW_TEST_MEMORY_TRACE_TOP_COUNT", 6));
+const heapSnapshotIntervalMs = Math.max(
+  0,
+  parseEnvNumber("OPENCLAW_TEST_HEAPSNAPSHOT_INTERVAL_MS", 0),
+);
+const heapSnapshotMinIntervalMs = 5000;
+const heapSnapshotEnabled =
+  process.platform !== "win32" && heapSnapshotIntervalMs >= heapSnapshotMinIntervalMs;
+const heapSnapshotSignal = process.env.OPENCLAW_TEST_HEAPSNAPSHOT_SIGNAL?.trim() || "SIGUSR2";
+const heapSnapshotBaseDir = heapSnapshotEnabled
+  ? path.resolve(
+      process.env.OPENCLAW_TEST_HEAPSNAPSHOT_DIR?.trim() ||
+        path.join(os.tmpdir(), `openclaw-heapsnapshots-${Date.now()}`),
+    )
+  : null;
+const ensureNodeOptionFlag = (nodeOptions, flagPrefix, nextValue) =>
+  nodeOptions.includes(flagPrefix) ? nodeOptions : `${nodeOptions} ${nextValue}`.trim();
+const isNodeLikeProcess = (command) => /(?:^|\/)node(?:$|\.exe$)/iu.test(command);
 
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
@@ -757,29 +782,80 @@ const runOnce = (entry, extraArgs = []) =>
       (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
       nodeOptions,
     );
-    const heapFlag =
+    const heapSnapshotDir =
+      heapSnapshotBaseDir === null ? null : path.join(heapSnapshotBaseDir, entry.name);
+    let resolvedNodeOptions =
       maxOldSpaceSizeMb && !nextNodeOptions.includes("--max-old-space-size=")
-        ? `--max-old-space-size=${maxOldSpaceSizeMb}`
-        : null;
-    const resolvedNodeOptions = heapFlag
-      ? `${nextNodeOptions} ${heapFlag}`.trim()
-      : nextNodeOptions;
+        ? `${nextNodeOptions} --max-old-space-size=${maxOldSpaceSizeMb}`.trim()
+        : nextNodeOptions;
+    if (heapSnapshotEnabled && heapSnapshotDir) {
+      try {
+        fs.mkdirSync(heapSnapshotDir, { recursive: true });
+      } catch (err) {
+        console.error(
+          `[test-parallel] failed to create heap snapshot dir ${heapSnapshotDir}: ${String(err)}`,
+        );
+        resolve(1);
+        return;
+      }
+      resolvedNodeOptions = ensureNodeOptionFlag(
+        resolvedNodeOptions,
+        "--diagnostic-dir=",
+        `--diagnostic-dir=${heapSnapshotDir}`,
+      );
+      resolvedNodeOptions = ensureNodeOptionFlag(
+        resolvedNodeOptions,
+        "--heapsnapshot-signal=",
+        `--heapsnapshot-signal=${heapSnapshotSignal}`,
+      );
+    }
     let output = "";
     let fatalSeen = false;
     let childError = null;
     let child;
     let pendingLine = "";
     let memoryPollTimer = null;
+    let heapSnapshotTimer = null;
     const memoryFileRecords = [];
     let initialTreeSample = null;
     let latestTreeSample = null;
     let peakTreeSample = null;
+    let heapSnapshotSequence = 0;
     const updatePeakTreeSample = (sample, reason) => {
       if (!sample) {
         return;
       }
       if (!peakTreeSample || sample.rssKb > peakTreeSample.rssKb) {
         peakTreeSample = { ...sample, reason };
+      }
+    };
+    const triggerHeapSnapshot = (reason) => {
+      if (!heapSnapshotEnabled || !child?.pid || !heapSnapshotDir) {
+        return;
+      }
+      const records = getProcessTreeRecords(child.pid) ?? [];
+      const targetPids = records
+        .filter((record) => record.pid !== process.pid && isNodeLikeProcess(record.command))
+        .map((record) => record.pid);
+      if (targetPids.length === 0) {
+        return;
+      }
+      heapSnapshotSequence += 1;
+      let signaledCount = 0;
+      for (const pid of targetPids) {
+        try {
+          process.kill(pid, heapSnapshotSignal);
+          signaledCount += 1;
+        } catch {
+          // Process likely exited between ps sampling and signal delivery.
+        }
+      }
+      if (signaledCount > 0) {
+        console.log(
+          `[test-parallel][heap] ${entry.name} seq=${String(heapSnapshotSequence)} reason=${reason} signaled=${String(
+            signaledCount,
+          )}/${String(targetPids.length)} dir=${heapSnapshotDir}`,
+        );
       }
     };
     const captureTreeSample = (reason) => {
@@ -877,6 +953,11 @@ const runOnce = (entry, extraArgs = []) =>
           captureTreeSample("poll");
         }, memoryTracePollMs);
       }
+      if (heapSnapshotEnabled) {
+        heapSnapshotTimer = setInterval(() => {
+          triggerHeapSnapshot("interval");
+        }, heapSnapshotIntervalMs);
+      }
     } catch (err) {
       console.error(`[test-parallel] spawn failed: ${String(err)}`);
       resolve(1);
@@ -904,6 +985,9 @@ const runOnce = (entry, extraArgs = []) =>
     child.on("close", (code, signal) => {
       if (memoryPollTimer) {
         clearInterval(memoryPollTimer);
+      }
+      if (heapSnapshotTimer) {
+        clearInterval(heapSnapshotTimer);
       }
       children.delete(child);
       const resolvedCode = resolveTestRunExitCode({ code, signal, output, fatalSeen, childError });

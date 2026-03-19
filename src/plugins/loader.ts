@@ -104,8 +104,20 @@ function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string
   return params.modulePath ?? fileURLToPath(params.moduleUrl ?? import.meta.url);
 }
 
-const resolvePluginSdkAlias = (): string | null =>
-  resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
+const resolvePluginSdkAlias = (params: LoaderModuleResolveParams = {}): string | null =>
+  resolvePluginSdkAliasFile({
+    srcFile: "root-alias.cjs",
+    distFile: "root-alias.cjs",
+    ...params,
+  });
+
+function buildPluginLoaderAliasMap(modulePath: string): Record<string, string> {
+  const pluginSdkAlias = resolvePluginSdkAlias({ modulePath });
+  return {
+    ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+    ...resolvePluginSdkScopedAliasMap({ modulePath }),
+  };
+}
 
 function resolvePluginRuntimeModulePath(params: LoaderModuleResolveParams = {}): string | null {
   try {
@@ -138,6 +150,7 @@ function resolvePluginRuntimeModulePath(params: LoaderModuleResolveParams = {}):
 
 export const __testing = {
   buildPluginLoaderJitiOptions,
+  buildPluginLoaderAliasMap,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
   resolvePluginSdkScopedAliasMap,
@@ -704,18 +717,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   }
 
   // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
-  const jitiLoaders = new Map<boolean, ReturnType<typeof createJiti>>();
+  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
   const getJiti = (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
-    const cached = jitiLoaders.get(tryNative);
+    const aliasMap = buildPluginLoaderAliasMap(modulePath);
+    const cacheKey = JSON.stringify({
+      tryNative,
+      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+    });
+    const cached = jitiLoaders.get(cacheKey);
     if (cached) {
       return cached;
     }
-    const pluginSdkAlias = resolvePluginSdkAlias();
-    const aliasMap = {
-      ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-      ...resolvePluginSdkScopedAliasMap(),
-    };
     const loader = createJiti(import.meta.url, {
       ...buildPluginLoaderJitiOptions(aliasMap),
       // Source .ts runtime shims import sibling ".js" specifiers that only exist
@@ -724,7 +737,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       // loading for the canonical built module graph.
       tryNative,
     });
-    jitiLoaders.set(tryNative, loader);
+    jitiLoaders.set(cacheKey, loader);
     return loader;
   };
 
