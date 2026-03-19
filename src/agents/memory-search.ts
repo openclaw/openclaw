@@ -34,10 +34,10 @@ export type ResolvedMemorySearchConfig = {
   store: {
     driver: "sqlite";
     path: string;
-    vector: {
+    vector: Readonly<{
       enabled: boolean;
       extensionPath?: string;
-    };
+    }>;
   };
   chunking: {
     tokens: number;
