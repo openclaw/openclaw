@@ -67,6 +67,7 @@ openclaw models fallbacks list
 ```bash
 openclaw models auth add
 openclaw models auth login --provider <id>
+openclaw models auth login --provider openai-codex --profile-id openai-codex:work
 openclaw models auth setup-token
 openclaw models auth paste-token
 ```
@@ -76,6 +77,9 @@ openclaw models auth paste-token
 
 Notes:
 
+- `login` accepts `--profile-id <id>` for providers that support named
+  profiles during login. Use this to keep multiple logins for the same
+  provider separate.
 - `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).
 - `paste-token` accepts a token string generated elsewhere or from automation.
 - Anthropic policy note: setup-token support is technical compatibility. Anthropic has blocked some subscription usage outside Claude Code in the past, so verify current terms before using it broadly.

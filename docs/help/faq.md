@@ -2432,7 +2432,14 @@ OpenClaw uses provider-prefixed IDs like:
 
 - `anthropic:default` (common when no email identity exists)
 - `anthropic:<email>` for OAuth identities
-- custom IDs you choose (e.g. `anthropic:work`)
+- `openai-codex:default` or `openai-codex:<email>` for Codex OAuth profiles
+- custom IDs you choose (for example `anthropic:work`, `openai-codex:ritsuko`)
+
+For providers that support named login profiles, you can assign the id up front:
+
+```bash
+openclaw models auth login --provider openai-codex --profile-id openai-codex:ritsuko
+```
 
 ### Can I control which auth profile is tried first
 

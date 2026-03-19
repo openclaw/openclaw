@@ -213,12 +213,15 @@ async function pickProviderTokenMethod(params: {
 
 async function persistProviderAuthResult(params: {
   result: ProviderAuthResult;
+  profiles?: ProviderAuthResult["profiles"];
   agentDir: string;
   runtime: RuntimeEnv;
   prompter: ReturnType<typeof createClackPrompter>;
   setDefault?: boolean;
 }) {
-  for (const profile of params.result.profiles) {
+  const profiles = params.profiles ?? params.result.profiles;
+
+  for (const profile of profiles) {
     upsertAuthProfile({
       profileId: profile.profileId,
       credential: profile.credential,
@@ -231,7 +234,7 @@ async function persistProviderAuthResult(params: {
     if (params.result.configPatch) {
       next = mergeConfigPatch(next, params.result.configPatch);
     }
-    for (const profile of params.result.profiles) {
+    for (const profile of profiles) {
       next = applyAuthProfileConfig(next, {
         profileId: profile.profileId,
         provider: profile.credential.provider,
@@ -245,7 +248,7 @@ async function persistProviderAuthResult(params: {
   });
 
   logConfigUpdated(params.runtime);
-  for (const profile of params.result.profiles) {
+  for (const profile of profiles) {
     params.runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
     );
@@ -270,6 +273,7 @@ async function runProviderAuthMethod(params: {
   method: ProviderAuthMethod;
   runtime: RuntimeEnv;
   prompter: ReturnType<typeof createClackPrompter>;
+  profileId?: string;
   setDefault?: boolean;
 }) {
   await clearStaleProfileLockouts(params.provider.id, params.agentDir);
@@ -290,8 +294,14 @@ async function runProviderAuthMethod(params: {
     },
   });
 
+  const profiles = resolveLoginProfiles({
+    result,
+    requestedProfileId: params.profileId,
+  });
+
   await persistProviderAuthResult({
     result,
+    profiles,
     agentDir: params.agentDir,
     runtime: params.runtime,
     prompter: params.prompter,
@@ -494,6 +504,7 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
 type LoginOptions = {
   provider?: string;
   method?: string;
+  profileId?: string;
   setDefault?: boolean;
   yes?: boolean;
 };
@@ -531,6 +542,25 @@ function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" 
     return "token";
   }
   return "oauth";
+}
+
+export function resolveLoginProfiles(params: {
+  result: ProviderAuthResult;
+  requestedProfileId?: string;
+}): ProviderAuthResult["profiles"] {
+  const requestedProfileId = params.requestedProfileId?.trim();
+  if (!requestedProfileId) {
+    return params.result.profiles;
+  }
+
+  if (params.result.profiles.length !== 1) {
+    throw new Error(
+      "--profile-id requires exactly one returned auth profile from the selected auth method.",
+    );
+  }
+
+  const [profile] = params.result.profiles;
+  return [{ ...profile, profileId: requestedProfileId }];
 }
 
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
@@ -582,6 +612,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     method: chosenMethod,
     runtime,
     prompter,
+    profileId: opts.profileId,
     setDefault: opts.setDefault,
   });
 }
