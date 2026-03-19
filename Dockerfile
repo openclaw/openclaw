@@ -188,11 +188,11 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES; \
     fi
 
-# Install Blink Claw extended tools: bun (JS runtime), uv (Python pkg manager), clawhub (skills marketplace)
+# Install Blink Claw extended tools: bun (JS runtime), uv (Python pkg manager).
 # nano-pdf (AI PDF editor). Requires python3-pip in OPENCLAW_DOCKER_APT_PACKAGES.
 ARG OPENCLAW_INSTALL_BLINK_TOOLS=""
 RUN if [ -n "$OPENCLAW_INSTALL_BLINK_TOOLS" ]; then \
-      npm install -g bun clawhub && \
+      npm install -g bun && \
       (pip3 install uv nano-pdf linkedin-api 2>/dev/null || pip install uv nano-pdf linkedin-api 2>/dev/null || true); \
     fi
 
@@ -250,6 +250,12 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Uses @latest so every Docker image rebuild ships the newest CLI automatically.
 # No manual version bumps needed — publishing a new CLI version is sufficient.
 RUN npm install -g @blinkdotnew/cli@latest
+
+# Install ClawHub CLI — the public skill registry for OpenClaw.
+# Pre-installed so agents can run `clawhub install <skill>` to extend capabilities.
+# Skills install to CLAWHUB_WORKDIR (/data/workspace) on the persistent Fly volume.
+RUN npm install -g clawhub@latest
+ENV CLAWHUB_WORKDIR=/data/workspace
 
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
