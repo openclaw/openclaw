@@ -131,6 +131,7 @@ function createSlackReplyReferencePlanner(params: {
   });
 }
 
+/** @internal Exported for testing only. */
 export function createSlackReplyDeliveryPlan(params: {
   replyToMode: "off" | "first" | "all";
   incomingThreadTs: string | undefined;

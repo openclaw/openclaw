@@ -228,6 +228,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
+  let lastResolvedDraftThreadTs: string | undefined;
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     // Reuse the thread ts from a prior block delivery so all blocks within the
@@ -383,13 +384,19 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     maxChars: Math.min(ctx.textLimit, 4000),
     resolveThreadTs: () => {
       // Reuse thread ts from a prior block so draft streams stay threaded (#49341).
+      // Cache the resolved ts in a local so onMessageSent can latch it only
+      // after the send succeeds — avoids recording thread participation when
+      // the Slack API call actually failed.
       const ts = usedReplyThreadTs ?? replyPlan.nextThreadTs();
-      if (ts) {
-        usedReplyThreadTs ??= ts;
-      }
+      lastResolvedDraftThreadTs = ts;
       return ts;
     },
-    onMessageSent: () => replyPlan.markSent(),
+    onMessageSent: () => {
+      if (lastResolvedDraftThreadTs) {
+        usedReplyThreadTs ??= lastResolvedDraftThreadTs;
+      }
+      replyPlan.markSent();
+    },
     log: logVerbose,
     warn: logVerbose,
   });
