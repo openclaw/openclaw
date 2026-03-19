@@ -22,6 +22,7 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
         openAiCompatTurnValidation: false,
         geminiThoughtSignatureSanitization: true,
         geminiThoughtSignatureModelHints: ["gemini"],
+        dropThinkingBlockModelHints: ["claude"],
       };
     case "openai-codex":
       return {
@@ -194,6 +195,12 @@ describe("resolveProviderCapabilities", () => {
       shouldDropThinkingBlocksForModel({
         provider: "github-copilot",
         modelId: "claude-3.7-sonnet",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "deepinfra",
+        modelId: "anthropic/claude-3.5-sonnet",
       }),
     ).toBe(true);
   });

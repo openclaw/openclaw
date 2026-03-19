@@ -63,6 +63,7 @@ export default definePluginEntry({
         openAiCompatTurnValidation: false,
         geminiThoughtSignatureSanitization: true,
         geminiThoughtSignatureModelHints: ["gemini"],
+        dropThinkingBlockModelHints: ["claude"],
       },
       isCacheTtlEligible: (ctx) => isDeepInfraCacheTtlModel(ctx.modelId),
     });
