@@ -768,6 +768,7 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let lastRetryFailoverReason: FailoverReason | null = null;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -835,6 +836,26 @@ export async function runEmbeddedPiAgent(
                 `provider=${provider}/${modelId} attempts=${runLoopIterations} ` +
                 `maxAttempts=${MAX_RUN_LOOP_ITERATIONS}`,
             );
+            // When fallback models are configured and the retries were exhausted
+            // by a failover-worthy reason (rate_limit, overloaded, auth, billing),
+            // throw a FailoverError so runWithModelFallback() can try the next
+            // candidate instead of silently returning an error result.
+            if (
+              fallbackConfigured &&
+              lastRetryFailoverReason &&
+              lastRetryFailoverReason !== "timeout" &&
+              lastRetryFailoverReason !== "model_not_found" &&
+              lastRetryFailoverReason !== "format" &&
+              lastRetryFailoverReason !== "session_expired"
+            ) {
+              throw new FailoverError(message, {
+                reason: lastRetryFailoverReason,
+                provider,
+                model: modelId,
+                profileId: lastProfileId,
+                status: resolveFailoverStatus(lastRetryFailoverReason),
+              });
+            }
             return {
               payloads: [
                 {
@@ -1358,6 +1379,7 @@ export async function runEmbeddedPiAgent(
               (await advanceAuthProfile())
             ) {
               logPromptFailoverDecision("rotate_profile");
+              lastRetryFailoverReason = promptFailoverReason;
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               continue;
             }
@@ -1490,6 +1512,7 @@ export async function runEmbeddedPiAgent(
             const rotated = await advanceAuthProfile();
             if (rotated) {
               logAssistantFailoverDecision("rotate_profile");
+              lastRetryFailoverReason = assistantFailoverReason ?? (timedOut ? "timeout" : null);
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               continue;
             }

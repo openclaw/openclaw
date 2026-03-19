@@ -532,4 +532,102 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(firstCall?.provider).toBe("openai");
     });
   });
+
+  it("falls back to next model when rate-limit retries exhaust the run loop limit", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      const RATE_LIMIT_ERROR =
+        '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limited"}}';
+
+      // Set up many profiles so profile rotation cycles through them
+      // without exhausting advanceAuthProfile before the retry limit.
+      // With 4 profiles: retry limit = max(32, 24 + 4*8) = 56.
+      // Each profile cycles once per 4 iterations, so after 4 rotations
+      // the profiles re-enter cooldown and the loop continues until the
+      // retry limit is hit.
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:p1": { type: "api_key", provider: "openai", key: "sk-1" },
+            "openai:p2": { type: "api_key", provider: "openai", key: "sk-2" },
+            "openai:p3": { type: "api_key", provider: "openai", key: "sk-3" },
+            "openai:p4": { type: "api_key", provider: "openai", key: "sk-4" },
+            "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
+          },
+          usageStats: {
+            "openai:p1": { lastUsed: 1 },
+            "openai:p2": { lastUsed: 2 },
+            "openai:p3": { lastUsed: 3 },
+            "openai:p4": { lastUsed: 4 },
+            "groq:p1": { lastUsed: 5 },
+          },
+        }),
+      );
+
+      // Primary provider always returns rate-limit errors.
+      // Fallback provider succeeds.
+      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+        const attemptParams = params as {
+          provider: string;
+          modelId: string;
+          authProfileId?: string;
+        };
+        if (attemptParams.provider === "openai") {
+          return makeAttempt({
+            assistantTexts: [],
+            lastAssistant: buildAssistant({
+              provider: "openai",
+              model: "mock-1",
+              stopReason: "error",
+              errorMessage: RATE_LIMIT_ERROR,
+            }),
+          });
+        }
+        if (attemptParams.provider === "groq") {
+          return makeAttempt({
+            assistantTexts: ["fallback ok"],
+            lastAssistant: buildAssistant({
+              provider: "groq",
+              model: "mock-2",
+              stopReason: "stop",
+              content: [{ type: "text", text: "fallback ok" }],
+            }),
+          });
+        }
+        throw new Error(`Unexpected provider ${attemptParams.provider}`);
+      });
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:rate-limit-retry-exhaustion",
+        runId: "run:rate-limit-retry-exhaustion",
+      });
+
+      // The key assertion: the fallback model must be used, not a
+      // "Request failed after repeated internal retries" error result.
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      // Verify the primary was attempted first (at least once).
+      const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as
+        | { provider?: string }
+        | undefined;
+      expect(firstCall?.provider).toBe("openai");
+
+      // Verify the fallback was actually invoked.
+      const allProviders = runEmbeddedAttemptMock.mock.calls.map(
+        (call) => (call[0] as { provider?: string })?.provider,
+      );
+      expect(allProviders).toContain("groq");
+
+      // The primary attempt should be recorded as a failed attempt.
+      expect(result.attempts.length).toBeGreaterThan(0);
+      const primaryAttempt = result.attempts.find((a) => a.provider === "openai");
+      expect(primaryAttempt).toBeDefined();
+      expect(primaryAttempt?.reason).toMatch(/rate_limit|overloaded|unknown/);
+    });
+  });
 });
