@@ -1,6 +1,6 @@
 {
   "name": "@openfinclaw/findoo-datahub-slim-plugin",
-  "version": "2026.3.18",
+  "version": "2026.3.19",
   "description": "Lightweight price query plugin — simple OHLCV, ticker, and market snapshot via DataHub.",
   "keywords": [
     "crypto",

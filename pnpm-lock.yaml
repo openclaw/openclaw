@@ -436,13 +436,12 @@ importers:
 
   extensions/findoo-datahub-slim-plugin:
     dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
       openclaw:
         specifier: '>=2026.1.0'
         version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.12.5)(node-llama-cpp@3.16.2(typescript@5.9.3))
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
 
   extensions/findoo-trader-plugin:
     dependencies:

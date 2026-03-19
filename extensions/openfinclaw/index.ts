@@ -1,6 +1,7 @@
 /**
  * OpenFinClaw — Skill publishing, strategy validation, and fork tools.
  * Tools: skill_leaderboard, skill_get_info, skill_validate, skill_fork, skill_list_local, skill_publish, skill_publish_verify.
+ * Supports FEP v2.0 protocol for strategy packages.
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -346,8 +347,24 @@ const openfinclawPlugin = {
                     profitFactor?: number | null;
                     maxDrawdownStart?: string;
                     maxDrawdownEnd?: string;
-                    monthlyReturns?: Record<string, number>;
+                    monthlyReturns?:
+                      | Record<string, number>
+                      | Array<{ month: string; return: number }>;
                     annualizedReturn?: number;
+                    returnsVolatility?: number;
+                    riskReturnRatio?: number;
+                    expectancy?: number;
+                    avgWinner?: number;
+                    avgLoser?: number;
+                    maxWinner?: number;
+                    maxLoser?: number;
+                    longRatio?: number;
+                    pnlTotal?: number;
+                    startingBalance?: number;
+                    endingBalance?: number;
+                    backtestStart?: string;
+                    backtestEnd?: string;
+                    totalOrders?: number;
                     recentValidation?: {
                       decay?: {
                         sharpeDecay30d?: number;
@@ -373,6 +390,18 @@ const openfinclawPlugin = {
                       };
                     };
                   };
+                  equityCurve?: Array<{ date: string; equity: number }>;
+                  drawdownCurve?: Array<{ date: string; drawdown: number }>;
+                  trades?: Array<{
+                    open_date: string;
+                    close_date: string;
+                    side: string;
+                    quantity: number;
+                    avg_open: number;
+                    avg_close: number;
+                    realized_pnl: string;
+                    return_pct: number;
+                  }>;
                   equity_curve?: unknown;
                   trade_journal?: unknown;
                 };
@@ -392,14 +421,22 @@ const openfinclawPlugin = {
 
               if (resp.backtestStatus === "completed" && resp.backtestReport?.performance) {
                 const perf = resp.backtestReport.performance;
+                const report = resp.backtestReport;
                 lines.push("");
                 lines.push("回测报告摘要：");
+
+                // ── 收益指标 ──
                 if (typeof perf.totalReturn === "number") {
                   lines.push(`- 总收益率: ${(perf.totalReturn * 100).toFixed(2)}%`);
                 }
                 if (typeof perf.annualizedReturn === "number") {
                   lines.push(`- 年化收益: ${(perf.annualizedReturn * 100).toFixed(2)}%`);
                 }
+                if (typeof perf.pnlTotal === "number") {
+                  lines.push(`- 总盈亏: ${perf.pnlTotal.toFixed(2)}`);
+                }
+
+                // ── 风险指标 ──
                 if (typeof perf.sharpe === "number") {
                   lines.push(`- 夏普比率: ${perf.sharpe.toFixed(3)}`);
                 }
@@ -412,18 +449,71 @@ const openfinclawPlugin = {
                 if (typeof perf.maxDrawdown === "number") {
                   lines.push(`- 最大回撤: ${(perf.maxDrawdown * 100).toFixed(2)}%`);
                 }
+                if (typeof perf.returnsVolatility === "number") {
+                  lines.push(`- 收益波动率: ${(perf.returnsVolatility * 100).toFixed(2)}%`);
+                }
+                if (typeof perf.riskReturnRatio === "number") {
+                  lines.push(`- 风险回报比: ${perf.riskReturnRatio.toFixed(3)}`);
+                }
+
+                // ── 交易指标 ──
                 if (typeof perf.winRate === "number") {
                   lines.push(`- 胜率: ${perf.winRate.toFixed(1)}%`);
                 }
                 if (typeof perf.profitFactor === "number") {
                   lines.push(`- 盈亏比: ${perf.profitFactor.toFixed(2)}`);
                 }
+                if (typeof perf.expectancy === "number") {
+                  lines.push(`- 期望收益: ${perf.expectancy.toFixed(2)}`);
+                }
+                if (typeof perf.avgWinner === "number") {
+                  lines.push(`- 平均盈利: ${perf.avgWinner.toFixed(2)}`);
+                }
+                if (typeof perf.avgLoser === "number") {
+                  lines.push(`- 平均亏损: ${perf.avgLoser.toFixed(2)}`);
+                }
+                if (typeof perf.longRatio === "number") {
+                  lines.push(`- 多头占比: ${(perf.longRatio * 100).toFixed(1)}%`);
+                }
+
+                // ── 交易统计 ──
                 if (typeof perf.totalTrades === "number") {
                   lines.push(`- 交易笔数: ${perf.totalTrades}`);
+                }
+                if (typeof perf.totalOrders === "number") {
+                  lines.push(`- 总订单数: ${perf.totalOrders}`);
+                }
+
+                // ── 资金信息 ──
+                if (typeof perf.startingBalance === "number") {
+                  lines.push(`- 初始资金: ${perf.startingBalance.toFixed(2)}`);
+                }
+                if (typeof perf.endingBalance === "number") {
+                  lines.push(`- 最终资金: ${perf.endingBalance.toFixed(2)}`);
                 }
                 if (typeof perf.finalEquity === "number") {
                   lines.push(`- 期末权益: ${perf.finalEquity.toFixed(2)}`);
                 }
+
+                // ── 回测周期 ──
+                if (perf.backtestStart || perf.backtestEnd) {
+                  lines.push(
+                    `- 回测周期: ${perf.backtestStart ?? "?"} ~ ${perf.backtestEnd ?? "?"}`,
+                  );
+                }
+
+                // ── 时序数据统计 ──
+                if (report.equityCurve && Array.isArray(report.equityCurve)) {
+                  lines.push(`- 权益曲线点数: ${report.equityCurve.length}`);
+                }
+                if (report.drawdownCurve && Array.isArray(report.drawdownCurve)) {
+                  lines.push(`- 回撤曲线点数: ${report.drawdownCurve.length}`);
+                }
+                if (report.trades && Array.isArray(report.trades)) {
+                  lines.push(`- 交易记录数: ${report.trades.length}`);
+                }
+
+                // ── 提示 ──
                 if (perf.hints && perf.hints.length > 0) {
                   lines.push("");
                   lines.push("提示:");
@@ -478,9 +568,12 @@ const openfinclawPlugin = {
     api.registerTool(
       {
         name: "skill_validate",
-        label: "Validate strategy package",
+        label: "Validate strategy package (FEP v2.0)",
         description:
-          "Validate a strategy package directory (fep v1.2) before zipping and publishing. Checks: fep.yaml with identity (id, name, type, version, style, visibility, summary, license, author, changelog), classification, technical, backtest; scripts/strategy.py with compute(data) and no forbidden imports. Only publish after validation passes.",
+          "Validate a strategy package directory per FEP v2.0 before zipping and publishing. " +
+          "Checks: fep.yaml with identity (id, name, type, version, style, visibility, summary, description, license, author, changelog, tags), " +
+          "backtest (symbol, defaultPeriod, initialCapital); scripts/strategy.py with compute(data) or select(universe) and no forbidden imports. " +
+          "Only publish after validation passes.",
         parameters: Type.Object({
           dirPath: Type.String({
             description:

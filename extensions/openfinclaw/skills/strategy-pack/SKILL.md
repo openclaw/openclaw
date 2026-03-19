@@ -1,10 +1,10 @@
 ---
 name: strategy-pack
-description: "Create and validate Findoo Backtest (fep v1.2) strategy packages. Use when the user wants to create a strategy pack, generate fep.yaml and strategy.py, or prepare a folder for remote backtest. Always validate with backtest_remote_validate before zipping and submitting."
+description: "Create and validate Findoo Backtest (FEP v2.0) strategy packages. Use when the user wants to create a strategy pack, generate fep.yaml and strategy.py, or prepare a folder for remote backtest. Always validate with backtest_remote_validate before zipping and submitting."
 metadata: { "openclaw": { "requires": { "extensions": ["fin-backtest-remote"] } } }
 ---
 
-# 策略包生成与校验 (FEP v1.2)
+# 策略包生成与校验 (FEP v2.0)
 
 当用户要**创建策略包**、**生成回测策略包**、**写 fep 策略**、**打包后提交回测**时，按以下结构生成目录和文件，并在**上传前必须用 `backtest_remote_validate` 校验**，通过后再打包为 ZIP 并提交。
 
@@ -19,56 +19,68 @@ metadata: { "openclaw": { "requires": { "extensions": ["fin-backtest-remote"] } 
 <strategy-dir>/
 ├── fep.yaml              # 必需：策略元数据与回测配置
 └── scripts/
-    └── strategy.py       # 必需：策略入口，必须实现 compute(data)
+    └── strategy.py       # 必需：策略入口，必须实现 compute(data) 或 select(universe)
     ├── risk_manager.py   # 可选
     └── indicators.py     # 可选
 └── data/                 # 可选：自定义数据
 ```
 
-## fep.yaml 配置 (FEP v1.2)
+## fep.yaml 配置 (FEP v2.0)
 
 ### 最小配置 (L1 Script)
 
 ```yaml
-fep: "1.2"
+fep: "2.0"
 
 # ── 身份标识 (必填) ───────────────────────────────────────
 identity:
   id: fin-dca-basic-test # 必填：策略唯一标识（英文 + 连字符）
-  type: strategy # strategy | indicator | connector
-  name: "DCA Basic Test Strategy" # 策略显示名称
-  version: "1.0.0" # 语义化版本号
-  style: dca # trend | mean_reversion | dca | momentum | swing | hybrid
-  visibility: public # public | private | unlisted（默认 private）
-  license: MIT # MIT | CC-BY-4.0 | proprietary（默认 MIT）
+  type: strategy # strategy | indicator | connector（默认 strategy）
+  name: "DCA Basic Test Strategy" # 必填：策略显示名称
+  version: "1.0.0" # 必填：语义化版本号
+  style: dca # 必填：trend | mean-reversion | momentum | value | growth | breakout | rotation | hybrid
+  visibility: public # 必填：public | private | unlisted
+  summary: "Simple DCA strategy for BTC" # 必填：一句话策略描述
+  description: "A simple DCA strategy that buys BTC periodically" # 必填：详细策略描述
+  license: MIT # 必填：MIT | CC-BY-4.0 | proprietary
+  tags: [dca, btc, crypto] # 必填：标签数组
   author:
     name: "OpenFinClaw" # 必填：作者名
     wallet: "0x..." # 可选：收益分配地址
-  summary: "Simple DCA strategy for BTC"
   changelog:
     - version: "1.0.0"
       date: "2025-01-01"
       changes: "Initial release"
 
-# ── 技术配置 (必填) ───────────────────────────────────────
+# ── 技术配置 (可选，有默认值) ───────────────────────────────
 technical:
-  language: python
-  entryPoint: strategy.py # scripts/ 下的入口文件
+  language: python # 默认 python
+  entryPoint: strategy.py # 默认 strategy.py
+
+# ── 策略参数 (可选) ───────────────────────────────────────
+parameters:
+  - name: base_amount
+    default: 100
+    type: number
+    label: "基础定投金额"
+    range: { min: 10, max: 10000 }
 
 # ── 回测配置 (必填) ───────────────────────────────────────
 backtest:
+  symbol: "BTC/USDT" # 必填：交易品种（服务端自动推断市场、货币、手续费）
+  timeframe: 1d # 可选：1m | 5m | 15m | 30m | 1h | 4h | 1d | 1w（默认 1d）
   defaultPeriod:
-    startDate: "2025-01-01"
-    endDate: "2025-12-31"
-  frequencyDays: 1 # 回测频率（天）
-  initialCapital: 10000 # 初始资金 (USD)
-  currency: USD # 货币类型
-  benchmark: BTC-USD # 基准标的
-  commissionRate: 0.001 # 手续费率 0.1%
-  slippageRate: 0.0005 # 滑点率 0.05%
-  dataSource: synthetic # synthetic | datahub | csv
+    startDate: "2024-01-01"
+    endDate: "2024-12-31"
+  initialCapital: 10000 # 必填：初始资金
 
-# ── 分类 (必填) ──────────────────────────────────────────
+# ── 风控配置 (可选) ───────────────────────────────────────
+risk:
+  maxDrawdownThreshold: 25 # 最大回撤限制 (%)，默认 25
+  dailyLossLimitPct: 5 # 日亏损限制 (%)，默认 5
+  maxTradesPerDay: 10 # 日最大交易笔数，默认 10
+
+# ── 分类 (可选，展示用) ───────────────────────────────────────
 classification:
   archetype: systematic # systematic | discretionary | hybrid
   market: Crypto # Crypto | US | CN | HK | Forex | Commodity
@@ -77,18 +89,20 @@ classification:
   riskProfile: medium # low | medium | high
 ```
 
-### Identity Fields (FEP v1.2)
+### Identity Fields (FEP v2.0)
 
 **必填字段：**
 
 - `id`: 策略唯一标识（英文 + 连字符，例如 `fin-dca-basic-test`）
-- `type`: `strategy` | `indicator` | `connector`
+- `type`: `strategy` | `indicator` | `connector`（默认 `strategy`）
 - `name`: 策略显示名称
 - `version`: 语义化版本号（例如 `"1.0.0"`）
-- `style`: `trend` | `mean_reversion` | `dca` | `momentum` | `swing` | `hybrid`
-- `visibility`: `public` | `private` | `unlisted`（默认 `private`）
+- `style`: `trend` | `mean-reversion` | `momentum` | `value` | `growth` | `breakout` | `rotation` | `hybrid`
+- `visibility`: `public` | `private` | `unlisted`
 - `summary`: 一句话策略描述
-- `license`: `MIT` | `CC-BY-4.0` | `proprietary`（默认 `MIT`）
+- `description`: 详细策略说明（支持 Markdown）
+- `license`: `MIT` | `CC-BY-4.0` | `proprietary`
+- `tags`: **字符串数组**，必须使用**行内数组格式**：`tags: [dca, btc, adaptive, crypto]`
 - `author`: 对象格式（必须包含 `name`）
   ```yaml
   author:
@@ -103,14 +117,54 @@ classification:
       changes: "Initial release"
   ```
 
+### Backtest Fields (FEP v2.0)
+
+**必填字段：**
+
+- `symbol`: 交易品种（服务端根据 symbol 自动推断市场类型、数据源、货币、手续费和结算规则）
+- `defaultPeriod.startDate`: 回测开始日期
+- `defaultPeriod.endDate`: 回测结束日期
+- `initialCapital`: 初始资金
+
 **可选字段：**
 
-- `description`: 详细策略说明（支持 Markdown）
-- `tags`: **字符串数组**，必须使用**行内数组格式**：`tags: [dca, btc, adaptive, crypto]`
-- `createdAt`: `"2025-01-01"` (YYYY-MM-DD)
-- `updatedAt`: `"2025-06-01"` (YYYY-MM-DD)
+- `timeframe`: K线周期，`1m` | `5m` | `15m` | `30m` | `1h` | `4h` | `1d` | `1w`（默认 `1d`）
+- `universe`: 多标的配置（轮动策略用）
+  ```yaml
+  universe:
+    symbols: ["000001.SZ", "000002.SZ", "600519.SH"]
+  ```
+- `rebalance`: 再平衡配置（多标的用）
+  ```yaml
+  rebalance:
+    frequency: monthly # daily | weekly | monthly
+    maxHoldings: 2 # 最大同时持仓数
+    weightMethod: equal # equal | market_cap
+  ```
 
-### Classification (必填)
+**服务端自动推断（用户无需指定）：**
+
+| 配置项   | 推断规则                                                                          |
+| -------- | --------------------------------------------------------------------------------- |
+| 市场类型 | `000001.SZ` → A股, `AAPL` → 美股, `BTC/USDT` → Crypto, `00700.HK` → 港股          |
+| 数据源   | 可识别 symbol → DataHub 真实数据, 未知 → 合成数据                                 |
+| 货币     | A股 → CNY, 美股 → USD, 港股 → HKD, Crypto → USDT                                  |
+| 手续费   | A股: 佣金+印花税+过户费, 港股: 佣金+印花税+征费, 美股: 零佣金, Crypto: MakerTaker |
+| 结算规则 | A股/ETF → T+1, 其余 → T+0                                                         |
+
+### Symbol 格式
+
+| 格式               | 市场   | 示例                     |
+| ------------------ | ------ | ------------------------ |
+| `XXX/YYY`          | Crypto | `BTC/USDT`, `ETH/BTC`    |
+| `6位数.SZ/SH`      | A股    | `000001.SZ`, `600519.SH` |
+| `5位数.SH` (5开头) | ETF    | `510300.SH`              |
+| `000xxx.SH`        | 指数   | `000300.SH`              |
+| `4-5位数.HK`       | 港股   | `00700.HK`               |
+| `1-5大写字母`      | 美股   | `AAPL`, `NVDA`           |
+| `字母+数字.交易所` | 期货   | `IF2503.CFX`             |
+
+### Classification (可选)
 
 ```yaml
 classification:
@@ -118,74 +172,31 @@ classification:
   market: Crypto # Crypto | US | CN | HK | Forex | Commodity
   assetClasses: [crypto]
   frequency: weekly # daily | weekly | monthly
-  riskProfile: medium # low | medium | high (fallback for risk.riskLevel)
+  riskProfile: medium # low | medium | high
 ```
 
-**字段说明：**
-
-| 字段           | 类型     | 必填 | 可选值                                                     | 说明                                   |
-| -------------- | -------- | ---- | ---------------------------------------------------------- | -------------------------------------- |
-| `archetype`    | string   | 是   | `systematic` \| `discretionary` \| `hybrid`                | 策略类型：系统化/主观/混合             |
-| `market`       | string   | 是   | `Crypto` \| `US` \| `CN` \| `HK` \| `Forex` \| `Commodity` | 目标市场                               |
-| `assetClasses` | string[] | 是   | `[crypto]`, `[equity]`, `[forex]`, `[commodity]`           | 资产类别数组                           |
-| `frequency`    | string   | 是   | `daily` \| `weekly` \| `monthly`                           | 交易频率                               |
-| `riskProfile`  | string   | 是   | `low` \| `medium` \| `high`                                | 风险等级（可被 `risk.riskLevel` 覆盖） |
-
-### Parameters (可选)
-
-```yaml
-parameters:
-  - name: base_amount
-    default: 100
-    type: number
-    label: "基础定投金额"
-    range: { min: 10, max: 10000, step: 10 }
-  - name: sma_fast
-    default: 20
-    type: integer
-    label: "快速均线周期"
-    range: { min: 5, max: 50 }
-```
-
-### Risk (可选但推荐)
+### Risk (可选)
 
 ```yaml
 risk:
-  riskLevel: medium # low | medium | high
-  maxPositionSizePct: 100 # 单标的最大仓位 %
-  maxExposurePct: 100 # 总敞口 %
-  maxConcurrentPositions: 3 # 最大同时持仓数
-  maxLeverage: 1.0 # 最大杠杆
-  maxDrawdownThreshold: 25 # 最大回撤阈值 %
-  stopLoss:
-    type: trailing # fixed | trailing | atr-based
-    value: 15 # 止损百分比或 ATR 倍数
-```
-
-### L2 Agent (仅 L2 策略需要)
-
-```yaml
-agent:
-  engine: agent # 触发 L2 Agent 引擎
-  mode: hybrid # script | sample | hybrid | full | research
-  model: claude-sonnet-4-6-20250514
-  budgetCapUsd: 5.0 # LLM 推理成本上限 (USD)
-  maxTurnsPerPeriod: 10
-  reflectionInterval: 20 # 每 N 周期执行一次反思
-  drawdownAlertPct: 15.0 # 触发深度分析的回撤阈值
-  priceSpikePct: 5.0 # 触发深度分析的价格波动阈值
+  maxDrawdownThreshold: 25 # 最大回撤限制 (%)，默认 25
+  dailyLossLimitPct: 5 # 日亏损限制 (%)，默认 5
+  maxTradesPerDay: 10 # 日最大交易笔数，默认 10
 ```
 
 ## scripts/strategy.py 要求
 
-- **必须**定义函数：`def compute(data):`
-  - `data`: pandas DataFrame，含列 open, high, low, close, volume
-  - 返回：`dict`，键至少包含 `action` ("buy"|"sell"|"hold")、`amount`、`price`、`reason`
-
-示例：
+### 单标的策略：compute() 函数
 
 ```python
+# 模式 A: 无 context（简单策略）
 def compute(data):
+    """
+    Args:
+        data: pandas DataFrame，含列 open, high, low, close, volume
+    Returns:
+        dict: 键至少包含 action ("buy"|"sell"|"hold"|"target")
+    """
     close = data["close"].values
     current_price = float(close[-1])
     return {
@@ -194,10 +205,47 @@ def compute(data):
         "price": current_price,
         "reason": f"Buy at ${current_price:.2f}",
     }
+
+# 模式 B: 带 context（推荐）
+def compute(data, context=None):
+    """
+    Args:
+        data: pandas DataFrame
+        context: dict with equity, cash, position, bar_index
+    """
+    position = context.get("position") if context else None
+    # ...
 ```
 
-- **允许的导入**：`numpy`, `pandas`, `math`, `statistics`, `datetime`, `collections`
-- **禁止（服务器会拒绝）**：`import os/subprocess/socket`、`eval()`、`exec()`、`open()`、`requests`、`urllib`、`__import__()`、`importlib`
+### 多标的策略：select() 函数
+
+用于轮动/选股策略，需在 backtest 中配置 universe：
+
+```python
+def select(universe):
+    """
+    Args:
+        universe: dict[str, pd.DataFrame] - {symbol: DataFrame}
+    Returns:
+        list[str]: 选中标的列表（按优先级排序）
+    """
+    scores = []
+    for symbol, df in universe.items():
+        close = df["close"].values
+        if len(close) < 20:
+            continue
+        momentum = (close[-1] / close[-20]) - 1
+        scores.append((symbol, momentum))
+
+    scores.sort(key=lambda x: x[1], reverse=True)
+    return [s[0] for s in scores]
+```
+
+- **允许的导入**：`numpy`, `pandas`, `math`, `statistics`, `datetime`, `collections`, `ta`
+- **禁止（服务器会拒绝）**：
+  - Import: `os/subprocess/sys/socket/shutil/ctypes/importlib/signal/threading/multiprocessing/pathlib/tempfile/requests/urllib/http/ftplib/smtplib/xmlrpc/pickle/shelve/marshal/concurrent/asyncio/io`
+  - 调用: `eval()`, `exec()`, `compile()`, `open()`, `__import__()`, `getattr()`, `setattr()`, `delattr()`, `vars()`, `dir()`, `breakpoint()`, `exit()`, `quit()`, `input()`, `globals()`, `locals()`
+  - 破坏回测: `datetime.now()`, `date.today()`
 
 ## 上传前校验与提交流程
 
@@ -209,14 +257,10 @@ def compute(data):
 
 1. **Structure:** 必需文件存在：`fep.yaml`, `scripts/strategy.py`。
 2. **fep.yaml:**
-   - Valid YAML, top-level key `fep: "1.2"`
-   - `identity`: id, type, name, version, style, visibility, summary, license (全部必填)
-   - `identity.author`: name (必填), wallet (可选)
-   - `identity.changelog`: 至少包含一条版本记录 (必填)
-   - `classification`: archetype, market, assetClasses, frequency, riskProfile (全部必填)
-   - `technical`: language, entryPoint (必填)
-   - `backtest`: defaultPeriod (startDate/endDate), frequencyDays, initialCapital, currency, benchmark, commissionRate, slippageRate, dataSource (全部必填)
-3. **strategy.py:** 定义 `compute(data)`；返回 dict 包含 `action`, `amount`, `price`, `reason`；无禁止的导入。
+   - Valid YAML, top-level key `fep: "2.0"`
+   - `identity`: id, name, type, version, style, visibility, summary, description, license, tags, author.name, changelog (全部必填)
+   - `backtest`: symbol, defaultPeriod (startDate/endDate), initialCapital (全部必填)
+3. **strategy.py:** 定义 `compute(data)` 或 `select(universe)`；返回 dict 包含正确字段；无禁止的导入/调用。
 4. 调用 `backtest_remote_validate` 传入策略包目录路径 `dirPath`。若返回 `valid: false`，根据 `errors` 修正后再次校验。
 5. Auto-fix and re-validate up to 3 iterations；若仍失败，向用户清晰解释问题。
 
@@ -228,13 +272,13 @@ def compute(data):
 
 ### Step 4: 提交
 
-调用 `backtest_remote_submit`，传入 ZIP 的 `filePath`（及可选 symbol、initial_capital、start_date、end_date、engine、budget_cap_usd）。
+调用 `backtest_remote_submit`，传入 ZIP 的 `filePath`（及可选 engine, budget_cap_usd）。
 
 ## 相关 Tools
 
 | Tool                                                | 用途                                                    |
 | --------------------------------------------------- | ------------------------------------------------------- |
-| `backtest_remote_validate`                          | 校验策略包目录格式是否符合 fep v1.2，通过后才可打包上传 |
+| `backtest_remote_validate`                          | 校验策略包目录格式是否符合 fep v2.0，通过后才可打包上传 |
 | `backtest_remote_submit`                            | 提交已打包的 ZIP 到远程回测服务                         |
 | `backtest_remote_status` / `backtest_remote_report` | 查询任务状态与报告                                      |
 
