@@ -92,6 +92,7 @@ export class ConsolidationService {
       timestamp?: unknown;
       created_at?: unknown;
     }> = [],
+    workspaceDir?: string,
   ): Promise<void> {
     try {
       // Check if bootstrap has already been done using a flag file
@@ -120,6 +121,30 @@ export class ConsolidationService {
       }
 
       this.log(`📥 [MIND] No bootstrap flag found. Ingesting memory history into Graphiti...`);
+
+      // 0. Ingest identity/profile files from workspaceDir (USER.md, SOUL.md, IDENTITY.md, MEMORY.md)
+      if (workspaceDir) {
+        const identityFiles = ["USER.md", "SOUL.md", "IDENTITY.md", "MEMORY.md"];
+        for (const file of identityFiles) {
+          if (processedFiles.has(`__identity__${file}`)) {
+            continue;
+          }
+          const filePath = path.join(workspaceDir, file);
+          try {
+            const content = await fs.readFile(filePath, "utf-8");
+            this.log(`📥 [MIND] Ingesting identity file: ${file}`);
+            await this.graph.addEpisode(
+              "global_user_memory",
+              `system: Identity/profile file — ${file}\n\n${content}`,
+              undefined,
+              { source: "identity-file" },
+            );
+            await fs.appendFile(bootstrapProgressPath, `__identity__${file}\n`);
+          } catch {
+            // File doesn't exist, skip
+          }
+        }
+      }
 
       // 1. Ingest Historical MD Files
       const files = await fs.readdir(memoryDir);

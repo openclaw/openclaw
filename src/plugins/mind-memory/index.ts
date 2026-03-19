@@ -301,7 +301,7 @@ export default function register(api: PluginApi) {
       const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
       const memoryDir = config.memoryDir || path.join(workspaceDir, "memory");
       const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
-      await consolidator.bootstrapHistoricalEpisodes(sessionId, memoryDir);
+      await consolidator.bootstrapHistoricalEpisodes(sessionId, memoryDir, [], workspaceDir);
 
       // Read QUICK.md for observer context
       const { readFile } = await import("node:fs/promises");
@@ -969,7 +969,7 @@ export default function register(api: PluginApi) {
     const [, , , flashbackResult] = await Promise.allSettled([
       config.graphiti?.enabled !== false
         ? (consolidator
-            .bootstrapHistoricalEpisodes(sessionId, memoryDir)
+            .bootstrapHistoricalEpisodes(sessionId, memoryDir, [], workspaceDir)
             .catch((e) => process.stderr.write(`⚠️ [MIND] Bootstrap error: ${e}\n`)),
           Promise.resolve())
         : Promise.resolve(),

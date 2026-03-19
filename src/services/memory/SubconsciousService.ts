@@ -87,25 +87,31 @@ export class SubconsciousService {
         : "(No previous context)";
 
     const prompt = `You are the "Subconscious Observer" of an artificial mind.
-Your task: generate 3 search queries to retrieve relevant past memories from a knowledge graph.
-
+Your task: generate 3 short keyword phrases to retrieve relevant past memories from a semantic search index.
+${
+  quickContext?.trim()
+    ? `
+ENTITY REFERENCE (read this ONLY to resolve who people are — never use this as a source for queries):
+${quickContext.trim()}
+`
+    : ""
+}
 CONVERSATION:
 ${historyText}
 
 LATEST MESSAGE: "${cleanedPrompt}"
 
-TASK:
-Read the full conversation above. Generate 3 search queries grounded in what is actually being discussed — prioritizing the most recent exchanges, understood in the context of the full thread.
+STEP 1 — Entity resolution: identify any pronouns or ambiguous references in the conversation above and resolve them using ENTITY REFERENCE if needed.
+STEP 2 — Generate exactly 3 keyword phrases based ONLY on what is discussed in CONVERSATION and LATEST MESSAGE. Do not generate queries about anything not mentioned there.
 
-RULES:
-1. CONVERSATION-GROUNDED — every query must be directly traceable to something said in the conversation above. Do not invent topics that are not mentioned.
-2. CONCRETE — name specific people, places, events or facts. Never generate abstract queries like "user interests", "general topics" or "previous interactions".
-3. ENTITY RESOLUTION — replace pronouns with their actual referent from context (e.g. "he", "she" → the actual name).
-4. FILLER MESSAGES — if the latest message is a short reaction or filler (e.g. "ok", "haha", "yes", "I see"…), base the queries on the substance of the recent exchanges instead.
-5. LANGUAGE — respond in the same language as the conversation.
-6. NO METADATA — ignore timestamps, user IDs, system labels.
-${quickContext?.trim() ? `\nBACKGROUND (use only to resolve names and entities in the conversation above — do NOT generate queries from this):\n${quickContext.trim()}` : ""}
-Respond with exactly 3 queries, one per line. No numbers, bullets, or explanations.`;
+RULES for the keyword phrases:
+- 2 to 5 words maximum. No full sentences, no questions.
+- Always in English, regardless of the conversation language.
+- Use specific names, places, events from the conversation.
+- If the latest message is a short reaction ("ok", "yes", "haha"…), use the recent conversation substance instead.
+- Never use abstract phrases like "user interests", "recent topics", or anything from ENTITY REFERENCE that is not also in the conversation.
+
+Respond with exactly 3 keyword phrases, one per line. No numbers, bullets, explanations, or step labels.`;
 
     this.log(`  👁️ [OBSERVER] Performing entity resolution and generating search queries...`);
 
