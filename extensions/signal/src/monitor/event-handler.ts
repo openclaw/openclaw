@@ -886,6 +886,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const quoteId = dataMessage.quote?.id;
     const quoteAuthor =
       dataMessage.quote?.author?.trim() ||
+      dataMessage.quote?.authorUuid?.trim() ||
       dataMessage.quote?.authorNumber?.trim() ||
       undefined;
     await inboundDebouncer.enqueue({

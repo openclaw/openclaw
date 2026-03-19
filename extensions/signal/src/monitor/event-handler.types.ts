@@ -41,6 +41,7 @@ export type SignalDataMessage = {
     id?: number | null;
     text?: string | null;
     author?: string | null;
+    authorUuid?: string | null;
     authorNumber?: string | null;
     authorUuid?: string | null;
   } | null;
