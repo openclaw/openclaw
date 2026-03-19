@@ -30,7 +30,6 @@ export const readAllowFromStoreMock: AnyMockFn = vi.fn().mockResolvedValue([]);
 export const upsertPairingRequestMock: AnyMockFn = vi
   .fn()
   .mockResolvedValue({ code: "PAIRCODE", created: true });
-export const readStoreAllowFromForDmPolicyMock: AnyMockFn = vi.fn().mockResolvedValue([]);
 
 export type MockSock = {
   ev: EventEmitter;
@@ -71,28 +70,24 @@ function createMockSock(): MockSock {
   };
 }
 
-function getPairingStoreMocks() {
-  const readChannelAllowFromStore = (...args: unknown[]) => readAllowFromStoreMock(...args);
-  const upsertChannelPairingRequest = (...args: unknown[]) => upsertPairingRequestMock(...args);
-  return {
-    readChannelAllowFromStore,
-    upsertChannelPairingRequest,
-  };
-}
-
 const sock: MockSock = createMockSock();
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
-  return {
-    ...actual,
-    saveMediaBuffer: vi.fn().mockResolvedValue({
+  const mockModule = Object.create(null) as Record<string, unknown>;
+  Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
+  Object.defineProperty(mockModule, "saveMediaBuffer", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: vi.fn().mockResolvedValue({
       id: "mid",
       path: "/tmp/mid",
       size: 1,
       contentType: "image/jpeg",
     }),
-  };
+  });
+  return mockModule;
 });
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
@@ -112,7 +107,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
-    ...getPairingStoreMocks(),
+    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
   };
 });
 
@@ -120,8 +115,14 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
   return {
     ...actual,
-    readStoreAllowFromForDmPolicy: (...args: unknown[]) =>
-      readStoreAllowFromForDmPolicyMock(...args),
+    readStoreAllowFromForDmPolicy: async (
+      params: Parameters<typeof actual.readStoreAllowFromForDmPolicy>[0],
+    ) =>
+      await actual.readStoreAllowFromForDmPolicy({
+        ...params,
+        readStore: async (provider, accountId) =>
+          (await readAllowFromStoreMock(provider, accountId)) as string[],
+      }),
   };
 });
 
@@ -165,7 +166,6 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
       code: "PAIRCODE",
       created: true,
     });
-    readStoreAllowFromForDmPolicyMock.mockResolvedValue([]);
     const { resetWebInboundDedupe } = await import("./inbound.js");
     resetWebInboundDedupe();
     if (createAuthDir) {

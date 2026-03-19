@@ -28,6 +28,7 @@ vi.mock("../send.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../send.js")>();
   return {
     ...actual,
+    addRoleDiscord: vi.fn(),
     sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscord(...args),
     sendWebhookMessageDiscord: (...args: unknown[]) => hoisted.sendWebhookMessageDiscord(...args),
   };

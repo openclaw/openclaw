@@ -88,12 +88,20 @@ vi.mock("./session-snapshot.js", () => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  const logger = {
+    child: () => logger,
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
   return {
     ...actual,
     getChildLogger: () => ({
       info: (...args: unknown[]) => state.loggerInfoCalls.push(args),
       warn: (...args: unknown[]) => state.loggerWarnCalls.push(args),
     }),
+    createSubsystemLogger: () => logger,
   };
 });
 
@@ -108,10 +116,14 @@ vi.mock("../reconnect.js", () => ({
   newConnectionId: () => "run-1",
 }));
 
-vi.mock("../send.js", () => ({
-  sendMessageWhatsApp: vi.fn(async () => ({ messageId: "m1" })),
-  sendReactionWhatsApp: vi.fn(async () => undefined),
-}));
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
+  return {
+    ...actual,
+    sendMessageWhatsApp: vi.fn(async () => ({ messageId: "m1" })),
+    sendReactionWhatsApp: vi.fn(async () => undefined),
+  };
+});
 
 vi.mock("../session.js", () => ({
   formatError: (err: unknown) => `ERR:${String(err)}`,

@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -37,22 +39,14 @@ const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
   loadWebMedia: vi.fn(),
 }));
 
-function maybePrefixReplyText(text: unknown, responsePrefix?: string): unknown {
-  if (typeof text !== "string") {
-    return text;
-  }
-  const normalizedPrefix = responsePrefix?.trim();
-  if (!normalizedPrefix || !text.trim() || text.startsWith(normalizedPrefix)) {
-    return text;
-  }
-  return `${normalizedPrefix} ${text}`;
-}
-
 export function getLoadWebMediaMock(): AnyMock {
   return loadWebMedia;
 }
 
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
+  loadWebMedia,
+}));
+vi.mock("openclaw/plugin-sdk/web-media.js", () => ({
   loadWebMedia,
 }));
 
@@ -71,7 +65,7 @@ const { loadConfig, resolveStorePathMock } = vi.hoisted(
 export function getLoadConfigMock(): AnyMock {
   return loadConfig;
 }
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
@@ -101,7 +95,15 @@ export function getUpsertChannelPairingRequestMock(): AnyAsyncMock {
   return upsertChannelPairingRequest;
 }
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+vi.doMock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    readChannelAllowFromStore,
+    upsertChannelPairingRequest,
+  };
+});
+vi.doMock("openclaw/plugin-sdk/conversation-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
@@ -112,6 +114,9 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
 
 const skillCommandListHoisted = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
+}));
+const modelProviderDataHoisted = vi.hoisted(() => ({
+  buildModelsProviderData: vi.fn(),
 }));
 const replySpyHoisted = vi.hoisted(() => ({
   replySpy: vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -125,42 +130,110 @@ const replySpyHoisted = vi.hoisted(() => ({
     ) => Promise<ReplyPayload | ReplyPayload[] | undefined>
   >,
 }));
+
+async function dispatchHarnessReplies(
+  params: DispatchReplyHarnessParams,
+  runReply: (
+    params: DispatchReplyHarnessParams,
+  ) => Promise<ReplyPayload | ReplyPayload[] | undefined>,
+): Promise<DispatchReplyWithBufferedBlockDispatcherResult> {
+  await params.dispatcherOptions.typingCallbacks?.onReplyStart?.();
+  const reply = await runReply(params);
+  const payloads: ReplyPayload[] =
+    reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
+  const dispatcher = createReplyDispatcher({
+    deliver: async (payload, info) => {
+      await params.dispatcherOptions.deliver?.(payload, info);
+    },
+    responsePrefix: params.dispatcherOptions.responsePrefix,
+    enableSlackInteractiveReplies: params.dispatcherOptions.enableSlackInteractiveReplies,
+    responsePrefixContextProvider: params.dispatcherOptions.responsePrefixContextProvider,
+    responsePrefixContext: params.dispatcherOptions.responsePrefixContext,
+    onHeartbeatStrip: params.dispatcherOptions.onHeartbeatStrip,
+    onSkip: (payload, info) => {
+      params.dispatcherOptions.onSkip?.(payload, info);
+    },
+    onError: (err, info) => {
+      params.dispatcherOptions.onError?.(err, info);
+    },
+  });
+  let finalCount = 0;
+  for (const payload of payloads) {
+    if (dispatcher.sendFinalReply(payload)) {
+      finalCount += 1;
+    }
+  }
+  dispatcher.markComplete();
+  await dispatcher.waitForIdle();
+  return {
+    queuedFinal: finalCount > 0,
+    counts: {
+      block: 0,
+      final: finalCount,
+      tool: 0,
+    },
+  };
+}
+
 const dispatchReplyHoisted = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
-    async (params: DispatchReplyHarnessParams) => {
-      await params.dispatcherOptions?.typingCallbacks?.onReplyStart?.();
-      const reply: ReplyPayload | ReplyPayload[] | undefined = await replySpyHoisted.replySpy(
-        params.ctx,
-        params.replyOptions,
-      );
-      const payloads: ReplyPayload[] =
-        reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
-      const counts: DispatchReplyWithBufferedBlockDispatcherResult["counts"] = {
-        block: 0,
-        final: payloads.length,
-        tool: 0,
-      };
-      for (const payload of payloads) {
-        await params.dispatcherOptions?.deliver?.(
-          {
-            ...payload,
-            text: maybePrefixReplyText(payload.text, params.dispatcherOptions.responsePrefix) as
-              | string
-              | undefined,
-          },
-          { kind: "final" },
-        );
-      }
-      return { queuedFinal: payloads.length > 0, counts };
-    },
+    async (params: DispatchReplyHarnessParams) =>
+      await dispatchHarnessReplies(params, async (dispatchParams) => {
+        return await replySpyHoisted.replySpy(dispatchParams.ctx, dispatchParams.replyOptions);
+      }),
   ),
 }));
 export const listSkillCommandsForAgents = skillCommandListHoisted.listSkillCommandsForAgents;
+const buildModelsProviderData = modelProviderDataHoisted.buildModelsProviderData;
 export const replySpy = replySpyHoisted.replySpy;
 export const dispatchReplyWithBufferedBlockDispatcher =
   dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher;
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+function parseModelRef(raw: string): { provider?: string; model: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { model: "" };
+  }
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex > 0 && slashIndex < trimmed.length - 1) {
+    return {
+      provider: trimmed.slice(0, slashIndex),
+      model: trimmed.slice(slashIndex + 1),
+    };
+  }
+  return { model: trimmed };
+}
+
+function createModelsProviderDataFromConfig(cfg: OpenClawConfig): {
+  byProvider: Map<string, Set<string>>;
+  providers: string[];
+  resolvedDefault: { provider: string; model: string };
+} {
+  const byProvider = new Map<string, Set<string>>();
+  const add = (providerRaw: string | undefined, modelRaw: string | undefined) => {
+    const provider = providerRaw?.trim().toLowerCase();
+    const model = modelRaw?.trim();
+    if (!provider || !model) {
+      return;
+    }
+    const existing = byProvider.get(provider) ?? new Set<string>();
+    existing.add(model);
+    byProvider.set(provider, existing);
+  };
+
+  const resolvedDefault = resolveDefaultModelForAgent({ cfg });
+  add(resolvedDefault.provider, resolvedDefault.model);
+
+  for (const raw of Object.keys(cfg.agents?.defaults?.models ?? {})) {
+    const parsed = parseModelRef(raw);
+    add(parsed.provider ?? resolvedDefault.provider, parsed.model);
+  }
+
+  const providers = [...byProvider.keys()].toSorted();
+  return { byProvider, providers, resolvedDefault };
+}
+
+vi.doMock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
     ...actual,
@@ -169,6 +242,19 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
     __replySpy: replySpyHoisted.replySpy,
     dispatchReplyWithBufferedBlockDispatcher:
       dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher,
+    buildModelsProviderData,
+  };
+});
+vi.doMock("openclaw/plugin-sdk/reply-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    listSkillCommandsForAgents: skillCommandListHoisted.listSkillCommandsForAgents,
+    getReplyFromConfig: replySpyHoisted.replySpy,
+    __replySpy: replySpyHoisted.replySpy,
+    dispatchReplyWithBufferedBlockDispatcher:
+      dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher,
+    buildModelsProviderData,
   };
 });
 
@@ -178,7 +264,7 @@ const systemEventsHoisted = vi.hoisted(() => ({
 export const enqueueSystemEventSpy: MockFn<TelegramBotDeps["enqueueSystemEvent"]> =
   systemEventsHoisted.enqueueSystemEventSpy;
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+vi.doMock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
     ...actual,
@@ -191,7 +277,7 @@ const sentMessageCacheHoisted = vi.hoisted(() => ({
 }));
 export const wasSentByBot = sentMessageCacheHoisted.wasSentByBot;
 
-vi.mock("./sent-message-cache.js", () => ({
+vi.doMock("./sent-message-cache.js", () => ({
   wasSentByBot: sentMessageCacheHoisted.wasSentByBot,
   recordSentMessage: vi.fn(),
   clearSentMessageCache: vi.fn(),
@@ -307,8 +393,11 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   resolveStorePath: resolveStorePathMock,
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
+  upsertChannelPairingRequest:
+    upsertChannelPairingRequest as TelegramBotDeps["upsertChannelPairingRequest"],
   enqueueSystemEvent: enqueueSystemEventSpy as TelegramBotDeps["enqueueSystemEvent"],
   dispatchReplyWithBufferedBlockDispatcher,
+  buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
   listSkillCommandsForAgents:
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
@@ -410,28 +499,10 @@ beforeEach(() => {
   });
   dispatchReplyWithBufferedBlockDispatcher.mockReset();
   dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-    async (params: DispatchReplyHarnessParams) => {
-      await params.dispatcherOptions?.typingCallbacks?.onReplyStart?.();
-      const reply = await replySpy(params.ctx, params.replyOptions);
-      const payloads = reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
-      const counts: DispatchReplyWithBufferedBlockDispatcherResult["counts"] = {
-        block: 0,
-        final: payloads.length,
-        tool: 0,
-      };
-      for (const payload of payloads) {
-        await params.dispatcherOptions?.deliver?.(
-          {
-            ...payload,
-            text: maybePrefixReplyText(payload.text, params.dispatcherOptions.responsePrefix) as
-              | string
-              | undefined,
-          },
-          { kind: "final" },
-        );
-      }
-      return { queuedFinal: payloads.length > 0, counts };
-    },
+    async (params: DispatchReplyHarnessParams) =>
+      await dispatchHarnessReplies(params, async (dispatchParams) => {
+        return await replySpy(dispatchParams.ctx, dispatchParams.replyOptions);
+      }),
   );
 
   sendAnimationSpy.mockReset();
@@ -467,6 +538,10 @@ beforeEach(() => {
   wasSentByBot.mockReturnValue(false);
   listSkillCommandsForAgents.mockReset();
   listSkillCommandsForAgents.mockReturnValue([]);
+  buildModelsProviderData.mockReset();
+  buildModelsProviderData.mockImplementation(async (cfg: OpenClawConfig) => {
+    return createModelsProviderDataFromConfig(cfg);
+  });
   middlewareUseSpy.mockReset();
   runnerHoisted.sequentializeMiddleware.mockReset();
   runnerHoisted.sequentializeMiddleware.mockImplementation(async (_ctx, next) => {
