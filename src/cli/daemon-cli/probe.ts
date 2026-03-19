@@ -11,6 +11,7 @@ export async function probeGatewayStatus(opts: {
   json?: boolean;
   configPath?: string;
 }) {
+  const startedAt = Date.now();
   try {
     await withProgress(
       {
@@ -31,11 +32,15 @@ export async function probeGatewayStatus(opts: {
           ...(opts.configPath ? { configPath: opts.configPath } : {}),
         }),
     );
-    return { ok: true } as const;
+    return {
+      ok: true,
+      durationMs: Math.max(0, Date.now() - startedAt),
+    } as const;
   } catch (err) {
     return {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
+      durationMs: Math.max(0, Date.now() - startedAt),
     } as const;
   }
 }

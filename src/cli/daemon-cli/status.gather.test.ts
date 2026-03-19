@@ -3,11 +3,17 @@ import { captureEnv } from "../../test-utils/env.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 
 const callGatewayStatusProbe = vi.fn<
-  (opts?: unknown) => Promise<{ ok: boolean; url?: string; error?: string | null }>
+  (opts?: unknown) => Promise<{
+    ok: boolean;
+    url?: string;
+    error?: string | null;
+    durationMs?: number;
+  }>
 >(async (_opts?: unknown) => ({
   ok: true,
   url: "ws://127.0.0.1:19001",
   error: null,
+  durationMs: 42,
 }));
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
@@ -195,6 +201,7 @@ describe("gatherDaemonStatus", () => {
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
+    expect(status.rpc?.durationMs).toBe(42);
   });
 
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {

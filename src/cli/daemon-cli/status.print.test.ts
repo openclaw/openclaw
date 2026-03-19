@@ -117,4 +117,80 @@ describe("printDaemonStatus", () => {
     );
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw gateway restart"));
   });
+
+  it("prints RPC duration in success text rows", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        rpc: {
+          ok: true,
+          durationMs: 77,
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("RPC duration:"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("77ms"));
+  });
+
+  it("prints RPC duration in failure text rows", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        rpc: {
+          ok: false,
+          durationMs: 98,
+          error: "gateway closed",
+          url: "ws://127.0.0.1:18789",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("RPC duration:"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("98ms"));
+  });
+
+  it("keeps JSON RPC payload stable when duration exists", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        rpc: {
+          ok: true,
+          durationMs: 77,
+          url: "ws://127.0.0.1:18789",
+        },
+        extraServices: [],
+      },
+      { json: true },
+    );
+
+    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0])) as {
+      rpc?: { ok?: boolean; url?: string; durationMs?: number };
+    };
+    expect(payload.rpc?.ok).toBe(true);
+    expect(payload.rpc?.url).toBe("ws://127.0.0.1:18789");
+    expect(payload.rpc?.durationMs).toBeUndefined();
+  });
 });

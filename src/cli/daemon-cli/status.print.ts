@@ -32,16 +32,24 @@ import {
 
 function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
   const command = status.service.command;
-  if (!command?.environment) {
-    return status;
-  }
-  const safeEnv = filterDaemonEnv(command.environment);
-  const nextCommand = {
-    ...command,
-    environment: Object.keys(safeEnv).length > 0 ? safeEnv : undefined,
-  };
+  const rpc = status.rpc
+    ? {
+        ...status.rpc,
+        durationMs: undefined,
+      }
+    : undefined;
+  const nextCommand = command?.environment
+    ? {
+        ...command,
+        environment: (() => {
+          const safeEnv = filterDaemonEnv(command.environment ?? {});
+          return Object.keys(safeEnv).length > 0 ? safeEnv : undefined;
+        })(),
+      }
+    : command;
   return {
     ...status,
+    ...(rpc ? { rpc } : {}),
     service: {
       ...status.service,
       command: nextCommand,
@@ -177,10 +185,20 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     );
   }
   if (rpc) {
+    const durationLine =
+      typeof rpc.durationMs === "number"
+        ? `${label("RPC duration:")} ${infoText(`${rpc.durationMs}ms`)}`
+        : null;
     if (rpc.ok) {
       defaultRuntime.log(`${label("RPC probe:")} ${okText("ok")}`);
+      if (durationLine) {
+        defaultRuntime.log(durationLine);
+      }
     } else {
       defaultRuntime.error(`${label("RPC probe:")} ${errorText("failed")}`);
+      if (durationLine) {
+        defaultRuntime.error(durationLine);
+      }
       if (rpc.authWarning) {
         defaultRuntime.error(`${label("RPC auth:")} ${warnText(rpc.authWarning)}`);
       }
