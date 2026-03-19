@@ -186,6 +186,52 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("listSessionsFromStore derives defaults from the requested agent filter", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+            },
+          },
+          {
+            id: "work",
+            model: {
+              primary: "openai/gpt-5.2",
+            },
+          },
+        ],
+      },
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: 1,
+        } as SessionEntry,
+        "agent:work:main": {
+          sessionId: "sess-work",
+          updatedAt: 2,
+        } as SessionEntry,
+      },
+      opts: {
+        agentId: "work",
+      },
+    });
+
+    expect(result.defaults).toMatchObject({
+      modelProvider: "openai",
+      model: "gpt-5.2",
+    });
+    expect(result.sessions.map((session) => session.key)).toEqual(["agent:work:main"]);
+  });
+
   test("resolveSessionStoreKey normalizes session key casing", () => {
     const cfg = {
       session: { mainKey: "main" },
