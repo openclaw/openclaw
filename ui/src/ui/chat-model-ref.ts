@@ -16,7 +16,14 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
     return "";
   }
   const trimmedProvider = provider?.trim();
-  return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
+  if (!trimmedProvider) {
+    return trimmedModel;
+  }
+  // Keep canonical same-provider refs like "openrouter/foo" or
+  // custom-provider ids that already include their own provider prefix.
+  return trimmedModel.toLowerCase().startsWith(`${trimmedProvider.toLowerCase()}/`)
+    ? trimmedModel
+    : `${trimmedProvider}/${trimmedModel}`;
 }
 
 export function createChatModelOverride(value: string): ChatModelOverride | null {

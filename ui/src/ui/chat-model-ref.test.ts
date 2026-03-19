@@ -47,4 +47,20 @@ describe("chat-model-ref helpers", () => {
     expect(resolveServerChatModelValue("gpt-5-mini", "openai")).toBe("openai/gpt-5-mini");
     expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");
   });
+
+  it("keeps same-provider-qualified ids unchanged", () => {
+    expect(
+      buildChatModelOption({
+        id: "lmstudio_mbp/qwen3.5-9b",
+        name: "Qwen 3.5 9B",
+        provider: "lmstudio_mbp",
+      }),
+    ).toEqual({
+      value: "lmstudio_mbp/qwen3.5-9b",
+      label: "lmstudio_mbp/qwen3.5-9b · lmstudio_mbp",
+    });
+    expect(resolveServerChatModelValue("lmstudio_mbp/qwen3.5-9b", "lmstudio_mbp")).toBe(
+      "lmstudio_mbp/qwen3.5-9b",
+    );
+  });
 });
