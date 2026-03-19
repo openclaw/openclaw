@@ -594,6 +594,7 @@ describe("matrix monitor handler pairing account scope", () => {
       directTracker: {
         isDirectMessage: async () => false,
       },
+      dropPreStartupMessages: true,
       getRoomInfo: async () => ({ altAliases: [] }),
       getMemberDisplayName: async () => "sender",
       needsRoomAliasesForConfig: false,

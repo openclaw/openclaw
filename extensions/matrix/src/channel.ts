@@ -434,7 +434,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       //
       // INVARIANT: The import() below cannot hang because:
       // 1. It only loads local ESM modules with no circular awaits
-      // 2. Module initialization is synchronous (no top-level await in ./matrix/index.js)
+      // 2. Module initialization is synchronous (no top-level await in ./matrix/monitor/index.js)
       // 3. The lock only serializes the import phase, not the provider startup
       const previousLock = matrixStartupLock;
       let releaseLock: () => void = () => {};
@@ -445,9 +445,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
 
       // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
       // Wrap in try/finally to ensure lock is released even if import fails.
-      let monitorMatrixProvider: typeof import("./matrix/index.js").monitorMatrixProvider;
+      let monitorMatrixProvider: typeof import("./matrix/monitor/index.js").monitorMatrixProvider;
       try {
-        const module = await import("./matrix/index.js");
+        const module = await import("./matrix/monitor/index.js");
         monitorMatrixProvider = module.monitorMatrixProvider;
       } finally {
         // Release lock after import completes or fails
