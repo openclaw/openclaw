@@ -21,6 +21,14 @@
       "docsLabel": "whatsapp",
       "blurb": "works with your own number; recommend a separate phone + eSIM.",
       "systemImage": "message"
+    },
+    "install": {
+      "npmSpec": "@openclaw/whatsapp",
+      "localPath": "extensions/whatsapp",
+      "defaultChoice": "npm"
+    },
+    "release": {
+      "publishToNpm": true
     }
   }
 }

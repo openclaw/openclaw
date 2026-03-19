@@ -279,6 +279,54 @@ describe("channel plugin catalog", () => {
 
     expect(ids).toContain("default-env-demo");
   });
+
+  it("includes bundled metadata-only channel entries even when the runtime entrypoint is omitted", () => {
+    const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-catalog-"));
+    const bundledDir = path.join(packageRoot, "dist", "extensions", "whatsapp");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw" }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(bundledDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/whatsapp",
+        openclaw: {
+          extensions: ["./index.js"],
+          channel: {
+            id: "whatsapp",
+            label: "WhatsApp",
+            selectionLabel: "WhatsApp (QR link)",
+            detailLabel: "WhatsApp Web",
+            docsPath: "/channels/whatsapp",
+            blurb: "works with your own number; recommend a separate phone + eSIM.",
+          },
+          install: {
+            npmSpec: "@openclaw/whatsapp",
+            defaultChoice: "npm",
+          },
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(bundledDir, "openclaw.plugin.json"),
+      JSON.stringify({ id: "whatsapp", channels: ["whatsapp"], configSchema: {} }),
+      "utf8",
+    );
+
+    const entry = listChannelPluginCatalogEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(packageRoot, "dist", "extensions"),
+      },
+    }).find((item) => item.id === "whatsapp");
+
+    expect(entry?.install.npmSpec).toBe("@openclaw/whatsapp");
+    expect(entry?.pluginId).toBe("whatsapp");
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);

@@ -76,6 +76,12 @@ These are published to npm and installed with `openclaw plugins install`:
 
 Microsoft Teams is plugin-only as of 2026.1.15.
 
+Packaged installs also ship install-on-demand metadata for heavyweight official
+plugins. Today that includes WhatsApp and `memory-lancedb`: onboarding,
+`openclaw channels add`, `openclaw channels login --channel whatsapp`, and
+other channel setup flows prompt to install them when first used instead of
+shipping their full runtime trees inside the main npm tarball.
+
 ### Bundled plugins
 
 These ship with OpenClaw and are enabled by default unless noted.
@@ -83,7 +89,7 @@ These ship with OpenClaw and are enabled by default unless noted.
 **Memory:**
 
 - `memory-core` -- bundled memory search (default via `plugins.slots.memory`)
-- `memory-lancedb` -- long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
+- `memory-lancedb` -- install-on-demand long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
 
 **Model providers** (all enabled by default):
 
@@ -193,8 +199,10 @@ enablement via `plugins.entries.<id>.enabled` or
 Bundled plugin runtime dependencies are owned by each plugin package. Packaged
 builds stage opted-in bundled dependencies under
 `dist/extensions/<id>/node_modules` instead of requiring mirrored copies in the
-root package. npm artifacts ship the built `dist/extensions/*` tree; source
-`extensions/*` directories stay in source checkouts only.
+root package. Very large official plugins can ship as metadata-only bundled
+entries and install their runtime package on demand. npm artifacts ship the
+built `dist/extensions/*` tree; source `extensions/*` directories stay in source
+checkouts only.
 
 Installed plugins are enabled by default, but can be disabled the same way.
 

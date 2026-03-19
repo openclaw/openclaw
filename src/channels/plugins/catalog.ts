@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
+import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
 import { discoverOpenClawPlugins } from "../../plugins/discovery.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
 import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
+import type { PackageManifest as PluginPackageManifest } from "../../plugins/manifest.js";
 import type { PluginOrigin } from "../../plugins/types.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import type { ChannelMeta } from "./types.js";
@@ -263,6 +265,46 @@ function buildExternalCatalogEntry(entry: ExternalCatalogEntry): ChannelPluginCa
   });
 }
 
+function loadBundledMetadataCatalogEntries(options: CatalogOptions): ChannelPluginCatalogEntry[] {
+  const bundledDir = resolveBundledPluginsDir(options.env ?? process.env);
+  if (!bundledDir || !fs.existsSync(bundledDir)) {
+    return [];
+  }
+
+  const entries: ChannelPluginCatalogEntry[] = [];
+  for (const dirent of fs.readdirSync(bundledDir, { withFileTypes: true })) {
+    if (!dirent.isDirectory()) {
+      continue;
+    }
+    const pluginDir = path.join(bundledDir, dirent.name);
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    if (!fs.existsSync(packageJsonPath)) {
+      continue;
+    }
+
+    let packageJson: PluginPackageManifest;
+    try {
+      packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as PluginPackageManifest;
+    } catch {
+      continue;
+    }
+
+    const entry = buildCatalogEntry({
+      packageName: packageJson.name,
+      packageDir: pluginDir,
+      rootDir: pluginDir,
+      origin: "bundled",
+      workspaceDir: options.workspaceDir,
+      packageManifest: packageJson.openclaw,
+    });
+    if (entry) {
+      entries.push(entry);
+    }
+  }
+
+  return entries;
+}
+
 export function buildChannelUiCatalog(
   plugins: Array<{ id: string; meta: ChannelMeta }>,
 ): ChannelUiCatalog {
@@ -306,6 +348,14 @@ export function listChannelPluginCatalogEntries(
       continue;
     }
     const priority = ORIGIN_PRIORITY[candidate.origin] ?? 99;
+    const existing = resolved.get(entry.id);
+    if (!existing || priority < existing.priority) {
+      resolved.set(entry.id, { entry, priority });
+    }
+  }
+
+  for (const entry of loadBundledMetadataCatalogEntries(options)) {
+    const priority = ORIGIN_PRIORITY.bundled ?? 99;
     const existing = resolved.get(entry.id);
     if (!existing || priority < existing.priority) {
       resolved.set(entry.id, { entry, priority });
