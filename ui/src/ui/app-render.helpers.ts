@@ -552,7 +552,6 @@ function resolveDefaultModelValue(state: AppViewState): string {
 function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
   currentOverride: string,
-  defaultModel: string,
 ): Array<{ value: string; label: string }> {
   const seen = new Set<string>();
   const options: Array<{ value: string; label: string }> = [];
@@ -574,11 +573,8 @@ function buildChatModelOptions(
     addOption(option.value, option.label);
   }
 
-  if (currentOverride) {
+  if (createChatModelOverride(currentOverride)?.kind === "qualified") {
     addOption(currentOverride);
-  }
-  if (defaultModel) {
-    addOption(defaultModel);
   }
   return options;
 }
@@ -586,11 +582,7 @@ function buildChatModelOptions(
 function renderChatModelSelect(state: AppViewState) {
   const currentOverride = resolveModelOverrideValue(state);
   const defaultModel = resolveDefaultModelValue(state);
-  const options = buildChatModelOptions(
-    state.chatModelCatalog ?? [],
-    currentOverride,
-    defaultModel,
-  );
+  const options = buildChatModelOptions(state.chatModelCatalog ?? [], currentOverride);
   const defaultDisplay = formatChatModelDisplay(defaultModel);
   const defaultLabel = defaultModel ? `Default (${defaultDisplay})` : "Default model";
   const busy =

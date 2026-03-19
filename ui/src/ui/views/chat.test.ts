@@ -706,6 +706,51 @@ describe("chat view", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps same-id models from different providers distinct in the chat header picker", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state, request } = createChatHeaderState({
+      models: [
+        { id: "baseline-model", name: "Baseline Model", provider: "provider-main" },
+        { id: "shared-model", name: "Shared Model", provider: "provider-alpha" },
+        { id: "shared-model", name: "Shared Model", provider: "provider-beta" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+
+    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+    expect(optionValues).toContain("provider-alpha/shared-model");
+    expect(optionValues).toContain("provider-beta/shared-model");
+    expect(optionValues).not.toContain("shared-model");
+
+    modelSelect!.value = "provider-beta/shared-model";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+    render(renderChatSessionSelect(state), container);
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "provider-beta/shared-model",
+    });
+    const rerendered = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(rerendered?.value).toBe("provider-beta/shared-model");
+    vi.unstubAllGlobals();
+  });
+
   it("clears the session model override back to the default model", async () => {
     vi.stubGlobal(
       "fetch",
