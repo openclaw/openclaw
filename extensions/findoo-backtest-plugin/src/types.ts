@@ -148,6 +148,45 @@ export interface HealthResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Backtest result types (inlined from fin-shared-types)
+// ---------------------------------------------------------------------------
+
+export interface TradeRecord {
+  entryTime: number;
+  exitTime: number;
+  symbol: string;
+  side: "long" | "short";
+  entryPrice: number;
+  exitPrice: number;
+  quantity: number;
+  commission: number;
+  slippage: number;
+  pnl: number;
+  pnlPct: number;
+  reason: string;
+  exitReason: string;
+}
+
+export interface BacktestResult {
+  strategyId: string;
+  startDate: number;
+  endDate: number;
+  initialCapital: number;
+  finalEquity: number;
+  totalReturn: number;
+  sharpe: number;
+  sortino: number;
+  maxDrawdown: number;
+  calmar: number;
+  winRate: number;
+  profitFactor: number;
+  totalTrades: number;
+  trades: TradeRecord[];
+  equityCurve: number[];
+  dailyReturns: number[];
+}
+
+// ---------------------------------------------------------------------------
 // Strategy validation (local compliance check)
 // ---------------------------------------------------------------------------
 

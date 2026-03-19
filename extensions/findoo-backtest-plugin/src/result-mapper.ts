@@ -1,5 +1,4 @@
-import type { BacktestResult, TradeRecord } from "@openfinclaw/fin-shared-types";
-import type { RemoteReport, RemoteTradeEntry } from "./types.js";
+import type { BacktestResult, TradeRecord, RemoteReport, RemoteTradeEntry } from "./types.js";
 
 /**
  * Convert a remote backtest report (v1.1) into the local BacktestResult format.

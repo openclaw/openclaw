@@ -29,7 +29,6 @@
     "jszip": "^3.10.1"
   },
   "devDependencies": {
-    "@openfinclaw/fin-shared-types": "workspace:*",
     "openfinclaw": "workspace:*"
   },
   "peerDependencies": {
