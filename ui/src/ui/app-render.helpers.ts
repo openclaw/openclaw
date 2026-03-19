@@ -674,12 +674,13 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
         };
       }
     }
-    await refreshSessionOptions(state);
   } catch (err) {
     // Roll back so the picker reflects the actual server model.
     state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
     state.lastError = `Failed to set model: ${String(err)}`;
+    return;
   }
+  await refreshSessionOptions(state);
 }
 
 /* ── Channel display labels ────────────────────────────── */
