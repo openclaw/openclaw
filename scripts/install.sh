@@ -1633,7 +1633,7 @@ fix_npm_permissions() {
         return 0
     fi
 
-    ui_info "Configuring npm for user-local installs"
+    ui_warn "npm global prefix not writable; using ~/.npm-global (saved to ~/.npmrc)"
     mkdir -p "$HOME/.npm-global"
     npm config set prefix "$HOME/.npm-global"
 
@@ -1646,7 +1646,7 @@ fix_npm_permissions() {
     done
 
     export PATH="$HOME/.npm-global/bin:$PATH"
-    ui_success "npm configured for user installs"
+    ui_warn "Future npm global installs will use ~/.npm-global. Use 'npm i -g' (no sudo) to avoid prefix mismatch."
 }
 
 ensure_openclaw_bin_link() {
