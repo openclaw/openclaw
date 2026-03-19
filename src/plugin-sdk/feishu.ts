@@ -82,7 +82,7 @@ export { withTempDownloadPath } from "./temp-path.js";
 export {
   buildFeishuConversationId,
   parseFeishuConversationId,
-} from "../../extensions/feishu/src/conversation-id.js";
+} from "../../extensions/feishu/api.js";
 export {
   createWebhookAnomalyTracker,
   createFixedWindowRateLimiter,
