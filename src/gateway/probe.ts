@@ -4,7 +4,6 @@ import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
-import { isLoopbackHost } from "./net.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -44,19 +43,9 @@ export async function probeGateway(opts: {
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
 
-  const disableDeviceIdentity = (() => {
-    if (typeof opts.disableDeviceIdentity === "boolean") {
-      return opts.disableDeviceIdentity;
-    }
-    try {
-      const hostname = new URL(opts.url).hostname;
-      // Local authenticated probes should stay device-bound so read/detail RPCs
-      // are not scope-limited by the shared-auth scope stripping hardening.
-      return isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password);
-    } catch {
-      return false;
-    }
-  })();
+  // Keep the default probe path device-bound. Callers that need a
+  // device-less probe, such as the rescue watchdog, must opt in.
+  const disableDeviceIdentity = opts.disableDeviceIdentity ?? false;
 
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
 
