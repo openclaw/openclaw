@@ -31,6 +31,14 @@ describe("scripts/test-parallel fatal output guard", () => {
     expect(resolveTestRunExitCode({ code: 2, signal: null, output: "" })).toBe(2);
   });
 
+  it("fails even when the fatal line scrolls out of the retained tail", () => {
+    const fatalLine = "FATAL ERROR: Ineffective mark-compacts near heap limit";
+    const output = appendCapturedOutput(fatalLine, "x".repeat(250_000), 200_000);
+
+    expect(hasFatalTestRunOutput(output)).toBe(false);
+    expect(resolveTestRunExitCode({ code: 0, signal: null, output, fatalSeen: true })).toBe(1);
+  });
+
   it("keeps only the tail of captured output", () => {
     const output = appendCapturedOutput("", "abc", 5);
     expect(appendCapturedOutput(output, "defg", 5)).toBe("cdefg");
