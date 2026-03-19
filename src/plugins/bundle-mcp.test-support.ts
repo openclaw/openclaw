@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { clearPluginDiscoveryCache } from "./discovery.js";
 import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 
 export function createBundleMcpTempHarness() {
@@ -13,6 +14,7 @@ export function createBundleMcpTempHarness() {
       return dir;
     },
     async cleanup() {
+      clearPluginDiscoveryCache();
       clearPluginManifestRegistryCache();
       await Promise.all(
         tempDirs

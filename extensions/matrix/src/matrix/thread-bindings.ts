@@ -1,4 +1,5 @@
 import path from "node:path";
+import { sendMessageMatrix } from "../../runtime-api.js";
 import {
   readJsonFileWithFallback,
   registerSessionBindingAdapter,
@@ -10,7 +11,6 @@ import {
 import { resolveMatrixStoragePaths } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
 import type { MatrixClient } from "./sdk.js";
-import { sendMessageMatrix } from "./send.js";
 import {
   deleteMatrixThreadBindingManagerEntry,
   getMatrixThreadBindingManager,

@@ -28,6 +28,11 @@ type HookPackageManifest = {
 } & Partial<Record<typeof MANIFEST_KEY, { hooks?: string[] }>>;
 const log = createSubsystemLogger("hooks/workspace");
 
+type LoadedHook = {
+  hook: Hook;
+  frontmatter: ParsedHookFrontmatter;
+};
+
 function filterHookEntries(
   entries: HookEntry[],
   config?: OpenClawConfig,
@@ -79,7 +84,7 @@ function loadHookFromDir(params: {
   source: HookSource;
   pluginId?: string;
   nameHint?: string;
-}): Hook | null {
+}): LoadedHook | null {
   const hookMdPath = path.join(params.hookDir, "HOOK.md");
   const content = readBoundaryFileUtf8({
     absolutePath: hookMdPath,
@@ -123,13 +128,16 @@ function loadHookFromDir(params: {
     }
 
     return {
-      name,
-      description,
-      source: params.source,
-      pluginId: params.pluginId,
-      filePath: hookMdPath,
-      baseDir,
-      handlerPath,
+      hook: {
+        name,
+        description,
+        source: params.source,
+        pluginId: params.pluginId,
+        filePath: hookMdPath,
+        baseDir,
+        handlerPath,
+      },
+      frontmatter,
     };
   } catch (err) {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
@@ -141,7 +149,11 @@ function loadHookFromDir(params: {
 /**
  * Scan a directory for hooks (subdirectories containing HOOK.md)
  */
-function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: string }): Hook[] {
+function loadHooksFromDir(params: {
+  dir: string;
+  source: HookSource;
+  pluginId?: string;
+}): LoadedHook[] {
   const { dir, source, pluginId } = params;
 
   if (!fs.existsSync(dir)) {
@@ -153,7 +165,7 @@ function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: 
     return [];
   }
 
-  const hooks: Hook[] = [];
+  const hooks: LoadedHook[] = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
 
   for (const entry of entries) {
@@ -211,16 +223,7 @@ export function loadHookEntriesFromDir(params: {
     source: params.source,
     pluginId: params.pluginId,
   });
-  return hooks.map((hook) => {
-    let frontmatter: ParsedHookFrontmatter = {};
-    const raw = readBoundaryFileUtf8({
-      absolutePath: hook.filePath,
-      rootPath: hook.baseDir,
-      boundaryLabel: "hook directory",
-    });
-    if (raw !== null) {
-      frontmatter = parseFrontmatter(raw);
-    }
+  return hooks.map(({ hook, frontmatter }) => {
     const entry: HookEntry = {
       hook: {
         ...hook,

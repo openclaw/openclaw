@@ -13,7 +13,6 @@ import {
 } from "./bundle-manifest.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import { safeRealpathSync } from "./path-safety.js";
 import type { PluginBundleFormat } from "./types.js";
 
 export type BundleMcpServerConfig = Record<string, unknown>;
@@ -122,8 +121,8 @@ function expandBundleRootPlaceholders(value: string, rootDir: string): string {
   return value.split(CLAUDE_PLUGIN_ROOT_PLACEHOLDER).join(rootDir);
 }
 
-function canonicalizeBundlePath(targetPath: string): string {
-  return path.normalize(safeRealpathSync(targetPath) ?? path.resolve(targetPath));
+function normalizeBundlePath(targetPath: string): string {
+  return path.normalize(path.resolve(targetPath));
 }
 
 function normalizeExpandedAbsolutePath(value: string): string {
@@ -194,7 +193,7 @@ function loadBundleFileBackedMcpConfig(params: {
   rootDir: string;
   relativePath: string;
 }): BundleMcpConfig {
-  const rootDir = canonicalizeBundlePath(params.rootDir);
+  const rootDir = normalizeBundlePath(params.rootDir);
   const absolutePath = path.resolve(rootDir, params.relativePath);
   const opened = openBoundaryFileSync({
     absolutePath,
@@ -212,7 +211,7 @@ function loadBundleFileBackedMcpConfig(params: {
     }
     const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
     const servers = extractMcpServerMap(raw);
-    const baseDir = canonicalizeBundlePath(path.dirname(absolutePath));
+    const baseDir = normalizeBundlePath(path.dirname(absolutePath));
     return {
       mcpServers: Object.fromEntries(
         Object.entries(servers).map(([serverName, server]) => [
@@ -233,7 +232,7 @@ function loadBundleInlineMcpConfig(params: {
   if (!isRecord(params.raw.mcpServers)) {
     return { mcpServers: {} };
   }
-  const baseDir = canonicalizeBundlePath(params.baseDir);
+  const baseDir = normalizeBundlePath(params.baseDir);
   const servers = extractMcpServerMap(params.raw.mcpServers);
   return {
     mcpServers: Object.fromEntries(
