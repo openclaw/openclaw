@@ -70,7 +70,7 @@ openclaw --profile rescue onboard
 #   better choose completely different base port, like 19789,
 # - rest of the onboarding is the same as normal
 
-# To install the service (if not happened automatically during onboarding)
+# To install the service (if not happened automatically during setup)
 openclaw --profile rescue gateway install
 ```
 

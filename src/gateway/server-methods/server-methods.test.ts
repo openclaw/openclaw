@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
-import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
+import {
+  buildSystemRunApprovalBinding,
+  buildSystemRunApprovalEnvBinding,
+} from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
@@ -221,59 +224,70 @@ describe("injectTimestamp", () => {
 });
 
 describe("timestampOptsFromConfig", () => {
-  it("extracts timezone from config", () => {
-    const opts = timestampOptsFromConfig({
-      agents: {
-        defaults: {
-          userTimezone: "America/Chicago",
-        },
-      },
+  it.each([
+    {
+      name: "extracts timezone from config",
       // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-
-    expect(opts.timezone).toBe("America/Chicago");
-  });
-
-  it("falls back gracefully with empty config", () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const opts = timestampOptsFromConfig({} as any);
-
-    expect(opts.timezone).toBeDefined();
+      cfg: { agents: { defaults: { userTimezone: "America/Chicago" } } } as any,
+      expected: "America/Chicago",
+    },
+    {
+      name: "falls back gracefully with empty config",
+      // oxlint-disable-next-line typescript/no-explicit-any
+      cfg: {} as any,
+      expected: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    },
+  ])("$name", ({ cfg, expected }) => {
+    expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);
   });
 });
 
 describe("normalizeRpcAttachmentsToChatAttachments", () => {
-  it("passes through string content", () => {
-    const res = normalizeRpcAttachmentsToChatAttachments([
-      { type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" },
-    ]);
-    expect(res).toEqual([
-      { type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" },
-    ]);
-  });
-
-  it("converts Uint8Array content to base64", () => {
-    const bytes = new TextEncoder().encode("foo");
-    const res = normalizeRpcAttachmentsToChatAttachments([{ content: bytes }]);
-    expect(res[0]?.content).toBe("Zm9v");
+  it.each([
+    {
+      name: "passes through string content",
+      attachments: [{ type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" }],
+      expected: [{ type: "file", mimeType: "image/png", fileName: "a.png", content: "Zm9v" }],
+    },
+    {
+      name: "converts Uint8Array content to base64",
+      attachments: [{ content: new TextEncoder().encode("foo") }],
+      expected: [{ type: undefined, mimeType: undefined, fileName: undefined, content: "Zm9v" }],
+    },
+    {
+      name: "converts ArrayBuffer content to base64",
+      attachments: [{ content: new TextEncoder().encode("bar").buffer }],
+      expected: [{ type: undefined, mimeType: undefined, fileName: undefined, content: "YmFy" }],
+    },
+    {
+      name: "drops attachments without usable content",
+      attachments: [{ content: undefined }, { mimeType: "image/png" }],
+      expected: [],
+    },
+  ])("$name", ({ attachments, expected }) => {
+    expect(normalizeRpcAttachmentsToChatAttachments(attachments)).toEqual(expected);
   });
 });
 
 describe("sanitizeChatSendMessageInput", () => {
-  it("rejects null bytes", () => {
-    expect(sanitizeChatSendMessageInput("before\u0000after")).toEqual({
-      ok: false,
-      error: "message must not contain null bytes",
-    });
-  });
-
-  it("strips unsafe control characters while preserving tab/newline/carriage return", () => {
-    const result = sanitizeChatSendMessageInput("a\u0001b\tc\nd\re\u0007f\u007f");
-    expect(result).toEqual({ ok: true, message: "ab\tc\nd\ref" });
-  });
-
-  it("normalizes unicode to NFC", () => {
-    expect(sanitizeChatSendMessageInput("Cafe\u0301")).toEqual({ ok: true, message: "Café" });
+  it.each([
+    {
+      name: "rejects null bytes",
+      input: "before\u0000after",
+      expected: { ok: false as const, error: "message must not contain null bytes" },
+    },
+    {
+      name: "strips unsafe control characters while preserving tab/newline/carriage return",
+      input: "a\u0001b\tc\nd\re\u0007f\u007f",
+      expected: { ok: true as const, message: "ab\tc\nd\ref" },
+    },
+    {
+      name: "normalizes unicode to NFC",
+      input: "Cafe\u0301",
+      expected: { ok: true as const, message: "Café" },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(sanitizeChatSendMessageInput(input)).toEqual(expected);
   });
 });
 
@@ -305,7 +319,7 @@ describe("exec approval handlers", () => {
     systemRunPlan: {
       argv: ["/usr/bin/echo", "ok"],
       cwd: "/tmp",
-      rawCommand: "/usr/bin/echo ok",
+      commandText: "/usr/bin/echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
     },
@@ -358,7 +372,7 @@ describe("exec approval handlers", () => {
       requestParams.systemRunPlan = {
         argv: commandArgv,
         cwd: cwdValue,
-        rawCommand: commandText,
+        commandText: commandText ?? commandArgv.join(" "),
         agentId:
           typeof (requestParams as { agentId?: unknown }).agentId === "string"
             ? ((requestParams as { agentId: string }).agentId ?? null)
@@ -572,6 +586,31 @@ describe("exec approval handlers", () => {
     );
   });
 
+  it("stores sorted env keys for gateway approvals without node-only binding", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+        env: {
+          Z_VAR: "z",
+          A_VAR: "a",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["envKeys"]).toEqual(
+      buildSystemRunApprovalEnvBinding({ A_VAR: "a", Z_VAR: "z" }).envKeys,
+    );
+    expect(request["systemRunBinding"]).toBeNull();
+  });
+
   it("prefers systemRunPlan canonical command/cwd when present", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
     await requestExecApproval({
@@ -586,7 +625,8 @@ describe("exec approval handlers", () => {
         systemRunPlan: {
           argv: ["/usr/bin/echo", "ok"],
           cwd: "/real/cwd",
-          rawCommand: "/usr/bin/echo ok",
+          commandText: "/usr/bin/echo ok",
+          commandPreview: "echo ok",
           agentId: "main",
           sessionKey: "agent:main:main",
         },
@@ -596,17 +636,76 @@ describe("exec approval handlers", () => {
     expect(requested).toBeTruthy();
     const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
     expect(request["command"]).toBe("/usr/bin/echo ok");
-    expect(request["commandArgv"]).toEqual(["/usr/bin/echo", "ok"]);
+    expect(request["commandPreview"]).toBeUndefined();
+    expect(request["commandArgv"]).toBeUndefined();
     expect(request["cwd"]).toBe("/real/cwd");
     expect(request["agentId"]).toBe("main");
     expect(request["sessionKey"]).toBe("agent:main:main");
     expect(request["systemRunPlan"]).toEqual({
       argv: ["/usr/bin/echo", "ok"],
       cwd: "/real/cwd",
-      rawCommand: "/usr/bin/echo ok",
+      commandText: "/usr/bin/echo ok",
+      commandPreview: "echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
     });
+  });
+
+  it("derives a command preview from the fallback command for older node plans", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "jq --version",
+        commandArgv: ["./env", "sh", "-c", "jq --version"],
+        systemRunPlan: {
+          argv: ["./env", "sh", "-c", "jq --version"],
+          cwd: "/real/cwd",
+          commandText: './env sh -c "jq --version"',
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).toBe('./env sh -c "jq --version"');
+    expect(request["commandPreview"]).toBeUndefined();
+    expect((request["systemRunPlan"] as { commandPreview?: string }).commandPreview).toBe(
+      "jq --version",
+    );
+  });
+
+  it("sanitizes invisible Unicode format chars in approval display text without changing node bindings", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "bash safe\u200B.sh",
+        commandArgv: ["bash", "safe\u200B.sh"],
+        systemRunPlan: {
+          argv: ["bash", "safe\u200B.sh"],
+          cwd: "/real/cwd",
+          commandText: "bash safe\u200B.sh",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).toBe("bash safe\\u{200B}.sh");
+    expect((request["systemRunPlan"] as { commandText?: string }).commandText).toBe(
+      "bash safe\u200B.sh",
+    );
   });
 
   it("accepts resolve during broadcast", async () => {

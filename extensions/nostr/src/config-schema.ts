@@ -1,7 +1,6 @@
-import { MarkdownConfigSchema, buildChannelConfigSchema } from "openclaw/plugin-sdk/nostr";
+import { AllowFromListSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
-
-const allowFromEntry = z.union([z.string(), z.number()]);
+import { MarkdownConfigSchema, buildChannelConfigSchema } from "../api.js";
 
 /**
  * Validates https:// URLs only (no javascript:, data:, file:, etc.)
@@ -76,10 +75,10 @@ export const NostrConfigSchema = z.object({
   relays: z.array(z.string()).optional(),
 
   /** DM access policy: pairing, allowlist, open, or disabled */
-  dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
+  dmPolicy: DmPolicySchema.optional(),
 
   /** Allowed sender pubkeys (npub or hex format) */
-  allowFrom: z.array(allowFromEntry).optional(),
+  allowFrom: AllowFromListSchema,
 
   /** Profile metadata (NIP-01 kind:0 content) */
   profile: NostrProfileSchema.optional(),

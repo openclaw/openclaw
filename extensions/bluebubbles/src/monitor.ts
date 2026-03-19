@@ -3,10 +3,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   beginWebhookRequestPipelineOrReject,
   createDedupeCache,
-  createWebhookInFlightLimiter,
-  registerWebhookTargetWithPluginRoute,
-  readWebhookBodyOrReject,
-  resolveWebhookTargetWithAuthOrRejectSync,
   resolveWebhookTargets,
 } from "openclaw/plugin-sdk/bluebubbles";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
@@ -28,6 +24,13 @@ import {
   type WebhookTarget,
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
+import {
+  createWebhookInFlightLimiter,
+  registerWebhookTargetWithPluginRoute,
+  readWebhookBodyOrReject,
+  resolveWebhookTargetWithAuthOrRejectSync,
+  withResolvedWebhookRequestPipeline,
+} from "./runtime-api.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import type { BlueBubblesAttachment } from "./types.js";
 

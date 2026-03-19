@@ -91,6 +91,7 @@ function pruneData(
     });
 }
 
+/** Create a dedupe helper that combines in-memory fast checks with a lock-protected disk store. */
 export function createPersistentDedupe(options: PersistentDedupeOptions): PersistentDedupe {
   const ttlMs = Math.max(0, Math.floor(options.ttlMs));
   const memoryMaxSize = Math.max(0, Math.floor(options.memoryMaxSize));
