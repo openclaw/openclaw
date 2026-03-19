@@ -52,6 +52,7 @@ export async function monitorWebInbox(options: {
   const PING_INTERVAL_MS = options.pingIntervalMs ?? 25_000;
   const PING_TIMEOUT_MS = options.pingTimeoutMs ?? 10_000;
   let pingTimer: ReturnType<typeof setInterval> | null = null;
+  let activePingTimeout: ReturnType<typeof setTimeout> | null = null;
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -94,14 +95,19 @@ export async function monitorWebInbox(options: {
       return true;
     };
 
+    const clearPingTimeout = () => {
+      if (activePingTimeout) { clearTimeout(activePingTimeout); activePingTimeout = null; }
+    };
+
     if (canWsPing) {
       // WebSocket-level ping/pong: no presence side-effect.
       const onPong = () => {
         if (!settle()) return;
-        clearTimeout(timeout);
+        clearPingTimeout();
       };
-      const timeout = setTimeout(() => {
+      activePingTimeout = setTimeout(() => {
         if (!settle()) return;
+        activePingTimeout = null;
         sock.ws.removeListener("pong", onPong);
         if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
         logVerbose("Health ping timed out — forcing reconnect");
@@ -114,7 +120,7 @@ export async function monitorWebInbox(options: {
       } catch (err: unknown) {
         if (settle()) {
           sock.ws.removeListener("pong", onPong);
-          clearTimeout(timeout);
+          clearPingTimeout();
           if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
           logVerbose(`Health ping failed: ${String(err)} — forcing reconnect`);
           resolveClose({ status: 499, isLoggedOut: false, error: err });
@@ -122,16 +128,17 @@ export async function monitorWebInbox(options: {
       }
     } else {
       // Fallback: presence update when raw WebSocket ping is unavailable.
-      const timeout = setTimeout(() => {
+      activePingTimeout = setTimeout(() => {
+        activePingTimeout = null;
         if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
         logVerbose("Health ping timed out — forcing reconnect");
         resolveClose({ status: 499, isLoggedOut: false, error: "health-ping-timeout" });
       }, PING_TIMEOUT_MS);
       sock
         .sendPresenceUpdate("available")
-        .then(() => clearTimeout(timeout))
+        .then(() => clearPingTimeout())
         .catch((err: unknown) => {
-          clearTimeout(timeout);
+          clearPingTimeout();
           if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
           logVerbose(`Health ping failed: ${String(err)} — forcing reconnect`);
           resolveClose({ status: 499, isLoggedOut: false, error: err });
@@ -456,6 +463,10 @@ export async function monitorWebInbox(options: {
       if (pingTimer) {
         clearInterval(pingTimer);
         pingTimer = null;
+      }
+      if (activePingTimeout) {
+        clearTimeout(activePingTimeout);
+        activePingTimeout = null;
       }
       try {
         const ev = sock.ev as unknown as {
