@@ -1,1 +1,1 @@
-export * from "../../src/plugin-sdk/tlon.js";
+export * from "openclaw/plugin-sdk/tlon";
