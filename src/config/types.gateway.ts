@@ -544,4 +544,27 @@ export interface GatewaySecurityConfig {
    * Default: undefined (no IP blocking)
    */
   ipBlocklist?: string[];
+  /**
+   * Reject WebSocket connections with proxy headers from untrusted sources.
+   * When enabled (default), connections with X-Forwarded-For/X-Forwarded-Host
+   * from IPs not in trustedProxies are rejected before auth runs.
+   * Set false to restore warn-only behavior (not recommended).
+   * Default: true
+   */
+  rejectUntrustedProxyHeaders?: boolean;
+  /**
+   * Automatically disable localhost/loopback origin privilege when proxy headers
+   * are present. When a proxy forwards the connection, the origin is not genuinely
+   * local, so localhost fallback should not apply.
+   * Set false to allow localhost privilege behind proxies (not recommended for Tailscale Serve).
+   * Default: true
+   */
+  autoDisableLocalhostBehindProxy?: boolean;
+  /**
+   * Enforce origin check for ALL client types, not just Control UI and webchat.
+   * When enabled, non-browser clients (CLI tools, custom integrations) must also
+   * pass origin validation or connect without an Origin header.
+   * Default: false (preserves backwards compatibility)
+   */
+  enforceOriginCheckForAllClients?: boolean;
 }

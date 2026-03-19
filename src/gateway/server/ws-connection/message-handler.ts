@@ -303,12 +303,25 @@ export function attachGatewayWsMessageHandler(params: {
         ? clientIp
         : undefined;
 
+  // Security: Reject connections with proxy headers from untrusted sources.
+  // When enabled (default), this prevents external attackers from injecting
+  // X-Forwarded-For/X-Forwarded-Host to influence IP resolution and auth decisions.
   if (hasUntrustedProxyHeaders) {
-    logWsControl.warn(
-      "Proxy headers detected from untrusted address. " +
-        "Connection will not be treated as local. " +
-        "Configure gateway.trustedProxies to restore local client detection behind your proxy.",
-    );
+    if (securityConfig.rejectUntrustedProxyHeaders !== false) {
+      logWsControl.warn("Rejecting connection: proxy headers from untrusted address", {
+        connId,
+        remoteAddr,
+        forwardedFor,
+        requestForwardedHost,
+        trustedProxies,
+      });
+      close(1008, "proxy headers from untrusted source");
+      return;
+    }
+    logWsControl.warn("Proxy headers detected from untrusted address (allowed by config)", {
+      connId,
+      remoteAddr,
+    });
   }
   if (!hostIsLocalish && isLoopbackAddress(remoteAddr) && !hasProxyHeaders) {
     logWsControl.warn(
@@ -511,7 +524,9 @@ export function attachGatewayWsMessageHandler(params: {
             allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
             isLocalClient,
             isTrustedProxy: remoteIsTrustedProxy,
-            disableLocalhostPrivilege: securityConfig.disableLocalhostPrivilege === true,
+            disableLocalhostPrivilege:
+              securityConfig.disableLocalhostPrivilege === true ||
+              (securityConfig.autoDisableLocalhostBehindProxy !== false && hasProxyHeaders),
             validateHostHeader: securityConfig.validateHostHeader,
           });
           if (!originCheck.ok) {
