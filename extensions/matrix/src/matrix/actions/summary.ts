@@ -1,4 +1,6 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
+import { resolveMatrixMessageAttachment, resolveMatrixMessageBody } from "../media-text.js";
+import { fetchMatrixPollMessageSummary } from "../poll-summary.js";
+import type { MatrixClient } from "../sdk.js";
 import {
   EventType,
   type MatrixMessageSummary,
@@ -30,8 +32,17 @@ export function summarizeMatrixRawEvent(event: MatrixRawEvent): MatrixMessageSum
   return {
     eventId: event.event_id,
     sender: event.sender,
-    body: content.body,
+    body: resolveMatrixMessageBody({
+      body: content.body,
+      filename: content.filename,
+      msgtype: content.msgtype,
+    }),
     msgtype: content.msgtype,
+    attachment: resolveMatrixMessageAttachment({
+      body: content.body,
+      filename: content.filename,
+      msgtype: content.msgtype,
+    }),
     timestamp: event.origin_server_ts,
     relatesTo,
   };
@@ -66,6 +77,10 @@ export async function fetchEventSummary(
     const raw = (await client.getEvent(roomId, eventId)) as unknown as MatrixRawEvent;
     if (raw.unsigned?.redacted_because) {
       return null;
+    }
+    const pollSummary = await fetchMatrixPollMessageSummary(client, roomId, raw);
+    if (pollSummary) {
+      return pollSummary;
     }
     return summarizeMatrixRawEvent(raw);
   } catch {
