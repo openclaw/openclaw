@@ -65,7 +65,9 @@ Skills can be gated by config/env (see `skills` in [Gateway configuration](/gate
 
 ## Runtime boundaries
 
-Session management, discovery, and tool wiring are OpenClaw-owned.
+The embedded agent runtime is built on the Pi agent core (models, tools, and
+prompt pipeline). Session management, discovery, tool wiring, and channel
+delivery are OpenClaw-owned layers on top of that core.
 
 ## Sessions
 
