@@ -12,6 +12,8 @@ import { resolveFeishuSendTarget } from "./send-target.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 export type DownloadImageResult = {
   buffer: Buffer;
   contentType?: string;
@@ -227,26 +229,118 @@ export async function downloadMessageResourceFeishu(params: {
   messageId: string;
   fileKey: string;
   type: "image" | "file";
+  /** Optional message content for video detection heuristic. */
+  content?: Record<string, unknown>;
   accountId?: string;
 }): Promise<DownloadMessageResourceResult> {
-  const { cfg, messageId, fileKey, type, accountId } = params;
+  const { cfg, messageId, fileKey, type, content, accountId } = params;
   const normalizedFileKey = normalizeFeishuExternalKey(fileKey);
   if (!normalizedFileKey) {
     throw new Error("Feishu message resource download failed: invalid file_key");
   }
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
-  const response = await client.im.messageResource.get({
-    path: { message_id: messageId, file_key: normalizedFileKey },
-    params: { type },
-  });
+  const doDownload = async () => {
+    const response = await client.im.messageResource.get({
+      path: { message_id: messageId, file_key: normalizedFileKey },
+      params: { type },
+    });
 
-  const buffer = await readFeishuResponseBuffer({
-    response,
-    tmpDirPrefix: "openclaw-feishu-resource-",
-    errorPrefix: "Feishu message resource download failed",
-  });
-  return { buffer, ...extractFeishuDownloadMetadata(response) };
+    const buffer = await readFeishuResponseBuffer({
+      response,
+      tmpDirPrefix: "openclaw-feishu-resource-",
+      errorPrefix: "Feishu message resource download failed",
+    });
+    return { buffer, ...extractFeishuDownloadMetadata(response) };
+  };
+
+  // iOS sends videos via photo library as "file" type messages. These are
+  // prone to transient 5xx errors (video still processing server-side).
+  // Use more aggressive retry for detected video files.
+  const isVideo = type === "file" && content != null && isLikelyVideoFile(content);
+  const maxRetries = isVideo ? 3 : 1;
+  const baseDelayMs = isVideo ? 1500 : 1000;
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      if (attempt > 0) {
+        const delayMs = baseDelayMs * 2 ** (attempt - 1);
+        if (isVideo) {
+          console.info(
+            `[feishu] retrying video file download for message ${messageId} (attempt ${attempt + 1}/${maxRetries + 1}, delay ${delayMs}ms)`,
+          );
+        }
+        await sleep(delayMs);
+      }
+      return await doDownload();
+    } catch (err) {
+      lastErr = err;
+      // Only retry on server errors (5xx), and only for file downloads.
+      if (type !== "file" || !isFeishuServerError(err) || attempt >= maxRetries) {
+        throw err;
+      }
+    }
+  }
+  // Unreachable, but satisfies TypeScript.
+  throw lastErr;
+}
+
+/** Check if an error looks like a Feishu server-side error (5xx HTTP status). */
+function isFeishuServerError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message;
+  // Match HTTP status codes like "502 Bad Gateway", "503 Service Unavailable".
+  // The pattern requires the status code to follow common HTTP error message formats
+  // to avoid false positives with Feishu API error codes (e.g. "code 50001").
+  if (
+    /\b5\d{2}\s+(Bad Gateway|Service Unavailable|Internal Server Error|Gateway Timeout)/i.test(msg)
+  )
+    return true;
+  // Also match bare "5xx" patterns at word boundaries (e.g. "failed: 502")
+  if (/:\s*5\d{2}\b/.test(msg)) return true;
+  // Check numeric status properties set by HTTP clients
+  const errAny = err as Record<string, unknown>;
+  const status = errAny.status ?? errAny.statusCode ?? errAny.httpStatus;
+  if (typeof status === "number" && status >= 500) return true;
+  return false;
+}
+
+const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v"]);
+
+/**
+ * Detect whether a file-type message is likely a video based on metadata.
+ *
+ * iOS photo library sends videos as "file" messages instead of "video".
+ * These can be identified by the presence of both `duration` and `image_key`
+ * (thumbnail) in the message content, or by a video file extension.
+ *
+ * When this returns true, callers should apply more aggressive retry
+ * logic since these downloads are prone to transient 5xx errors
+ * (Feishu may still be processing the video server-side).
+ */
+export function isLikelyVideoFile(content: Record<string, unknown>): boolean {
+  // Video messages have both duration (playback length) and image_key (thumbnail)
+  if (
+    typeof content.duration === "number" &&
+    content.duration > 0 &&
+    typeof content.image_key === "string" &&
+    content.image_key.length > 0
+  ) {
+    return true;
+  }
+  // Check file extension as fallback
+  const fileName =
+    typeof content.file_name === "string"
+      ? content.file_name
+      : typeof content.fileName === "string"
+        ? content.fileName
+        : "";
+  if (fileName) {
+    const ext = path.extname(fileName).toLowerCase();
+    if (VIDEO_EXTENSIONS.has(ext)) return true;
+  }
+  return false;
 }
 
 export type UploadImageResult = {
