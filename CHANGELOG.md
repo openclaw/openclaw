@@ -139,6 +139,7 @@ Docs: https://docs.openclaw.ai
 - Discord: enforce strict DM component allowlist auth (#49997) Thanks @joshavant.
 - Stabilize plugin loader and Docker extension smoke (#50058) Thanks @joshavant.
 - Telegram: stabilize pairing/session/forum routing and reply formatting tests (#50155) Thanks @joshavant.
+- Hardening: refresh stale device pairing requests and pending metadata (#50695) Thanks @smaeljaish771 and @joshavant.
 
 ### Fixes
 

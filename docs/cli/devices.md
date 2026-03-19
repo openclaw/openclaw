@@ -21,6 +21,9 @@ openclaw devices list
 openclaw devices list --json
 ```
 
+Pending request output includes the requested role and scopes so approvals can
+be reviewed before you approve.
+
 ### `openclaw devices remove <deviceId>`
 
 Remove one paired device entry.
@@ -44,6 +47,11 @@ openclaw devices clear --yes --pending --json
 
 Approve a pending device pairing request. If `requestId` is omitted, OpenClaw
 automatically approves the most recent pending request.
+
+Note: if a device retries pairing with changed auth details (role/scopes/public
+key), OpenClaw supersedes the previous pending entry and issues a new
+`requestId`. Run `openclaw devices list` right before approval to use the
+current ID.
 
 ```
 openclaw devices approve
