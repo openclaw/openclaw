@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Readable } from "node:stream";
@@ -100,6 +101,38 @@ const LOCAL_PINNED_WRITE_PYTHON = [
   "    os.close(root_fd)",
 ].join("\n");
 
+const PINNED_WRITE_PYTHON_CANDIDATES = [
+  process.env.OPENCLAW_PINNED_WRITE_PYTHON,
+  "/usr/bin/python3",
+  "/opt/homebrew/bin/python3",
+  "/usr/local/bin/python3",
+].filter((value): value is string => Boolean(value));
+
+let cachedPinnedWritePython = "";
+
+function canExecute(binPath: string): boolean {
+  try {
+    fsSync.accessSync(binPath, fsSync.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolvePinnedWritePython(): string {
+  if (cachedPinnedWritePython) {
+    return cachedPinnedWritePython;
+  }
+  for (const candidate of PINNED_WRITE_PYTHON_CANDIDATES) {
+    if (canExecute(candidate)) {
+      cachedPinnedWritePython = candidate;
+      return cachedPinnedWritePython;
+    }
+  }
+  cachedPinnedWritePython = "python3";
+  return cachedPinnedWritePython;
+}
+
 function parsePinnedIdentity(stdout: string): FileIdentityStat {
   const line = stdout
     .trim()
@@ -128,7 +161,7 @@ export async function runPinnedWriteHelper(params: {
   input: PinnedWriteInput;
 }): Promise<FileIdentityStat> {
   const child = spawn(
-    "python3",
+    resolvePinnedWritePython(),
     [
       "-c",
       LOCAL_PINNED_WRITE_PYTHON,
