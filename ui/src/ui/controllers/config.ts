@@ -1,4 +1,5 @@
-import type { GatewayBrowserClient } from "../gateway.ts";
+import { hasOperatorReadAccess } from "../app-settings.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
 import type { JsonSchema } from "../views/config-form.shared.ts";
 import { coerceFormValues } from "./config/form-coerce.ts";
@@ -12,6 +13,7 @@ import {
 export type ConfigState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  hello?: GatewayHelloOk | null;
   applySessionKey: string;
   configLoading: boolean;
   configRaw: string;
@@ -40,6 +42,12 @@ export async function loadConfig(state: ConfigState) {
   if (!state.client || !state.connected) {
     return;
   }
+  const auth = state.hello?.auth ?? null;
+  if (auth && !hasOperatorReadAccess(auth)) {
+    state.configLoading = false;
+    state.lastError = null;
+    return;
+  }
   state.configLoading = true;
   state.lastError = null;
   try {
@@ -54,6 +62,12 @@ export async function loadConfig(state: ConfigState) {
 
 export async function loadConfigSchema(state: ConfigState) {
   if (!state.client || !state.connected) {
+    return;
+  }
+  const auth = state.hello?.auth ?? null;
+  if (auth && !hasOperatorReadAccess(auth)) {
+    state.configSchemaLoading = false;
+    state.lastError = null;
     return;
   }
   if (state.configSchemaLoading) {
@@ -108,14 +122,6 @@ function asJsonSchema(value: unknown): JsonSchema | null {
   return value as JsonSchema;
 }
 
-/**
- * Serialize the form state for submission to `config.set` / `config.apply`.
- *
- * HTML `<input>` elements produce string `.value` properties, so numeric and
- * boolean config fields can leak into `configForm` as strings.  We coerce
- * them back to their schema-defined types before JSON serialization so the
- * gateway's Zod validation always sees correctly typed values.
- */
 function serializeFormForSubmit(state: ConfigState): string {
   if (state.configFormMode !== "form" || !state.configForm) {
     return state.configRaw;

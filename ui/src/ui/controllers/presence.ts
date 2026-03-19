@@ -1,9 +1,11 @@
-import type { GatewayBrowserClient } from "../gateway.ts";
+import { hasOperatorReadAccess } from "../app-settings.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
 import type { PresenceEntry } from "../types.ts";
 
 export type PresenceState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  hello?: GatewayHelloOk | null;
   presenceLoading: boolean;
   presenceEntries: PresenceEntry[];
   presenceError: string | null;
@@ -12,6 +14,13 @@ export type PresenceState = {
 
 export async function loadPresence(state: PresenceState) {
   if (!state.client || !state.connected) {
+    return;
+  }
+  const auth = state.hello?.auth ?? null;
+  if (auth && !hasOperatorReadAccess(auth)) {
+    state.presenceEntries = [];
+    state.presenceStatus = "Unavailable without operator.read scope.";
+    state.presenceError = null;
     return;
   }
   if (state.presenceLoading) {

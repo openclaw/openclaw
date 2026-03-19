@@ -1,9 +1,11 @@
-import type { GatewayBrowserClient } from "../gateway.ts";
+import { hasOperatorReadAccess } from "../app-settings.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
 import type { HealthSnapshot, StatusSummary } from "../types.ts";
 
 export type DebugState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  hello?: GatewayHelloOk | null;
   debugLoading: boolean;
   debugStatus: StatusSummary | null;
   debugHealth: HealthSnapshot | null;
@@ -17,6 +19,12 @@ export type DebugState = {
 
 export async function loadDebug(state: DebugState) {
   if (!state.client || !state.connected) {
+    return;
+  }
+  const auth = state.hello?.auth ?? null;
+  if (auth && !hasOperatorReadAccess(auth)) {
+    state.debugLoading = false;
+    state.debugCallError = null;
     return;
   }
   if (state.debugLoading) {
