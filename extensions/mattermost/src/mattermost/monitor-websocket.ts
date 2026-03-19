@@ -143,16 +143,23 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("message", async (data) => {
-          // Track last event time so the channel health monitor can detect
-          // stale sockets that silently stop delivering events.
-          opts.statusSink?.({ lastEventAt: Date.now() });
-
           const raw = rawDataToString(data);
           let payload: MattermostEventPayload;
           try {
             payload = JSON.parse(raw) as MattermostEventPayload;
           } catch {
             return;
+          }
+
+          // Track last event time only on meaningful application events so
+          // infrastructure messages (hello, auth ack) don't suppress zombie
+          // detection in the channel health monitor.
+          if (
+            payload.event === "posted" ||
+            payload.event === "reaction_added" ||
+            payload.event === "reaction_removed"
+          ) {
+            opts.statusSink?.({ lastEventAt: Date.now() });
           }
 
           if (payload.event === "reaction_added" || payload.event === "reaction_removed") {
