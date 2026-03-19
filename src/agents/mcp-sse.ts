@@ -11,7 +11,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function toStringRecord(value: unknown): Record<string, string> | undefined {
+function toStringRecord(
+  value: unknown,
+  warnDropped?: (key: string, entry: unknown) => void,
+): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -23,13 +26,17 @@ function toStringRecord(value: unknown): Record<string, string> | undefined {
       if (typeof entry === "number" || typeof entry === "boolean") {
         return [key, String(entry)] as const;
       }
+      warnDropped?.(key, entry);
       return null;
     })
     .filter((entry): entry is readonly [string, string] => entry !== null);
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-export function resolveSseMcpServerLaunchConfig(raw: unknown): SseMcpServerLaunchResult {
+export function resolveSseMcpServerLaunchConfig(
+  raw: unknown,
+  options?: { onDroppedHeader?: (key: string, value: unknown) => void },
+): SseMcpServerLaunchResult {
   if (!isRecord(raw)) {
     return { ok: false, reason: "server config must be an object" };
   }
@@ -53,7 +60,7 @@ export function resolveSseMcpServerLaunchConfig(raw: unknown): SseMcpServerLaunc
     ok: true,
     config: {
       url,
-      headers: toStringRecord(raw.headers),
+      headers: toStringRecord(raw.headers, options?.onDroppedHeader),
     },
   };
 }

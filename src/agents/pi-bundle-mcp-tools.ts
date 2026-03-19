@@ -153,7 +153,13 @@ function resolveTransport(
   }
 
   // Try SSE (url-based servers).
-  const sseLaunch = resolveSseMcpServerLaunchConfig(rawServer);
+  const sseLaunch = resolveSseMcpServerLaunchConfig(rawServer, {
+    onDroppedHeader: (key) => {
+      logWarn(
+        `bundle-mcp: server "${serverName}": header "${key}" has an unsupported value type and was ignored.`,
+      );
+    },
+  });
   if (sseLaunch.ok) {
     const headers: Record<string, string> = {
       ...sseLaunch.config.headers,
