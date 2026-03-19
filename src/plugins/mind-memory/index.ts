@@ -41,6 +41,28 @@ function sendNotify(message: string): void {
   proc.unref();
 }
 
+/** Resolve chunk size for bootstrap from the graphiti (smallModel) contextWindow. */
+function resolveBootstrapChunkSize(globalConfig: Record<string, unknown>): number {
+  const smallModelRaw = (
+    globalConfig as Record<string, unknown> & { agents?: { defaults?: { smallModel?: string } } }
+  )?.agents?.defaults?.smallModel;
+  if (!smallModelRaw?.includes("/")) {
+    return 12000;
+  }
+  const [provider, ...modelParts] = smallModelRaw.split("/");
+  const modelId = modelParts.join("/");
+  const models = globalConfig?.models as
+    | { providers?: Record<string, { models?: Array<{ id: string; contextWindow?: number }> }> }
+    | undefined;
+  const providers = models?.providers;
+  const contextWindow = providers?.[provider]?.models?.find((m) => m.id === modelId)?.contextWindow;
+  if (!contextWindow) {
+    return 12000;
+  }
+  // Leave ~2000 tokens for graphiti extraction prompt + output; 3 chars per token
+  return Math.max(4000, (contextWindow - 2000) * 3);
+}
+
 /** Extract the mind-memory plugin config from the global config. */
 function getMindMemoryConfig(globalConfig: Record<string, unknown>): MindMemoryPluginConfig {
   const plugins = globalConfig?.plugins as Record<string, unknown> | undefined;
@@ -301,7 +323,13 @@ export default function register(api: PluginApi) {
       const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
       const memoryDir = config.memoryDir || path.join(workspaceDir, "memory");
       const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
-      await consolidator.bootstrapHistoricalEpisodes(sessionId, memoryDir, [], workspaceDir);
+      await consolidator.bootstrapHistoricalEpisodes(
+        sessionId,
+        memoryDir,
+        [],
+        workspaceDir,
+        resolveBootstrapChunkSize(api.config),
+      );
 
       // Read QUICK.md for observer context
       const { readFile } = await import("node:fs/promises");
@@ -969,7 +997,13 @@ export default function register(api: PluginApi) {
     const [, , , flashbackResult] = await Promise.allSettled([
       config.graphiti?.enabled !== false
         ? (consolidator
-            .bootstrapHistoricalEpisodes(sessionId, memoryDir, [], workspaceDir)
+            .bootstrapHistoricalEpisodes(
+              sessionId,
+              memoryDir,
+              [],
+              workspaceDir,
+              resolveBootstrapChunkSize(api.config),
+            )
             .catch((e) => process.stderr.write(`⚠️ [MIND] Bootstrap error: ${e}\n`)),
           Promise.resolve())
         : Promise.resolve(),

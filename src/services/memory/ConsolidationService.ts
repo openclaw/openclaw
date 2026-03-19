@@ -49,6 +49,28 @@ function extractTextFromUnknown(value: unknown): string {
  * The lock file is created at `<storyPath>.lock`.
  */
 /** Query FalkorDB directly for the current count of Episodic nodes. */
+/** Split text into chunks of at most maxChars, breaking at newlines when possible. */
+function splitIntoChunks(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) {
+    return [text];
+  }
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = start + maxChars;
+    if (end < text.length) {
+      // Try to break at a newline
+      const lastNewline = text.lastIndexOf("\n", end);
+      if (lastNewline > start) {
+        end = lastNewline + 1;
+      }
+    }
+    chunks.push(text.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}
+
 const STORY_LOCK_OPTIONS: FileLockOptions = {
   retries: { retries: 10, factor: 2, minTimeout: 200, maxTimeout: 15_000, randomize: true },
   stale: 120_000, // 2 min stale detection
@@ -93,6 +115,8 @@ export class ConsolidationService {
       created_at?: unknown;
     }> = [],
     workspaceDir?: string,
+    /** Max chars per episode chunk. Derived from model contextWindow: (contextWindow - 2000) * 3 */
+    chunkSize: number = 12000,
   ): Promise<void> {
     try {
       // Check if bootstrap has already been done using a flag file
@@ -132,13 +156,23 @@ export class ConsolidationService {
           const filePath = path.join(workspaceDir, file);
           try {
             const content = await fs.readFile(filePath, "utf-8");
-            this.log(`📥 [MIND] Ingesting identity file: ${file}`);
-            await this.graph.addEpisode(
-              "global_user_memory",
-              `system: Identity/profile file — ${file}\n\n${content}`,
-              undefined,
-              { source: "identity-file" },
+            const chunks = splitIntoChunks(content, chunkSize);
+            this.log(
+              `📥 [MIND] Ingesting identity file: ${file} (${content.length} chars → ${chunks.length} chunk${chunks.length > 1 ? "s" : ""}, chunkSize=${chunkSize})`,
             );
+            for (let i = 0; i < chunks.length; i++) {
+              if (chunks.length > 1) {
+                this.log(
+                  `  📄 [MIND] ${file} chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`,
+                );
+              }
+              await this.graph.addEpisode(
+                "global_user_memory",
+                `system: Identity/profile file — ${file}${chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : ""}\n\n${chunks[i]}`,
+                undefined,
+                { source: "identity-file" },
+              );
+            }
             await fs.appendFile(bootstrapProgressPath, `__identity__${file}\n`);
           } catch {
             // File doesn't exist, skip
@@ -170,12 +204,23 @@ export class ConsolidationService {
         }
 
         const dateString = episodeTimestamp || file.substring(0, 10);
-        await this.graph.addEpisode(
-          "global_user_memory", // FORCE GLOBAL ID for historical files
-          `FECHA: ${dateString} | system: Historical memory from ${file}\n\n${content}`,
-          episodeTimestamp,
-          { source: "historical-file" },
+        const chunks = splitIntoChunks(content, chunkSize);
+        this.log(
+          `📥 [MIND] Ingesting: ${file} (${content.length} chars → ${chunks.length} chunk${chunks.length > 1 ? "s" : ""})`,
         );
+        for (let i = 0; i < chunks.length; i++) {
+          if (chunks.length > 1) {
+            this.log(
+              `  📄 [MIND] ${file} chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`,
+            );
+          }
+          await this.graph.addEpisode(
+            "global_user_memory", // FORCE GLOBAL ID for historical files
+            `FECHA: ${dateString} | system: Historical memory from ${file}${chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : ""}\n\n${chunks[i]}`,
+            episodeTimestamp,
+            { source: "historical-file" },
+          );
+        }
 
         await fs.appendFile(bootstrapProgressPath, `${file}\n`);
       }
