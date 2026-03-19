@@ -1,0 +1,42 @@
+version: '3.9'
+
+services:
+  govdoss-api:
+    build:
+      context: ../../
+      dockerfile: deploy/govdoss/Dockerfile
+    container_name: govdoss-api
+    ports:
+      - "8787:8787"
+    environment:
+      NODE_ENV: production
+      GOVDOSS_API_PORT: 8787
+      GOVDOSS_REDIS_URL: redis://redis:6379
+      GOVDOSS_DATABASE_URL: postgres://postgres:postgres@postgres:5432/govdoss
+      GOVDOSS_APPROVAL_BACKEND: redis
+      GOVDOSS_USAGE_BACKEND: postgres
+      GOVDOSS_AUDIT_SINK: postgres
+    depends_on:
+      - redis
+      - postgres
+
+  redis:
+    image: redis:7-alpine
+    container_name: govdoss-redis
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: govdoss-postgres
+    environment:
+      POSTGRES_DB: govdoss
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
