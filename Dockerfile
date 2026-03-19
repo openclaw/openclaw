@@ -173,7 +173,7 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
     && chmod 755 /app/openclaw.mjs
 
 RUN mkdir -p /home/node/.openclaw && \
-    echo '{"gateway":{"mode":"local","bind":"lan","port":18789,"auth":{"mode":"token","token":"${OPENCLAW_GATEWAY_TOKEN}"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true}}}' > /home/node/.openclaw/openclaw.json && \
+    echo '{"gateway":{"mode":"local","bind":"lan","auth":{"mode":"token","token":"${OPENCLAW_GATEWAY_TOKEN}"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true}}}' > /home/node/.openclaw/openclaw.json && \
     chown -R node:node /home/node/.openclaw
 
 ENV NODE_ENV=production
@@ -181,6 +181,6 @@ ENV NODE_ENV=production
 USER node
 
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
-  CMD node -e "fetch('http://0.0.0.0:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const p=process.env.PORT||18789;fetch('http://0.0.0.0:'+p+'/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan"]

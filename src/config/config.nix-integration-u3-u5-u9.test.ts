@@ -220,6 +220,28 @@ describe("Nix integration (U3, U5, U9)", () => {
         ),
       ).toBe(19003);
     });
+
+    it("respects PORT env var (PaaS standard) when OPENCLAW_GATEWAY_PORT is unset", () => {
+      expect(resolveGatewayPort({}, envWith({ PORT: "8080" }))).toBe(8080);
+    });
+
+    it("prefers OPENCLAW_GATEWAY_PORT over PORT", () => {
+      expect(
+        resolveGatewayPort({}, envWith({ OPENCLAW_GATEWAY_PORT: "19001", PORT: "8080" })),
+      ).toBe(19001);
+    });
+
+    it("PORT takes precedence over config port", () => {
+      expect(resolveGatewayPort({ gateway: { port: 19002 } }, envWith({ PORT: "8080" }))).toBe(
+        8080,
+      );
+    });
+
+    it("ignores invalid PORT and falls back to config", () => {
+      expect(resolveGatewayPort({ gateway: { port: 19003 } }, envWith({ PORT: "bad" }))).toBe(
+        19003,
+      );
+    });
   });
 
   describe("U9: telegram.tokenFile schema validation", () => {
