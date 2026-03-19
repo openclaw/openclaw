@@ -36,9 +36,8 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   ],
   "extensions/googlechat/runtime-api.ts": ['export * from "openclaw/plugin-sdk/googlechat";'],
   "extensions/matrix/runtime-api.ts": [
-    'export * from "openclaw/plugin-sdk/matrix";',
     'export * from "./src/auth-precedence.js";',
-    'export { findMatrixAccountEntry, hashMatrixAccessToken, listMatrixEnvAccountIds, resolveConfiguredMatrixAccountIds, resolveMatrixChannelConfig, resolveMatrixCredentialsFilename, resolveMatrixEnvAccountToken, resolveMatrixHomeserverKey, resolveMatrixLegacyFlatStoreRoot, sanitizeMatrixPathSegment } from "./helper-api.js";',
+    'export * from "./helper-api.js";',
   ],
   "extensions/nextcloud-talk/runtime-api.ts": [
     'export * from "openclaw/plugin-sdk/nextcloud-talk";',
