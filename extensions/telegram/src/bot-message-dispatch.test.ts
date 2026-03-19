@@ -224,9 +224,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
       replyToMode: "first",
       streamMode: params.streamMode ?? "partial",
       textLimit: 4096,
-      telegramDeps: {
-        dispatchReplyWithBufferedBlockDispatcher,
-      } as unknown as NonNullable<Parameters<typeof dispatchTelegramMessage>[0]["telegramDeps"]>,
       telegramCfg: params.telegramCfg ?? {},
       telegramDeps: params.telegramDeps ?? telegramDepsForTest,
       opts: { token: "token" },

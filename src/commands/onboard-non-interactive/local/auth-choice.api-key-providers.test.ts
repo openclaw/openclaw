@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { RuntimeEnv } from "../../../runtime.js";
 import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
 
 const applyAuthProfileConfig = vi.hoisted(() => vi.fn((cfg: OpenClawConfig) => cfg));
@@ -120,11 +121,11 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
 
   it("rejects Basic-shaped GIGACHAT_CREDENTIALS in the OAuth onboarding path", async () => {
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
-    const runtime = {
+    const runtime: RuntimeEnv = {
       error: vi.fn(),
       exit: vi.fn(),
       log: vi.fn(),
-    } as never;
+    };
     const resolveApiKey = vi.fn(async () => ({
       key: "basic-user:basic-pass",
       source: "env" as const,
