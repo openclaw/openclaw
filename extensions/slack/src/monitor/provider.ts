@@ -1,5 +1,16 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import SlackBolt, * as SlackBoltNamespace from "@slack/bolt";
+// Dynamic import to avoid esbuild bundling issues with ESM/CJS interop
+let SlackBolt: unknown;
+let SlackBoltNamespace: Record<string, unknown> | undefined;
+
+async function loadSlackBolt() {
+  if (!SlackBolt) {
+    const slackModule = await import("@slack/bolt");
+    SlackBolt = slackModule.default ?? slackModule;
+    SlackBoltNamespace = slackModule as Record<string, unknown>;
+  }
+  return { SlackBolt, SlackBoltNamespace };
+}
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -113,10 +124,19 @@ function resolveSlackBoltInterop(params: {
   throw new TypeError("Unable to resolve @slack/bolt App/HTTPReceiver exports");
 }
 
-const { App, HTTPReceiver } = resolveSlackBoltInterop({
-  defaultImport: SlackBolt,
-  namespaceImport: SlackBoltNamespace,
-});
+// Lazy-loaded Slack Bolt exports (loaded dynamically to avoid bundling issues)
+let slackBoltExports: SlackBoltResolvedExports | null = null;
+
+async function getSlackBoltExports(): Promise<SlackBoltResolvedExports> {
+  if (!slackBoltExports) {
+    const { SlackBolt, SlackBoltNamespace } = await loadSlackBolt();
+    slackBoltExports = resolveSlackBoltInterop({
+      defaultImport: SlackBolt,
+      namespaceImport: SlackBoltNamespace,
+    });
+  }
+  return slackBoltExports;
+}
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -247,6 +267,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+
+  // Load Slack Bolt exports dynamically
+  const { App, HTTPReceiver } = await getSlackBoltExports();
 
   const receiver =
     slackMode === "http"
