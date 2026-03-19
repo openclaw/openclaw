@@ -3678,6 +3678,25 @@ description: test skill
     );
   });
 
+  it("preserves the active profile in the workspaceOnly remediation command", async () => {
+    await withEnvAsync({ OPENCLAW_PROFILE: "danger" }, async () => {
+      const res = await audit({
+        channels: { whatsapp: { groupPolicy: "open" } },
+        tools: {
+          elevated: { enabled: false },
+          profile: "coding",
+        },
+      });
+      const finding = res.findings.find(
+        (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+      );
+      expect(finding, "expected open_groups_with_runtime_or_fs finding to exist").toBeDefined();
+      expect(finding?.remediation).toContain(
+        "openclaw --profile danger config set tools.fs.workspaceOnly true",
+      );
+    });
+  });
+
   describe("maybeProbeGateway auth selection", () => {
     const makeProbeCapture = () => {
       let capturedAuth: { token?: string; password?: string } | undefined;
