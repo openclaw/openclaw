@@ -1,5 +1,5 @@
-import type { RuntimeEnv, RuntimeLogger } from "openclaw/plugin-sdk/matrix";
 import { vi } from "vitest";
+import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
 import type { MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";

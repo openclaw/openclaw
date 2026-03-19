@@ -1,16 +1,16 @@
 import {
-  DEFAULT_ACCOUNT_ID,
-  isPrivateOrLoopbackHost,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-  normalizeResolvedSecretInputString,
-} from "openclaw/plugin-sdk/matrix";
-import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../../account-selection.js";
 import { resolveMatrixAccountStringValues } from "../../auth-precedence.js";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  isPrivateOrLoopbackHost,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+  normalizeResolvedSecretInputString,
+} from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import {

@@ -1,4 +1,4 @@
-import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/matrix";
+import type { PluginRuntime, RuntimeLogger } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
 import { formatMatrixEncryptedEventDisabledWarning } from "../encryption-guidance.js";
