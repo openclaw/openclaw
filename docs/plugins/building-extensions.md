@@ -89,14 +89,16 @@ For provider plugins, use `definePluginEntry` instead.
 
 ## Step 3: Import from focused subpaths
 
-The plugin SDK exposes 70+ focused subpaths. Always import from specific
+The plugin SDK exposes many focused subpaths. Always import from specific
 subpaths rather than the monolithic root:
 
 ```typescript
 // Correct: focused subpaths
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+import { createOptionalChannelSetupSurface } from "openclaw/plugin-sdk/channel-setup";
 import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
 
 // Wrong: monolithic root (lint will reject this)
@@ -105,17 +107,24 @@ import { ... } from "openclaw/plugin-sdk";
 
 Common subpaths:
 
-| Subpath                            | Purpose                              |
-| ---------------------------------- | ------------------------------------ |
-| `plugin-sdk/core`                  | Plugin entry definitions, base types |
-| `plugin-sdk/channel-runtime`       | Channel runtime helpers              |
-| `plugin-sdk/channel-config-schema` | Config schema builders               |
-| `plugin-sdk/channel-policy`        | Group/DM policy helpers              |
-| `plugin-sdk/setup`                 | Setup wizard adapters                |
-| `plugin-sdk/runtime-store`         | Persistent plugin storage            |
-| `plugin-sdk/allow-from`            | Allowlist resolution                 |
-| `plugin-sdk/reply-payload`         | Message reply types                  |
-| `plugin-sdk/testing`               | Test utilities                       |
+| Subpath                             | Purpose                              |
+| ----------------------------------- | ------------------------------------ |
+| `plugin-sdk/core`                   | Plugin entry definitions, base types |
+| `plugin-sdk/channel-setup`          | Optional setup adapters/wizards      |
+| `plugin-sdk/channel-pairing`        | DM pairing primitives                |
+| `plugin-sdk/channel-reply-pipeline` | Prefix + typing reply wiring         |
+| `plugin-sdk/channel-config-schema`  | Config schema builders               |
+| `plugin-sdk/channel-policy`         | Group/DM policy helpers              |
+| `plugin-sdk/secret-input`           | Secret input parsing/helpers         |
+| `plugin-sdk/webhook-ingress`        | Webhook request/target helpers       |
+| `plugin-sdk/runtime-store`          | Persistent plugin storage            |
+| `plugin-sdk/allow-from`             | Allowlist resolution                 |
+| `plugin-sdk/reply-payload`          | Message reply types                  |
+| `plugin-sdk/provider-onboard`       | Provider onboarding config patches   |
+| `plugin-sdk/testing`                | Test utilities                       |
+
+Use the narrowest primitive that matches the job. Reach for `channel-runtime`
+or other larger helper barrels only when a dedicated subpath does not exist yet.
 
 ## Step 4: Use local barrels for internal imports
 
@@ -131,10 +140,10 @@ export { MyChannelRuntime } from "./src/runtime.js";
 export { internalHelper } from "./src/helpers.js";
 ```
 
-**Self-import guardrail**: never import your own extension through
-`openclaw/plugin-sdk/my-channel` from production files. Route internal imports
-through `./api.ts` or `./runtime-api.ts` instead. The SDK subpath is the
-external contract only.
+**Self-import guardrail**: never import your own extension back through its
+published SDK contract path from production files. Route internal imports
+through `./api.ts` or `./runtime-api.ts` instead. The SDK contract is for
+external consumers only.
 
 ## Step 5: Add a plugin manifest
 

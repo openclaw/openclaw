@@ -10,7 +10,7 @@ import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-runtime";
-import { runStoppablePassiveMonitor } from "../../shared/passive-monitor.js";
+import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
