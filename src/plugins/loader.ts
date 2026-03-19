@@ -104,8 +104,12 @@ function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string
   return params.modulePath ?? fileURLToPath(params.moduleUrl ?? import.meta.url);
 }
 
-const resolvePluginSdkAlias = (): string | null =>
-  resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
+const resolvePluginSdkAlias = (params: LoaderModuleResolveParams = {}): string | null =>
+  resolvePluginSdkAliasFile({
+    srcFile: "root-alias.cjs",
+    distFile: "root-alias.cjs",
+    ...params,
+  });
 
 function resolvePluginRuntimeModulePath(params: LoaderModuleResolveParams = {}): string | null {
   try {
@@ -704,17 +708,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   }
 
   // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
-  const jitiLoaders = new Map<boolean, ReturnType<typeof createJiti>>();
+  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
   const getJiti = (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
-    const cached = jitiLoaders.get(tryNative);
+    const aliasOrderKey = resolvePluginSdkAliasCandidateOrder({
+      modulePath,
+      isProduction: process.env.NODE_ENV === "production",
+    }).join(">");
+    const cacheKey = `${tryNative ? "native" : "jiti"}:${aliasOrderKey}`;
+    const cached = jitiLoaders.get(cacheKey);
     if (cached) {
       return cached;
     }
-    const pluginSdkAlias = resolvePluginSdkAlias();
+    const pluginSdkAlias = resolvePluginSdkAlias({ modulePath });
     const aliasMap = {
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-      ...resolvePluginSdkScopedAliasMap(),
+      ...resolvePluginSdkScopedAliasMap({ modulePath }),
     };
     const loader = createJiti(import.meta.url, {
       ...buildPluginLoaderJitiOptions(aliasMap),
@@ -724,7 +733,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       // loading for the canonical built module graph.
       tryNative,
     });
-    jitiLoaders.set(tryNative, loader);
+    jitiLoaders.set(cacheKey, loader);
     return loader;
   };
 
