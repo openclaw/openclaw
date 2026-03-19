@@ -15,13 +15,14 @@ type MatrixMigrationLogger = {
 async function runBestEffortMatrixMigrationStep(params: {
   label: string;
   log: MatrixMigrationLogger;
+  logPrefix?: string;
   run: () => Promise<unknown>;
 }): Promise<void> {
   try {
     await params.run();
   } catch (err) {
     params.log.warn?.(
-      `gateway: ${params.label} failed during Matrix migration; continuing startup: ${String(err)}`,
+      `${params.logPrefix?.trim() || "gateway"}: ${params.label} failed during Matrix migration; continuing startup: ${String(err)}`,
     );
   }
 }
@@ -30,6 +31,8 @@ export async function runStartupMatrixMigration(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   log: MatrixMigrationLogger;
+  trigger?: string;
+  logPrefix?: string;
   deps?: {
     maybeCreateMatrixMigrationSnapshot?: typeof maybeCreateMatrixMigrationSnapshot;
     autoMigrateLegacyMatrixState?: typeof autoMigrateLegacyMatrixState;
@@ -43,6 +46,8 @@ export async function runStartupMatrixMigration(params: {
     params.deps?.autoMigrateLegacyMatrixState ?? autoMigrateLegacyMatrixState;
   const prepareLegacyCrypto =
     params.deps?.autoPrepareLegacyMatrixCrypto ?? autoPrepareLegacyMatrixCrypto;
+  const trigger = params.trigger?.trim() || "gateway-startup";
+  const logPrefix = params.logPrefix?.trim() || "gateway";
   const actionable = hasActionableMatrixMigration({ cfg: params.cfg, env });
   const pending = actionable || hasPendingMatrixMigration({ cfg: params.cfg, env });
 
@@ -58,13 +63,13 @@ export async function runStartupMatrixMigration(params: {
 
   try {
     await createSnapshot({
-      trigger: "gateway-startup",
+      trigger,
       env,
       log: params.log,
     });
   } catch (err) {
     params.log.warn?.(
-      `gateway: failed creating a Matrix migration snapshot; skipping Matrix migration for now: ${String(err)}`,
+      `${logPrefix}: failed creating a Matrix migration snapshot; skipping Matrix migration for now: ${String(err)}`,
     );
     return;
   }
@@ -72,6 +77,7 @@ export async function runStartupMatrixMigration(params: {
   await runBestEffortMatrixMigrationStep({
     label: "legacy Matrix state migration",
     log: params.log,
+    logPrefix,
     run: () =>
       migrateLegacyState({
         cfg: params.cfg,
@@ -82,6 +88,7 @@ export async function runStartupMatrixMigration(params: {
   await runBestEffortMatrixMigrationStep({
     label: "legacy Matrix encrypted-state preparation",
     log: params.log,
+    logPrefix,
     run: () =>
       prepareLegacyCrypto({
         cfg: params.cfg,
