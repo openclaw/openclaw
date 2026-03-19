@@ -826,6 +826,7 @@ Docs: https://docs.openclaw.ai
 - Docs/plugins: add the community DingTalk plugin listing to the docs catalog. (#29913) Thanks @sliverp.
 - Docs/plugins: add the community QQbot plugin listing to the docs catalog. (#29898) Thanks @sliverp.
 - Docs/plugins: add the community wecom plugin listing to the docs catalog. (#29905) Thanks @sliverp.
+- Models/Gemini: add `models.providers.*.safetySettings` for `google-generative-ai` providers so Gemini safety thresholds can be configured from `openclaw.json` and applied on outbound requests. Fixes #27186 and #12008.
 
 ### Fixes
 
