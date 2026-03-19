@@ -1,5 +1,5 @@
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
@@ -374,8 +374,7 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
-    beforeEach(async () => {
-      vi.resetModules();
+    beforeAll(async () => {
       ({ completeSimple: completeSimpleForTest } = await import("@mariozechner/pi-ai"));
       ({ getApiKeyForModel: getApiKeyForModelForTest } = await import("../agents/model-auth.js"));
       ({ resolveModelAsync: resolveModelAsyncForTest } =
@@ -385,6 +384,9 @@ describe("tts", () => {
       const ttsModule = await import("./tts.js");
       summarizeTextForTest = ttsModule._test.summarizeText;
       resolveTtsConfigForTest = ttsModule.resolveTtsConfig;
+    });
+
+    beforeEach(() => {
       vi.mocked(completeSimpleForTest).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: "Summary" }]),
       );
