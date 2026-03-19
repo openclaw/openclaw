@@ -46,11 +46,6 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { ModelApi } from "../config/types.models.js";
-import {
-  MISTRAL_DEFAULT_MODEL_REF,
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_GLOBAL_BASE_URL,
-} from "../plugin-sdk/provider-models.js";
 import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 import {
   AIMLAPI_DEFAULT_MODEL_REF,
@@ -58,6 +53,11 @@ import {
   setMinimaxApiKey,
   writeOAuthCredentials,
 } from "../plugins/provider-auth-storage.js";
+import {
+  MISTRAL_DEFAULT_MODEL_REF,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
+} from "../plugins/provider-model-definitions.js";
 import { applyLitellmProviderConfig } from "./onboard-auth.config-litellm.js";
 import {
   createAuthTestLifecycle,
@@ -391,8 +391,8 @@ describe("applyMinimaxApiConfig", () => {
     });
   });
 
-  it("keeps reasoning enabled for MiniMax-M2.5", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.5");
+  it("keeps reasoning enabled for MiniMax-M2.7", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.7");
     expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
   });
 
@@ -402,7 +402,7 @@ describe("applyMinimaxApiConfig", () => {
         agents: {
           defaults: {
             models: {
-              "minimax/MiniMax-M2.5": {
+              "minimax/MiniMax-M2.7": {
                 alias: "MiniMax",
                 params: { custom: "value" },
               },
@@ -410,9 +410,9 @@ describe("applyMinimaxApiConfig", () => {
           },
         },
       },
-      "MiniMax-M2.5",
+      "MiniMax-M2.7",
     );
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.5"]).toMatchObject({
+    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.7"]).toMatchObject({
       alias: "Minimax",
       params: { custom: "value" },
     });
@@ -431,7 +431,7 @@ describe("applyMinimaxApiConfig", () => {
     expect(cfg.models?.providers?.minimax?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
       "old-model",
-      "MiniMax-M2.5",
+      "MiniMax-M2.7",
     ]);
   });
 
@@ -674,8 +674,8 @@ describe("provider alias defaults", () => {
   it("adds expected alias for provider defaults", () => {
     const aliasCases = [
       {
-        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5"),
-        modelRef: "minimax/MiniMax-M2.5",
+        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.7"),
+        modelRef: "minimax/MiniMax-M2.7",
         alias: "Minimax",
       },
       {

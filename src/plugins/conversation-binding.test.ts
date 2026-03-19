@@ -83,14 +83,18 @@ const sessionBindingState = vi.hoisted(() => {
   };
 });
 
-vi.mock("../infra/home-dir.js", () => ({
-  expandHomePrefix: (value: string) => {
-    if (value === "~/.openclaw/plugin-binding-approvals.json") {
-      return approvalsPath;
-    }
-    return value;
-  },
-}));
+vi.mock("../infra/home-dir.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
+  return {
+    ...actual,
+    expandHomePrefix: (value: string) => {
+      if (value === "~/.openclaw/plugin-binding-approvals.json") {
+        return approvalsPath;
+      }
+      return actual.expandHomePrefix(value);
+    },
+  };
+});
 
 const {
   __testing,
