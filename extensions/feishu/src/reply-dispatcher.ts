@@ -416,24 +416,50 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           if (useCard) {
             const cardHeader = resolveCardHeader(agentId, identity);
             const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-            await sendChunkedTextReply({
-              text,
-              useCard: true,
-              infoKind: info?.kind,
-              sendChunk: async ({ chunk, isFirst }) => {
-                await sendStructuredCardFeishu({
-                  cfg,
-                  to: chatId,
-                  text: chunk,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  mentions: isFirst ? mentionTargets : undefined,
-                  accountId,
-                  header: cardHeader,
-                  note: cardNote,
-                });
-              },
-            });
+            try {
+              await sendChunkedTextReply({
+                text,
+                useCard: true,
+                infoKind: info?.kind,
+                sendChunk: async ({ chunk, isFirst }) => {
+                  await sendStructuredCardFeishu({
+                    cfg,
+                    to: chatId,
+                    text: chunk,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    mentions: isFirst ? mentionTargets : undefined,
+                    accountId,
+                    header: cardHeader,
+                    note: cardNote,
+                  });
+                },
+              });
+            } catch (cardError) {
+              // Card delivery can fail when the content exceeds Feishu card
+              // limitations (e.g. "card table number over limit"). Fall back
+              // to plain-text delivery so the user still receives the reply.
+              params.runtime.log?.(
+                `feishu[${account.accountId}]: card send failed, falling back to text: ${String(cardError)}`,
+              );
+              const fallbackText = core.channel.text.convertMarkdownTables(text, tableMode);
+              await sendChunkedTextReply({
+                text: fallbackText,
+                useCard: false,
+                infoKind: info?.kind,
+                sendChunk: async ({ chunk, isFirst }) => {
+                  await sendMessageFeishu({
+                    cfg,
+                    to: chatId,
+                    text: chunk,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    mentions: isFirst ? mentionTargets : undefined,
+                    accountId,
+                  });
+                },
+              });
+            }
           } else {
             await sendChunkedTextReply({
               text,

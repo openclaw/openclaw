@@ -715,4 +715,82 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       streamingInstances.push = origPush;
     }
   });
+
+  it("falls back to plain text when card send fails (e.g. table limit exceeded)", async () => {
+    const convertMock = vi.fn((text: string) => text.replace(/\|/g, "-"));
+    getFeishuRuntimeMock.mockReturnValue({
+      channel: {
+        text: {
+          resolveTextChunkLimit: vi.fn(() => 4000),
+          resolveChunkMode: vi.fn(() => "line"),
+          resolveMarkdownTableMode: vi.fn(() => "bullet"),
+          convertMarkdownTables: convertMock,
+          chunkTextWithMode: vi.fn((text: string) => [text]),
+        },
+        reply: {
+          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+          resolveHumanDelayConfig: vi.fn(() => undefined),
+        },
+      },
+    });
+
+    // Simulate non-streaming card mode
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+      },
+    });
+
+    const logMock = vi.fn();
+    const { options } = createDispatcherHarness({
+      runtime: { log: logMock, error: vi.fn() } as never,
+    });
+
+    // First call to sendStructuredCardFeishu fails (card table limit)
+    sendStructuredCardFeishuMock.mockRejectedValueOnce(new Error("card table number over limit"));
+
+    const tableMarkdown = "| Col1 | Col2 |\n|------|------|\n| a | b |";
+    await options.deliver({ text: tableMarkdown }, { kind: "final" });
+
+    // Card was attempted and failed
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+
+    // Fallback to plain text was used
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+
+    // Markdown tables were converted before fallback send
+    expect(convertMock).toHaveBeenCalled();
+
+    // Warning was logged
+    expect(logMock).toHaveBeenCalledWith(
+      expect.stringContaining("card send failed, falling back to text"),
+    );
+  });
+
+  it("card fallback does not trigger when card send succeeds", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+      },
+    });
+
+    const { options } = createDispatcherHarness();
+
+    await options.deliver({ text: "```js\ncode\n```" }, { kind: "final" });
+
+    // Card send should succeed normally
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+    // No fallback to plain text
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
 });
