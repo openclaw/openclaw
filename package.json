@@ -165,6 +165,10 @@
       "types": "./dist/plugin-sdk/acp-runtime.d.ts",
       "default": "./dist/plugin-sdk/acp-runtime.js"
     },
+    "./plugin-sdk/acpx": {
+      "types": "./dist/plugin-sdk/acpx.d.ts",
+      "default": "./dist/plugin-sdk/acpx.js"
+    },
     "./plugin-sdk/telegram": {
       "types": "./dist/plugin-sdk/telegram.d.ts",
       "default": "./dist/plugin-sdk/telegram.js"
@@ -181,9 +185,49 @@
       "types": "./dist/plugin-sdk/discord-core.d.ts",
       "default": "./dist/plugin-sdk/discord-core.js"
     },
+    "./plugin-sdk/copilot-proxy": {
+      "types": "./dist/plugin-sdk/copilot-proxy.d.ts",
+      "default": "./dist/plugin-sdk/copilot-proxy.js"
+    },
     "./plugin-sdk/feishu": {
       "types": "./dist/plugin-sdk/feishu.d.ts",
       "default": "./dist/plugin-sdk/feishu.js"
+    },
+    "./plugin-sdk/google": {
+      "types": "./dist/plugin-sdk/google.d.ts",
+      "default": "./dist/plugin-sdk/google.js"
+    },
+    "./plugin-sdk/googlechat": {
+      "types": "./dist/plugin-sdk/googlechat.d.ts",
+      "default": "./dist/plugin-sdk/googlechat.js"
+    },
+    "./plugin-sdk/irc": {
+      "types": "./dist/plugin-sdk/irc.d.ts",
+      "default": "./dist/plugin-sdk/irc.js"
+    },
+    "./plugin-sdk/line-core": {
+      "types": "./dist/plugin-sdk/line-core.d.ts",
+      "default": "./dist/plugin-sdk/line-core.js"
+    },
+    "./plugin-sdk/lobster": {
+      "types": "./dist/plugin-sdk/lobster.d.ts",
+      "default": "./dist/plugin-sdk/lobster.js"
+    },
+    "./plugin-sdk/matrix": {
+      "types": "./dist/plugin-sdk/matrix.d.ts",
+      "default": "./dist/plugin-sdk/matrix.js"
+    },
+    "./plugin-sdk/mattermost": {
+      "types": "./dist/plugin-sdk/mattermost.d.ts",
+      "default": "./dist/plugin-sdk/mattermost.js"
+    },
+    "./plugin-sdk/msteams": {
+      "types": "./dist/plugin-sdk/msteams.d.ts",
+      "default": "./dist/plugin-sdk/msteams.js"
+    },
+    "./plugin-sdk/nextcloud-talk": {
+      "types": "./dist/plugin-sdk/nextcloud-talk.d.ts",
+      "default": "./dist/plugin-sdk/nextcloud-talk.js"
     },
     "./plugin-sdk/slack": {
       "types": "./dist/plugin-sdk/slack.d.ts",
@@ -196,6 +240,22 @@
     "./plugin-sdk/imessage": {
       "types": "./dist/plugin-sdk/imessage.d.ts",
       "default": "./dist/plugin-sdk/imessage.js"
+    },
+    "./plugin-sdk/open-prose": {
+      "types": "./dist/plugin-sdk/open-prose.d.ts",
+      "default": "./dist/plugin-sdk/open-prose.js"
+    },
+    "./plugin-sdk/phone-control": {
+      "types": "./dist/plugin-sdk/phone-control.d.ts",
+      "default": "./dist/plugin-sdk/phone-control.js"
+    },
+    "./plugin-sdk/qwen-portal-auth": {
+      "types": "./dist/plugin-sdk/qwen-portal-auth.d.ts",
+      "default": "./dist/plugin-sdk/qwen-portal-auth.js"
+    },
+    "./plugin-sdk/signal": {
+      "types": "./dist/plugin-sdk/signal.d.ts",
+      "default": "./dist/plugin-sdk/signal.js"
     },
     "./plugin-sdk/whatsapp": {
       "types": "./dist/plugin-sdk/whatsapp.d.ts",
@@ -436,6 +496,18 @@
     "./plugin-sdk/web-media": {
       "types": "./dist/plugin-sdk/web-media.d.ts",
       "default": "./dist/plugin-sdk/web-media.js"
+    },
+    "./plugin-sdk/zai": {
+      "types": "./dist/plugin-sdk/zai.d.ts",
+      "default": "./dist/plugin-sdk/zai.js"
+    },
+    "./plugin-sdk/zalo": {
+      "types": "./dist/plugin-sdk/zalo.d.ts",
+      "default": "./dist/plugin-sdk/zalo.js"
+    },
+    "./plugin-sdk/zalouser": {
+      "types": "./dist/plugin-sdk/zalouser.d.ts",
+      "default": "./dist/plugin-sdk/zalouser.js"
     },
     "./plugin-sdk/speech": {
       "types": "./dist/plugin-sdk/speech.d.ts",

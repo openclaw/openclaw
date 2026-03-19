@@ -1,1 +1,1 @@
-export * from "../../src/plugin-sdk/lobster.js";
+export * from "openclaw/plugin-sdk/lobster";

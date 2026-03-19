@@ -1,1 +1,1 @@
-export * from "../../src/plugin-sdk/mattermost.js";
+export * from "openclaw/plugin-sdk/mattermost";

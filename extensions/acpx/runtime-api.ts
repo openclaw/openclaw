@@ -1,1 +1,1 @@
-export * from "../../src/plugin-sdk/acpx.js";
+export * from "openclaw/plugin-sdk/acpx";
