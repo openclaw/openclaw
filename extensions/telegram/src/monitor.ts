@@ -33,6 +33,14 @@ export type MonitorTelegramOpts = {
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
   webhookCertPath?: string;
+  statusSink?: (patch: {
+    running?: boolean | null;
+    lastStartAt?: number | null;
+    lastStopAt?: number | null;
+    lastError?: string | null;
+    lastInboundAt?: number | null;
+    mode?: string | null;
+  }) => void;
 };
 
 export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
@@ -137,6 +145,13 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       );
     }
 
+    opts.statusSink?.({
+      running: true,
+      lastStartAt: Date.now(),
+      lastError: null,
+      mode: opts.useWebhook ? "webhook" : "polling",
+    });
+
     const persistUpdateId = async (updateId: number) => {
       const normalizedUpdateId = normalizePersistedUpdateId(updateId);
       if (normalizedUpdateId === null) {
@@ -196,9 +211,21 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       persistUpdateId,
       log,
       telegramTransport,
+      statusSink: opts.statusSink,
     });
     await pollingSession.runUntilAbort();
+  } catch (err) {
+    opts.statusSink?.({
+      running: false,
+      lastStopAt: Date.now(),
+      lastError: formatErrorMessage(err),
+    });
+    throw err;
   } finally {
+    opts.statusSink?.({
+      running: false,
+      lastStopAt: Date.now(),
+    });
     await execApprovalsHandler?.stop().catch(() => {});
     unregisterHandler();
   }

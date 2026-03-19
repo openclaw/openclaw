@@ -48,6 +48,7 @@ type TelegramPollingSessionOpts = {
   getLastUpdateId: () => number | null;
   persistUpdateId: (updateId: number) => Promise<void>;
   log: (line: string) => void;
+  statusSink?: (patch: { lastInboundAt?: number | null }) => void;
   /** Pre-resolved Telegram transport to reuse across bot instances */
   telegramTransport?: TelegramTransport;
 };
@@ -136,7 +137,10 @@ export class TelegramPollingSession {
         fetchAbortSignal: fetchAbortController.signal,
         updateOffset: {
           lastUpdateId: this.opts.getLastUpdateId(),
-          onUpdateId: this.opts.persistUpdateId,
+          onUpdateId: async (updateId) => {
+            this.opts.statusSink?.({ lastInboundAt: Date.now() });
+            await this.opts.persistUpdateId(updateId);
+          },
         },
         telegramTransport: this.opts.telegramTransport,
       });

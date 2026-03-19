@@ -3,6 +3,7 @@ import {
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
   attachChannelToResult,
@@ -680,6 +681,10 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
+      const statusSink = createAccountStatusSink({
+        accountId: ctx.accountId,
+        setStatus: ctx.setStatus,
+      });
       const ownerAccountId = findTelegramTokenOwnerAccountId({
         cfg: ctx.cfg,
         accountId: account.accountId,
@@ -723,6 +728,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         webhookHost: account.config.webhookHost,
         webhookPort: account.config.webhookPort,
         webhookCertPath: account.config.webhookCertPath,
+        statusSink,
       });
     },
     logoutAccount: async ({ accountId, cfg }) => {
