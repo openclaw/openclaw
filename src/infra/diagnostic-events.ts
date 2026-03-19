@@ -37,6 +37,10 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   };
   costUsd?: number;
   durationMs?: number;
+  /** User-facing input text. Only populated when diagnostics.otel.captureContent is enabled. */
+  inputText?: string;
+  /** User-facing output text. Only populated when diagnostics.otel.captureContent is enabled. */
+  outputText?: string;
 };
 
 export type DiagnosticWebhookReceivedEvent = DiagnosticBaseEvent & {

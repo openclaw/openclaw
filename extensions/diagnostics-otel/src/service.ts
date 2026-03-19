@@ -742,7 +742,30 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.cache_read": usage.cacheRead ?? 0,
           "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
           "openclaw.tokens.total": usage.total ?? 0,
+          // OpenTelemetry GenAI semantic conventions (primary)
+          "gen_ai.request.model": evt.model ?? "unknown",
+          "gen_ai.system": evt.provider ?? "unknown",
+          "gen_ai.usage.input_tokens": usage.input ?? 0,
+          "gen_ai.usage.output_tokens": usage.output ?? 0,
         };
+        if (evt.sessionKey) {
+          spanAttrs["langfuse.session.id"] = evt.sessionKey;
+        }
+        if (evt.costUsd) {
+          spanAttrs["gen_ai.usage.cost"] = evt.costUsd;
+        }
+        // Content capture: standard gen_ai.* attrs (primary), Langfuse compat (secondary).
+        // All content is redacted before export; gated by captureContent policy.
+        if (contentCapturePolicy.inputMessages && evt.inputText) {
+          const redactedInput = redactSensitiveText(evt.inputText);
+          spanAttrs["gen_ai.prompt"] = redactedInput;
+          spanAttrs["langfuse.observation.input"] = redactedInput;
+        }
+        if (contentCapturePolicy.outputMessages && evt.outputText) {
+          const redactedOutput = redactSensitiveText(evt.outputText);
+          spanAttrs["gen_ai.completion"] = redactedOutput;
+          spanAttrs["langfuse.observation.output"] = redactedOutput;
+        }
 
         const span = spanWithDuration("openclaw.model.usage", spanAttrs, evt.durationMs);
         span.end();

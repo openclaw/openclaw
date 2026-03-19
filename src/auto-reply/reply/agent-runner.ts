@@ -1433,7 +1433,7 @@ export async function runReplyAgent(params: {
         config: cfg,
       });
       const costUsd = estimateUsageCost({ usage, cost: costConfig });
-      emitDiagnosticEvent({
+      const usageEvent: Parameters<typeof emitDiagnosticEvent>[0] & { type: "model.usage" } = {
         type: "model.usage",
         ...(runResult.diagnosticTrace
           ? { trace: freezeDiagnosticTraceContext(runResult.diagnosticTrace) }
@@ -1458,7 +1458,23 @@ export async function runReplyAgent(params: {
         },
         costUsd,
         durationMs: Date.now() - runStartedAt,
-      });
+      };
+      // Include user-facing content when explicitly opted in via captureContent config.
+      const cc = cfg.diagnostics?.otel?.captureContent;
+      if (cc === true || (typeof cc === "object" && cc && "enabled" in cc && cc.enabled)) {
+        if (typeof followupRun.prompt === "string") {
+          usageEvent.inputText = followupRun.prompt;
+        }
+        const outputTexts = replyPayloads
+          ?.filter(
+            (p): p is typeof p & { text: string } => typeof p.text === "string" && !p.isError,
+          )
+          .map((p) => p.text);
+        if (outputTexts && outputTexts.length > 0) {
+          usageEvent.outputText = outputTexts.join("\n");
+        }
+      }
+      emitDiagnosticEvent(usageEvent);
     }
 
     const responseUsageRaw =
