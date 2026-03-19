@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.openclaw.imessage-service</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/Users/chrisreyes/openclaw/imessage-service/index.js</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/chrisreyes/openclaw/imessage-service/service.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/chrisreyes/openclaw/imessage-service/error.log</string>
+    <key>WorkingDirectory</key>
+    <string>/Users/chrisreyes/openclaw/imessage-service</string>
+</dict>
+</plist>
