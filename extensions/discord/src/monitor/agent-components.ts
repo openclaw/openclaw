@@ -33,7 +33,10 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  dispatchPluginInteractiveHandler,
+  type PluginInteractiveDiscordHandlerContext,
+} from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import {
   formatInboundEnvelope,
@@ -117,7 +120,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       ? `channel:${params.interactionCtx.channelId}`
       : `user:${params.interactionCtx.userId}`;
   let responded = false;
-  const respond = {
+  const respond: PluginInteractiveDiscordHandlerContext["respond"] = {
     acknowledge: async () => {
       responded = true;
       await params.interaction.acknowledge();
@@ -136,20 +139,15 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
         ephemeral,
       });
     },
-    editMessage: async ({
-      text,
-      components,
-    }: {
-      text?: string;
-      components?: TopLevelComponents[];
-    }) => {
+    editMessage: async (input) => {
       if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
         throw new Error("Discord interaction cannot update the source message");
       }
+      const { text, components } = input;
       responded = true;
       await params.interaction.update({
         ...(text !== undefined ? { content: text } : {}),
-        ...(components !== undefined ? { components } : {}),
+        ...(components !== undefined ? { components: components as TopLevelComponents[] } : {}),
       });
     },
     clearComponents: async (input?: { text?: string }) => {
