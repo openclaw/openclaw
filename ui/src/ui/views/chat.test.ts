@@ -939,7 +939,7 @@ describe("chat view", () => {
     expect(title).toBeNull();
   });
 
-  it("shows displayName in the page-title when label is absent", () => {
+  it("does not render a page-title for a synthesized displayName without label", () => {
     const { state } = createChatHeaderState();
     (state.sessionsResult!.sessions[0] as Record<string, unknown>).displayName =
       "Debug Stream Deck";
@@ -947,8 +947,6 @@ describe("chat view", () => {
     render(renderChatSessionSelect(state), container);
 
     const title = container.querySelector<HTMLElement>(".page-title");
-    expect(title).not.toBeNull();
-    expect(title?.textContent?.trim()).toBe("Debug Stream Deck");
-    expect(title?.getAttribute("title")).toBe("main");
+    expect(title).toBeNull();
   });
 });
