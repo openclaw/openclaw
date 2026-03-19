@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "westus2"
+    },
+    "vmName": {
+      "value": "vm-openclaw"
+    },
+    "vmSize": {
+      "value": "Standard_B2as_v2"
+    },
+    "adminUsername": {
+      "value": "openclaw"
+    },
+    "vnetName": {
+      "value": "vnet-openclaw"
+    },
+    "vnetAddressPrefix": {
+      "value": "10.40.0.0/16"
+    },
+    "vmSubnetName": {
+      "value": "snet-openclaw-vm"
+    },
+    "vmSubnetPrefix": {
+      "value": "10.40.2.0/24"
+    },
+    "bastionSubnetPrefix": {
+      "value": "10.40.1.0/26"
+    },
+    "nsgName": {
+      "value": "nsg-openclaw-vm"
+    },
+    "nicName": {
+      "value": "nic-openclaw-vm"
+    },
+    "bastionName": {
+      "value": "bas-openclaw"
+    },
+    "bastionPublicIpName": {
+      "value": "pip-openclaw-bastion"
+    },
+    "osDiskSizeGb": {
+      "value": 64
+    }
+  }
+}
