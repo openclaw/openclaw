@@ -225,6 +225,44 @@ describe("promptCustomApiConfig", () => {
     });
   });
 
+  it("uses Azure Foundry chat-completions probes for services.ai URLs", async () => {
+    const prompter = createTestPrompter({
+      text: [
+        "https://my-resource.services.ai.azure.com",
+        "azure-test-key",
+        "deepseek-v3-0324",
+        "custom",
+        "alias",
+      ],
+      select: ["plaintext", "openai"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter);
+
+    const firstCall = fetchMock.mock.calls[0];
+    const firstUrl = firstCall?.[0];
+    const firstInit = firstCall?.[1] as
+      | { body?: string; headers?: Record<string, string> }
+      | undefined;
+    if (typeof firstUrl !== "string") {
+      throw new Error("Expected first verification call URL");
+    }
+    const parsedBody = JSON.parse(firstInit?.body ?? "{}");
+
+    expect(firstUrl).toBe(
+      "https://my-resource.services.ai.azure.com/openai/deployments/deepseek-v3-0324/chat/completions?api-version=2024-10-21",
+    );
+    expect(firstInit?.headers?.["api-key"]).toBe("azure-test-key");
+    expect(firstInit?.headers?.Authorization).toBeUndefined();
+    expect(parsedBody).toEqual({
+      model: "deepseek-v3-0324",
+      messages: [{ role: "user", content: "Hi" }],
+      max_tokens: 1,
+      stream: false,
+    });
+  });
+
   it("uses expanded max_tokens for anthropic verification probes", async () => {
     const prompter = createTestPrompter({
       text: ["https://example.com", "test-key", "detected-model", "custom", "alias"],
@@ -456,7 +494,7 @@ describe("applyCustomApiConfig", () => {
     expect(result.config.agents?.defaults?.models?.[modelRef]?.params?.thinking).toBe("medium");
   });
 
-  it("produces azure-specific config for Azure AI Foundry URLs", () => {
+  it("keeps selected compatibility for Azure AI Foundry URLs", () => {
     const result = applyCustomApiConfig({
       config: {},
       baseUrl: "https://my-resource.services.ai.azure.com",
@@ -468,7 +506,7 @@ describe("applyCustomApiConfig", () => {
     const provider = result.config.models?.providers?.[providerId];
 
     expect(provider?.baseUrl).toBe("https://my-resource.services.ai.azure.com/openai/v1");
-    expect(provider?.api).toBe("openai-responses");
+    expect(provider?.api).toBe("openai-completions");
     expect(provider?.authHeader).toBe(false);
     expect(provider?.headers).toEqual({ "api-key": "key123" });
 
