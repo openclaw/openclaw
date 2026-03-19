@@ -220,6 +220,14 @@ async function resolveProviderUsageAuthFallback(params: {
       });
       return apiKey ? { provider: "xiaomi", token: apiKey } : null;
     }
+    case "kilocode": {
+      const apiKey = resolveProviderApiKeyFromConfigAndStore({
+        state: params.state,
+        providerIds: ["kilocode"],
+        envDirect: [params.state.env.KILOCODE_API_KEY],
+      });
+      return apiKey ? { provider: "kilocode", token: apiKey } : null;
+    }
     default:
       return null;
   }
