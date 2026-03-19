@@ -450,6 +450,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
 export function buildConfigSchema(params?: {
   plugins?: PluginUiMetadata[];
   channels?: ChannelUiMetadata[];
+  cache?: boolean;
 }): ConfigSchemaResponse {
   const base = buildBaseConfigSchema();
   const plugins = params?.plugins ?? [];
@@ -457,10 +458,13 @@ export function buildConfigSchema(params?: {
   if (plugins.length === 0 && channels.length === 0) {
     return base;
   }
-  const cacheKey = buildMergedSchemaCacheKey({ plugins, channels });
-  const cached = mergedSchemaCache.get(cacheKey);
-  if (cached) {
-    return cached;
+  const useCache = params?.cache !== false;
+  const cacheKey = useCache ? buildMergedSchemaCacheKey({ plugins, channels }) : null;
+  if (cacheKey) {
+    const cached = mergedSchemaCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
   }
   const mergedWithoutSensitiveHints = applyHeartbeatTargetHints(
     applyChannelHints(applyPluginHints(base.uiHints, plugins), channels),
@@ -480,7 +484,9 @@ export function buildConfigSchema(params?: {
     schema: mergedSchema,
     uiHints: mergedHints,
   };
-  setMergedSchemaCache(cacheKey, merged);
+  if (cacheKey) {
+    setMergedSchemaCache(cacheKey, merged);
+  }
   return merged;
 }
 

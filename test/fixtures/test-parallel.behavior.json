@@ -24,6 +24,10 @@
         "reason": "Clean in isolation, but can hang after sharing the broad lane."
       },
       {
+        "file": "src/config/doc-baseline.test.ts",
+        "reason": "Builds the full bundled config schema graph and is safer outside the shared unit-fast heap."
+      },
+      {
         "file": "src/memory/manager.get-concurrency.test.ts",
         "reason": "Memory manager cache concurrency coverage can spike shared unit-fast heap on Linux Node 24."
       },
