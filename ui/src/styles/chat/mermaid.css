@@ -9,12 +9,18 @@
 .chat-text :where(.mermaid-block__render) {
   overflow-x: auto;
   padding: 12px;
+  cursor: zoom-in;
 }
 
 .chat-text :where(.mermaid-block__render svg) {
   display: block;
   max-width: 100%;
   height: auto;
+}
+
+.chat-text :where(.mermaid-block__render:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .chat-text :where(.mermaid-block__source) {
@@ -32,4 +38,56 @@
 
 .chat-text :where(.mermaid-block__source > summary::-webkit-details-marker) {
   display: none;
+}
+
+.mermaid-block__dialog {
+  width: min(92vw, 1200px);
+  max-width: 1200px;
+  max-height: 88vh;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius-lg) + 4px);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.mermaid-block__dialog::backdrop {
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
+}
+
+.mermaid-block__dialog-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: 88vh;
+}
+
+.mermaid-block__dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mermaid-block__dialog-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mermaid-block__dialog-body {
+  overflow: auto;
+  padding: 20px;
+  background: color-mix(in srgb, var(--secondary) 65%, transparent);
+}
+
+.mermaid-block__dialog-body svg {
+  display: block;
+  min-width: min(960px, 100%);
+  width: max-content;
+  max-width: none;
+  height: auto;
+  margin: 0 auto;
 }

@@ -11,6 +11,7 @@ const allowedTags = [
   "code",
   "del",
   "details",
+  "dialog",
   "div",
   "em",
   "h1",
@@ -48,7 +49,9 @@ const allowedAttrs = [
   "data-code",
   "type",
   "aria-label",
+  "aria-modal",
   "role",
+  "tabindex",
 ];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
@@ -258,7 +261,7 @@ htmlEscapeRenderer.code = ({
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 
   if (normalizedLang === "mermaid") {
-    return `<div class="mermaid-block"><div class="mermaid-block__render" aria-label="Mermaid diagram" role="img"></div><details class="mermaid-block__source"><summary>Mermaid source</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details></div>`;
+    return `<div class="mermaid-block"><div class="mermaid-block__render" aria-label="Mermaid diagram. Click to enlarge." role="button" tabindex="0" title="Click to enlarge"></div><dialog class="mermaid-block__dialog" aria-modal="true"><div class="mermaid-block__dialog-panel"><div class="mermaid-block__dialog-header"><div class="mermaid-block__dialog-title">Mermaid diagram</div><button type="button" class="btn btn--sm mermaid-block__dialog-close" aria-label="Close Mermaid preview">Close</button></div><div class="mermaid-block__dialog-body"></div></div></dialog><details class="mermaid-block__source"><summary>Mermaid source</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details></div>`;
   }
 
   const trimmed = text.trim();

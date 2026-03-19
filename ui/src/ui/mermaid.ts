@@ -8,6 +8,7 @@ type MermaidApi = {
 let mermaidApiPromise: Promise<MermaidApi> | null = null;
 let renderScheduled = false;
 let renderCounter = 0;
+const interactionDocs = new WeakSet<Document>();
 
 async function loadMermaidApi(): Promise<MermaidApi> {
   if (!mermaidApiPromise) {
@@ -17,6 +18,10 @@ async function loadMermaidApi(): Promise<MermaidApi> {
         api.initialize({
           startOnLoad: false,
           securityLevel: "strict",
+          // Keep labels as native SVG text instead of foreignObject-backed HTML.
+          // The rendered SVG is sanitized before insertion, and HTML labels can
+          // lose their contents during that pass, leaving empty shapes behind.
+          htmlLabels: false,
         });
         return api;
       })
@@ -30,7 +35,90 @@ async function loadMermaidApi(): Promise<MermaidApi> {
   return mermaidApiPromise;
 }
 
+export function installMermaidInteractions(root: ParentNode = document): void {
+  const doc = root instanceof Document ? root : root.ownerDocument;
+  if (!doc || interactionDocs.has(doc)) {
+    return;
+  }
+  interactionDocs.add(doc);
+
+  doc.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const closeButton = target.closest<HTMLButtonElement>(".mermaid-block__dialog-close");
+    if (closeButton) {
+      closeMermaidDialog(closeButton.closest(".mermaid-block__dialog"));
+      return;
+    }
+
+    const dialog = target.closest<HTMLDialogElement>(".mermaid-block__dialog");
+    if (dialog && target === dialog) {
+      closeMermaidDialog(dialog);
+      return;
+    }
+
+    const renderTarget = target.closest<HTMLElement>(".mermaid-block__render");
+    if (!renderTarget) {
+      return;
+    }
+
+    const block = renderTarget.closest<HTMLElement>(".mermaid-block");
+    if (!block || block.dataset.mermaidStatus !== "ready") {
+      return;
+    }
+
+    openMermaidDialog(block);
+  });
+
+  doc.addEventListener("keydown", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement) || !target.classList.contains("mermaid-block__render")) {
+      return;
+    }
+    if (e.key !== "Enter" && e.key !== " ") {
+      return;
+    }
+    const block = target.closest<HTMLElement>(".mermaid-block");
+    if (!block || block.dataset.mermaidStatus !== "ready") {
+      return;
+    }
+    e.preventDefault();
+    openMermaidDialog(block);
+  });
+}
+
+function openMermaidDialog(block: HTMLElement): void {
+  const dialog = block.querySelector<HTMLDialogElement>(".mermaid-block__dialog");
+  const body = block.querySelector<HTMLElement>(".mermaid-block__dialog-body");
+  const renderTarget = block.querySelector<HTMLElement>(".mermaid-block__render");
+  if (!dialog || !body || !renderTarget) {
+    return;
+  }
+
+  body.innerHTML = renderTarget.innerHTML;
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+    return;
+  }
+  dialog.setAttribute("open", "");
+}
+
+function closeMermaidDialog(dialog: HTMLDialogElement | null): void {
+  if (!dialog) {
+    return;
+  }
+  if (typeof dialog.close === "function") {
+    dialog.close();
+    return;
+  }
+  dialog.removeAttribute("open");
+}
+
 export function scheduleMermaidRender(root: ParentNode = document): void {
+  installMermaidInteractions(root);
   if (renderScheduled) {
     return;
   }

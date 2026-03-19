@@ -36,8 +36,10 @@ describe("toSanitizedMarkdownHtml", () => {
     );
     expect(html).toContain('class="mermaid-block"');
     expect(html).toContain('class="mermaid-block__render"');
+    expect(html).toContain('class="mermaid-block__dialog"');
     expect(html).toContain('class="language-mermaid"');
     expect(html).toContain("Mermaid source");
+    expect(html).toContain("Click to enlarge");
   });
 
   it("flattens remote markdown images into alt text", () => {
