@@ -317,10 +317,12 @@ describe("delivery-queue", () => {
       deliver,
       log = createLog(),
       maxRecoveryMs,
+      transientStartupOnlyUntilMs,
     }: {
       deliver: ReturnType<typeof vi.fn>;
       log?: ReturnType<typeof createLog>;
       maxRecoveryMs?: number;
+      transientStartupOnlyUntilMs?: number;
     }) => {
       const result = await recoverPendingDeliveries({
         deliver: deliver as DeliverFn,
@@ -328,6 +330,7 @@ describe("delivery-queue", () => {
         cfg: baseCfg,
         stateDir: tmpDir,
         ...(maxRecoveryMs === undefined ? {} : { maxRecoveryMs }),
+        ...(transientStartupOnlyUntilMs === undefined ? {} : { transientStartupOnlyUntilMs }),
       });
       return { result, log };
     };
@@ -391,7 +394,10 @@ describe("delivery-queue", () => {
       const deliver = vi
         .fn()
         .mockRejectedValue(new Error("No active WhatsApp Web listener (account: default)"));
-      const { result } = await runRecovery({ deliver });
+      const { result } = await runRecovery({
+        deliver,
+        transientStartupOnlyUntilMs: Number.MAX_SAFE_INTEGER,
+      });
 
       expect(result).toEqual({
         recovered: 0,
@@ -407,6 +413,28 @@ describe("delivery-queue", () => {
       expect(entries[0].retryCount).toBe(0);
       expect(entries[0].lastError).toContain("No active WhatsApp Web listener");
       expect(entries[0].lastAttemptAt).toBeTypeOf("number");
+    });
+
+    it("treats transient startup errors as ordinary failures when no startup window is provided", async () => {
+      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
+
+      const deliver = vi
+        .fn()
+        .mockRejectedValue(new Error("No active WhatsApp Web listener (account: default)"));
+      const { result } = await runRecovery({ deliver });
+
+      expect(result).toEqual({
+        recovered: 0,
+        failed: 1,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+        deferredTransient: 0,
+      });
+
+      const entries = await loadPendingDeliveries(tmpDir);
+      expect(entries).toHaveLength(1);
+      expect(entries[0].retryCount).toBe(1);
+      expect(entries[0].lastError).toContain("No active WhatsApp Web listener");
     });
 
     it("moves entries to failed/ immediately on permanent delivery errors", async () => {

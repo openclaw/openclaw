@@ -381,7 +381,13 @@ export async function recoverPendingDeliveries(opts: {
   for (const entry of pending) {
     const now = Date.now();
     if (now >= deadline) {
-      const deferred = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
+      const deferred =
+        pending.length -
+        recovered -
+        failed -
+        skippedMaxRetries -
+        deferredBackoff -
+        deferredTransient;
       opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
       break;
     }
@@ -430,7 +436,7 @@ export async function recoverPendingDeliveries(opts: {
       const errMsg = err instanceof Error ? err.message : String(err);
 
       const withinTransientStartupWindow =
-        opts.transientStartupOnlyUntilMs === undefined ||
+        opts.transientStartupOnlyUntilMs !== undefined &&
         Date.now() <= opts.transientStartupOnlyUntilMs;
       if (withinTransientStartupWindow && isTransientStartupDeliveryError(entry.channel, errMsg)) {
         deferredTransient += 1;
