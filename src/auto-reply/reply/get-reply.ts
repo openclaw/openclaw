@@ -13,7 +13,10 @@ import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { isImageAttachment, normalizeAttachments } from "../../media-understanding/attachments.js";
-import { resolveMediaAttachmentLocalRoots } from "../../media-understanding/runner.js";
+import {
+  createMediaAttachmentCache,
+  resolveMediaAttachmentLocalRoots,
+} from "../../media-understanding/runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -147,7 +150,6 @@ export async function getReplyFromConfig(
       const imageAttachments = attachments.filter(isImageAttachment);
       if (imageAttachments.length > 0) {
         const images: ImageContent[] = [];
-        const { createMediaAttachmentCache } = await import("../../media-understanding/runner.js");
         const cache = createMediaAttachmentCache(attachments, {
           localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx: finalized }),
         });
