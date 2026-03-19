@@ -68,9 +68,19 @@ function resolveFocusBindingContext(
     };
   }
   if (isFeishuSurface(params)) {
-    const conversationId = resolveFeishuConversationId(params);
-    if (!conversationId) {
+    const baseConversationId = resolveFeishuConversationId(params);
+    if (!baseConversationId) {
       return null;
+    }
+    // In group_topic_sender scope, inbound routing resolves a sender-scoped
+    // conversation ID (chatId:topic:topicId:sender:openId). Bind with the
+    // sender-scoped variant so the exact-match lookup in bot.ts succeeds.
+    let conversationId = baseConversationId;
+    if (baseConversationId.includes(":topic:")) {
+      const senderId = (params.command.senderId ?? "").trim();
+      if (senderId) {
+        conversationId = `${baseConversationId}:sender:${senderId}`;
+      }
     }
     return {
       channel: "feishu",
