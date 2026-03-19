@@ -48,10 +48,6 @@
   },
   "redirects": [
     {
-      "source": "/start/quickstart",
-      "destination": "/start/getting-started"
-    },
-    {
       "source": "/brave-search",
       "destination": "/tools/brave-search"
     },
