@@ -41,8 +41,8 @@ const LEGACY_USAGE_DATE_PARAMS_MODE_RE = /unexpected property ['"]mode['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_OFFSET_RE = /unexpected property ['"]utcoffset['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_TIME_ZONE_RE = /unexpected property ['"]timezone['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_INVALID_RE = /invalid sessions\.usage params/i;
-const LEGACY_LOCAL_TIME_ZONE_MESSAGE =
-  "Connected gateway does not support local usage timezone yet. Showing UTC dates instead.";
+const LEGACY_USAGE_DATE_PARAMS_UNSUPPORTED_MESSAGE =
+  "This gateway is too old to support Usage time zone filters. Upgrade the gateway to use the Local/UTC toggle.";
 
 let legacyUsageDateParamsCache: Set<string> | null = null;
 
@@ -200,12 +200,8 @@ function toErrorMessage(err: unknown): string {
   return "request failed";
 }
 
-function applyLegacyLocalTimeZoneFallback(state: UsageState, requestVersion: number) {
-  if (state.usageRequestVersion !== requestVersion || state.usageTimeZone !== "local") {
-    return;
-  }
-  state.usageTimeZone = "utc";
-  state.usageError = LEGACY_LOCAL_TIME_ZONE_MESSAGE;
+function createLegacyUsageDateInterpretationUnsupportedError(): Error {
+  return new Error(LEGACY_USAGE_DATE_PARAMS_UNSUPPORTED_MESSAGE);
 }
 
 export async function loadUsage(
@@ -227,12 +223,11 @@ export async function loadUsage(
   try {
     const startDate = overrides?.startDate ?? state.usageStartDate;
     const endDate = overrides?.endDate ?? state.usageEndDate;
-    let usageTimeZone = state.usageTimeZone;
     const includeDateInterpretation = shouldSendLegacyDateInterpretation(state);
-    if (!includeDateInterpretation && usageTimeZone === "local") {
-      applyLegacyLocalTimeZoneFallback(state, requestVersion);
-      usageTimeZone = "utc";
+    if (!includeDateInterpretation) {
+      throw createLegacyUsageDateInterpretationUnsupportedError();
     }
+    const usageTimeZone = state.usageTimeZone;
     const runUsageRequests = async (includeDateInterpretation: boolean) => {
       const dateInterpretation = buildDateInterpretationParams(
         usageTimeZone,
@@ -272,14 +267,9 @@ export async function loadUsage(
     } catch (err) {
       if (includeDateInterpretation && isLegacyDateInterpretationUnsupportedError(err)) {
         // Older gateways reject date-interpretation fields in `sessions.usage`.
-        // Remember this per gateway and retry without those fields.
+        // Remember this per gateway and fail loudly instead of silently changing semantics.
         rememberLegacyDateInterpretation(state);
-        if (usageTimeZone === "local") {
-          applyLegacyLocalTimeZoneFallback(state, requestVersion);
-          usageTimeZone = "utc";
-        }
-        const [sessionsRes, costRes] = await runUsageRequests(false);
-        applyUsageResults(sessionsRes, costRes);
+        throw createLegacyUsageDateInterpretationUnsupportedError();
       } else {
         throw err;
       }
@@ -310,10 +300,7 @@ export const __test = {
 };
 
 function bumpRequestVersion(value: number | undefined): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value + 1;
-  }
-  return 1;
+  return typeof value === "number" && Number.isFinite(value) ? value + 1 : 1;
 }
 
 export function resetSessionUsageDetails(state: UsageState) {

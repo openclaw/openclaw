@@ -86,7 +86,7 @@ describe("usage controller date interpretation params", () => {
     expect(__test.formatUtcOffset(0)).toBe("UTC+0");
   });
 
-  it("sends specific mode with browser IANA timezone when usage timezone is local", async () => {
+  it("sends specific mode with browser offset when usage timezone is local", async () => {
     const request = vi.fn(async () => ({}));
     const state = createState(request, { usageTimeZone: "local" });
     vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-330);
@@ -131,7 +131,7 @@ describe("usage controller date interpretation params", () => {
     expect(__test.toErrorMessage({ reason: "nope" })).toBe('{"reason":"nope"}');
   });
 
-  it("falls back to utc and remembers compatibility when sessions.usage rejects date interpretation params", async () => {
+  it("fails loudly and remembers compatibility when sessions.usage rejects date interpretation params", async () => {
     const storage = createStorageMock();
     vi.stubGlobal("localStorage", storage as unknown as Storage);
     vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-330);
@@ -157,32 +157,15 @@ describe("usage controller date interpretation params", () => {
     await loadUsage(state);
 
     expectSpecificTimezoneCalls(request, 1);
-    expect(state.usageTimeZone).toBe("utc");
-    expect(state.usageError).toContain("Showing UTC dates instead");
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.usage", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      limit: 1000,
-      includeContextWeight: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(4, "usage.cost", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-    });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.usageTimeZone).toBe("local");
+    expect(state.usageError).toContain("too old to support Usage time zone filters");
 
-    // Subsequent loads for the same gateway should skip date-interpretation fields immediately.
+    // Subsequent loads for the same gateway should fail immediately without sending requests.
     await loadUsage(state);
 
-    expect(request).toHaveBeenNthCalledWith(5, "sessions.usage", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      limit: 1000,
-      includeContextWeight: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(6, "usage.cost", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-    });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.usageError).toContain("too old to support Usage time zone filters");
 
     // Persisted flag should survive cache resets (simulating app reload).
     __test.resetLegacyUsageDateParamsCache();
@@ -191,7 +174,7 @@ describe("usage controller date interpretation params", () => {
     vi.unstubAllGlobals();
   });
 
-  it("switches remembered legacy local usage views back to utc before loading", async () => {
+  it("fails immediately when a gateway is already known to reject date interpretation params", async () => {
     const storage = createStorageMock();
     vi.stubGlobal("localStorage", storage as unknown as Storage);
 
@@ -205,18 +188,9 @@ describe("usage controller date interpretation params", () => {
 
     await loadUsage(state);
 
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      limit: 1000,
-      includeContextWeight: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "usage.cost", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-    });
-    expect(state.usageTimeZone).toBe("utc");
-    expect(state.usageError).toContain("Showing UTC dates instead");
+    expect(request).not.toHaveBeenCalled();
+    expect(state.usageTimeZone).toBe("local");
+    expect(state.usageError).toContain("too old to support Usage time zone filters");
 
     vi.unstubAllGlobals();
   });

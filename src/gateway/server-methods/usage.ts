@@ -63,17 +63,15 @@ type CostUsageCacheEntry = {
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
 const timeZoneDateTimeFormatterCache = new Map<string, Intl.DateTimeFormat>();
 
-function hasSpecificTimeZoneInterpretation(
+const hasSpecificTimeZone = (
   interpretation: DateInterpretation,
-): interpretation is { mode: "specific"; timeZone: string } {
-  return interpretation.mode === "specific" && "timeZone" in interpretation;
-}
+): interpretation is { mode: "specific"; timeZone: string } =>
+  interpretation.mode === "specific" && "timeZone" in interpretation;
 
-function hasSpecificUtcOffsetInterpretation(
+const hasSpecificUtcOffset = (
   interpretation: DateInterpretation,
-): interpretation is { mode: "specific"; utcOffsetMinutes: number } {
-  return interpretation.mode === "specific" && "utcOffsetMinutes" in interpretation;
-}
+): interpretation is { mode: "specific"; utcOffsetMinutes: number } =>
+  interpretation.mode === "specific" && "utcOffsetMinutes" in interpretation;
 
 function resolveSessionUsageFileOrRespond(
   key: string,
@@ -285,7 +283,7 @@ const getDatePartsForInstant = (
       day: date.getUTCDate(),
     };
   }
-  if (hasSpecificTimeZoneInterpretation(interpretation)) {
+  if (hasSpecificTimeZone(interpretation)) {
     const parts = parseDateTimePartsInTimeZone(date, interpretation.timeZone);
     if (!parts) {
       return undefined;
@@ -296,7 +294,7 @@ const getDatePartsForInstant = (
       day: parts.day,
     };
   }
-  if (!hasSpecificUtcOffsetInterpretation(interpretation)) {
+  if (!hasSpecificUtcOffset(interpretation)) {
     return undefined;
   }
   const shifted = new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
@@ -319,10 +317,10 @@ const getStartOfDayMs = (
     const ms = Date.UTC(parts.year, parts.monthIndex, parts.day);
     return Number.isNaN(ms) ? undefined : ms;
   }
-  if (hasSpecificTimeZoneInterpretation(interpretation)) {
+  if (hasSpecificTimeZone(interpretation)) {
     return getTimeZoneStartOfDayMs(parts, interpretation.timeZone);
   }
-  if (!hasSpecificUtcOffsetInterpretation(interpretation)) {
+  if (!hasSpecificUtcOffset(interpretation)) {
     return undefined;
   }
   const ms = Date.UTC(parts.year, parts.monthIndex, parts.day);
@@ -489,7 +487,7 @@ async function loadCostUsageSummaryCached(params: {
 }): Promise<CostUsageSummary> {
   const interpretationKey =
     params.dayKeyInterpretation.mode === "specific"
-      ? "timeZone" in params.dayKeyInterpretation
+      ? hasSpecificTimeZone(params.dayKeyInterpretation)
         ? `specific-tz:${params.dayKeyInterpretation.timeZone}`
         : `specific:${params.dayKeyInterpretation.utcOffsetMinutes}`
       : params.dayKeyInterpretation.mode;

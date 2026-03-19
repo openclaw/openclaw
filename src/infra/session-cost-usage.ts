@@ -72,17 +72,15 @@ type DayKeyInterpretation =
   | { mode: "specific"; utcOffsetMinutes: number }
   | { mode: "specific"; timeZone: string };
 
-function hasSpecificTimeZoneInterpretation(
+const hasSpecificDayKeyTimeZone = (
   interpretation: DayKeyInterpretation,
-): interpretation is { mode: "specific"; timeZone: string } {
-  return interpretation.mode === "specific" && "timeZone" in interpretation;
-}
+): interpretation is { mode: "specific"; timeZone: string } =>
+  interpretation.mode === "specific" && "timeZone" in interpretation;
 
-function hasSpecificUtcOffsetInterpretation(
+const hasSpecificDayKeyUtcOffset = (
   interpretation: DayKeyInterpretation,
-): interpretation is { mode: "specific"; utcOffsetMinutes: number } {
-  return interpretation.mode === "specific" && "utcOffsetMinutes" in interpretation;
-}
+): interpretation is { mode: "specific"; utcOffsetMinutes: number } =>
+  interpretation.mode === "specific" && "utcOffsetMinutes" in interpretation;
 
 const toFiniteNumber = (value: unknown): number | undefined => {
   if (typeof value !== "number") {
@@ -212,10 +210,10 @@ const formatDayKey = (date: Date, interpretation?: DayKeyInterpretation): string
   if (interpretation.mode === "utc") {
     return formatDateKeyFromUtcParts(date);
   }
-  if (hasSpecificTimeZoneInterpretation(interpretation)) {
+  if (hasSpecificDayKeyTimeZone(interpretation)) {
     return formatDateKeyInTimeZone(date, interpretation.timeZone);
   }
-  if (!hasSpecificUtcOffsetInterpretation(interpretation)) {
+  if (!hasSpecificDayKeyUtcOffset(interpretation)) {
     return formatDateKeyFromUtcParts(date);
   }
   const shifted = new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
