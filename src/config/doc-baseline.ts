@@ -658,11 +658,11 @@ export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
 }
 
 export async function renderConfigDocBaselineStatefile(
-  baseline?: ConfigDocBaseline,
+  baseline?: ConfigDocBaseline | Promise<ConfigDocBaseline>,
 ): Promise<ConfigDocBaselineStatefileRender> {
   const start = Date.now();
   logConfigDocBaselineDebug("render statefile start");
-  const resolvedBaseline = baseline ?? (await buildConfigDocBaseline());
+  const resolvedBaseline = baseline ? await baseline : await buildConfigDocBaseline();
   const json = `${JSON.stringify(resolvedBaseline, null, 2)}\n`;
   const metadataLine = JSON.stringify({
     generatedBy: GENERATED_BY,
@@ -706,13 +706,16 @@ export async function writeConfigDocBaselineStatefile(params?: {
   check?: boolean;
   jsonPath?: string;
   statefilePath?: string;
+  rendered?: ConfigDocBaselineStatefileRender | Promise<ConfigDocBaselineStatefileRender>;
 }): Promise<ConfigDocBaselineStatefileWriteResult> {
   const start = Date.now();
   logConfigDocBaselineDebug("write statefile start");
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
   const jsonPath = path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT);
   const statefilePath = path.resolve(repoRoot, params?.statefilePath ?? DEFAULT_STATEFILE_OUTPUT);
-  const rendered = await renderConfigDocBaselineStatefile();
+  const rendered = params?.rendered
+    ? await params.rendered
+    : await renderConfigDocBaselineStatefile();
   logConfigDocBaselineDebug(`render statefile done elapsedMs=${Date.now() - start}`);
   logConfigDocBaselineDebug(`read current json start ${jsonPath}`);
   const currentJson = await readIfExists(jsonPath);
