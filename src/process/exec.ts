@@ -102,6 +102,23 @@ export async function runExec(
   args: string[],
   opts: number | { timeoutMs?: number; maxBuffer?: number; cwd?: string } = 10_000,
 ): Promise<{ stdout: string; stderr: string }> {
+  const argv = [command, ...args];
+  let execCommand: string;
+  let execArgs: string[];
+  if (process.platform === "win32") {
+    const resolved = resolveNpmArgvForWindows(argv);
+    if (resolved) {
+      execCommand = resolved[0] ?? "";
+      execArgs = resolved.slice(1);
+    } else {
+      execCommand = resolveCommand(command);
+      execArgs = args;
+    }
+  } else {
+    execCommand = resolveCommand(command);
+    execArgs = args;
+  }
+  const useCmdWrapper = isWindowsBatchCommand(execCommand);
   const options =
     typeof opts === "number"
       ? { timeout: opts, encoding: "utf8" as const }
@@ -112,27 +129,18 @@ export async function runExec(
           encoding: "utf8" as const,
         };
   try {
-    const argv = [command, ...args];
-    let execCommand: string;
-    let execArgs: string[];
-    if (process.platform === "win32") {
-      const resolved = resolveNpmArgvForWindows(argv);
-      if (resolved) {
-        execCommand = resolved[0] ?? "";
-        execArgs = resolved.slice(1);
-      } else {
-        execCommand = resolveCommand(command);
-        execArgs = args;
-      }
-    } else {
-      execCommand = resolveCommand(command);
-      execArgs = args;
-    }
-    const useCmdWrapper = isWindowsBatchCommand(execCommand);
+    // Windows cmd.exe uses a locale-specific code page by default (e.g., GBK on
+    // Chinese Windows, CP932 on Japanese Windows). This causes garbled output
+    // for non-ASCII characters. We prepend "chcp 65001" to force UTF-8 mode,
+    // which works correctly with our utf8 encoding option.
+    // See: https://github.com/openclaw/openclaw/issues/50519
+    const cmdExeCommandLine = useCmdWrapper
+      ? `chcp 65001 > nul && ${buildCmdExeCommandLine(execCommand, execArgs)}`
+      : buildCmdExeCommandLine(execCommand, execArgs);
     const { stdout, stderr } = useCmdWrapper
       ? await execFileAsync(
           process.env.ComSpec ?? "cmd.exe",
-          ["/d", "/s", "/c", buildCmdExeCommandLine(execCommand, execArgs)],
+          ["/d", "/s", "/c", cmdExeCommandLine],
           { ...options, windowsVerbatimArguments: true },
         )
       : await execFileAsync(execCommand, execArgs, options);
@@ -224,11 +232,20 @@ export async function runCommandWithTimeout(
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
   const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
+  // Windows cmd.exe uses a locale-specific code page by default. Force UTF-8
+  // mode to properly handle non-ASCII characters in output.
+  // See: https://github.com/openclaw/openclaw/issues/50519
+  const cmdExeArgs = useCmdWrapper
+    ? [
+        "/d",
+        "/s",
+        "/c",
+        `chcp 65001 > nul && ${buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))}`,
+      ]
+    : finalArgv.slice(1);
   const child = spawn(
     useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
-    useCmdWrapper
-      ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
-      : finalArgv.slice(1),
+    cmdExeArgs,
     {
       stdio,
       cwd,

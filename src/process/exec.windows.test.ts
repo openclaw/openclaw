@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -94,6 +95,26 @@ describe("windows command wrapper behavior", () => {
     }
   });
 
+  it("prepends chcp 65001 to cmd.exe commands in runCommandWithTimeout", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      // pnpm.cmd will trigger the cmd.exe wrapper
+      await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1000 });
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      expect(captured?.[0]).toBe(process.env.ComSpec ?? "cmd.exe");
+      // Verify chcp 65001 is prepended to force UTF-8 mode
+      expect(captured?.[1][3]).toContain("chcp 65001");
+      expect(captured?.[1][3]).toContain("pnpm.cmd");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("uses cmd.exe wrapper with windowsVerbatimArguments in runExec for .cmd shims", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
@@ -115,6 +136,61 @@ describe("windows command wrapper behavior", () => {
       expectCmdWrappedInvocation({ captured, expectedComSpec });
     } finally {
       platformSpy.mockRestore();
+    }
+  });
+
+  it("prepends chcp 65001 to cmd.exe commands for UTF-8 support", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        cb: (err: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        cb(null, "ok", "");
+      },
+    );
+
+    try {
+      // pnpm.cmd will trigger the cmd.exe wrapper
+      await runExec("pnpm", ["--version"], 1000);
+      const captured = execFileMock.mock.calls[0] as ExecCall | undefined;
+      expect(captured?.[0]).toBe(expectedComSpec);
+      // Verify chcp 65001 is prepended to force UTF-8 mode
+      expect(captured?.[1][3]).toContain("chcp 65001");
+      expect(captured?.[1][3]).toContain("pnpm.cmd");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("uses utf8 encoding for non-cmd executables on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const pathSepSpy = vi.spyOn(path, "extname").mockReturnValue(".exe");
+
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        options: Record<string, unknown>,
+        cb: (err: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        // Verify that utf8 encoding is used for non-cmd executables
+        expect(options.encoding).toBe("utf8");
+        cb(null, "ok", "");
+      },
+    );
+
+    try {
+      // node.exe should not trigger cmd.exe wrapper, so utf8 should be used
+      await runExec("node", ["--version"], 1000);
+      expect(execFileMock).toHaveBeenCalled();
+    } finally {
+      platformSpy.mockRestore();
+      pathSepSpy.mockRestore();
     }
   });
 });
