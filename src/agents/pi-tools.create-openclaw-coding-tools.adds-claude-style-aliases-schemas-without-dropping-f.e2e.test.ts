@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
+import { normalizeToolParams } from "./pi-tools.read.js";
 
 describe("createOpenClawCodingTools", () => {
   it("uses workspaceDir for Read tool path resolution", async () => {
@@ -146,6 +147,67 @@ describe("createOpenClawCodingTools", () => {
 
       const result = await readTool?.execute("tool-camel-alias-3", {
         filePath,
+      });
+
+      const textBlocks = result?.content?.filter((block) => block.type === "text") as
+        | Array<{ text?: string }>
+        | undefined;
+      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
+      expect(combinedText).toContain("hello universe");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("promotes non-empty aliases when canonical fields are blank and cleans alias keys", async () => {
+    expect(
+      normalizeToolParams({
+        path: "",
+        file_path: "snake-path.txt",
+        filePath: "camel-path.txt",
+        oldText: "",
+        old_string: "snake-old",
+        oldString: "camel-old",
+        newText: "",
+        new_string: "snake-new",
+        newString: "camel-new",
+      }),
+    ).toEqual({
+      path: "snake-path.txt",
+      oldText: "snake-old",
+      newText: "snake-new",
+    });
+  });
+
+  it("accepts blank canonical fields when aliases carry the real values", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-blank-canonical-"));
+    try {
+      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+      const readTool = tools.find((tool) => tool.name === "read");
+      const writeTool = tools.find((tool) => tool.name === "write");
+      const editTool = tools.find((tool) => tool.name === "edit");
+      expect(readTool).toBeDefined();
+      expect(writeTool).toBeDefined();
+      expect(editTool).toBeDefined();
+
+      await writeTool?.execute("tool-blank-canonical-1", {
+        path: "",
+        filePath: "blank-canonical.txt",
+        content: "hello world",
+      });
+
+      await editTool?.execute("tool-blank-canonical-2", {
+        path: "",
+        filePath: "blank-canonical.txt",
+        oldText: "",
+        oldString: "world",
+        newText: "",
+        newString: "universe",
+      });
+
+      const result = await readTool?.execute("tool-blank-canonical-3", {
+        path: "",
+        filePath: "blank-canonical.txt",
       });
 
       const textBlocks = result?.content?.filter((block) => block.type === "text") as

@@ -405,6 +405,64 @@ function normalizeTextLikeParam(record: Record<string, unknown>, key: string) {
   }
 }
 
+function isBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length === 0;
+}
+
+function hasConcreteValue(record: Record<string, unknown>, key: string): boolean {
+  if (!(key in record)) {
+    return false;
+  }
+  const value = record[key];
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (isBlankString(value)) {
+    return false;
+  }
+  return true;
+}
+
+function firstAliasValue(record: Record<string, unknown>, aliases: readonly string[]): unknown {
+  let fallback: unknown;
+  for (const alias of aliases) {
+    if (!(alias in record)) {
+      continue;
+    }
+    const value = record[alias];
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (typeof value === "string") {
+      if (value.trim().length > 0) {
+        return value;
+      }
+      if (fallback === undefined) {
+        fallback = value;
+      }
+      continue;
+    }
+    return value;
+  }
+  return fallback;
+}
+
+function normalizeAliasFamily(
+  record: Record<string, unknown>,
+  canonicalKey: string,
+  aliasKeys: readonly string[],
+): void {
+  if (!hasConcreteValue(record, canonicalKey)) {
+    const candidate = firstAliasValue(record, aliasKeys);
+    if (candidate !== undefined) {
+      record[canonicalKey] = candidate;
+    }
+  }
+  for (const alias of aliasKeys) {
+    delete record[alias];
+  }
+}
+
 // Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
 // Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
 // This prevents models trained on Claude Code from getting stuck in tool-call loops.
@@ -414,33 +472,9 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   }
   const record = params as Record<string, unknown>;
   const normalized = { ...record };
-  // file_path/filePath → path (read, write, edit)
-  if ("file_path" in normalized && !("path" in normalized)) {
-    normalized.path = normalized.file_path;
-    delete normalized.file_path;
-  }
-  if ("filePath" in normalized && !("path" in normalized)) {
-    normalized.path = normalized.filePath;
-    delete normalized.filePath;
-  }
-  // old_string/oldString → oldText (edit)
-  if ("old_string" in normalized && !("oldText" in normalized)) {
-    normalized.oldText = normalized.old_string;
-    delete normalized.old_string;
-  }
-  if ("oldString" in normalized && !("oldText" in normalized)) {
-    normalized.oldText = normalized.oldString;
-    delete normalized.oldString;
-  }
-  // new_string/newString → newText (edit)
-  if ("new_string" in normalized && !("newText" in normalized)) {
-    normalized.newText = normalized.new_string;
-    delete normalized.new_string;
-  }
-  if ("newString" in normalized && !("newText" in normalized)) {
-    normalized.newText = normalized.newString;
-    delete normalized.newString;
-  }
+  normalizeAliasFamily(normalized, "path", ["file_path", "filePath"]);
+  normalizeAliasFamily(normalized, "oldText", ["old_string", "oldString"]);
+  normalizeAliasFamily(normalized, "newText", ["new_string", "newString"]);
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.
   normalizeTextLikeParam(normalized, "content");
