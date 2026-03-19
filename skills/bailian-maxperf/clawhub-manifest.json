@@ -126,8 +126,9 @@
   "security": {
     "credentials": false,
     "networkCalls": false,
-    "systemChanges": "configuration-only",
-    "reversible": true
+    "systemChanges": "runtime-patching",
+    "reversible": true,
+    "notes": "Script patches OpenClaw runtime files to add Bailian token usage compatibility. Patches are reverted on OpenClaw upgrade."
   },
   "metrics": {
     "downloads": 0,
