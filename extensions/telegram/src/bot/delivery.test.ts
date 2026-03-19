@@ -243,6 +243,29 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("retries text sends on safe pre-connect network errors", async () => {
+    const runtime = createRuntime();
+    const preConnectErr = Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+      code: "ECONNREFUSED",
+    });
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(preConnectErr)
+      .mockResolvedValue({ message_id: 7, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("failed before reaching Telegram; retrying"),
+    );
+  });
+
   it("emits internal message:sent when session hook context is available", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });

@@ -12,6 +12,7 @@ import type { TelegramMessageContextOptions } from "./bot-message-context.types.
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import { retryTelegramPreConnectSend } from "./final-reply-retry.js";
 
 /** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
@@ -128,11 +129,18 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     } catch (err) {
       runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
       try {
-        await bot.api.sendMessage(
-          context.chatId,
-          "Something went wrong while processing your request. Please try again.",
-          context.threadSpec?.id != null ? { message_thread_id: context.threadSpec.id } : undefined,
-        );
+        await retryTelegramPreConnectSend({
+          operationLabel: "error fallback send",
+          log: runtime.log,
+          deliver: () =>
+            bot.api.sendMessage(
+              context.chatId,
+              "Something went wrong while processing your request. Please try again.",
+              context.threadSpec?.id != null
+                ? { message_thread_id: context.threadSpec.id }
+                : undefined,
+            ),
+        });
       } catch {
         // Best-effort fallback; delivery may fail if the bot was blocked or the chat is invalid.
       }

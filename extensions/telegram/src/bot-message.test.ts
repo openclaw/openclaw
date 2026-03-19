@@ -136,4 +136,30 @@ describe("telegram bot message processor", () => {
     );
     expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
   });
+
+  it("retries user-visible fallback on safe pre-connect send failures", async () => {
+    const preConnectErr = Object.assign(new Error("connect ENOTFOUND api.telegram.org"), {
+      code: "ENOTFOUND",
+    });
+    const sendMessage = vi.fn().mockRejectedValueOnce(preConnectErr).mockResolvedValue(undefined);
+    const runtimeError = vi.fn();
+    const runtimeLog = vi.fn();
+    buildTelegramMessageContext.mockResolvedValue({
+      chatId: 123,
+      route: { sessionKey: "agent:main:main" },
+    });
+    dispatchTelegramMessage.mockRejectedValue(new Error("dispatch exploded"));
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+      runtime: { error: runtimeError, log: runtimeLog },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("failed before reaching Telegram; retrying"),
+    );
+  });
 });

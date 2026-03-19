@@ -10,9 +10,10 @@ const TELEGRAM_FINAL_REPLY_RETRY_POLICY = {
 
 const TELEGRAM_FINAL_REPLY_MAX_ATTEMPTS = 4;
 
-export async function retryTelegramFinalReplyDelivery<T>(params: {
+export async function retryTelegramPreConnectSend<T>(params: {
   deliver: () => Promise<T>;
   log?: (message: string) => void;
+  operationLabel?: string;
 }): Promise<T> {
   let attempt = 0;
   while (true) {
@@ -25,9 +26,19 @@ export async function retryTelegramFinalReplyDelivery<T>(params: {
       }
       const delayMs = computeBackoff(TELEGRAM_FINAL_REPLY_RETRY_POLICY, attempt);
       params.log?.(
-        `telegram: final reply send failed before reaching Telegram; retrying in ${delayMs}ms (${String(err)})`,
+        `telegram: ${params.operationLabel ?? "send"} failed before reaching Telegram; retrying in ${delayMs}ms (${String(err)})`,
       );
       await sleepWithAbort(delayMs);
     }
   }
+}
+
+export async function retryTelegramFinalReplyDelivery<T>(params: {
+  deliver: () => Promise<T>;
+  log?: (message: string) => void;
+}): Promise<T> {
+  return retryTelegramPreConnectSend({
+    ...params,
+    operationLabel: "final reply send",
+  });
 }
