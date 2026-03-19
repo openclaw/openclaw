@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import { GATEWAY_CLIENT_CAPS } from "../protocol/client-info.js";
 import { agentHandlers } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   getSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
+  agentRunContexts: new Map<string, Record<string, unknown>>(),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -63,6 +65,16 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../../infra/agent-events.js", () => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
+  getAgentRunContext: (runId: string) => mocks.agentRunContexts.get(runId),
+  getRunIdsBySessionKey: (sessionKey: string) => {
+    const result = new Map<string, Record<string, unknown>>();
+    for (const [id, ctx] of mocks.agentRunContexts) {
+      if ((ctx as Record<string, unknown>).sessionKey === sessionKey) {
+        result.set(id, ctx as Record<string, unknown>);
+      }
+    }
+    return result;
+  },
   onAgentEvent: vi.fn(),
 }));
 
@@ -298,6 +310,10 @@ async function invokeAgentIdentityGet(
 }
 
 describe("gateway agent handler", () => {
+  afterEach(() => {
+    mocks.agentRunContexts.clear();
+  });
+
   it("preserves ACP metadata from the current stored session entry", async () => {
     const existingAcpMeta = {
       backend: "acpx",
@@ -876,5 +892,145 @@ describe("gateway agent handler", () => {
         message: expect.stringContaining("malformed session key"),
       }),
     );
+  });
+
+  it("registers thinking/tool recipients on dedupe reconnect for a visible run owned by the reconnecting device", async () => {
+    const idem = "idem-dedupe-reconnect";
+    // Simulate a run that was accepted (dedupe written) and is still active.
+    const dedupe = new Map([
+      [
+        `agent:${idem}`,
+        { ts: Date.now(), ok: true, payload: { runId: idem, status: "accepted", acceptedAt: Date.now() } },
+      ],
+    ]);
+    mocks.agentRunContexts.set(idem, {
+      sessionKey: "agent:main:main",
+      isControlUiVisible: true,
+      ownerConnId: "conn-original",
+      ownerDeviceId: "dev-1",
+    });
+
+    const registerThinkingEventRecipient = vi.fn();
+    const registerToolEventRecipient = vi.fn();
+    const context = {
+      ...makeContext(),
+      dedupe,
+      registerThinkingEventRecipient,
+      registerToolEventRecipient,
+    } as unknown as GatewayRequestContext;
+
+    const respond = vi.fn();
+    await invokeAgent(
+      { message: "hello", sessionKey: "agent:main:main", idempotencyKey: idem },
+      {
+        respond,
+        context,
+        client: {
+          connId: "conn-refresh",
+          connect: {
+            caps: [GATEWAY_CLIENT_CAPS.THINKING_EVENTS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+            device: { id: "dev-1" },
+          },
+        } as never,
+      },
+    );
+
+    // Should have returned the cached accepted response.
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "accepted" }),
+      undefined,
+      expect.objectContaining({ cached: true }),
+    );
+    // Reconnecting connId must be subscribed to both stream types.
+    expect(registerThinkingEventRecipient).toHaveBeenCalledWith(idem, "conn-refresh");
+    expect(registerToolEventRecipient).toHaveBeenCalledWith(idem, "conn-refresh");
+  });
+
+  it("does not register recipients on dedupe reconnect when run is hidden from Control UI", async () => {
+    const idem = "idem-dedupe-hidden";
+    const dedupe = new Map([
+      [
+        `agent:${idem}`,
+        { ts: Date.now(), ok: true, payload: { runId: idem, status: "accepted", acceptedAt: Date.now() } },
+      ],
+    ]);
+    mocks.agentRunContexts.set(idem, {
+      sessionKey: "agent:main:main",
+      isControlUiVisible: false,
+      ownerConnId: "conn-original",
+      ownerDeviceId: "dev-1",
+    });
+
+    const registerThinkingEventRecipient = vi.fn();
+    const registerToolEventRecipient = vi.fn();
+    const context = {
+      ...makeContext(),
+      dedupe,
+      registerThinkingEventRecipient,
+      registerToolEventRecipient,
+    } as unknown as GatewayRequestContext;
+
+    const respond = vi.fn();
+    await invokeAgent(
+      { message: "hello", sessionKey: "agent:main:main", idempotencyKey: idem },
+      {
+        respond,
+        context,
+        client: {
+          connId: "conn-refresh",
+          connect: {
+            caps: [GATEWAY_CLIENT_CAPS.THINKING_EVENTS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+            device: { id: "dev-1" },
+          },
+        } as never,
+      },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "accepted" }),
+      undefined,
+      expect.objectContaining({ cached: true }),
+    );
+    // Hidden runs must never be surfaced to WebSocket clients.
+    expect(registerThinkingEventRecipient).not.toHaveBeenCalled();
+    expect(registerToolEventRecipient).not.toHaveBeenCalled();
+  });
+
+  it("does not backfill hidden runs in session during fresh agent registration", async () => {
+    // A visible run starting fresh must not register a connId against a hidden
+    // sibling run in the same session (P1: isControlUiVisible guard).
+    primeMainAgentRun();
+    mocks.agentRunContexts.set("run-hidden-sibling", {
+      sessionKey: "agent:main:main",
+      isControlUiVisible: false,
+      ownerConnId: "conn-1",
+    });
+
+    const registerThinkingEventRecipient = vi.fn();
+    const registerToolEventRecipient = vi.fn();
+    const context = {
+      ...makeContext(),
+      registerThinkingEventRecipient,
+      registerToolEventRecipient,
+    } as unknown as GatewayRequestContext;
+
+    await invokeAgent(
+      { message: "hello", sessionKey: "agent:main:main", idempotencyKey: "idem-visible" },
+      {
+        context,
+        client: {
+          connId: "conn-1",
+          connect: {
+            caps: [GATEWAY_CLIENT_CAPS.THINKING_EVENTS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+          },
+        } as never,
+      },
+    );
+
+    // The hidden sibling must never receive a recipient registration.
+    expect(registerThinkingEventRecipient).not.toHaveBeenCalledWith("run-hidden-sibling", "conn-1");
+    expect(registerToolEventRecipient).not.toHaveBeenCalledWith("run-hidden-sibling", "conn-1");
   });
 });

@@ -16,7 +16,11 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { getRunIdsBySessionKey, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  getAgentRunContext,
+  getRunIdsBySessionKey,
+  registerAgentRunContext,
+} from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -296,6 +300,48 @@ export const agentHandlers: GatewayRequestHandlers = {
     const inputProvenance = normalizeInputProvenance(request.inputProvenance);
     const cached = context.dedupe.get(`agent:${idem}`);
     if (cached) {
+      // Register the reconnecting client as a stream recipient before returning
+      // the cached response, mirroring what chat.send does for in_flight runs.
+      // The run may still be executing (dedupe is written at accept time, not
+      // completion), so a page-refresh or reconnect replaying the same
+      // idempotencyKey must still receive live tool/thinking events.
+      const connIdReconnect = typeof client?.connId === "string" ? client.connId : undefined;
+      const deviceIdReconnect = client?.connect?.device?.id?.trim() || undefined;
+      const runCtx = getAgentRunContext(idem);
+      if (connIdReconnect && runCtx && runCtx.isControlUiVisible !== false) {
+        const runSessionKey = runCtx.sessionKey;
+        if (isBackfillAuthorized(runCtx.ownerConnId, runCtx.ownerDeviceId, connIdReconnect, deviceIdReconnect)) {
+          if (hasGatewayClientCap(client?.connect?.caps, GATEWAY_CLIENT_CAPS.THINKING_EVENTS)) {
+            context.registerThinkingEventRecipient(idem, connIdReconnect);
+            // Also backfill other visible runs in the same session.
+            if (runSessionKey) {
+              for (const [activeRunId, active] of getRunIdsBySessionKey(runSessionKey)) {
+                if (
+                  activeRunId !== idem &&
+                  active.isControlUiVisible !== false &&
+                  isBackfillAuthorized(active.ownerConnId, active.ownerDeviceId, connIdReconnect, deviceIdReconnect)
+                ) {
+                  context.registerThinkingEventRecipient(activeRunId, connIdReconnect);
+                }
+              }
+            }
+          }
+          if (hasGatewayClientCap(client?.connect?.caps, GATEWAY_CLIENT_CAPS.TOOL_EVENTS)) {
+            context.registerToolEventRecipient(idem, connIdReconnect);
+            if (runSessionKey) {
+              for (const [activeRunId, active] of getRunIdsBySessionKey(runSessionKey)) {
+                if (
+                  activeRunId !== idem &&
+                  active.isControlUiVisible !== false &&
+                  isBackfillAuthorized(active.ownerConnId, active.ownerDeviceId, connIdReconnect, deviceIdReconnect)
+                ) {
+                  context.registerToolEventRecipient(activeRunId, connIdReconnect);
+                }
+              }
+            }
+          }
+        }
+      }
       respond(cached.ok, cached.payload, cached.error, {
         cached: true,
       });
@@ -560,9 +606,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       // Use resolvedSessionKey (the canonical form) because that is what
       // registerAgentRunContext stores; requestedSessionKey may differ by case
       // or alias and would silently miss every in-progress run.
+      // Skip runs marked isControlUiVisible:false — those are external-channel
+      // turns whose tool/thinking output must not reach WebSocket clients.
       for (const [activeRunId, active] of getRunIdsBySessionKey(resolvedSessionKey)) {
         if (
           activeRunId !== runId &&
+          active.isControlUiVisible !== false &&
           isBackfillAuthorized(active.ownerConnId, active.ownerDeviceId, connId, deviceId)
         ) {
           context.registerToolEventRecipient(activeRunId, connId);
@@ -578,9 +627,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       // Same backfill via AgentRunContext registry — chatAbortControllers only
       // tracks chat.send runs and would silently miss any in-progress agent run.
       // Use resolvedSessionKey for the same canonical-form reason as above.
+      // Same isControlUiVisible guard as the tool-events loop above.
       for (const [activeRunId, active] of getRunIdsBySessionKey(resolvedSessionKey)) {
         if (
           activeRunId !== runId &&
+          active.isControlUiVisible !== false &&
           isBackfillAuthorized(active.ownerConnId, active.ownerDeviceId, connId, deviceId)
         ) {
           context.registerThinkingEventRecipient(activeRunId, connId);
