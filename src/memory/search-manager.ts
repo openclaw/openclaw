@@ -8,8 +8,24 @@ import type {
   MemorySyncProgressUpdate,
 } from "./types.js";
 
+const MEMORY_SEARCH_MANAGER_CACHE_KEY = "__openclawMemorySearchManagerCache";
+type MemorySearchManagerCacheStore = {
+  qmdManagerCache: Map<string, MemorySearchManager>;
+};
+
+function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
+  const globalCache = globalThis as typeof globalThis & {
+    [MEMORY_SEARCH_MANAGER_CACHE_KEY]?: MemorySearchManagerCacheStore;
+  };
+  // Keep caches reachable across `vi.resetModules()` so later cleanup can close older instances.
+  globalCache[MEMORY_SEARCH_MANAGER_CACHE_KEY] ??= {
+    qmdManagerCache: new Map<string, MemorySearchManager>(),
+  };
+  return globalCache[MEMORY_SEARCH_MANAGER_CACHE_KEY];
+}
+
 const log = createSubsystemLogger("memory");
-const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
+const { qmdManagerCache: QMD_MANAGER_CACHE } = getMemorySearchManagerCacheStore();
 let managerRuntimePromise: Promise<typeof import("./manager-runtime.js")> | null = null;
 
 function loadManagerRuntime() {

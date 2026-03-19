@@ -37,10 +37,28 @@ const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const BATCH_FAILURE_LIMIT = 2;
 
+const MEMORY_INDEX_MANAGER_CACHE_KEY = "__openclawMemoryIndexManagerCache";
+type MemoryIndexManagerCacheStore = {
+  indexCache: Map<string, MemoryIndexManager>;
+  indexCachePending: Map<string, Promise<MemoryIndexManager>>;
+};
+
+function getMemoryIndexManagerCacheStore(): MemoryIndexManagerCacheStore {
+  const globalCache = globalThis as typeof globalThis & {
+    [MEMORY_INDEX_MANAGER_CACHE_KEY]?: MemoryIndexManagerCacheStore;
+  };
+  // Keep manager caches reachable across `vi.resetModules()` so cleanup still reaches older managers.
+  globalCache[MEMORY_INDEX_MANAGER_CACHE_KEY] ??= {
+    indexCache: new Map<string, MemoryIndexManager>(),
+    indexCachePending: new Map<string, Promise<MemoryIndexManager>>(),
+  };
+  return globalCache[MEMORY_INDEX_MANAGER_CACHE_KEY];
+}
+
 const log = createSubsystemLogger("memory");
 
-const INDEX_CACHE = new Map<string, MemoryIndexManager>();
-const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
+const { indexCache: INDEX_CACHE, indexCachePending: INDEX_CACHE_PENDING } =
+  getMemoryIndexManagerCacheStore();
 
 export async function closeAllMemoryIndexManagers(): Promise<void> {
   const pending = Array.from(INDEX_CACHE_PENDING.values());

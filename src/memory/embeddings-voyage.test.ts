@@ -23,7 +23,6 @@ let createVoyageEmbeddingProvider: typeof import("./embeddings-voyage.js").creat
 let normalizeVoyageModel: typeof import("./embeddings-voyage.js").normalizeVoyageModel;
 
 beforeEach(async () => {
-  vi.resetModules();
   authModule = await import("../agents/model-auth.js");
   ({ createVoyageEmbeddingProvider, normalizeVoyageModel } =
     await import("./embeddings-voyage.js"));
