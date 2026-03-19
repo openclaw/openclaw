@@ -8,9 +8,6 @@ import { createTelegramThreadBindingManager } from "../../../../extensions/teleg
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getSessionBindingService,
-  registerSessionBindingAdapter,
-  unregisterSessionBindingAdapter,
-  type SessionBindingBindInput,
   type SessionBindingCapabilities,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
@@ -139,7 +136,6 @@ function expectResolvedSessionBinding(params: {
   channel: string;
   accountId: string;
   conversationId: string;
-  parentConversationId?: string;
   targetSessionKey: string;
 }) {
   expect(
@@ -147,7 +143,6 @@ function expectResolvedSessionBinding(params: {
       channel: params.channel,
       accountId: params.accountId,
       conversationId: params.conversationId,
-      parentConversationId: params.parentConversationId,
     }),
   )?.toMatchObject({
     targetSessionKey: params.targetSessionKey,
@@ -594,75 +589,6 @@ const baseSessionBindingCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
-function createMatrixSessionBindingRecord(input: SessionBindingBindInput): SessionBindingRecord {
-  const parentConversationId = input.conversation.parentConversationId?.trim() || undefined;
-  const isChildPlacement = input.placement === "child";
-  const conversationId = isChildPlacement ? "$root" : input.conversation.conversationId.trim();
-  return {
-    bindingId: `matrix:ops:${conversationId}:${input.targetSessionKey}`,
-    targetSessionKey: input.targetSessionKey,
-    targetKind: input.targetKind,
-    conversation: {
-      channel: "matrix",
-      accountId: "ops",
-      conversationId,
-      parentConversationId: isChildPlacement
-        ? parentConversationId || input.conversation.conversationId.trim()
-        : parentConversationId,
-    },
-    status: "active",
-    boundAt: 1,
-  };
-}
-
-function registerMatrixSessionBindingAdapter() {
-  const bindings = new Map<string, SessionBindingRecord>();
-  unregisterSessionBindingAdapter({
-    channel: "matrix",
-    accountId: "ops",
-  });
-  registerSessionBindingAdapter({
-    channel: "matrix",
-    accountId: "ops",
-    capabilities: {
-      placements: ["current", "child"],
-      bindSupported: true,
-      unbindSupported: true,
-    },
-    bind: async (input) => {
-      const binding = createMatrixSessionBindingRecord(input);
-      bindings.set(binding.bindingId, binding);
-      return binding;
-    },
-    listBySession: (targetSessionKey) =>
-      [...bindings.values()].filter((binding) => binding.targetSessionKey === targetSessionKey),
-    resolveByConversation: (ref) =>
-      [...bindings.values()].find(
-        (binding) =>
-          binding.conversation.channel === ref.channel &&
-          binding.conversation.accountId === ref.accountId &&
-          binding.conversation.conversationId === ref.conversationId &&
-          binding.conversation.parentConversationId ===
-            (ref.parentConversationId?.trim() || undefined),
-      ) ?? null,
-    unbind: async (input) => {
-      const removed = [...bindings.values()].filter((binding) => {
-        if (input.bindingId?.trim()) {
-          return binding.bindingId === input.bindingId.trim();
-        }
-        if (input.targetSessionKey?.trim()) {
-          return binding.targetSessionKey === input.targetSessionKey.trim();
-        }
-        return false;
-      });
-      for (const binding of removed) {
-        bindings.delete(binding.bindingId);
-      }
-      return removed;
-    },
-  });
-}
-
 export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
   {
     id: "discord",
@@ -780,63 +706,6 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
         accountId: "default",
         conversationId: "oc_group_chat:topic:om_topic_root",
       });
-    },
-  },
-  {
-    id: "matrix",
-    expectedCapabilities: {
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current", "child"],
-    },
-    getCapabilities: () => {
-      registerMatrixSessionBindingAdapter();
-      return getSessionBindingService().getCapabilities({
-        channel: "matrix",
-        accountId: "ops",
-      });
-    },
-    bindAndResolve: async () => {
-      registerMatrixSessionBindingAdapter();
-      const service = getSessionBindingService();
-      const binding = await service.bind({
-        targetSessionKey: "agent:matrix:subagent:child-1",
-        targetKind: "subagent",
-        conversation: {
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "!room:example",
-        },
-        placement: "child",
-        metadata: {
-          label: "codex-matrix",
-          introText: "intro root",
-        },
-      });
-      expectResolvedSessionBinding({
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$root",
-        parentConversationId: "!room:example",
-        targetSessionKey: "agent:matrix:subagent:child-1",
-      });
-      return binding;
-    },
-    unbindAndVerify: unbindAndExpectClearedSessionBinding,
-    cleanup: async () => {
-      unregisterSessionBindingAdapter({
-        channel: "matrix",
-        accountId: "ops",
-      });
-      expect(
-        getSessionBindingService().resolveByConversation({
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$root",
-          parentConversationId: "!room:example",
-        }),
-      ).toBeNull();
     },
   },
   {

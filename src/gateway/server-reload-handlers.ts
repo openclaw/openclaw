@@ -22,8 +22,8 @@ import type { GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
-import type { HookClientIpConfig } from "./server-http.js";
 import { refreshGatewayModelCatalog } from "./server-model-catalog.js";
+import type { HookClientIpConfig } from "./server-http.js";
 import { resolveHookClientIpConfig } from "./server/hooks.js";
 
 type GatewayHotReloadState = {
