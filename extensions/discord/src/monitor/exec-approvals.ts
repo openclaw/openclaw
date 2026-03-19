@@ -395,6 +395,11 @@ export class DiscordExecApprovalHandler {
       }
     }
 
+    const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase();
+    if (turnSourceChannel && turnSourceChannel !== "discord") {
+      return false;
+    }
+
     // Check agent filter
     if (config.agentFilter?.length) {
       if (!request.request.agentId) {

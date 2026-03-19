@@ -373,6 +373,14 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
     expect(handler.shouldHandle(createRequest())).toBe(true);
   });
 
+  it("rejects requests originating from non-discord channels", () => {
+    const handler = createHandler({ enabled: true, approvers: ["123"] });
+    expect(handler.shouldHandle(createRequest({ turnSourceChannel: "webchat" }))).toBe(false);
+    expect(handler.shouldHandle(createRequest({ turnSourceChannel: "exec-event" }))).toBe(false);
+    expect(handler.shouldHandle(createRequest({ turnSourceChannel: "telegram" }))).toBe(false);
+    expect(handler.shouldHandle(createRequest({ turnSourceChannel: "discord" }))).toBe(true);
+  });
+
   it("filters by agent ID", () => {
     const handler = createHandler({
       enabled: true,
