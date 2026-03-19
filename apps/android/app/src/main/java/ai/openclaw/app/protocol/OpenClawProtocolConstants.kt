@@ -53,6 +53,7 @@ enum class OpenClawCameraCommand(val rawValue: String) {
 
 enum class OpenClawSmsCommand(val rawValue: String) {
   Send("sms.send"),
+  Search("sms.search"),
   ;
 
   companion object {

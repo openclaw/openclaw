@@ -64,6 +64,7 @@ class InvokeCommandRegistryTest {
       OpenClawMotionCommand.Activity.rawValue,
       OpenClawMotionCommand.Pedometer.rawValue,
       OpenClawSmsCommand.Send.rawValue,
+      OpenClawSmsCommand.Search.rawValue,
     )
 
   private val debugCommands = setOf("debug.logs", "debug.ed25519")
@@ -83,7 +84,8 @@ class InvokeCommandRegistryTest {
         defaultFlags(
           cameraEnabled = true,
           locationEnabled = true,
-          smsAvailable = true,
+          sendSmsAvailable = true,
+          readSmsAvailable = true,
           voiceWakeEnabled = true,
           motionActivityAvailable = true,
           motionPedometerAvailable = true,
@@ -108,7 +110,8 @@ class InvokeCommandRegistryTest {
         defaultFlags(
           cameraEnabled = true,
           locationEnabled = true,
-          smsAvailable = true,
+          sendSmsAvailable = true,
+          readSmsAvailable = true,
           motionActivityAvailable = true,
           motionPedometerAvailable = true,
           debugBuild = true,
@@ -125,7 +128,8 @@ class InvokeCommandRegistryTest {
         NodeRuntimeFlags(
           cameraEnabled = false,
           locationEnabled = false,
-          smsAvailable = false,
+          sendSmsAvailable = false,
+          readSmsAvailable = false,
           voiceWakeEnabled = false,
           motionActivityAvailable = true,
           motionPedometerAvailable = false,
@@ -137,10 +141,43 @@ class InvokeCommandRegistryTest {
     assertFalse(commands.contains(OpenClawMotionCommand.Pedometer.rawValue))
   }
 
+  @Test
+  fun advertisedCommands_splitsSmsSendAndSearchAvailability() {
+    val readOnlyCommands =
+      InvokeCommandRegistry.advertisedCommands(
+        defaultFlags(readSmsAvailable = true),
+      )
+    val sendOnlyCommands =
+      InvokeCommandRegistry.advertisedCommands(
+        defaultFlags(sendSmsAvailable = true),
+      )
+
+    assertTrue(readOnlyCommands.contains(OpenClawSmsCommand.Search.rawValue))
+    assertFalse(readOnlyCommands.contains(OpenClawSmsCommand.Send.rawValue))
+    assertTrue(sendOnlyCommands.contains(OpenClawSmsCommand.Send.rawValue))
+    assertFalse(sendOnlyCommands.contains(OpenClawSmsCommand.Search.rawValue))
+  }
+
+  @Test
+  fun advertisedCapabilities_includeSmsWhenEitherSmsPathIsAvailable() {
+    val readOnlyCapabilities =
+      InvokeCommandRegistry.advertisedCapabilities(
+        defaultFlags(readSmsAvailable = true),
+      )
+    val sendOnlyCapabilities =
+      InvokeCommandRegistry.advertisedCapabilities(
+        defaultFlags(sendSmsAvailable = true),
+      )
+
+    assertTrue(readOnlyCapabilities.contains(OpenClawCapability.Sms.rawValue))
+    assertTrue(sendOnlyCapabilities.contains(OpenClawCapability.Sms.rawValue))
+  }
+
   private fun defaultFlags(
     cameraEnabled: Boolean = false,
     locationEnabled: Boolean = false,
-    smsAvailable: Boolean = false,
+    sendSmsAvailable: Boolean = false,
+    readSmsAvailable: Boolean = false,
     voiceWakeEnabled: Boolean = false,
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
@@ -149,7 +186,8 @@ class InvokeCommandRegistryTest {
     NodeRuntimeFlags(
       cameraEnabled = cameraEnabled,
       locationEnabled = locationEnabled,
-      smsAvailable = smsAvailable,
+      sendSmsAvailable = sendSmsAvailable,
+      readSmsAvailable = readSmsAvailable,
       voiceWakeEnabled = voiceWakeEnabled,
       motionActivityAvailable = motionActivityAvailable,
       motionPedometerAvailable = motionPedometerAvailable,

@@ -32,7 +32,8 @@ class InvokeDispatcher(
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
-  private val smsAvailable: () -> Boolean,
+  private val sendSmsAvailable: () -> Boolean,
+  private val readSmsAvailable: () -> Boolean,
   private val debugBuild: () -> Boolean,
   private val refreshNodeCanvasCapability: suspend () -> Boolean,
   private val onCanvasA2uiPush: () -> Unit,
@@ -162,6 +163,7 @@ class InvokeDispatcher(
 
       // SMS command
       OpenClawSmsCommand.Send.rawValue -> smsHandler.handleSmsSend(paramsJson)
+      OpenClawSmsCommand.Search.rawValue -> smsHandler.handleSmsSearch(paramsJson)
 
       // CallLog command
       OpenClawCallLogCommand.Search.rawValue -> callLogHandler.handleCallLogSearch(paramsJson)
@@ -256,8 +258,17 @@ class InvokeDispatcher(
             message = "PEDOMETER_UNAVAILABLE: step counter not available",
           )
         }
-      InvokeCommandAvailability.SmsAvailable ->
-        if (smsAvailable()) {
+      InvokeCommandAvailability.SendSmsAvailable ->
+        if (sendSmsAvailable()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "SMS_UNAVAILABLE",
+            message = "SMS_UNAVAILABLE: SMS not available on this device",
+          )
+        }
+      InvokeCommandAvailability.ReadSmsAvailable ->
+        if (readSmsAvailable()) {
           null
         } else {
           GatewaySession.InvokeResult.error(
