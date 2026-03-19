@@ -39,7 +39,9 @@ export async function probeDingtalk(creds?: {
     return { ok: false, error: "missing credentials (clientId, clientSecret)" };
   }
 
-  const cacheKey = creds.accountId ?? `${creds.clientId}:${creds.clientSecret.slice(0, 8)}`;
+  // 同时纳入凭据指纹，确保 clientSecret 轮换后缓存立即失效
+  const credFingerprint = `${creds.clientId}:${creds.clientSecret.slice(0, 8)}`;
+  const cacheKey = creds.accountId ? `${creds.accountId}:${credFingerprint}` : credFingerprint;
   const cached = probeCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.result;

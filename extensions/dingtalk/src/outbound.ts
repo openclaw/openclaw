@@ -96,7 +96,8 @@ export const dingtalkOutbound: ChannelOutboundAdapter = {
             const result = await sendImageMessage({
               account,
               ...target,
-              photoURL: `@lADPDe7s${mediaId}`,
+              // uploadMedia 已返回钉钉完整 media_id，直接用作 photoURL
+              photoURL: mediaId,
             });
             return { channel: "dingtalk", messageId: result.processQueryKey ?? "", ...result };
           }

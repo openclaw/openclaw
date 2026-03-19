@@ -87,7 +87,8 @@ export function createDingtalkReplyDispatcher(params: {
               conversationType: ctx.conversationType,
               conversationId: ctx.conversationId,
               senderStaffId: ctx.senderStaffId,
-              photoURL: `@lADPDe7s${mediaId}`,
+              // uploadMedia 已返回钉钉完整 media_id，直接用作 photoURL
+              photoURL: mediaId,
             });
           } else {
             await sendFileMessage({
@@ -188,12 +189,15 @@ export function createDingtalkReplyDispatcher(params: {
             } catch (err) {
               log(`dingtalk[${account.accountId}]: AI Card finish failed, sending as text: ${err}`);
               card = null;
+              // 卡片完成失败时保留累积文本作为回退，避免丢失 block 流式内容
             }
           }
         }
 
+        // 优先用 accumulatedBlockText 作为回退（block 流式传输时 text 往往为空）
+        const fallbackText = text.trim() || accumulatedBlockText.trim();
         accumulatedBlockText = "";
-        if (text.trim()) await sendText(text);
+        if (fallbackText) await sendText(fallbackText);
         if (mediaUrls.length > 0) await sendMediaUrls(mediaUrls);
       },
       onError: async (error, info) => {
