@@ -1269,8 +1269,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     minScore: number;
     collection?: string;
     timeoutMs: number;
+    skipDaemonStart?: boolean;
   }): Promise<QmdQueryResult[]> {
-    await this.ensureMcporterDaemonStarted(params.mcporter);
+    if (!params.skipDaemonStart) {
+      await this.ensureMcporterDaemonStarted(params.mcporter);
+    }
 
     // QMD's MCP server exposes a single `query` tool that accepts a `searches`
     // array with typed sub-queries.  Map the legacy tool names to the
@@ -2021,6 +2024,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     minScore: number;
     collectionNames: string[];
   }): Promise<QmdQueryResult[]> {
+    // Start the daemon once before iterating collections, not per-collection.
+    await this.ensureMcporterDaemonStarted(this.qmd.mcporter);
+
     const bestByDocId = new Map<string, QmdQueryResult>();
     for (const collectionName of params.collectionNames) {
       const parsed = await this.runQmdSearchViaMcporter({
@@ -2031,6 +2037,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         minScore: params.minScore,
         collection: collectionName,
         timeoutMs: this.qmd.limits.timeoutMs,
+        skipDaemonStart: true,
       });
       for (const entry of parsed) {
         if (typeof entry.docid !== "string" || !entry.docid.trim()) {
