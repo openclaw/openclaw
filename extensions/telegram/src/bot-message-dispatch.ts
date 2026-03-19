@@ -536,6 +536,14 @@ export const dispatchTelegramMessage = async ({
   const waitForPendingAnswerFinalDelivery = async () => {
     await pendingAnswerFinalDelivery;
   };
+  const applyPendingAnswerBoundaryReset = async (payload: ReplyPayload) => {
+    if (!answerLaneNeedsBoundaryReset || payload.isError === true) {
+      return;
+    }
+    await rotateAnswerLaneForNewAssistantMessage();
+    activePreviewLifecycleByLane.answer = "transient";
+    retainPreviewOnCleanupByLane.answer = false;
+  };
   const deliverFinalAnswerLaneText = async (params: {
     text: string;
     payload: ReplyPayload;
@@ -546,6 +554,7 @@ export const dispatchTelegramMessage = async ({
       resolvePendingAnswerFinalDelivery = resolve;
     });
     try {
+      await applyPendingAnswerBoundaryReset(params.payload);
       const result = await deliverLaneText({
         laneName: "answer",
         text: params.text,
