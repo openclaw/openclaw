@@ -32,6 +32,7 @@ export type ToolCallSummary = {
 
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
+  preexistingMessages: Set<AgentMessage>;
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;

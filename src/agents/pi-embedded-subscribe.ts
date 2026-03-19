@@ -37,6 +37,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const useMarkdown = toolResultFormat === "markdown";
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
+    preexistingMessages: new Set(params.session.messages ?? []),
     toolMetas: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),

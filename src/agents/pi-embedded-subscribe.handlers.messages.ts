@@ -34,6 +34,16 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
+function shouldIgnoreAssistantMessage(
+  ctx: EmbeddedPiSubscribeContext,
+  message: AgentMessage | undefined,
+): boolean {
+  if (!message || message.role !== "assistant") {
+    return true;
+  }
+  return ctx.state.preexistingMessages.has(message);
+}
+
 function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
@@ -85,7 +95,7 @@ export function handleMessageStart(
   evt: AgentEvent & { message: AgentMessage },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") {
+  if (shouldIgnoreAssistantMessage(ctx, msg)) {
     return;
   }
 
@@ -104,7 +114,7 @@ export function handleMessageUpdate(
   evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") {
+  if (shouldIgnoreAssistantMessage(ctx, msg)) {
     return;
   }
 
@@ -274,7 +284,7 @@ export function handleMessageEnd(
   evt: AgentEvent & { message: AgentMessage },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") {
+  if (shouldIgnoreAssistantMessage(ctx, msg)) {
     return;
   }
 

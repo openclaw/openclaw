@@ -12,6 +12,32 @@ import {
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
+  function createReplayingAgentEventHarness(params: {
+    replayEvents: unknown[];
+    existingMessages?: unknown[];
+  }) {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session = {
+      messages: params.existingMessages ?? [],
+      subscribe: (fn: (evt: unknown) => void) => {
+        handler = fn;
+        for (const evt of params.replayEvents) {
+          fn(evt);
+        }
+        return () => {};
+      },
+    } as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"];
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    return { emit: (evt: unknown) => handler?.(evt), onAgentEvent };
+  }
+
   function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
@@ -291,6 +317,30 @@ describe("subscribeEmbeddedPiSession", () => {
     });
     emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
     expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
+  });
+
+  it("does not replay historical assistant finals when subscribing to an existing session", () => {
+    const historicalAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Earlier reply" }],
+    } as AssistantMessage;
+    const { emit, onAgentEvent } = createReplayingAgentEventHarness({
+      existingMessages: [historicalAssistantMessage],
+      replayEvents: [
+        { type: "agent_start" },
+        { type: "message_start", message: historicalAssistantMessage },
+        { type: "message_end", message: historicalAssistantMessage },
+        { type: "agent_end" },
+      ],
+    });
+
+    emitMessageStartAndEndForAssistantText({ emit, text: "Current reply" });
+
+    const replyPayloads = extractAgentEventPayloads(onAgentEvent.mock.calls).filter(
+      (payload) => typeof payload.text === "string",
+    );
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("Current reply");
   });
 
   it("does not emit duplicate agent events when message_end repeats", () => {
