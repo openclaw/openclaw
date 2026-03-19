@@ -1,6 +1,8 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
+import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
+import { resolveBundledWebSearchPluginIds } from "../plugins/bundled-web-search.js";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -351,15 +353,38 @@ function validateConfigObjectWithPluginsBase(
   };
 
   let registryInfo: RegistryInfo | null = null;
+  let compatConfig: OpenClawConfig | null | undefined;
+
+  const ensureCompatConfig = (): OpenClawConfig => {
+    if (compatConfig !== undefined) {
+      return compatConfig ?? config;
+    }
+
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const bundledWebSearchPluginIds = resolveBundledWebSearchPluginIds({
+      config,
+      workspaceDir: workspaceDir ?? undefined,
+      env: opts.env,
+    });
+    compatConfig = withBundledPluginAllowlistCompat({
+      config,
+      pluginIds: bundledWebSearchPluginIds,
+    });
+    return compatConfig ?? config;
+  };
 
   const ensureRegistry = (): RegistryInfo => {
     if (registryInfo) {
       return registryInfo;
     }
 
-    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const effectiveConfig = ensureCompatConfig();
+    const workspaceDir = resolveAgentWorkspaceDir(
+      effectiveConfig,
+      resolveDefaultAgentId(effectiveConfig),
+    );
     const registry = loadPluginManifestRegistry({
-      config,
+      config: effectiveConfig,
       workspaceDir: workspaceDir ?? undefined,
       env: opts.env,
     });
@@ -393,7 +418,7 @@ function validateConfigObjectWithPluginsBase(
   const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
     const info = ensureRegistry();
     if (!info.normalizedPlugins) {
-      info.normalizedPlugins = normalizePluginsConfig(config.plugins);
+      info.normalizedPlugins = normalizePluginsConfig(ensureCompatConfig().plugins);
     }
     return info.normalizedPlugins;
   };

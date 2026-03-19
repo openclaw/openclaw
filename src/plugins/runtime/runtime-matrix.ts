@@ -1,7 +1,7 @@
 import {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
-} from "../../../extensions/matrix/runtime-api.js";
+} from "./runtime-matrix-boundary.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
 export function createRuntimeMatrix(): PluginRuntimeChannel["matrix"] {
