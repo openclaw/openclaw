@@ -539,6 +539,8 @@ describe("telegramPlugin duplicate token guard", () => {
   });
 
   it("does not crash startup when a resolved account token is undefined", async () => {
+    probeTelegramMock.mockClear();
+    monitorTelegramProviderMock.mockClear();
     const { monitorTelegramProvider, probeTelegram } = installGatewayRuntime({
       probeOk: false,
     });
@@ -557,17 +559,14 @@ describe("telegramPlugin duplicate token guard", () => {
     } as ResolvedTelegramAccount;
 
     await expect(telegramPlugin.gateway!.startAccount!(ctx)).resolves.toBeUndefined();
-    expect(probeTelegramMock).toHaveBeenCalledWith("", 2500, {
-      accountId: "ops",
-      proxyUrl: undefined,
-      network: undefined,
-    });
+    expect(probeTelegramMock).not.toHaveBeenCalled();
     expect(monitorTelegramProviderMock).toHaveBeenCalledWith(
       expect.objectContaining({
         token: "",
+        useWebhook: false,
       }),
     );
-    expect(probeTelegram).toHaveBeenCalled();
+    expect(probeTelegram).not.toHaveBeenCalled();
     expect(monitorTelegramProvider).toHaveBeenCalled();
   });
 });

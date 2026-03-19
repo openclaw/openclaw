@@ -42,7 +42,8 @@ export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unk
     },
     runner: {
       fetch: {
-        // Match grammY defaults
+        // Shorter than grammY's 30s default to avoid retry overlap with
+        // the previous server-side getUpdates window.
         timeout: 10,
         // Request reactions without dropping default update types.
         allowed_updates: resolveTelegramAllowedUpdates(),
