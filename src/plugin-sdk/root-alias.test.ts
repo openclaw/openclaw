@@ -109,6 +109,17 @@ describe("plugin-sdk root alias", () => {
     expect(lazyModule.jitiLoadCalls).toBe(0);
   });
 
+  it("does not load the monolithic sdk for promise-like or symbol reflection probes", () => {
+    const lazyModule = loadRootAliasWithStubs();
+    const lazyRootSdk = lazyModule.moduleExports;
+
+    expect("then" in lazyRootSdk).toBe(false);
+    expect(Reflect.get(lazyRootSdk, Symbol.toStringTag)).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(lazyRootSdk, Symbol.toStringTag)).toBeUndefined();
+    expect(lazyModule.createJitiCalls).toBe(0);
+    expect(lazyModule.jitiLoadCalls).toBe(0);
+  });
+
   it("loads legacy root exports on demand and preserves reflection", () => {
     const lazyModule = loadRootAliasWithStubs({
       monolithicExports: {
