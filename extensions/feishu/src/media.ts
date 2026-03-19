@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
-import { execSync } from "child_process";
+import { spawnSync } from "child_process";
 import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -471,13 +471,20 @@ export async function sendMediaFeishu(params: {
         // Try to get duration from the original file path if available
         const filePath = mediaUrl && !mediaUrl.startsWith("http") ? mediaUrl : undefined;
         if (filePath && fs.existsSync(filePath)) {
-          const durationSec = parseFloat(
-            execSync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`, {
-              encoding: "utf-8",
-              timeout: 10000,
-            }).trim()
+          const result = spawnSync(
+            "ffprobe",
+            [
+              "-v", "error",
+              "-show_entries", "format=duration",
+              "-of", "default=noprint_wrappers=1:nokey=1",
+              filePath,
+            ],
+            { encoding: "utf-8", timeout: 10000 }
           );
-          duration = Math.round(durationSec * 1000); // Convert to milliseconds
+          if (result.status === 0) {
+            const durationSec = parseFloat(result.stdout.trim());
+            duration = Math.round(durationSec * 1000); // Convert to milliseconds
+          }
         }
       } catch (e) {
         // Silently ignore ffprobe errors
