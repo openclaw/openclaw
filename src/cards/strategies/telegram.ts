@@ -70,6 +70,32 @@ function renderElement(el: AcElement): string {
       const items = el.items as AcElement[] | undefined;
       return (items ?? []).map(renderElement).filter(Boolean).join("\n");
     }
+    case "Icon": {
+      // Render icon as emoji/name text representation; graceful fallback
+      const name = str(el.name);
+      return name ? `\u{1F535} ${escapeHtml(name)}` : "";
+    }
+    case "List": {
+      const title = str(el.title);
+      const items = el.items as Array<{ title?: string; subtitle?: string }> | undefined;
+      const parts: string[] = [];
+      if (title) {
+        parts.push(`<b>${escapeHtml(title)}</b>`);
+      }
+      if (items?.length) {
+        for (const item of items) {
+          const itemTitle = item.title ?? "";
+          const itemSub = item.subtitle ? ` - ${item.subtitle}` : "";
+          parts.push(`\u2022 ${escapeHtml(itemTitle + itemSub)}`);
+        }
+      }
+      return parts.join("\n");
+    }
+    case "ActionSet": {
+      // Inline ActionSet actions are collected by the top-level render pass;
+      // render nothing in body text (buttons added to keyboard below)
+      return "";
+    }
     default:
       return "";
   }
@@ -123,7 +149,16 @@ export const telegramStrategy: CardRenderStrategy = {
 
     const text = lines.join("\n\n") || escapeHtml(parsed.fallbackText);
 
-    const keyboard = parsed.card.actions?.length ? renderActions(parsed.card.actions) : [];
+    // Collect actions from both top-level and inline ActionSet elements
+    const allActions = [...(parsed.card.actions ?? [])];
+    for (const el of parsed.card.body) {
+      const elem = el as AcElement;
+      if (elem.type === "ActionSet" && Array.isArray(elem.actions)) {
+        allActions.push(...(elem.actions as unknown[]));
+      }
+    }
+
+    const keyboard = allActions.length > 0 ? renderActions(allActions) : [];
 
     if (keyboard.length === 0) {
       return { type: "telegram", text };

@@ -70,6 +70,52 @@ describe("parseAdaptiveCardMarkers", () => {
     expect(result!.card.type).toBe("AdaptiveCard");
     expect(result!.templateData).toBeUndefined();
   });
+
+  it("extracts cardId and previewUrl from meta marker", () => {
+    const meta = JSON.stringify({
+      cardId: "abc-123",
+      previewUrl: "https://img.example.com/preview.png",
+    });
+    const text = buildMarkedText() + `\n<!--adaptive-card-meta-->${meta}<!--/adaptive-card-meta-->`;
+    const result = parseAdaptiveCardMarkers(text);
+    expect(result).not.toBeNull();
+    expect(result!.cardId).toBe("abc-123");
+    expect(result!.previewUrl).toBe("https://img.example.com/preview.png");
+  });
+
+  it("extracts cardId and previewUrl from card top-level $cardId/$previewUrl", () => {
+    const card = JSON.stringify({
+      type: "AdaptiveCard",
+      version: "1.5",
+      body: [{ type: "TextBlock", text: "Hi" }],
+      $cardId: "top-level-id",
+      $previewUrl: "https://img.example.com/top.png",
+    });
+    const text = buildMarkedText({ card });
+    const result = parseAdaptiveCardMarkers(text);
+    expect(result).not.toBeNull();
+    expect(result!.cardId).toBe("top-level-id");
+    expect(result!.previewUrl).toBe("https://img.example.com/top.png");
+    // Should be stripped from the card object
+    expect((result!.card as Record<string, unknown>).$cardId).toBeUndefined();
+    expect((result!.card as Record<string, unknown>).$previewUrl).toBeUndefined();
+  });
+
+  it("prefers meta marker over card top-level for cardId/previewUrl", () => {
+    const card = JSON.stringify({
+      type: "AdaptiveCard",
+      version: "1.5",
+      body: [],
+      $cardId: "from-card",
+      $previewUrl: "https://card.example.com",
+    });
+    const meta = JSON.stringify({ cardId: "from-meta", previewUrl: "https://meta.example.com" });
+    const text = `Fallback\n\n<!--adaptive-card-->${card}<!--/adaptive-card-->\n<!--adaptive-card-meta-->${meta}<!--/adaptive-card-meta-->`;
+    const result = parseAdaptiveCardMarkers(text);
+    expect(result).not.toBeNull();
+    expect(result!.cardId).toBe("from-meta");
+    expect(result!.previewUrl).toBe("https://meta.example.com");
+  });
 });
 
 describe("stripCardMarkers", () => {
@@ -84,6 +130,12 @@ describe("stripCardMarkers", () => {
 
   it("strips card marker without data marker", () => {
     const text = buildMarkedText();
+    expect(stripCardMarkers(text)).toBe("Fallback text here");
+  });
+
+  it("strips meta markers too", () => {
+    const meta = JSON.stringify({ cardId: "abc" });
+    const text = buildMarkedText() + `\n<!--adaptive-card-meta-->${meta}<!--/adaptive-card-meta-->`;
     expect(stripCardMarkers(text)).toBe("Fallback text here");
   });
 });

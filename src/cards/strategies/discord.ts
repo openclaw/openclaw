@@ -115,6 +115,33 @@ function buildEmbedFromBody(body: unknown[]): DiscordEmbed {
         }
         break;
       }
+      case "Icon":
+        // Discord has no icon equivalent; skip gracefully
+        break;
+      case "List": {
+        const listTitle = str(el.title);
+        const listItems = el.items as Array<{ title?: string; subtitle?: string }> | undefined;
+        const bullets: string[] = [];
+        if (listItems?.length) {
+          for (const item of listItems) {
+            const itemTitle = item.title ?? "";
+            const itemSub = item.subtitle ? ` - ${item.subtitle}` : "";
+            bullets.push(`\u2022 ${itemTitle}${itemSub}`);
+          }
+        }
+        if (listTitle || bullets.length > 0) {
+          embed.fields ??= [];
+          embed.fields.push({
+            name: listTitle || "\u200B",
+            value: bullets.join("\n") || "\u200B",
+            inline: false,
+          });
+        }
+        break;
+      }
+      case "ActionSet":
+        // ActionSet actions are collected separately in the render pass
+        break;
       // skip unknown element types
     }
   }
@@ -184,9 +211,18 @@ export const discordStrategy: CardRenderStrategy = {
     const embed = buildEmbedFromBody(parsed.card.body);
     const embeds = [embed];
 
+    // Collect actions from both top-level and inline ActionSet elements
+    const allActions = [...(parsed.card.actions ?? [])];
+    for (const el of parsed.card.body) {
+      const elem = el as AcElement;
+      if (elem.type === "ActionSet" && Array.isArray(elem.actions)) {
+        allActions.push(...(elem.actions as unknown[]));
+      }
+    }
+
     const components: unknown[] = [];
-    if (parsed.card.actions?.length) {
-      const actionRow = buildActionRow(parsed.card.actions);
+    if (allActions.length > 0) {
+      const actionRow = buildActionRow(allActions);
       if (actionRow) {
         components.push(actionRow);
       }

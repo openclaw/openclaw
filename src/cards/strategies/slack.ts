@@ -86,6 +86,40 @@ function renderElement(el: AcElement): unknown[] {
       const items = el.items as AcElement[] | undefined;
       return (items ?? []).flatMap(renderElement);
     }
+    case "Icon":
+      // Slack Block Kit has no icon equivalent; skip gracefully
+      return [];
+    case "List": {
+      const title = str(el.title);
+      const items = el.items as Array<{ title?: string; subtitle?: string }> | undefined;
+      const parts: string[] = [];
+      if (title) {
+        parts.push(`*${title}*`);
+      }
+      if (items?.length) {
+        for (const item of items) {
+          const itemTitle = item.title ?? "";
+          const itemSub = item.subtitle ? ` - ${item.subtitle}` : "";
+          parts.push(`\u2022 ${itemTitle}${itemSub}`);
+        }
+      }
+      if (parts.length === 0) {
+        return [];
+      }
+      return [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: truncateMrkdwn(parts.join("\n")) },
+        },
+      ];
+    }
+    case "ActionSet": {
+      const actions = el.actions as unknown[] | undefined;
+      if (!actions?.length) {
+        return [];
+      }
+      return renderActions(actions);
+    }
     default:
       return [];
   }

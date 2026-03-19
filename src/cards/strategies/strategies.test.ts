@@ -79,6 +79,55 @@ describe("telegramStrategy", () => {
     }
     expect(result.text).toContain("Status: Deploy");
   });
+
+  it("renders Icon as emoji + name", () => {
+    const parsed = makeParsed();
+    parsed.card.body = [{ type: "Icon", name: "settings" }];
+    parsed.card.actions = [];
+    const result = telegramStrategy.render(parsed);
+    if (result.type !== "telegram") {
+      return;
+    }
+    expect(result.text).toContain("\u{1F535} settings");
+  });
+
+  it("renders List as bulleted items with title", () => {
+    const parsed = makeParsed();
+    parsed.card.body = [
+      {
+        type: "List",
+        title: "Tasks",
+        items: [{ title: "Build", subtitle: "in progress" }, { title: "Deploy" }],
+      },
+    ];
+    parsed.card.actions = [];
+    const result = telegramStrategy.render(parsed);
+    if (result.type !== "telegram") {
+      return;
+    }
+    expect(result.text).toContain("<b>Tasks</b>");
+    expect(result.text).toContain("\u2022 Build - in progress");
+    expect(result.text).toContain("\u2022 Deploy");
+  });
+
+  it("collects ActionSet actions into inline keyboard", () => {
+    const parsed = makeParsed();
+    parsed.card.body = [
+      { type: "TextBlock", text: "Hello" },
+      {
+        type: "ActionSet",
+        actions: [{ type: "Action.OpenUrl", title: "Link", url: "https://example.com/inline" }],
+      },
+    ];
+    parsed.card.actions = [];
+    const result = telegramStrategy.render(parsed);
+    if (result.type !== "telegram") {
+      return;
+    }
+    expect(result.replyMarkup).toBeDefined();
+    expect(result.replyMarkup!.inline_keyboard).toHaveLength(1);
+    expect(result.replyMarkup!.inline_keyboard[0][0].url).toBe("https://example.com/inline");
+  });
 });
 
 // ── Slack ──
@@ -128,6 +177,58 @@ describe("slackStrategy", () => {
         (b as { fields?: unknown[] }).fields,
     );
     expect(sections.length).toBe(2); // 10 + 5
+  });
+
+  it("skips Icon gracefully", () => {
+    const parsed = makeParsed();
+    parsed.card.body = [{ type: "Icon", name: "settings" }];
+    parsed.card.actions = [];
+    const result = slackStrategy.render(parsed);
+    if (result.type !== "slack") {
+      return;
+    }
+    expect(result.blocks).toHaveLength(0);
+  });
+
+  it("renders List as mrkdwn section with bullets", () => {
+    const parsed = makeParsed();
+    parsed.card.body = [
+      {
+        type: "List",
+        title: "Tasks",
+        items: [{ title: "Build", subtitle: "done" }, { title: "Test" }],
+      },
+    ];
+    parsed.card.actions = [];
+    const result = slackStrategy.render(parsed);
+    if (result.type !== "slack") {
+      return;
+    }
+    const section = result.blocks[0] as { type: string; text: { text: string } };
+    expect(section.type).toBe("section");
+    expect(section.text.text).toContain("*Tasks*");
+    expect(section.text.text).toContain("\u2022 Build - done");
+    expect(section.text.text).toContain("\u2022 Test");
+  });
+
+  it("renders ActionSet as actions block", () => {
+    const parsed = makeParsed();
+    parsed.card.body = [
+      { type: "TextBlock", text: "Info" },
+      {
+        type: "ActionSet",
+        actions: [{ type: "Action.OpenUrl", title: "Go", url: "https://example.com/go" }],
+      },
+    ];
+    parsed.card.actions = [];
+    const result = slackStrategy.render(parsed);
+    if (result.type !== "slack") {
+      return;
+    }
+    const actionsBlock = result.blocks.find(
+      (b: unknown) => (b as { type: string }).type === "actions",
+    );
+    expect(actionsBlock).toBeDefined();
   });
 });
 
@@ -183,6 +284,68 @@ describe("discordStrategy", () => {
     }
     const embed = result.embeds[0] as { fields?: unknown[] };
     expect(embed.fields!.length).toBeLessThanOrEqual(25);
+  });
+
+  it("skips Icon gracefully", () => {
+    const parsed = makeParsed();
+    parsed.card.body = [{ type: "Icon", name: "alert" }];
+    parsed.card.actions = [];
+    const result = discordStrategy.render(parsed);
+    if (result.type !== "discord") {
+      return;
+    }
+    const embed = result.embeds[0] as { title?: string; description?: string };
+    // Icon should not produce a title or description
+    expect(embed.title).toBeUndefined();
+    expect(embed.description).toBeUndefined();
+  });
+
+  it("renders List as embed field with bulleted items", () => {
+    const parsed = makeParsed();
+    parsed.card.body = [
+      {
+        type: "List",
+        title: "Deployments",
+        items: [
+          { title: "staging", subtitle: "live" },
+          { title: "production", subtitle: "pending" },
+        ],
+      },
+    ];
+    parsed.card.actions = [];
+    const result = discordStrategy.render(parsed);
+    if (result.type !== "discord") {
+      return;
+    }
+    const embed = result.embeds[0] as { fields?: Array<{ name: string; value: string }> };
+    expect(embed.fields).toHaveLength(1);
+    expect(embed.fields![0].name).toBe("Deployments");
+    expect(embed.fields![0].value).toContain("\u2022 staging - live");
+    expect(embed.fields![0].value).toContain("\u2022 production - pending");
+  });
+
+  it("collects ActionSet actions into button components", () => {
+    const parsed = makeParsed();
+    parsed.card.body = [
+      { type: "TextBlock", text: "Info", weight: "Bolder" },
+      {
+        type: "ActionSet",
+        actions: [{ type: "Action.OpenUrl", title: "Visit", url: "https://example.com/visit" }],
+      },
+    ];
+    parsed.card.actions = [];
+    const result = discordStrategy.render(parsed);
+    if (result.type !== "discord") {
+      return;
+    }
+    expect(result.components).toBeDefined();
+    const row = result.components![0] as {
+      type: number;
+      components: Array<{ label: string; url?: string }>;
+    };
+    expect(row.type).toBe(1);
+    expect(row.components[0].label).toBe("Visit");
+    expect(row.components[0].url).toBe("https://example.com/visit");
   });
 });
 
