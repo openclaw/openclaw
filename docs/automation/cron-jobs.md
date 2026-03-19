@@ -602,6 +602,22 @@ openclaw cron add \
   --to "+15551234567"
 ```
 
+Recurring isolated job (watch GitHub checks and announce to Slack):
+
+```bash
+openclaw cron add \
+  --name "OpenClaw main CI watch" \
+  --cron "*/15 * * * *" \
+  --tz "UTC" \
+  --session isolated \
+  --message "Use github_checks for openclaw/openclaw on ref main. If any checks are failing or pending, summarize the important ones in a short operator update. If everything is green, say that clearly and keep it brief." \
+  --announce \
+  --channel slack \
+  --to "channel:C12345678"
+```
+
+For Sentry-backed cron failure reporting, enable the optional `diagnostics-sentry` plugin under `plugins.entries.diagnostics-sentry.config` and set its DSN.
+
 Recurring cron job with explicit 30-second stagger:
 
 ```bash

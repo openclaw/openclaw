@@ -1,5 +1,5 @@
 ---
-summary: "Agent tool surface for OpenClaw (browser, canvas, nodes, message, cron) replacing legacy `openclaw-*` skills"
+summary: "Agent tool surface for OpenClaw (browser, canvas, nodes, message, cron, GitHub checks) replacing legacy `openclaw-*` skills"
 read_when:
   - Adding or modifying agent tools
   - Retiring or changing `openclaw-*` skills
@@ -8,7 +8,7 @@ title: "Tools"
 
 # Tools (OpenClaw)
 
-OpenClaw exposes **first-class agent tools** for browser, canvas, nodes, and cron.
+OpenClaw exposes **first-class agent tools** for browser, canvas, nodes, cron, GitHub checks, and messaging.
 These replace the old `openclaw-*` skills: the tools are typed, no shelling,
 and the agent should rely on them directly.
 
@@ -148,7 +148,7 @@ Available groups:
 - `group:memory`: `memory_search`, `memory_get`
 - `group:web`: `web_search`, `web_fetch`
 - `group:ui`: `browser`, `canvas`
-- `group:automation`: `cron`, `gateway`
+- `group:automation`: `cron`, `gateway`, `github_checks`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
 - `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
@@ -488,6 +488,23 @@ Notes:
 
 - `add` expects a full cron job object (same schema as `cron.add` RPC).
 - `update` uses `{ jobId, patch }` (`id` accepted for compatibility).
+
+### `github_checks`
+
+Fetch GitHub check runs and commit statuses for a repository ref.
+
+Core parameters:
+
+- `repo` (required, `owner/repo`)
+- `ref` (required, branch, tag, or commit SHA)
+- `checkName` (optional server-side filter)
+- `maxCheckRuns`, `maxStatuses`, `timeoutMs`
+
+Notes:
+
+- Uses `GH_TOKEN`, `GITHUB_TOKEN`, or an explicit `token` parameter.
+- Returns both GitHub Check Runs and legacy commit statuses, plus a combined summary (`failure`, `pending`, `success`, or `no_data`).
+- Useful in isolated cron jobs that announce concise CI updates back to Slack, Discord, or other channels.
 
 ### `gateway`
 
