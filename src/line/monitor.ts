@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { chunkMarkdownText } from "../auto-reply/chunk.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { filterThoughtLeakPayload } from "../auto-reply/reply/thought-leak-filter.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { danger, logVerbose } from "../globals.js";
 import {
@@ -214,7 +215,16 @@ export async function monitorLineProvider(
           dispatcherOptions: {
             ...prefixOptions,
             deliver: async (payload, _info) => {
-              const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+              const filtered = filterThoughtLeakPayload(payload);
+              if (
+                !filtered.text &&
+                !filtered.mediaUrl &&
+                !filtered.mediaUrls?.length &&
+                !filtered.channelData
+              ) {
+                return; // entirely thought-leak content, skip delivery
+              }
+              const lineData = (filtered.channelData?.line as LineChannelData | undefined) ?? {};
 
               // Show loading animation before each delivery (non-blocking)
               if (ctx.userId && !ctx.isGroup) {
@@ -222,7 +232,7 @@ export async function monitorLineProvider(
               }
 
               const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
-                payload,
+                payload: filtered,
                 lineData,
                 to: ctxPayload.From,
                 replyToken,

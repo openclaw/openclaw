@@ -503,6 +503,7 @@ export async function startGatewayServer(
     gatewayHost: bindHost ?? undefined,
     canvasHostEnabled: Boolean(canvasHost),
     canvasHostServerPort,
+    canvasHostUrlOverride: cfgAtStart.canvasHost?.url,
     resolvedAuth,
     rateLimiter: authRateLimiter,
     gatewayMethods,

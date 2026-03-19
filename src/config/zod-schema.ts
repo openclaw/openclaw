@@ -358,6 +358,7 @@ export const OpenClawSchema = z
         root: z.string().optional(),
         port: z.number().int().positive().optional(),
         liveReload: z.boolean().optional(),
+        url: z.string().optional(),
       })
       .strict()
       .optional(),

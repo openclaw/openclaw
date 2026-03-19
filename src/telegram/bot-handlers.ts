@@ -30,6 +30,7 @@ import {
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
 } from "./bot/helpers.js";
+import { lookupGroupJoin, removeGroupJoin } from "./group-join-tracker.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
@@ -40,7 +41,7 @@ import {
   parseModelCallbackData,
   type ProviderInfo,
 } from "./model-buttons.js";
-import { buildInlineKeyboard } from "./send.js";
+import { buildInlineKeyboard, sendMessageTelegram } from "./send.js";
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -693,6 +694,111 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(ctx)) {
         return;
       }
+
+      // ── War room reply-to-bind: intercept replies to group-join notifications ──
+      const WAR_ROOM_ID = -5069648203;
+      const CRUZ_USER_ID = 448345880;
+      if (
+        msg.chat.id === WAR_ROOM_ID &&
+        msg.from?.id === CRUZ_USER_ID &&
+        msg.reply_to_message &&
+        msg.text
+      ) {
+        const replyToId = msg.reply_to_message.message_id;
+        const joinEntry = lookupGroupJoin(replyToId);
+        if (joinEntry) {
+          const replyText = msg.text.trim().toLowerCase();
+          if (replyText === "忽略" || replyText === "ignore") {
+            removeGroupJoin(replyToId);
+            await ctx.api.sendMessage(WAR_ROOM_ID, "✅ 已忽略，不綁定。", {
+              reply_to_message_id: msg.message_id,
+            });
+            return;
+          }
+
+          const agentName = msg.text.trim();
+
+          // Validate agent exists by checking workspace directories
+          const fs = await import("node:fs");
+          const path = await import("node:path");
+          const workspaceBase = path.resolve(process.cwd(), "workspace/agents");
+          const agentDir = path.join(workspaceBase, agentName);
+          const agentExists = fs.existsSync(agentDir) && fs.statSync(agentDir).isDirectory();
+
+          if (!agentExists) {
+            // List available agents for convenience
+            const dirs = fs
+              .readdirSync(workspaceBase, { withFileTypes: true })
+              .filter((d: { isDirectory: () => boolean }) => d.isDirectory())
+              .filter((d: { name: string }) => !d.name.startsWith("_"))
+              .map((d: { name: string }) => d.name);
+            await ctx.api.sendMessage(
+              WAR_ROOM_ID,
+              `❌ 找不到 agent「${agentName}」\n\n可用的 agents：\n${dirs.join("\n")}`,
+              { reply_to_message_id: msg.message_id },
+            );
+            return;
+          }
+
+          // Check for existing binding and handle override
+          const currentConfig = loadConfig();
+          const existingIdx =
+            currentConfig.bindings?.findIndex(
+              (b: { match?: { channel?: string; peer?: { id?: string } } }) =>
+                b.match?.channel === "telegram" && b.match?.peer?.id === joinEntry.groupId,
+            ) ?? -1;
+
+          if (!currentConfig.bindings) {
+            currentConfig.bindings = [];
+          }
+
+          if (existingIdx >= 0) {
+            // Override: replace existing binding
+            const oldAgent = currentConfig.bindings[existingIdx].agentId;
+            currentConfig.bindings[existingIdx] = {
+              agentId: agentName,
+              match: {
+                channel: "telegram",
+                peer: { kind: "group", id: joinEntry.groupId },
+              },
+            };
+            await writeConfigFile(currentConfig);
+            removeGroupJoin(replyToId);
+
+            await ctx.api.sendMessage(
+              WAR_ROOM_ID,
+              `✅ 已覆蓋綁定\n\n群組：${joinEntry.groupTitle}\nID：${joinEntry.groupId}\n${oldAgent} → ${agentName}`,
+              { reply_to_message_id: msg.message_id },
+            );
+            runtime.log?.(
+              `[telegram] Re-bound group "${joinEntry.groupTitle}" (${joinEntry.groupId}): ${oldAgent} → ${agentName}`,
+            );
+            return;
+          }
+
+          // New binding
+          currentConfig.bindings.push({
+            agentId: agentName,
+            match: {
+              channel: "telegram",
+              peer: { kind: "group", id: joinEntry.groupId },
+            },
+          });
+          await writeConfigFile(currentConfig);
+          removeGroupJoin(replyToId);
+
+          await ctx.api.sendMessage(
+            WAR_ROOM_ID,
+            `✅ 已綁定\n\n群組：${joinEntry.groupTitle}\nID：${joinEntry.groupId}\nAgent：${agentName}`,
+            { reply_to_message_id: msg.message_id },
+          );
+          runtime.log?.(
+            `[telegram] Auto-bound group "${joinEntry.groupTitle}" (${joinEntry.groupId}) → agent "${agentName}"`,
+          );
+          return;
+        }
+      }
+      // ── End war room reply-to-bind ──
 
       const chatId = msg.chat.id;
       const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";

@@ -104,6 +104,19 @@ export class GatewayClient {
     if (this.closed) {
       return;
     }
+    // Prevent overlapping connections: tear down stale socket before reconnecting.
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch {
+        // Ignore close errors on stale socket.
+      }
+      this.ws = null;
+    }
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
     const url = this.opts.url ?? "ws://127.0.0.1:18789";
     if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
       this.opts.onConnectError?.(new Error("gateway tls fingerprint requires wss:// gateway url"));
@@ -168,6 +181,10 @@ export class GatewayClient {
 
   stop() {
     this.closed = true;
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
@@ -270,20 +287,24 @@ export class GatewayClient {
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
-        if (canFallbackToShared && this.opts.deviceIdentity) {
-          clearDeviceAuthToken({
-            deviceId: this.opts.deviceIdentity.deviceId,
-            role,
-          });
+        try {
+          if (canFallbackToShared && this.opts.deviceIdentity) {
+            clearDeviceAuthToken({
+              deviceId: this.opts.deviceIdentity.deviceId,
+              role,
+            });
+          }
+          this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
+          const msg = `gateway connect failed: ${String(err)}`;
+          if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE) {
+            logDebug(msg);
+          } else {
+            logError(msg);
+          }
+          this.ws?.close(1008, "connect failed");
+        } catch {
+          /* prevent unhandled rejection if error handler itself throws */
         }
-        this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
-        const msg = `gateway connect failed: ${String(err)}`;
-        if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE) {
-          logDebug(msg);
-        } else {
-          logError(msg);
-        }
-        this.ws?.close(1008, "connect failed");
       });
   }
 

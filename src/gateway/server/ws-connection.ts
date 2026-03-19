@@ -60,6 +60,7 @@ export function attachGatewayWsConnectionHandler(params: {
   gatewayHost?: string;
   canvasHostEnabled: boolean;
   canvasHostServerPort?: number;
+  canvasHostUrlOverride?: string;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
@@ -86,6 +87,7 @@ export function attachGatewayWsConnectionHandler(params: {
     gatewayHost,
     canvasHostEnabled,
     canvasHostServerPort,
+    canvasHostUrlOverride,
     resolvedAuth,
     rateLimiter,
     gatewayMethods,
@@ -116,13 +118,15 @@ export function attachGatewayWsConnectionHandler(params: {
     const canvasHostPortForWs = canvasHostServerPort ?? (canvasHostEnabled ? port : undefined);
     const canvasHostOverride =
       gatewayHost && gatewayHost !== "0.0.0.0" && gatewayHost !== "::" ? gatewayHost : undefined;
-    const canvasHostUrl = resolveCanvasHostUrl({
-      canvasPort: canvasHostPortForWs,
-      hostOverride: canvasHostServerPort ? canvasHostOverride : undefined,
-      requestHost: upgradeReq.headers.host,
-      forwardedProto: upgradeReq.headers["x-forwarded-proto"],
-      localAddress: upgradeReq.socket?.localAddress,
-    });
+    const canvasHostUrl =
+      canvasHostUrlOverride ||
+      resolveCanvasHostUrl({
+        canvasPort: canvasHostPortForWs,
+        hostOverride: canvasHostServerPort ? canvasHostOverride : undefined,
+        requestHost: upgradeReq.headers.host,
+        forwardedProto: upgradeReq.headers["x-forwarded-proto"],
+        localAddress: upgradeReq.socket?.localAddress,
+      });
 
     logWs("in", "open", { connId, remoteAddr });
     let handshakeState: "pending" | "connected" | "failed" = "pending";

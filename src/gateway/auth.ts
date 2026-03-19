@@ -145,7 +145,7 @@ function hasTailscaleProxyHeaders(req?: IncomingMessage): boolean {
   );
 }
 
-function isTailscaleProxyRequest(req?: IncomingMessage): boolean {
+export function isTailscaleProxyRequest(req?: IncomingMessage): boolean {
   if (!req) {
     return false;
   }

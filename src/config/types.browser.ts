@@ -38,4 +38,21 @@ export type BrowserConfig = {
   profiles?: Record<string, BrowserProfileConfig>;
   /** Default snapshot options (applied by the browser tool/CLI when unset). */
   snapshotDefaults?: BrowserSnapshotDefaults;
+  /** Advanced stealth browser settings (browser_advanced tool). */
+  advanced?: BrowserAdvancedConfig;
+};
+
+export type BrowserAdvancedConfig = {
+  /** Enable the browser_advanced tool. Default: true */
+  enabled?: boolean;
+  /** Max concurrent stealth sessions. Default: 5 */
+  maxSessions?: number;
+  /** Session TTL in ms before auto-cleanup. Default: 300000 (5 min) */
+  sessionTtlMs?: number;
+  /** Stagehand AI integration settings. */
+  stagehand?: {
+    enabled?: boolean;
+    modelProvider?: string;
+    modelId?: string;
+  };
 };

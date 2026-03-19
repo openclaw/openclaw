@@ -604,10 +604,12 @@ export async function runAgentTurnWithFallback(params: {
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isContextOverflow
-        ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+        ? "⚠️ 對話太長了，請用 /new 開啟新對話。"
         : isRoleOrderingError
-          ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+          ? "⚠️ 訊息順序衝突，請再試一次。如持續發生請用 /new 重新開始。"
+          : isTransientHttp
+            ? "⚠️ AI 服務暫時繁忙，請稍後再試。"
+            : `⚠️ 處理失敗: ${trimmedMessage}`;
 
       return {
         kind: "final",

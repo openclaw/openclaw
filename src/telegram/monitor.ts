@@ -182,7 +182,15 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       try {
         // runner.task() returns a promise that resolves when the runner stops
         await runner.task();
-        return;
+        // Runner stopped gracefully (not from abort). This can happen after
+        // transient network recovery — restart the polling loop instead of
+        // exiting permanently which would kill Telegram connectivity forever.
+        if (opts.abortSignal?.aborted) {
+          return;
+        }
+        restartAttempts = 0;
+        log("[telegram] polling runner exited gracefully; restarting polling loop.");
+        continue;
       } catch (err) {
         if (opts.abortSignal?.aborted) {
           throw err;

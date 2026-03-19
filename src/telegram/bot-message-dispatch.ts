@@ -15,6 +15,7 @@ import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { filterThoughtLeakPayload } from "../auto-reply/reply/thought-leak-filter.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
@@ -261,8 +262,17 @@ export const dispatchTelegramMessage = async ({
           await flushDraft();
           draftStream?.stop();
         }
+        const filtered = filterThoughtLeakPayload(payload);
+        if (
+          !filtered.text &&
+          !filtered.mediaUrl &&
+          !filtered.mediaUrls?.length &&
+          !filtered.channelData
+        ) {
+          return; // entirely thought-leak content, skip delivery
+        }
         const result = await deliverReplies({
-          replies: [payload],
+          replies: [filtered],
           chatId: String(chatId),
           token: opts.token,
           runtime,

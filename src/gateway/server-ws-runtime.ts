@@ -13,6 +13,7 @@ export function attachGatewayWsHandlers(params: {
   gatewayHost?: string;
   canvasHostEnabled: boolean;
   canvasHostServerPort?: number;
+  canvasHostUrlOverride?: string;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
@@ -39,6 +40,7 @@ export function attachGatewayWsHandlers(params: {
     gatewayHost: params.gatewayHost,
     canvasHostEnabled: params.canvasHostEnabled,
     canvasHostServerPort: params.canvasHostServerPort,
+    canvasHostUrlOverride: params.canvasHostUrlOverride,
     resolvedAuth: params.resolvedAuth,
     rateLimiter: params.rateLimiter,
     gatewayMethods: params.gatewayMethods,

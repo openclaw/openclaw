@@ -62,5 +62,18 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
     return undefined;
   }
   const formatted = host.includes(":") ? `[${host}]` : host;
-  return `${scheme}://${formatted}:${port}`;
+
+  // When behind a TLS-terminating reverse proxy (e.g. Tailscale Serve),
+  // the forwarded proto is "https" but the backend port is plain HTTP.
+  // Use the default HTTPS port (443) instead of the backend port so the
+  // client connects to the proxy, not directly to the backend.
+  const resolvedPort =
+    scheme === "https" && parseForwardedProto(params.forwardedProto)?.trim() === "https"
+      ? 443
+      : port;
+
+  // Omit port when it matches the scheme default (443 for https, 80 for http).
+  const omitPort =
+    (scheme === "https" && resolvedPort === 443) || (scheme === "http" && resolvedPort === 80);
+  return omitPort ? `${scheme}://${formatted}` : `${scheme}://${formatted}:${resolvedPort}`;
 }

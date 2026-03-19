@@ -13,6 +13,7 @@ import {
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { getUserDisplayName } from "./send.js";
 
 interface MediaRef {
   path: string;
@@ -176,18 +177,23 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     return null;
   }
 
-  // Build sender info
+  // Build sender info (fetch display name for all messages with userId)
   const senderId = userId ?? "unknown";
+  const senderDisplayName = userId
+    ? await getUserDisplayName(userId, { accountId: account.accountId })
+    : undefined;
   const senderLabel = userId ? `user:${userId}` : "unknown";
 
-  // Build conversation label
+  // Build conversation label (include display name like Telegram does)
   const conversationLabel = isGroup
     ? groupId
       ? `group:${groupId}`
       : roomId
         ? `room:${roomId}`
         : "unknown-group"
-    : senderLabel;
+    : senderDisplayName && userId
+      ? `${senderDisplayName} (${userId})`
+      : senderLabel;
 
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
@@ -207,6 +213,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     chatType: isGroup ? "group" : "direct",
     sender: {
       id: senderId,
+      name: senderDisplayName,
     },
     previousTimestamp,
     envelope: envelopeOptions,
@@ -348,6 +355,9 @@ export async function buildLinePostbackContext(params: {
   }
 
   const senderId = userId ?? "unknown";
+  const senderDisplayName = userId
+    ? await getUserDisplayName(userId, { accountId: account.accountId })
+    : undefined;
   const senderLabel = userId ? `user:${userId}` : "unknown";
 
   const conversationLabel = isGroup
@@ -356,7 +366,9 @@ export async function buildLinePostbackContext(params: {
       : roomId
         ? `room:${roomId}`
         : "unknown-group"
-    : senderLabel;
+    : senderDisplayName && userId
+      ? `${senderDisplayName} (${userId})`
+      : senderLabel;
 
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
@@ -376,6 +388,7 @@ export async function buildLinePostbackContext(params: {
     chatType: isGroup ? "group" : "direct",
     sender: {
       id: senderId,
+      name: senderDisplayName,
     },
     previousTimestamp,
     envelope: envelopeOptions,

@@ -44,6 +44,10 @@ export type CanvasHostConfig = {
   port?: number;
   /** Enable live-reload file watching + WS reloads (default: true). */
   liveReload?: boolean;
+  /** Override the canvasHostUrl sent to clients in hello-ok.
+   *  Useful when behind a reverse proxy (e.g. Tailscale Serve)
+   *  so remote/relay nodes receive the correct external URL. */
+  url?: string;
 };
 
 export type TalkConfig = {

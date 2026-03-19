@@ -380,7 +380,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
   const leadingStatus = extractLeadingHttpStatus(trimmed);
   if (leadingStatus && isCloudflareOrHtmlErrorPage(trimmed)) {
-    return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
+    return `AI 服務暫時無法使用 (HTTP ${leadingStatus.code})，正在切換備用模型。`;
   }
 
   const httpMatch = trimmed.match(HTTP_STATUS_PREFIX_RE);
@@ -462,7 +462,7 @@ export function formatAssistantErrorText(
   }
 
   if (isOverloadedErrorMessage(raw)) {
-    return "The AI service is temporarily overloaded. Please try again in a moment.";
+    return "AI 服務暫時繁忙，正在切換備用模型。如仍無回應請稍後再試。";
   }
 
   if (isBillingErrorMessage(raw)) {
@@ -518,7 +518,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
     if (ERROR_PREFIX_RE.test(trimmed)) {
       if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
-        return "The AI service is temporarily overloaded. Please try again in a moment.";
+        return "AI 服務暫時繁忙，正在切換備用模型。如仍無回應請稍後再試。";
       }
       if (isTimeoutErrorMessage(trimmed)) {
         return "LLM request timed out.";

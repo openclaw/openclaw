@@ -100,4 +100,12 @@ export async function stopBrowserControlService(): Promise<void> {
   } catch {
     // ignore
   }
+
+  // Clean up any advanced stealth browser sessions.
+  try {
+    const { closeAllSessions } = await import("./advanced-session.js");
+    await closeAllSessions();
+  } catch {
+    // ignore — module may not be loaded
+  }
 }

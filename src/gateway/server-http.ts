@@ -24,6 +24,7 @@ import { handleSlackHttpRequest } from "../slack/http/index.js";
 import {
   authorizeGatewayConnect,
   isLocalDirectRequest,
+  isTailscaleProxyRequest,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
@@ -115,6 +116,11 @@ async function authorizeCanvasRequest(params: {
 }): Promise<GatewayAuthResult> {
   const { req, auth, trustedProxies, clients, rateLimiter } = params;
   if (isLocalDirectRequest(req, trustedProxies)) {
+    return { ok: true };
+  }
+
+  // Allow canvas access for Tailscale-authenticated users when configured.
+  if (auth.allowTailscale && isTailscaleProxyRequest(req)) {
     return { ok: true };
   }
 

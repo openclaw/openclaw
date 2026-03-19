@@ -45,6 +45,8 @@ import {
   resolveTelegramStreamMode,
 } from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
+import { trackGroupJoin } from "./group-join-tracker.js";
+import { sendMessageTelegram } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
 export type TelegramBotOptions = {
@@ -139,11 +141,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
       : undefined;
+  const apiRoot = telegramCfg.apiRoot;
   const client: ApiClientOptions | undefined =
-    shouldProvideFetch || timeoutSeconds
+    shouldProvideFetch || timeoutSeconds || apiRoot
       ? {
           ...(shouldProvideFetch && fetchImpl ? { fetch: fetchForClient } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
+          ...(apiRoot ? { apiRoot } : {}),
         }
       : undefined;
 
@@ -384,6 +388,79 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
     opts,
+  });
+
+  // Handle bot added/removed from groups — notify war room
+  bot.on("my_chat_member", async (ctx) => {
+    try {
+      const update = ctx.myChatMember;
+      if (!update) {
+        return;
+      }
+
+      const newStatus = update.new_chat_member.status;
+      const oldStatus = update.old_chat_member.status;
+
+      // Only trigger when bot joins (not when kicked/restricted/left)
+      const isJoin =
+        (newStatus === "member" || newStatus === "administrator") &&
+        oldStatus !== "member" &&
+        oldStatus !== "administrator";
+      if (!isJoin) {
+        return;
+      }
+
+      const chat = update.chat;
+      // Only for groups/supergroups, not private chats
+      if (chat.type !== "group" && chat.type !== "supergroup") {
+        return;
+      }
+
+      const groupId = String(chat.id);
+      const groupTitle = chat.title ?? "Unknown";
+      const groupType = chat.type;
+      const isForum = "is_forum" in chat && chat.is_forum === true;
+      const inviter = update.from;
+      const inviterLabel = inviter
+        ? [inviter.first_name, inviter.last_name].filter(Boolean).join(" ").trim() +
+          (inviter.username ? ` (@${inviter.username})` : "")
+        : undefined;
+
+      runtime.log?.(
+        `[telegram] Bot added to group: "${groupTitle}" (${groupId}) by ${inviterLabel ?? "unknown"}`,
+      );
+
+      // Send notification to war room
+      const WAR_ROOM_ID = "-5069648203";
+      const forumNote = isForum ? "\n\n⚠️ 此群為 Forum（有 topic），binding 會綁到整個群" : "";
+      const notifText =
+        `🔔 我被加入了新群組\n\n` +
+        `群組：${groupTitle}\n` +
+        `ID：${groupId}\n` +
+        `類型：${groupType}\n` +
+        `邀請人：${inviterLabel ?? "未知"}` +
+        forumNote +
+        `\n\n@DufuTheSage 回覆這則訊息 + agent 名稱即可綁定\n` +
+        `例如回覆：speech-lab\n` +
+        `回覆「忽略」則不綁定`;
+
+      const result = await sendMessageTelegram(WAR_ROOM_ID, notifText, {
+        accountId: account.accountId,
+      });
+
+      // Track the notification message for reply-based binding
+      if (result.messageId) {
+        trackGroupJoin(Number(result.messageId), {
+          groupId,
+          groupTitle,
+          groupType,
+          isForum,
+          invitedBy: inviterLabel,
+        });
+      }
+    } catch (err) {
+      runtime.error?.(danger(`[telegram] my_chat_member handler failed: ${String(err)}`));
+    }
   });
 
   // Handle emoji reactions to messages

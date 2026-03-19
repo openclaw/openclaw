@@ -21,7 +21,7 @@ import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
-import { logInfo } from "../logger.js";
+import { logError, logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
@@ -448,7 +448,7 @@ export function createExecTool(
           const noticeSeconds = Math.max(1, Math.round(approvalRunningNoticeMs / 1000));
           const warningText = warnings.length ? `${warnings.join("\n")}\n\n` : "";
 
-          void (async () => {
+          (async () => {
             let decision: string | null = null;
             try {
               const decisionResult = await callGatewayTool<{ decision: string }>(
@@ -537,7 +537,7 @@ export function createExecTool(
                 clearTimeout(runningTimer);
               }
             }
-          })();
+          })().catch((err) => logError(`exec node approval IIFE: ${String(err)}`));
 
           return {
             content: [
@@ -632,7 +632,7 @@ export function createExecTool(
             typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
           const warningText = warnings.length ? `${warnings.join("\n")}\n\n` : "";
 
-          void (async () => {
+          (async () => {
             let decision: string | null = null;
             try {
               const decisionResult = await callGatewayTool<{ decision: string }>(
@@ -777,7 +777,7 @@ export function createExecTool(
               ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
               : `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
             emitExecSystemEvent(summary, { sessionKey: notifySessionKey, contextKey });
-          })();
+          })().catch((err) => logError(`exec gateway approval IIFE: ${String(err)}`));
 
           return {
             content: [
