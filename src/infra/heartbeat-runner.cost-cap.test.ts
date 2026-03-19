@@ -327,10 +327,11 @@ describe("runHeartbeatOnce – maxCostPerRun", () => {
     expect(replyCallCount).toBe(1);
   });
 
-  it("proceeds for free catalog model when maxCostPerRun is 0", async () => {
-    // Free model: estimated cost = $0. maxCostPerRun = 0. 0 > 0 = false, so run proceeds.
-    // This uses heartbeat.model override which goes through the hardcoded table,
-    // not the catalog. A truly free model via catalog would also return $0.
+  it("skips cheap (non-free) model when maxCostPerRun is 0", async () => {
+    // gemini-2.0-flash costs $0.10/M input — non-zero — so with maxCostPerRun = 0
+    // the condition (estimatedCost > 0) is true and the run is skipped.
+    // Note: a *truly* free model (cost.input = 0 in catalog) would NOT be skipped
+    // because 0 > 0 === false. That scenario is covered by the unit tests above.
     const { result, replyCallCount } = await runWithCostCap({
       maxCostPerRun: 0,
       model: "gemini-2.0-flash", // cheapest in table, but still > $0 for non-empty prompt
