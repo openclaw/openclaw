@@ -23,6 +23,12 @@ This guide covers:
 
 Sandboxing details: [Sandboxing](/gateway/sandboxing)
 
+## On this page
+
+- [Containerized Gateway](#containerized-gateway-docker-compose) — run the full OpenClaw Gateway in Docker
+- [Agent Sandbox](#agent-sandbox-host-gateway--docker-tools) — isolate agent tool execution in containers while the gateway runs on the host
+- [Troubleshooting](#troubleshooting)
+
 ## Requirements
 
 - Docker Desktop (or Docker Engine) + Docker Compose v2
