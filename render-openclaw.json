@@ -1,0 +1,36 @@
+{
+  "agents": {
+    "defaults": { 
+      "workspace": "/data/workspace/obsidian-vault" 
+    },
+    "list": [
+      { 
+        "id": "main", 
+        "default": true, 
+        "name": "Coordinator",
+        "subagents": { "allowAgents": ["researcher"] } 
+      },
+      { 
+        "id": "researcher", 
+        "name": "Researcher",
+        "workspace": "/data/workspace/obsidian-vault/research",
+        "tools": { "allow": ["read", "write", "browser", "obsidian"] }
+      }
+    ]
+  },
+  "channels": {
+    "discord": {
+      "enabled": true,
+      "token": "${DISCORD_BOT_TOKEN}", 
+      "dm": { "enabled": true, "policy": "pairing" },
+      "guilds": {
+        "*": { "requireMention": true }
+      }
+    }
+  },
+  "skills": {
+    "entries": {
+      "obsidian": { "enabled": true }
+    }
+  }
+}
