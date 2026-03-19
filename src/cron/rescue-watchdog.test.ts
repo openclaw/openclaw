@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayServiceRestartResult } from "../daemon/service-types.js";
 
 const originalArgv = [...process.argv];
 type MockGatewayTlsRuntime = {
@@ -51,7 +52,11 @@ function createDefaultConfig() {
     },
   };
 }
-const restartService = vi.hoisted(() => vi.fn(async () => ({ outcome: "completed" as const })));
+const restartService = vi.hoisted(() =>
+  vi.fn<() => Promise<GatewayServiceRestartResult>>(async () => ({
+    outcome: "completed",
+  })),
+);
 const readServiceCommand = vi.hoisted(() =>
   vi.fn<
     () => Promise<{
@@ -1104,7 +1109,7 @@ describe("runRescueWatchdogJob", () => {
       close: { code: 1006, reason: "down" },
       error: "down",
     });
-    restartService.mockImplementation(() => new Promise<void>(() => {}));
+    restartService.mockImplementation(() => new Promise<GatewayServiceRestartResult>(() => {}));
 
     const runPromise = runRescueWatchdogJob({
       job: {
@@ -1135,8 +1140,8 @@ describe("runRescueWatchdogJob", () => {
     });
     restartService.mockImplementation(
       () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 60_000);
+        new Promise<GatewayServiceRestartResult>((resolve) => {
+          setTimeout(() => resolve({ outcome: "completed" }), 60_000);
         }),
     );
     const abort = new AbortController();
@@ -1169,7 +1174,7 @@ describe("runRescueWatchdogJob", () => {
       close: { code: 1006, reason: "down" },
       error: "down",
     });
-    restartService.mockImplementation(() => new Promise<void>(() => {}));
+    restartService.mockImplementation(() => new Promise<GatewayServiceRestartResult>(() => {}));
 
     let settled = false;
     const runPromise = runRescueWatchdogJob({
