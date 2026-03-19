@@ -39,6 +39,8 @@ export async function monitorWebInbox(options: {
    * the latest socket at call time so reconnect can swap sockets safely.
    */
   socketRef?: { current: WASocket | null };
+  /** Whether disconnect-class send errors should retry for a reconnect gap. */
+  shouldRetryDisconnect?: () => boolean;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -399,6 +401,7 @@ export async function monitorWebInbox(options: {
       sendComposing,
       reply,
       sendMedia,
+      shouldRetryDisconnect: options.shouldRetryDisconnect,
       mediaPath: enriched.mediaPath,
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,

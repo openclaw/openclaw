@@ -81,6 +81,10 @@ export async function deliverWebReply(params: {
           throw err;
         }
 
+        if (msg.shouldRetryDisconnect?.() === false) {
+          throw err;
+        }
+
         const backoffMs =
           strategy.factor === 1
             ? strategy.baseMs * attempt

@@ -146,6 +146,7 @@ export async function monitorWebChannel(
   const socketRef: { current: import("@whiskeysockets/baileys").WASocket | null } = {
     current: null,
   };
+  let shouldRetryDisconnect = keepAlive;
 
   while (true) {
     if (stopRequested()) {
@@ -206,6 +207,7 @@ export async function monitorWebChannel(
       debounceMs: inboundDebounceMs,
       shouldDebounce,
       socketRef,
+      shouldRetryDisconnect: () => shouldRetryDisconnect,
       onMessage: async (msg: WebInboundMsg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();
@@ -338,6 +340,7 @@ export async function monitorWebChannel(
     }
 
     if (!keepAlive) {
+      shouldRetryDisconnect = false;
       await closeListener();
       process.removeListener("SIGINT", handleSigint);
       return;
@@ -359,6 +362,7 @@ export async function monitorWebChannel(
     emitStatus();
 
     if (stopRequested() || sigintStop || reason === "aborted") {
+      shouldRetryDisconnect = false;
       await closeListener();
       break;
     }
@@ -402,6 +406,7 @@ export async function monitorWebChannel(
     });
 
     if (loggedOut) {
+      shouldRetryDisconnect = false;
       runtime.error(
         `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel web")}\` to relink.`,
       );
@@ -410,6 +415,7 @@ export async function monitorWebChannel(
     }
 
     if (isNonRetryableWebCloseStatus(statusCode)) {
+      shouldRetryDisconnect = false;
       reconnectLogger.warn(
         {
           connectionId,
@@ -429,6 +435,7 @@ export async function monitorWebChannel(
     status.reconnectAttempts = reconnectAttempts;
     emitStatus();
     if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
+      shouldRetryDisconnect = false;
       reconnectLogger.warn(
         {
           connectionId,
@@ -459,6 +466,7 @@ export async function monitorWebChannel(
     runtime.error(
       `WhatsApp Web connection closed (status ${statusCode}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(delay)}… (${errorStr})`,
     );
+    shouldRetryDisconnect = true;
     await closeListener();
     try {
       await sleep(delay, abortSignal);

@@ -36,6 +36,7 @@ export type WebInboundMessage = {
   sendComposing: () => Promise<void>;
   reply: (text: string) => Promise<void>;
   sendMedia: (payload: AnyMessageContent) => Promise<void>;
+  shouldRetryDisconnect?: () => boolean;
   mediaPath?: string;
   mediaType?: string;
   mediaFileName?: string;

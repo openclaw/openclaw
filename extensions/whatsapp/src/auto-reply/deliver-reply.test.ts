@@ -33,6 +33,7 @@ function makeMsg(): WebInboundMsg {
     id: "msg-1",
     reply: vi.fn(async () => undefined),
     sendMedia: vi.fn(async () => undefined),
+    shouldRetryDisconnect: () => true,
   } as unknown as WebInboundMsg;
 }
 
@@ -212,6 +213,28 @@ describe("deliverWebReply", () => {
     expect(sleep).toHaveBeenNthCalledWith(4, 8000);
     expect(sleep).toHaveBeenNthCalledWith(5, 16000);
     expect(sleep).toHaveBeenNthCalledWith(6, 32000);
+  });
+
+  it("does not retry disconnect errors when reconnect is not expected", async () => {
+    const msg = makeMsg();
+    msg.shouldRetryDisconnect = () => false;
+    (msg.reply as unknown as { mockRejectedValue: (v: unknown) => void }).mockRejectedValue(
+      new Error("no active socket - reconnection in progress"),
+    );
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }),
+    ).rejects.toThrow("no active socket - reconnection in progress");
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("sends image media with caption and then remaining text", async () => {
