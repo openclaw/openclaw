@@ -78,6 +78,7 @@ vi.mock("./status.link-channel.js", () => ({
 }));
 
 const { hasPotentialConfiguredChannels } = await import("../channels/config-presence.js");
+const { resolveContextTokensForModel } = await import("../agents/context.js");
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { resolveLinkChannelContext } = await import("./status.link-channel.js");
 const { getStatusSummary } = await import("./status.summary.js");
@@ -104,5 +105,13 @@ describe("getStatusSummary", () => {
     expect(summary.linkChannel).toBeUndefined();
     expect(buildChannelSummary).not.toHaveBeenCalled();
     expect(resolveLinkChannelContext).not.toHaveBeenCalled();
+  });
+
+  it("does not trigger async context warmup while building status summaries", async () => {
+    await getStatusSummary();
+
+    expect(vi.mocked(resolveContextTokensForModel)).toHaveBeenCalledWith(
+      expect.objectContaining({ allowAsyncLoad: false }),
+    );
   });
 });
