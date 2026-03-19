@@ -13,11 +13,11 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
   loginOpenAICodex: mocks.loginOpenAICodex,
 }));
 
-vi.mock("./oauth-flow.js", () => ({
+vi.mock("../plugins/provider-oauth-flow.js", () => ({
   createVpsAwareOAuthHandlers: mocks.createVpsAwareOAuthHandlers,
 }));
 
-vi.mock("./oauth-tls-preflight.js", () => ({
+vi.mock("../plugins/provider-openai-codex-oauth-tls.js", () => ({
   runOpenAIOAuthTlsPreflight: mocks.runOpenAIOAuthTlsPreflight,
   formatOpenAIOAuthTlsPreflightFix: mocks.formatOpenAIOAuthTlsPreflightFix,
 }));
@@ -73,6 +73,7 @@ describe("loginOpenAICodexOAuth", () => {
     mocks.createVpsAwareOAuthHandlers.mockReturnValue({
       onAuth: vi.fn(),
       onPrompt: vi.fn(),
+      onManualCodeInput: vi.fn(),
     });
     mocks.loginOpenAICodex.mockResolvedValue(creds);
 
@@ -80,6 +81,11 @@ describe("loginOpenAICodexOAuth", () => {
 
     expect(result).toEqual(creds);
     expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
+    expect(mocks.loginOpenAICodex).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onManualCodeInput: expect.any(Function),
+      }),
+    );
     expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth complete");
     expect(runtime.error).not.toHaveBeenCalled();
   });
@@ -96,6 +102,7 @@ describe("loginOpenAICodexOAuth", () => {
     mocks.createVpsAwareOAuthHandlers.mockReturnValue({
       onAuth: onAuthSpy,
       onPrompt: vi.fn(),
+      onManualCodeInput: vi.fn(),
     });
     mocks.loginOpenAICodex.mockImplementation(
       async (opts: { onAuth: (event: { url: string }) => Promise<void> }) => {
@@ -119,6 +126,7 @@ describe("loginOpenAICodexOAuth", () => {
     mocks.createVpsAwareOAuthHandlers.mockReturnValue({
       onAuth: vi.fn(),
       onPrompt: vi.fn(),
+      onManualCodeInput: vi.fn(),
     });
     mocks.loginOpenAICodex.mockRejectedValue(new Error("oauth failed"));
 
@@ -157,6 +165,7 @@ describe("loginOpenAICodexOAuth", () => {
     mocks.createVpsAwareOAuthHandlers.mockReturnValue({
       onAuth: vi.fn(),
       onPrompt: vi.fn(),
+      onManualCodeInput: vi.fn(),
     });
     mocks.loginOpenAICodex.mockResolvedValue(creds);
 

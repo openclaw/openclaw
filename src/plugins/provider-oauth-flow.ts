@@ -16,21 +16,29 @@ export function createVpsAwareOAuthHandlers(params: {
 }): {
   onAuth: (event: { url: string }) => Promise<void>;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
+  onManualCodeInput: () => Promise<string>;
 } {
   const manualPromptMessage = params.manualPromptMessage ?? "Paste the redirect URL";
   let manualCodePromise: Promise<string> | undefined;
+
+  const getManualCode = async () => {
+    if (!manualCodePromise) {
+      manualCodePromise = params.prompter
+        .text({
+          message: manualPromptMessage,
+          validate: validateRequiredInput,
+        })
+        .then((value) => String(value));
+    }
+    return await manualCodePromise;
+  };
 
   return {
     onAuth: async ({ url }) => {
       if (params.isRemote) {
         params.spin.stop("OAuth URL ready");
         params.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
-        manualCodePromise = params.prompter
-          .text({
-            message: manualPromptMessage,
-            validate: validateRequiredInput,
-          })
-          .then((value) => String(value));
+        manualCodePromise = getManualCode();
         return;
       }
 
@@ -49,5 +57,6 @@ export function createVpsAwareOAuthHandlers(params: {
       });
       return String(code);
     },
+    onManualCodeInput: getManualCode,
   };
 }
