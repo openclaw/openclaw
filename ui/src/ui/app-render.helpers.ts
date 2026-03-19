@@ -7,7 +7,6 @@ import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
 import {
-  buildChatModelOption,
   createChatModelOverride,
   formatChatModelDisplay,
   normalizeChatModelOverrideValue,
