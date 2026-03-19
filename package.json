@@ -702,7 +702,6 @@
     "@mariozechner/pi-tui": "0.60.0",
     "@modelcontextprotocol/sdk": "1.27.1",
     "@mozilla/readability": "^0.6.0",
-    "@rolldown/binding-darwin-arm64": "1.0.0-rc.10",
     "@sinclair/typebox": "0.34.48",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
