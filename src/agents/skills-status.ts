@@ -30,6 +30,7 @@ export type SkillInstallOption = {
 export type SkillStatusEntry = {
   name: string;
   description: string;
+  descriptionLength: number;
   source: string;
   bundled: boolean;
   filePath: string;
@@ -46,6 +47,7 @@ export type SkillStatusEntry = {
   missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
   install: SkillInstallOption[];
+  warnings?: string[];
 };
 
 export type SkillStatusReport = {
@@ -202,9 +204,18 @@ function buildSkillStatus(
     });
   const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
 
+  const descriptionLength = entry.skill.description?.length ?? 0;
+  const warnings: string[] = [];
+  if (descriptionLength > 200) {
+    warnings.push(
+      `description is verbose (${descriptionLength} chars) — shorten to reduce system prompt bloat`,
+    );
+  }
+
   return {
     name: entry.skill.name,
     description: entry.skill.description,
+    descriptionLength,
     source: entry.skill.source,
     bundled,
     filePath: entry.skill.filePath,
@@ -221,6 +232,7 @@ function buildSkillStatus(
     missing,
     configChecks,
     install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
 

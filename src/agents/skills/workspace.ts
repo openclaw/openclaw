@@ -99,6 +99,7 @@ const DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE = 200;
 const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
 const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 30_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
+const DEFAULT_MAX_SKILL_DESCRIPTION_CHARS = 200;
 
 function sanitizeSkillCommandName(raw: string): string {
   const normalized = raw
@@ -135,6 +136,7 @@ type ResolvedSkillsLimits = {
   maxSkillsInPrompt: number;
   maxSkillsPromptChars: number;
   maxSkillFileBytes: number;
+  maxSkillDescriptionChars: number;
 };
 
 function resolveSkillsLimits(config?: OpenClawConfig): ResolvedSkillsLimits {
@@ -146,6 +148,8 @@ function resolveSkillsLimits(config?: OpenClawConfig): ResolvedSkillsLimits {
     maxSkillsInPrompt: limits?.maxSkillsInPrompt ?? DEFAULT_MAX_SKILLS_IN_PROMPT,
     maxSkillsPromptChars: limits?.maxSkillsPromptChars ?? DEFAULT_MAX_SKILLS_PROMPT_CHARS,
     maxSkillFileBytes: limits?.maxSkillFileBytes ?? DEFAULT_MAX_SKILL_FILE_BYTES,
+    maxSkillDescriptionChars:
+      limits?.maxSkillDescriptionChars ?? DEFAULT_MAX_SKILL_DESCRIPTION_CHARS,
   };
 }
 
@@ -524,6 +528,18 @@ function loadSkillEntries(
       invocation: resolveSkillInvocationPolicy(frontmatter),
     };
   });
+
+  // Warn about verbose skill descriptions that bloat the system prompt.
+  for (const entry of skillEntries) {
+    const descLen = entry.skill.description?.length ?? 0;
+    if (descLen > limits.maxSkillDescriptionChars) {
+      skillsLogger.warn(
+        `Skill "${entry.skill.name}" has a verbose description (${descLen} chars, limit ${limits.maxSkillDescriptionChars}). ` +
+          `Shorten it to reduce system prompt bloat. Run \`openclaw skills check\` to audit.`,
+      );
+    }
+  }
+
   return skillEntries;
 }
 

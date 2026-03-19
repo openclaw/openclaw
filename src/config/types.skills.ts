@@ -35,6 +35,12 @@ export type SkillsLimitsConfig = {
   maxSkillsPromptChars?: number;
   /** Max size (bytes) allowed for a SKILL.md file to be considered. */
   maxSkillFileBytes?: number;
+  /**
+   * Warn when a skill description exceeds this many characters.
+   * Verbose descriptions bloat the system prompt on every turn.
+   * Default: 200.
+   */
+  maxSkillDescriptionChars?: number;
 };
 
 export type SkillsConfig = {

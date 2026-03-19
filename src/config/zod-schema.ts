@@ -905,6 +905,7 @@ export const OpenClawSchema = z
             maxSkillsInPrompt: z.number().int().min(0).optional(),
             maxSkillsPromptChars: z.number().int().min(0).optional(),
             maxSkillFileBytes: z.number().int().min(0).optional(),
+            maxSkillDescriptionChars: z.number().int().min(0).optional(),
           })
           .strict()
           .optional(),
