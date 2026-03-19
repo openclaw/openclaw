@@ -5,18 +5,18 @@ import { monitorSingleAccount } from "./monitor.account.js";
 import { setFeishuRuntime } from "./runtime.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
+type BoundConversation = {
+  bindingId: string;
+  targetSessionKey: string;
+};
+
 const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 const createFeishuReplyDispatcherMock = vi.hoisted(() => vi.fn());
-const resolveBoundConversationMock = vi.hoisted(() =>
-  vi.fn<
-    () => {
-      bindingId: string;
-      targetSessionKey: string;
-    } | null
-  >(() => null),
+const resolveBoundConversationMock = vi.hoisted(
+  () => vi.fn<() => BoundConversation | null>(() => null),
 );
 const touchBindingMock = vi.hoisted(() => vi.fn());
 const resolveAgentRouteMock = vi.hoisted(() => vi.fn());
@@ -117,6 +117,7 @@ function createLifecycleConfig(): ClawdbotConfig {
 function createLifecycleAccount(): ResolvedFeishuAccount {
   return {
     accountId: "acct-menu",
+    selectionSource: "explicit",
     enabled: true,
     configured: true,
     appId: "cli_test",
@@ -129,7 +130,7 @@ function createLifecycleAccount(): ResolvedFeishuAccount {
       requireMention: false,
       resolveSenderNames: false,
     },
-  } as ResolvedFeishuAccount;
+  } as unknown as ResolvedFeishuAccount;
 }
 
 function createRuntimeEnv(): RuntimeEnv {
@@ -209,10 +210,10 @@ describe("Feishu bot-menu lifecycle", () => {
       markDispatchIdle: vi.fn(),
     });
 
-    resolveBoundConversationMock.mockReturnValue({
+    resolveBoundConversationMock.mockImplementation(() => ({
       bindingId: "binding-menu",
       targetSessionKey: "agent:bound-agent:feishu:direct:ou_user1",
-    });
+    }));
 
     resolveAgentRouteMock.mockReturnValue({
       agentId: "main",
