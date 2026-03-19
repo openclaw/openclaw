@@ -1,16 +1,17 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { expect, vi } from "vitest";
 import {
   __testing as discordThreadBindingTesting,
   createThreadBindingManager as createDiscordThreadBindingManager,
 } from "../../../../extensions/discord/runtime-api.js";
 import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
+import { createMatrixThreadBindingManager } from "../../../../extensions/matrix/runtime-api.js";
 import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/runtime-api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getSessionBindingService,
-  registerSessionBindingAdapter,
-  unregisterSessionBindingAdapter,
-  type SessionBindingBindInput,
   type SessionBindingCapabilities,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
@@ -129,7 +130,7 @@ type DirectoryContractEntry = {
 type SessionBindingContractEntry = {
   id: string;
   expectedCapabilities: SessionBindingCapabilities;
-  getCapabilities: () => SessionBindingCapabilities;
+  getCapabilities: () => SessionBindingCapabilities | Promise<SessionBindingCapabilities>;
   bindAndResolve: () => Promise<SessionBindingRecord>;
   unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
   cleanup: () => Promise<void> | void;
@@ -594,72 +595,21 @@ const baseSessionBindingCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
-function createMatrixSessionBindingRecord(input: SessionBindingBindInput): SessionBindingRecord {
-  const parentConversationId = input.conversation.parentConversationId?.trim() || undefined;
-  const isChildPlacement = input.placement === "child";
-  const conversationId = isChildPlacement ? "$root" : input.conversation.conversationId.trim();
-  return {
-    bindingId: `matrix:ops:${conversationId}:${input.targetSessionKey}`,
-    targetSessionKey: input.targetSessionKey,
-    targetKind: input.targetKind,
-    conversation: {
-      channel: "matrix",
+async function createContractMatrixThreadBindingManager() {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "matrix-contract-thread-bindings-"));
+  return await createMatrixThreadBindingManager({
+    accountId: "ops",
+    auth: {
       accountId: "ops",
-      conversationId,
-      parentConversationId: isChildPlacement
-        ? parentConversationId || input.conversation.conversationId.trim()
-        : parentConversationId,
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "token",
     },
-    status: "active",
-    boundAt: 1,
-  };
-}
-
-function registerMatrixSessionBindingAdapter() {
-  const bindings = new Map<string, SessionBindingRecord>();
-  unregisterSessionBindingAdapter({
-    channel: "matrix",
-    accountId: "ops",
-  });
-  registerSessionBindingAdapter({
-    channel: "matrix",
-    accountId: "ops",
-    capabilities: {
-      placements: ["current", "child"],
-      bindSupported: true,
-      unbindSupported: true,
-    },
-    bind: async (input) => {
-      const binding = createMatrixSessionBindingRecord(input);
-      bindings.set(binding.bindingId, binding);
-      return binding;
-    },
-    listBySession: (targetSessionKey) =>
-      [...bindings.values()].filter((binding) => binding.targetSessionKey === targetSessionKey),
-    resolveByConversation: (ref) =>
-      [...bindings.values()].find(
-        (binding) =>
-          binding.conversation.channel === ref.channel &&
-          binding.conversation.accountId === ref.accountId &&
-          binding.conversation.conversationId === ref.conversationId &&
-          binding.conversation.parentConversationId ===
-            (ref.parentConversationId?.trim() || undefined),
-      ) ?? null,
-    unbind: async (input) => {
-      const removed = [...bindings.values()].filter((binding) => {
-        if (input.bindingId?.trim()) {
-          return binding.bindingId === input.bindingId.trim();
-        }
-        if (input.targetSessionKey?.trim()) {
-          return binding.targetSessionKey === input.targetSessionKey.trim();
-        }
-        return false;
-      });
-      for (const binding of removed) {
-        bindings.delete(binding.bindingId);
-      }
-      return removed;
-    },
+    client: {} as never,
+    stateDir,
+    idleTimeoutMs: 24 * 60 * 60 * 1000,
+    maxAgeMs: 0,
+    enableSweeper: false,
   });
 }
 
@@ -790,15 +740,15 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
       unbindSupported: true,
       placements: ["current", "child"],
     },
-    getCapabilities: () => {
-      registerMatrixSessionBindingAdapter();
+    getCapabilities: async () => {
+      await createContractMatrixThreadBindingManager();
       return getSessionBindingService().getCapabilities({
         channel: "matrix",
         accountId: "ops",
       });
     },
     bindAndResolve: async () => {
-      registerMatrixSessionBindingAdapter();
+      await createContractMatrixThreadBindingManager();
       const service = getSessionBindingService();
       const binding = await service.bind({
         targetSessionKey: "agent:matrix:subagent:child-1",
@@ -825,10 +775,8 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
-      unregisterSessionBindingAdapter({
-        channel: "matrix",
-        accountId: "ops",
-      });
+      const manager = await createContractMatrixThreadBindingManager();
+      manager.stop();
       expect(
         getSessionBindingService().resolveByConversation({
           channel: "matrix",

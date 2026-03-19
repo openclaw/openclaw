@@ -1,6 +1,11 @@
 export * from "openclaw/plugin-sdk/matrix";
 export * from "./src/auth-precedence.js";
 export {
+  createMatrixThreadBindingManager,
+  getMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+} from "./src/matrix/thread-bindings.js";
+export {
   findMatrixAccountEntry,
   hashMatrixAccessToken,
   listMatrixEnvAccountIds,
