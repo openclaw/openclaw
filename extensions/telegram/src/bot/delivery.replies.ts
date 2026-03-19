@@ -634,6 +634,7 @@ export async function deliverReplies(params: {
           channelId: "telegram",
           accountId: params.accountId,
           conversationId: params.chatId,
+          sessionKey: params.sessionKeyForInternalHooks,
         },
       );
       if (hookResult?.cancel) {
