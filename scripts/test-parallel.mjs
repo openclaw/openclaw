@@ -787,7 +787,13 @@ const runOnce = (entry, extraArgs = []) =>
         ? `${nextNodeOptions} --max-old-space-size=${maxOldSpaceSizeMb}`.trim()
         : nextNodeOptions;
     if (heapSnapshotEnabled && heapSnapshotDir) {
-      fs.mkdirSync(heapSnapshotDir, { recursive: true });
+      try {
+        fs.mkdirSync(heapSnapshotDir, { recursive: true });
+      } catch (err) {
+        console.error(`[test-parallel] failed to create heap snapshot dir ${heapSnapshotDir}: ${String(err)}`);
+        resolve(1);
+        return;
+      }
       resolvedNodeOptions = ensureNodeOptionFlag(
         resolvedNodeOptions,
         "--diagnostic-dir=",
@@ -798,6 +804,7 @@ const runOnce = (entry, extraArgs = []) =>
         "--heapsnapshot-signal=",
         `--heapsnapshot-signal=${heapSnapshotSignal}`,
       );
+    }
     }
     let output = "";
     let fatalSeen = false;
