@@ -206,7 +206,11 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   loadDotEnv({ quiet: true });
   setConfigSource(resolveConfigSource(process.env));
 
-  const cfg = loadConfig();
+  // loadConfig() always uses file IO unless a runtime snapshot exists, so in Nacos-only
+  // deployments it would bind the wrong port and use file-based gateway.mode. Use the
+  // snapshot from the current source (Nacos or file) for preflight.
+  const preflightSnapshot = await readConfigFileSnapshot().catch(() => null);
+  const cfg = preflightSnapshot?.valid ? preflightSnapshot.config : loadConfig();
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error("Invalid port");
@@ -319,7 +323,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
   const tokenRaw = toOptionString(opts.token);
 
-  const snapshot = await readConfigFileSnapshot().catch(() => null);
+  const snapshot = preflightSnapshot;
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
   const mode = cfg.gateway?.mode;
