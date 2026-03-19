@@ -141,7 +141,7 @@ describe("applyJobResult – delivered=true overrides error status (#50170)", ()
   it("does not apply error backoff to nextRunAtMs for recurring job when delivered=true overrides error", () => {
     // Use a high-frequency schedule so the backoff (30 s minimum) would
     // exceed the natural interval and push nextRunAtMs out if applied.
-    const schedule = { kind: "every" as const, intervalMs: 5_000 };
+    const schedule = { kind: "every" as const, everyMs: 5_000 };
 
     const jobError = createJob({ schedule });
     const jobOk = createJob({ id: "test-job-2", schedule });
