@@ -22,32 +22,75 @@
 static GDBusProxy *manager_proxy = NULL;
 static GDBusProxy *unit_proxy = NULL;
 static gchar *cached_exec_start = NULL;
+static gchar **cached_environment = NULL;
 static guint properties_changed_signal_id = 0;
 
 static void fetch_unit_properties(void);
 extern void systemd_refresh(void);
 
-static gchar* extract_exec_start_from_file(void) {
+static void extract_service_config_from_file(gchar **exec_start_out, gchar ***environment_out) {
+    *exec_start_out = NULL;
+    *environment_out = NULL;
+
     const gchar *home_dir = g_get_home_dir();
-    if (!home_dir) return NULL;
+    if (!home_dir) return;
 
     g_autofree gchar *unit_path = g_build_filename(home_dir, ".config", "systemd", "user", "openclaw-gateway.service", NULL);
     
-    g_autoptr(GKeyFile) key_file = g_key_file_new();
+    g_autofree gchar *contents = NULL;
     g_autoptr(GError) error = NULL;
-    
-    if (!g_key_file_load_from_file(key_file, unit_path, G_KEY_FILE_NONE, &error)) {
-        // Normal if unit not installed yet
-        return NULL;
+
+    if (!g_file_get_contents(unit_path, &contents, NULL, &error)) {
+        return;
     }
-    
-    gchar *exec_start = g_key_file_get_string(key_file, "Service", "ExecStart", &error);
-    if (!exec_start) {
-        g_warning("Could not find ExecStart in %s: %s", unit_path, error->message);
-        return NULL;
+
+    gchar **lines = g_strsplit(contents, "\n", -1);
+    gboolean in_service_section = FALSE;
+    GPtrArray *env_array = g_ptr_array_new_with_free_func(g_free);
+    gchar *exec_start = NULL;
+
+    for (gint i = 0; lines[i] != NULL; i++) {
+        gchar *line = g_strstrip(lines[i]);
+        if (line[0] == '#' || line[0] == ';') continue;
+        
+        if (g_str_has_prefix(line, "[")) {
+            if (g_strcmp0(line, "[Service]") == 0) {
+                in_service_section = TRUE;
+            } else {
+                in_service_section = FALSE;
+            }
+            continue;
+        }
+
+        if (in_service_section) {
+            if (g_str_has_prefix(line, "ExecStart=")) {
+                g_free(exec_start);
+                exec_start = g_strdup(line + 10);
+            } else if (g_str_has_prefix(line, "Environment=")) {
+                gchar *env_val = line + 12;
+                gint argc = 0;
+                gchar **argv = NULL;
+                if (g_shell_parse_argv(env_val, &argc, &argv, NULL)) {
+                    for (gint j = 0; j < argc; j++) {
+                        g_ptr_array_add(env_array, g_strdup(argv[j]));
+                    }
+                    g_strfreev(argv);
+                }
+            }
+        }
     }
+
+    g_strfreev(lines);
+
+    *exec_start_out = exec_start;
     
-    return exec_start;
+    if (env_array->len > 0) {
+        g_ptr_array_add(env_array, NULL);
+        *environment_out = (gchar **)g_ptr_array_free(env_array, FALSE);
+    } else {
+        g_ptr_array_free(env_array, TRUE);
+        *environment_out = NULL;
+    }
 }
 
 static void on_unit_properties_changed(GDBusProxy *proxy, GVariant *changed_properties, const gchar* const *invalidated_properties, gpointer user_data) {
@@ -132,11 +175,16 @@ static void fetch_unit_properties(void) {
         }
     }
 
+    if (cached_environment) {
+        sys_state.environment = g_strdupv(cached_environment);
+    }
+
     state_update_systemd(&sys_state);
 
     g_free(sys_state.active_state);
     g_free(sys_state.sub_state);
     g_strfreev(sys_state.exec_start_argv);
+    g_strfreev(sys_state.environment);
 }
 
 void systemd_init(void) {
@@ -164,7 +212,7 @@ void systemd_init(void) {
     // Systemd docs require us to call Subscribe before getting signals for non-running units
     g_dbus_proxy_call(manager_proxy, "Subscribe", NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
 
-    cached_exec_start = extract_exec_start_from_file();
+    extract_service_config_from_file(&cached_exec_start, &cached_environment);
 }
 
 static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointer user_data) {
@@ -188,11 +236,16 @@ static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointe
                 sys_state.exec_start_argv = argvp;
             }
         }
+
+        if (cached_environment) {
+            sys_state.environment = g_strdupv(cached_environment);
+        }
         
         state_update_systemd(&sys_state);
         g_free(sys_state.active_state);
         g_free(sys_state.sub_state);
         g_strfreev(sys_state.exec_start_argv);
+        g_strfreev(sys_state.environment);
         return;
     }
 
@@ -210,9 +263,12 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
     g_autoptr(GError) error = NULL;
     g_autoptr(GVariant) result = g_dbus_proxy_call_finish(G_DBUS_PROXY(source_object), res, &error);
 
-    // 1. Refresh ExecStart unconditionally, so reconfigurations or deletions update the cache
+    // 1. Refresh config unconditionally, so reconfigurations or deletions update the cache
     g_free(cached_exec_start);
-    cached_exec_start = extract_exec_start_from_file();
+    cached_exec_start = NULL;
+    g_strfreev(cached_environment);
+    cached_environment = NULL;
+    extract_service_config_from_file(&cached_exec_start, &cached_environment);
 
     // 2. If GetUnitFileState fails, treat as not installed
     if (!result) {

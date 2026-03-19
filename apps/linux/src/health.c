@@ -16,6 +16,7 @@
 #include <glib.h>
 #include <gio/gio.h>
 #include <json-glib/json-glib.h>
+#include <string.h>
 #include "state.h"
 
 void health_init(void) {
@@ -54,11 +55,6 @@ static gchar** resolve_openclaw_argv(const gchar *subcommand) {
                 if (g_strcmp0(subcommand, "status") == 0) {
                     g_ptr_array_add(arr, g_strdup("--json"));
                 }
-            }
-            
-            // Append remaining flags
-            for (gint i = gateway_idx + 1; i < len; i++) {
-                g_ptr_array_add(arr, g_strdup(sys->exec_start_argv[i]));
             }
             
             g_ptr_array_add(arr, NULL);
@@ -132,6 +128,37 @@ static gchar** resolve_openclaw_argv(const gchar *subcommand) {
         }
     }
     return new_argv;
+}
+
+static GSubprocess *spawn_gateway_subprocess(const gchar *subcommand, GError **error) {
+    gchar **argv = resolve_openclaw_argv(subcommand);
+    
+    GSubprocessLauncher *launcher = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE);
+    
+    gchar **envp = g_get_environ();
+    
+    SystemdState *sys = state_get_systemd();
+    if (sys && sys->environment) {
+        for (gint i = 0; sys->environment[i] != NULL; i++) {
+            gchar *env_line = sys->environment[i];
+            gchar *eq = strchr(env_line, '=');
+            if (eq) {
+                g_autofree gchar *key = g_strndup(env_line, eq - env_line);
+                gchar *value = eq + 1;
+                envp = g_environ_setenv(envp, key, value, TRUE);
+            }
+        }
+    }
+    
+    g_subprocess_launcher_set_environ(launcher, envp);
+    g_strfreev(envp);
+    
+    GSubprocess *subprocess = g_subprocess_launcher_spawnv(launcher, (const gchar *const *)argv, error);
+    
+    g_object_unref(launcher);
+    g_strfreev(argv);
+    
+    return subprocess;
 }
 
 static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, gpointer user_data) {
@@ -236,14 +263,9 @@ void health_probe_gateway(void) {
     if (state_get_health()->in_flight) return;
     
     g_autoptr(GError) error = NULL;
-    gchar **argv = resolve_openclaw_argv("status");
     
-    GSubprocess *subprocess = g_subprocess_newv((const gchar *const *)argv,
-                                                G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE,
-                                                &error);
+    GSubprocess *subprocess = spawn_gateway_subprocess("status", &error);
     
-    g_strfreev(argv);
-
     if (!subprocess) {
         g_warning("Failed to spawn health probe: %s", error->message);
         HealthState hs = {0};
@@ -322,14 +344,9 @@ void health_run_deep_probe(void) {
     if (state_get_probe()->in_flight) return;
 
     g_autoptr(GError) error = NULL;
-    gchar **argv = resolve_openclaw_argv("probe");
     
-    GSubprocess *subprocess = g_subprocess_newv((const gchar *const *)argv,
-                                                G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE,
-                                                &error);
+    GSubprocess *subprocess = spawn_gateway_subprocess("probe", &error);
     
-    g_strfreev(argv);
-
     if (!subprocess) {
         ProbeState ps = {0};
         ps.ran = TRUE;

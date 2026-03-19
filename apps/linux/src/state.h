@@ -34,6 +34,7 @@ typedef struct {
     char *active_state;
     char *sub_state;
     char **exec_start_argv;
+    char **environment;
 } SystemdState;
 
 typedef struct {
@@ -81,4 +82,3 @@ ProbeState* state_get_probe(void);
 // Callbacks (implemented elsewhere)
 void notify_on_transition(AppState old_state, AppState new_state);
 void tray_update_from_state(AppState state);
-

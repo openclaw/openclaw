@@ -123,6 +123,8 @@ void tray_init(void) {
                                        &error);
     if (!helper_process) {
         g_warning("Failed to spawn tray helper (%s): %s", helper_path, error->message);
+        GApplication *app = g_application_get_default();
+        if (app) g_application_quit(app);
         return;
     }
     

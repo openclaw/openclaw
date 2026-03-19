@@ -77,6 +77,7 @@ void state_update_systemd(SystemdState *sys_state) {
     g_free(current_sys_state.active_state);
     g_free(current_sys_state.sub_state);
     g_strfreev(current_sys_state.exec_start_argv);
+    g_strfreev(current_sys_state.environment);
     
     current_sys_state = *sys_state;
     current_sys_state.active_state = g_strdup(sys_state->active_state);
@@ -85,6 +86,11 @@ void state_update_systemd(SystemdState *sys_state) {
         current_sys_state.exec_start_argv = g_strdupv(sys_state->exec_start_argv);
     } else {
         current_sys_state.exec_start_argv = NULL;
+    }
+    if (sys_state->environment) {
+        current_sys_state.environment = g_strdupv(sys_state->environment);
+    } else {
+        current_sys_state.environment = NULL;
     }
     
     trigger_updates(compute_state());
