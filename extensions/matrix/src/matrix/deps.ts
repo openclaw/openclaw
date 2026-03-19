@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/matrix";
+import type { RuntimeEnv } from "../runtime-api.js";
 
 const REQUIRED_MATRIX_PACKAGES = ["matrix-js-sdk", "@matrix-org/matrix-sdk-crypto-nodejs"];
 

@@ -1,3 +1,5 @@
+import { resolveMatrixEnvAuthReadiness } from "./matrix/client.js";
+import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
@@ -5,9 +7,7 @@ import {
   normalizeAccountId,
   normalizeSecretInputString,
   type ChannelSetupInput,
-} from "openclaw/plugin-sdk/matrix";
-import { resolveMatrixEnvAuthReadiness } from "./matrix/client.js";
-import { updateMatrixAccountConfig } from "./matrix/config-update.js";
+} from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
