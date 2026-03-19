@@ -168,7 +168,6 @@ export const VENICE_MODEL_CATALOG = [
     input: ["text"],
     contextWindow: 160000,
     maxTokens: 32768,
-    supportsTools: false,
     privacy: "private",
   },
 
