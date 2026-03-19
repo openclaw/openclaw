@@ -961,7 +961,8 @@ function rewriteTranscriptBeforeUserPivot(params: {
   }
 
   const keepMessages = messages.slice(0, pivotAbsoluteIndex);
-  fs.copyFileSync(params.transcriptPath, `${params.transcriptPath}.edit.${Date.now()}.bak`);
+  const backupPath = `${params.transcriptPath}.edit.bak`;
+  fs.copyFileSync(params.transcriptPath, backupPath);
 
   const header = {
     type: "session",
@@ -1252,6 +1253,21 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (!transcriptPath) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "transcript not found"));
       return;
+    }
+
+    // Reject edit when there is an active run for this session to avoid transcript races.
+    for (const [, active] of context.chatAbortControllers) {
+      if (active.sessionKey === p.sessionKey) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "cannot edit while a run is active for this session",
+          ),
+        );
+        return;
+      }
     }
 
     try {

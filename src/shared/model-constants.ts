@@ -19,6 +19,8 @@ export const ROUTING_TAG = {
   FAST: "fast",
   /** Image/multimodal tasks. */
   IMAGE: "image",
+  /** Higher-tier / expensive routing. */
+  EXPENSIVE: "expensive",
 } as const;
 
 export type RoutingTag = (typeof ROUTING_TAG)[keyof typeof ROUTING_TAG];

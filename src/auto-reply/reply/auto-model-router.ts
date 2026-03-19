@@ -9,7 +9,7 @@ import {
  * and optional micro-batching. Activates when selected model equals AUTO_MODEL.
  */
 import type { OpenClawConfig } from "../../config/config.js";
-import { AUTO_MODEL } from "../../shared/model-constants.js";
+import { AUTO_MODEL, ROUTING_TAG, type RoutingTag } from "../../shared/model-constants.js";
 
 /** Re-exported for existing imports/tests. */
 export { AUTO_MODEL };
@@ -39,7 +39,7 @@ export type RouterResult = {
   provider: string;
   model: string;
   reason: string;
-  tag: "expensive";
+  tag: RoutingTag;
   pass1TokenUsage?: Pass1TokenUsage;
 };
 
@@ -102,7 +102,7 @@ function selectModelFromConfig(cfg: OpenClawConfig | undefined): RouterResult {
     provider: ref.provider,
     model: ref.model,
     reason: "default",
-    tag: "expensive",
+    tag: ROUTING_TAG.EXPENSIVE,
     pass1TokenUsage: { input: 0, output: 0, estimated: true },
   };
 }
@@ -120,10 +120,14 @@ function splitModelKey(key: string): { provider: string; model: string } | null 
   return { provider, model };
 }
 
+/** Only used when autoModelRouting.preferLocalOnKeywords is true; avoids overriding explicit user model choice. */
 function maybeSelectLocalModel(params: {
   cfg: OpenClawConfig | undefined;
   promptText?: string;
 }): RouterResult | null {
+  if (params.cfg?.agents?.defaults?.autoModelRouting?.preferLocalOnKeywords !== true) {
+    return null;
+  }
   const rawPrompt = params.promptText?.toLowerCase() ?? "";
   const shouldPreferLocal =
     rawPrompt.includes("local model") ||
@@ -150,7 +154,7 @@ function maybeSelectLocalModel(params: {
     provider: split.provider,
     model: split.model,
     reason: "local-preferred",
-    tag: "expensive",
+    tag: ROUTING_TAG.EXPENSIVE,
     pass1TokenUsage: { input: 0, output: 0, estimated: true },
   };
 }
@@ -229,7 +233,7 @@ export async function routeAutoModel(params: {
         provider: params.lastNonAutoProvider,
         model: params.lastNonAutoModel,
         reason: "fallback-unavailable",
-        tag: "expensive",
+        tag: ROUTING_TAG.EXPENSIVE,
         pass1TokenUsage: result.pass1TokenUsage,
       };
     }

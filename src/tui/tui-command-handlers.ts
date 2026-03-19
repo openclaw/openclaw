@@ -110,7 +110,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       const autoItem = {
         value: AUTO_MODEL,
         label: "Auto (Recommended)",
-        description: "Let GPT-5.2 choose the best model per prompt",
+        description: "Automatically route to the best available model per prompt",
       };
       const modelItems = models.map((model) => ({
         value: `${model.provider}/${model.id}`,
@@ -529,10 +529,29 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`activation failed: ${String(err)}`);
         }
         break;
-      case "new":
+      case "new": {
+        try {
+          state.sessionInfo.inputTokens = null;
+          state.sessionInfo.outputTokens = null;
+          state.sessionInfo.totalTokens = null;
+          tui.requestRender();
+          // Unique session key so /new does not broadcast to other TUI clients (see #39217).
+          const parts = state.currentSessionKey.split(":");
+          const newKey =
+            parts.length >= 2
+              ? `${parts.slice(0, -1).join(":")}:tui-${randomUUID()}`
+              : `main:tui-${randomUUID()}`;
+          await client.resetSession(newKey, "new");
+          await setSession(newKey);
+          chatLog.addSystem(`new session ${formatSessionKey(newKey)}`);
+          await loadHistory();
+        } catch (err) {
+          chatLog.addSystem(`new session failed: ${String(err)}`);
+        }
+        break;
+      }
       case "reset":
         try {
-          // Clear token counts immediately to avoid stale display (#1523)
           state.sessionInfo.inputTokens = null;
           state.sessionInfo.outputTokens = null;
           state.sessionInfo.totalTokens = null;

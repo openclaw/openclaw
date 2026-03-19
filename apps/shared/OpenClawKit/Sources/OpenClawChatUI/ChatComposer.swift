@@ -135,6 +135,8 @@ struct OpenClawChatComposer: View {
         .help("Session")
     }
 
+    /// Manual attachment only. Image-paste from the text view was intentionally removed;
+    /// attachmentPicker (and attachmentsStrip when showsAttachments) remain for file/image selection.
     @ViewBuilder
     private var attachmentPicker: some View {
         #if os(macOS)

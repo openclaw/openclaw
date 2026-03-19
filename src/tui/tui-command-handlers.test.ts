@@ -8,11 +8,13 @@ function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
   loadHistory?: LoadHistoryMock;
+  setSession?: ReturnType<typeof vi.fn>;
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
+  const setSession = params?.setSession ?? vi.fn().mockResolvedValue(undefined);
   const addUser = vi.fn();
   const addSystem = vi.fn();
   const requestRender = vi.fn();
@@ -36,7 +38,7 @@ function createHarness(params?: {
     closeOverlay: vi.fn(),
     refreshSessionInfo: vi.fn(),
     loadHistory,
-    setSession: vi.fn(),
+    setSession,
     refreshAgents: vi.fn(),
     abortActive: vi.fn(),
     setActivityStatus,
@@ -51,6 +53,7 @@ function createHarness(params?: {
     handleCommand,
     sendChat,
     resetSession,
+    setSession,
     addUser,
     addSystem,
     requestRender,
@@ -106,12 +109,18 @@ describe("tui command handlers", () => {
 
   it("passes reset reason when handling /new and /reset", async () => {
     const loadHistory = vi.fn().mockResolvedValue(undefined);
-    const { handleCommand, resetSession } = createHarness({ loadHistory });
+    const setSession = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand, resetSession } = createHarness({ loadHistory, setSession });
 
     await handleCommand("/new");
     await handleCommand("/reset");
 
-    expect(resetSession).toHaveBeenNthCalledWith(1, "agent:main:main", "new");
+    expect(resetSession).toHaveBeenNthCalledWith(
+      1,
+      expect.stringMatching(/^agent:main:tui-[0-9a-f-]+$/i),
+      "new",
+    );
+    expect(setSession).toHaveBeenCalledWith(expect.stringMatching(/^agent:main:tui-[0-9a-f-]+$/i));
     expect(resetSession).toHaveBeenNthCalledWith(2, "agent:main:main", "reset");
     expect(loadHistory).toHaveBeenCalledTimes(2);
   });
