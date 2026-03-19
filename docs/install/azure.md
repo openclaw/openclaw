@@ -284,7 +284,7 @@ Azure Bastion Standard SKU runs approximately **\$140/month** and the VM (Standa
 
 To reduce costs:
 
-- **Deallocate the VM** when not in use (stops compute billing; disk charges remain):
+- **Deallocate the VM** when not in use (stops compute billing; disk charges remain). The OpenClaw Gateway will not be reachable while the VM is deallocated — restart it when you need it live again:
   ```bash
   az vm deallocate -g rg-openclaw -n vm-openclaw
   az vm start -g rg-openclaw -n vm-openclaw   # restart later
