@@ -29,7 +29,7 @@ Sandboxing details: [Sandboxing](/gateway/sandboxing)
 - At least 2 GB RAM for image build (`pnpm install` may be OOM-killed on 1 GB hosts with exit 137)
 - Enough disk for images + logs
 - If running on a VPS/public host, review
-  [Security hardening for network exposure](/gateway/security#04-network-exposure-bind--port--firewall),
+  [Security hardening for network exposure](/gateway/security#0-4-network-exposure-bind-port-firewall),
   especially Docker `DOCKER-USER` firewall policy.
 
 ## Containerized Gateway (Docker Compose)
