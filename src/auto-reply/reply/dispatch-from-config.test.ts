@@ -2685,7 +2685,7 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         channelId: "telegram",
         accountId: "acc-2",
-        conversationId: "99",
+        conversationId: "telegram:99",
       }),
     );
   });
