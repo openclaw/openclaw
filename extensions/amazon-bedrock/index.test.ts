@@ -154,6 +154,55 @@ describe("amazon-bedrock provider plugin", () => {
     expect(result).toBe(baseFn);
   });
 
+  it("disables prompt caching for Application Inference Profile ARNs with non-Claude model name", () => {
+    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
+    const arn =
+      "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/llama-profile";
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: arn,
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              models: [{ id: arn, name: "Llama 2 via Inference Profile" }],
+            },
+          },
+        },
+      },
+      streamFn: baseFn,
+    } as never);
+
+    expect(
+      wrapped?.(
+        { api: "openai-completions", provider: "amazon-bedrock", id: arn } as never,
+        { messages: [] } as never,
+        {},
+      ),
+    ).toMatchObject({ cacheRetention: "none" });
+  });
+
+  it("disables prompt caching for Application Inference Profile ARNs with no config entry", () => {
+    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
+    const arn =
+      "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/unknown-profile";
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: arn,
+      streamFn: baseFn,
+    } as never);
+
+    expect(
+      wrapped?.(
+        { api: "openai-completions", provider: "amazon-bedrock", id: arn } as never,
+        { messages: [] } as never,
+        {},
+      ),
+    ).toMatchObject({ cacheRetention: "none" });
+  });
+
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
     const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
     const wrapped = provider.wrapStreamFn?.({

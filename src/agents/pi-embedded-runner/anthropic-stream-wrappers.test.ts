@@ -55,10 +55,24 @@ describe("isAnthropicBedrockModel", () => {
       expect(isAnthropicBedrockModel(arn, "General Model")).toBe(false);
     });
 
-    it("should return false for Application Inference Profile ARNs when model name is not provided", () => {
+    it("should return false for Application Inference Profile ARNs when neither profile ID nor model name contains 'claude'", () => {
       const arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-profile";
       expect(isAnthropicBedrockModel(arn)).toBe(false);
       expect(isAnthropicBedrockModel(arn, undefined)).toBe(false);
+      expect(isAnthropicBedrockModel(arn, "Titan Model")).toBe(false);
+    });
+
+    it("should return true for Application Inference Profile ARNs when profile ID contains 'claude' (no model name needed)", () => {
+      expect(
+        isAnthropicBedrockModel(
+          "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile",
+        ),
+      ).toBe(true);
+      expect(
+        isAnthropicBedrockModel(
+          "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-sonnet",
+        ),
+      ).toBe(true);
     });
 
     it("should handle Application Inference Profile ARNs with various formats", () => {
@@ -90,10 +104,15 @@ describe("isAnthropicBedrockModel", () => {
       expect(isAnthropicBedrockModel("test-profile", "test-model")).toBe(false);
     });
 
-    it("should return false for short IDs without model name", () => {
+    it("should return false for short IDs without model name and without 'claude' in ID", () => {
       expect(isAnthropicBedrockModel("my-profile-id")).toBe(false);
       expect(isAnthropicBedrockModel("prod-inference")).toBe(false);
       expect(isAnthropicBedrockModel("test-profile")).toBe(false);
+    });
+
+    it("should return true for short IDs containing 'claude' without model name", () => {
+      expect(isAnthropicBedrockModel("my-claude-profile")).toBe(true);
+      expect(isAnthropicBedrockModel("claude-sonnet-profile")).toBe(true);
     });
   });
 
