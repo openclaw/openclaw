@@ -747,16 +747,11 @@ export function formatAssistantErrorText(
   }
 
   if (isBillingErrorMessage(raw)) {
-    // Extract custom message from JSON error body (e.g. Blink's credits-exhausted message with pricing URL)
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[0]) as { error?: { message?: string }; message?: string };
-        const customMsg = parsed?.error?.message ?? parsed?.message;
-        if (customMsg && customMsg.includes("http")) {
-          return `⚠️ ${customMsg}`;
-        }
-      } catch { /* fall through */ }
+    // For insufficient_quota errors, surface the provider's custom message (e.g. Blink pricing URL)
+    const info = parseApiErrorInfo(raw);
+    if (info?.type === "insufficient_quota" && info.message) {
+      const truncated = info.message.length > 600 ? `${info.message.slice(0, 600)}…` : info.message;
+      return `⚠️ ${truncated}`;
     }
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
@@ -801,6 +796,11 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
 
     if (isBillingErrorMessage(trimmed)) {
+      const info = parseApiErrorInfo(trimmed);
+      if (info?.type === "insufficient_quota" && info.message) {
+        const truncated = info.message.length > 600 ? `${info.message.slice(0, 600)}…` : info.message;
+        return `⚠️ ${truncated}`;
+      }
       return BILLING_ERROR_USER_MESSAGE;
     }
 
