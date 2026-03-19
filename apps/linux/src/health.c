@@ -32,11 +32,51 @@ static gchar** resolve_openclaw_argv(const gchar *subcommand) {
     SystemdState *sys = state_get_systemd();
     if (sys && sys->exec_start_argv && g_strv_length(sys->exec_start_argv) > 0) {
         gint len = g_strv_length(sys->exec_start_argv);
+        gint gateway_idx = -1;
         
-        if (len >= 2 && g_str_has_suffix(sys->exec_start_argv[1], ".js")) {
-            gchar **new_argv = g_new0(gchar*, subcommand ? 6 : 5);
-            new_argv[0] = g_strdup(sys->exec_start_argv[0]); // node
-            new_argv[1] = g_strdup(sys->exec_start_argv[1]); // index.js
+        for (gint i = 0; i < len; i++) {
+            if (g_strcmp0(sys->exec_start_argv[i], "gateway") == 0) {
+                gateway_idx = i;
+                break;
+            }
+        }
+
+        if (gateway_idx >= 0) {
+            GPtrArray *arr = g_ptr_array_new();
+            // Copy prefix up to and including 'gateway'
+            for (gint i = 0; i <= gateway_idx; i++) {
+                g_ptr_array_add(arr, g_strdup(sys->exec_start_argv[i]));
+            }
+            
+            // Insert subcommand
+            if (subcommand) {
+                g_ptr_array_add(arr, g_strdup(subcommand));
+                if (g_strcmp0(subcommand, "status") == 0) {
+                    g_ptr_array_add(arr, g_strdup("--json"));
+                }
+            }
+            
+            // Append remaining flags
+            for (gint i = gateway_idx + 1; i < len; i++) {
+                g_ptr_array_add(arr, g_strdup(sys->exec_start_argv[i]));
+            }
+            
+            g_ptr_array_add(arr, NULL);
+            return (gchar **)g_ptr_array_free(arr, FALSE);
+        }
+    }
+
+    // Priority 2: Repo-local
+    g_autofree gchar *exe_path = g_file_read_link("/proc/self/exe", NULL);
+    if (exe_path) {
+        gchar *last_slash = strrchr(exe_path, '/');
+        if (last_slash) *last_slash = '\0';
+        
+        g_autofree gchar *local_js = g_build_filename(exe_path, "..", "..", "..", "dist", "index.js", NULL);
+        if (g_file_test(local_js, G_FILE_TEST_EXISTS)) {
+            gchar **new_argv = g_new0(gchar*, subcommand && g_strcmp0(subcommand, "status") == 0 ? 6 : 5);
+            new_argv[0] = g_strdup("node"); 
+            new_argv[1] = g_strdup(local_js);
             new_argv[2] = g_strdup("gateway");
             if (subcommand) {
                 new_argv[3] = g_strdup(subcommand);
@@ -45,35 +85,7 @@ static gchar** resolve_openclaw_argv(const gchar *subcommand) {
                 }
             }
             return new_argv;
-        } else if (len >= 1) {
-            // Might be a compiled binary
-            gint count = subcommand ? (g_strcmp0(subcommand, "status") == 0 ? 5 : 4) : 3;
-            gchar **new_argv = g_new0(gchar*, count);
-            new_argv[0] = g_strdup(sys->exec_start_argv[0]);
-            new_argv[1] = g_strdup("gateway");
-            if (subcommand) {
-                new_argv[2] = g_strdup(subcommand);
-                if (g_strcmp0(subcommand, "status") == 0) {
-                    new_argv[3] = g_strdup("--json");
-                }
-            }
-            return new_argv;
         }
-    }
-
-    // Priority 2: Repo-local
-    if (g_file_test("../../dist/index.js", G_FILE_TEST_EXISTS)) {
-        gchar **new_argv = g_new0(gchar*, subcommand && g_strcmp0(subcommand, "status") == 0 ? 6 : 5);
-        new_argv[0] = g_strdup("node"); 
-        new_argv[1] = g_strdup("../../dist/index.js");
-        new_argv[2] = g_strdup("gateway");
-        if (subcommand) {
-            new_argv[3] = g_strdup(subcommand);
-            if (g_strcmp0(subcommand, "status") == 0) {
-                new_argv[4] = g_strdup("--json");
-            }
-        }
-        return new_argv;
     }
 
     // Priority 3: PATH
