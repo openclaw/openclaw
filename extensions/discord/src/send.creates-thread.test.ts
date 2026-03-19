@@ -1,5 +1,6 @@
 import { RateLimitError } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
+import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addRoleDiscord,
@@ -18,7 +19,7 @@ import {
 } from "./send.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 
-vi.mock("../../whatsapp/src/media.js", async () => {
+vi.mock("openclaw/plugin-sdk/web-media", async () => {
   const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
   return discordWebMediaMockFactory();
 });
@@ -288,6 +289,7 @@ describe("uploadEmojiDiscord", () => {
         },
       }),
     );
+    expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/party.png", 256 * 1024);
   });
 });
 
@@ -325,6 +327,7 @@ describe("uploadStickerDiscord", () => {
         },
       }),
     );
+    expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/wave.png", 512 * 1024);
   });
 });
 

@@ -1,12 +1,10 @@
 export {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
-} from "openclaw/plugin-sdk/discord";
+} from "openclaw/plugin-sdk/channel-runtime";
 export {
   buildChannelConfigSchema,
   getChatChannelMeta,
@@ -37,10 +35,9 @@ export {
 export {
   createAccountActionGate,
   createAccountListHelpers,
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  resolveAccountEntry,
-} from "openclaw/plugin-sdk/account-resolution";
+} from "openclaw/plugin-sdk/account-helpers";
+export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+export { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
