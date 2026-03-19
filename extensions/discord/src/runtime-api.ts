@@ -15,6 +15,9 @@ export {
   resolvePollMaxSelections,
   type ActionGate,
   type ChannelPlugin,
+  type DiscordAccountConfig,
+  type DiscordActionConfig,
+  type DiscordConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/discord-core";
 export { DiscordConfigSchema } from "openclaw/plugin-sdk/discord-core";
@@ -42,8 +45,6 @@ export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-runtime";
-export type { DiscordConfig } from "openclaw/plugin-sdk/discord";
-export type { DiscordAccountConfig, DiscordActionConfig } from "openclaw/plugin-sdk/discord";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
