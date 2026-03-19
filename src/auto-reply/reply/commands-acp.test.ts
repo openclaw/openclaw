@@ -120,7 +120,7 @@ type FakeBinding = {
   targetSessionKey: string;
   targetKind: "subagent" | "session";
   conversation: {
-    channel: "discord" | "telegram" | "feishu";
+    channel: "discord" | "matrix" | "telegram" | "feishu";
     accountId: string;
     conversationId: string;
     parentConversationId?: string;
@@ -245,9 +245,10 @@ function createSessionBindingCapabilities() {
 type AcpBindInput = {
   targetSessionKey: string;
   conversation: {
-    channel?: "discord" | "telegram" | "feishu";
+    channel?: "discord" | "matrix" | "telegram" | "feishu";
     accountId: string;
     conversationId: string;
+    parentConversationId?: string;
   };
   placement: "current" | "child";
   metadata?: Record<string, unknown>;
@@ -266,17 +267,27 @@ function createAcpThreadBinding(input: AcpBindInput): FakeBinding {
           conversationId: nextConversationId,
           parentConversationId: "parent-1",
         }
-      : channel === "feishu"
+      : channel === "matrix"
         ? {
-            channel: "feishu" as const,
+            channel: "matrix" as const,
             accountId: input.conversation.accountId,
             conversationId: nextConversationId,
+            parentConversationId:
+              input.placement === "child"
+                ? input.conversation.conversationId
+                : input.conversation.parentConversationId,
           }
-        : {
-            channel: "telegram" as const,
-            accountId: input.conversation.accountId,
-            conversationId: nextConversationId,
-          };
+        : channel === "feishu"
+          ? {
+              channel: "feishu" as const,
+              accountId: input.conversation.accountId,
+              conversationId: nextConversationId,
+            }
+          : {
+              channel: "telegram" as const,
+              accountId: input.conversation.accountId,
+              conversationId: nextConversationId,
+            };
   return createSessionBinding({
     targetSessionKey: input.targetSessionKey,
     conversation,
@@ -357,6 +368,32 @@ async function runTelegramAcpCommand(commandBody: string, cfg: OpenClawConfig = 
 
 async function runTelegramDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   return handleAcpCommand(createTelegramDmParams(commandBody, cfg), true);
+}
+
+function createMatrixRoomParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "matrix",
+    Surface: "matrix",
+    OriginatingChannel: "matrix",
+    OriginatingTo: "room:!room:example.org",
+    AccountId: "default",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
+function createMatrixThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = createMatrixRoomParams(commandBody, cfg);
+  params.ctx.MessageThreadId = "$thread-root";
+  return params;
+}
+
+async function runMatrixAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(createMatrixRoomParams(commandBody, cfg), true);
+}
+
+async function runMatrixThreadAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(createMatrixThreadParams(commandBody, cfg), true);
 }
 
 function createFeishuDmParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
@@ -598,6 +635,63 @@ describe("/acp command", () => {
     );
   });
 
+  it("creates Matrix thread-bound ACP spawns from top-level rooms when enabled", async () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        matrix: {
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: true,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runMatrixAcpCommand("/acp spawn codex", cfg);
+
+    expect(result?.reply?.text).toContain("Created thread thread-created and bound it");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          accountId: "default",
+          conversationId: "!room:example.org",
+        }),
+      }),
+    );
+  });
+
+  it("binds Matrix thread ACP spawns to the current thread with the parent room id", async () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        matrix: {
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: true,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runMatrixThreadAcpCommand("/acp spawn codex --thread here", cfg);
+
+    expect(result?.reply?.text).toContain("Bound this thread to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          accountId: "default",
+          conversationId: "$thread-root",
+          parentConversationId: "!room:example.org",
+        }),
+      }),
+    );
+  });
+
   it("binds Feishu DM ACP spawns to the current DM conversation", async () => {
     const result = await runFeishuDmAcpCommand("/acp spawn codex --thread here");
 
@@ -652,6 +746,24 @@ describe("/acp command", () => {
     expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ method: "sessions.patch" }),
     );
+  });
+
+  it("rejects Matrix thread-bound ACP spawn when spawnAcpSessions is unset", async () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        matrix: {
+          threadBindings: {
+            enabled: true,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runMatrixAcpCommand("/acp spawn codex", cfg);
+
+    expect(result?.reply?.text).toContain("spawnAcpSessions=true");
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
   it("forbids /acp spawn from sandboxed requester sessions", async () => {

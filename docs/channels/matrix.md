@@ -372,7 +372,7 @@ Planned improvement:
 
 ## Automatic verification notices
 
-Matrix now posts verification lifecycle notices directly into the Matrix room as `m.notice` messages.
+Matrix now posts verification lifecycle notices directly into the strict DM verification room as `m.notice` messages.
 That includes:
 
 - verification request notices
@@ -381,7 +381,8 @@ That includes:
 - SAS details (emoji and decimal) when available
 
 Incoming verification requests from another Matrix client are tracked and auto-accepted by OpenClaw.
-When SAS emoji verification becomes available, OpenClaw starts that SAS flow automatically for inbound requests and confirms its own side.
+For self-verification flows, OpenClaw also starts the SAS flow automatically when emoji verification becomes available and confirms its own side.
+For verification requests from another Matrix user/device, OpenClaw auto-accepts the request and then waits for the SAS flow to proceed normally.
 You still need to compare the emoji or decimal SAS in your Matrix client and confirm "They match" there to complete the verification.
 
 OpenClaw does not auto-accept self-initiated duplicate flows blindly. Startup skips creating a new request when a self-verification request is already pending.

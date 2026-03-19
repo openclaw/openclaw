@@ -9,6 +9,10 @@ import { getSessionBindingService } from "../../../infra/outbound/session-bindin
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { parseDiscordParentChannelFromSessionKey } from "../discord-parent-channel.js";
+import {
+  resolveMatrixConversationId,
+  resolveMatrixParentConversationId,
+} from "../matrix-context.js";
 import { resolveTelegramConversationId } from "../telegram-context.js";
 
 type FeishuGroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
@@ -161,6 +165,18 @@ export function resolveAcpCommandThreadId(params: HandleCommandsParams): string 
 
 export function resolveAcpCommandConversationId(params: HandleCommandsParams): string | undefined {
   const channel = resolveAcpCommandChannel(params);
+  if (channel === "matrix") {
+    return resolveMatrixConversationId({
+      ctx: {
+        MessageThreadId: params.ctx.MessageThreadId,
+        OriginatingTo: params.ctx.OriginatingTo,
+        To: params.ctx.To,
+      },
+      command: {
+        to: params.command.to,
+      },
+    });
+  }
   if (channel === "telegram") {
     const telegramConversationId = resolveTelegramConversationId({
       ctx: {
@@ -231,6 +247,18 @@ export function resolveAcpCommandParentConversationId(
   params: HandleCommandsParams,
 ): string | undefined {
   const channel = resolveAcpCommandChannel(params);
+  if (channel === "matrix") {
+    return resolveMatrixParentConversationId({
+      ctx: {
+        MessageThreadId: params.ctx.MessageThreadId,
+        OriginatingTo: params.ctx.OriginatingTo,
+        To: params.ctx.To,
+      },
+      command: {
+        to: params.command.to,
+      },
+    });
+  }
   if (channel === "telegram") {
     return (
       parseTelegramChatIdFromTarget(params.ctx.OriginatingTo) ??

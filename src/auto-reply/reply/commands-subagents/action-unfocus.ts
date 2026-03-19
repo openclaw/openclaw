@@ -1,8 +1,13 @@
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import {
+  resolveMatrixConversationId,
+  resolveMatrixParentConversationId,
+} from "../matrix-context.js";
+import {
   type SubagentsCommandContext,
   isDiscordSurface,
+  isMatrixSurface,
   isTelegramSurface,
   resolveChannelAccountId,
   resolveCommandSurfaceChannel,
@@ -15,8 +20,8 @@ export async function handleSubagentsUnfocusAction(
 ): Promise<CommandHandlerResult> {
   const { params } = ctx;
   const channel = resolveCommandSurfaceChannel(params);
-  if (channel !== "discord" && channel !== "telegram") {
-    return stopWithText("⚠️ /unfocus is only available on Discord and Telegram.");
+  if (channel !== "discord" && channel !== "matrix" && channel !== "telegram") {
+    return stopWithText("⚠️ /unfocus is only available on Discord, Matrix, and Telegram.");
   }
 
   const accountId = resolveChannelAccountId(params);
@@ -30,12 +35,42 @@ export async function handleSubagentsUnfocusAction(
     if (isTelegramSurface(params)) {
       return resolveTelegramConversationId(params);
     }
+    if (isMatrixSurface(params)) {
+      return resolveMatrixConversationId({
+        ctx: {
+          MessageThreadId: params.ctx.MessageThreadId,
+          OriginatingTo: params.ctx.OriginatingTo,
+          To: params.ctx.To,
+        },
+        command: {
+          to: params.command.to,
+        },
+      });
+    }
     return undefined;
+  })();
+  const parentConversationId = (() => {
+    if (!isMatrixSurface(params)) {
+      return undefined;
+    }
+    return resolveMatrixParentConversationId({
+      ctx: {
+        MessageThreadId: params.ctx.MessageThreadId,
+        OriginatingTo: params.ctx.OriginatingTo,
+        To: params.ctx.To,
+      },
+      command: {
+        to: params.command.to,
+      },
+    });
   })();
 
   if (!conversationId) {
     if (channel === "discord") {
       return stopWithText("⚠️ /unfocus must be run inside a Discord thread.");
+    }
+    if (channel === "matrix") {
+      return stopWithText("⚠️ /unfocus must be run inside a Matrix thread.");
     }
     return stopWithText(
       "⚠️ /unfocus on Telegram requires a topic context in groups, or a direct-message conversation.",
@@ -46,12 +81,17 @@ export async function handleSubagentsUnfocusAction(
     channel,
     accountId,
     conversationId,
+    ...(parentConversationId && parentConversationId !== conversationId
+      ? { parentConversationId }
+      : {}),
   });
   if (!binding) {
     return stopWithText(
       channel === "discord"
         ? "ℹ️ This thread is not currently focused."
-        : "ℹ️ This conversation is not currently focused.",
+        : channel === "matrix"
+          ? "ℹ️ This thread is not currently focused."
+          : "ℹ️ This conversation is not currently focused.",
     );
   }
 
@@ -62,7 +102,9 @@ export async function handleSubagentsUnfocusAction(
     return stopWithText(
       channel === "discord"
         ? `⚠️ Only ${boundBy} can unfocus this thread.`
-        : `⚠️ Only ${boundBy} can unfocus this conversation.`,
+        : channel === "matrix"
+          ? `⚠️ Only ${boundBy} can unfocus this thread.`
+          : `⚠️ Only ${boundBy} can unfocus this conversation.`,
     );
   }
 
@@ -71,6 +113,8 @@ export async function handleSubagentsUnfocusAction(
     reason: "manual",
   });
   return stopWithText(
-    channel === "discord" ? "✅ Thread unfocused." : "✅ Conversation unfocused.",
+    channel === "discord" || channel === "matrix"
+      ? "✅ Thread unfocused."
+      : "✅ Conversation unfocused.",
   );
 }
