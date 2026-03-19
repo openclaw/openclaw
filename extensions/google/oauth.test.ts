@@ -252,10 +252,7 @@ describe("loginGeminiCliOAuth", () => {
     if (process.platform === "win32") {
       return "WINDOWS";
     }
-    if (process.platform === "darwin") {
-      return "MACOS";
-    }
-    // Matches updated resolvePlatform() which uses PLATFORM_UNSPECIFIED for Linux
+    // Matches updated resolvePlatform() which uses PLATFORM_UNSPECIFIED for macOS and Linux
     return "PLATFORM_UNSPECIFIED";
   }
 

@@ -12,9 +12,8 @@ function resolvePlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
   if (process.platform === "win32") {
     return "WINDOWS";
   }
-  if (process.platform === "darwin") {
-    return "MACOS";
-  }
+  // Google's loadCodeAssist API rejects "MACOS" and "LINUX" as invalid Platform enum values.
+  // Use "PLATFORM_UNSPECIFIED" for macOS, Linux and other platforms to match the pi-ai runtime.
   return "PLATFORM_UNSPECIFIED";
 }
 
