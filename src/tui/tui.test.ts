@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
-  isBusyActivityStatus,
+  isIgnorableTuiStopError,
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
+  resolveInitialTuiAgentId,
   resolveTuiSessionKey,
+  stopTuiSafely,
 } from "./tui.js";
 
 describe("resolveFinalAssistantText", () => {
@@ -21,6 +24,16 @@ describe("resolveFinalAssistantText", () => {
         streamedText: "partial",
       }),
     ).toBe("All done");
+  });
+
+  it("falls back to formatted error text when final and streamed text are empty", () => {
+    expect(
+      resolveFinalAssistantText({
+        finalText: "",
+        streamedText: "",
+        errorMessage: '401 {"error":{"message":"Missing scopes: model.request"}}',
+      }),
+    ).toContain("HTTP 401");
   });
 });
 
@@ -73,6 +86,71 @@ describe("resolveTuiSessionKey", () => {
       }),
     ).toBe("agent:ops:incident");
   });
+
+  it("lowercases session keys with uppercase characters", () => {
+    // Uppercase in agent-prefixed form
+    expect(
+      resolveTuiSessionKey({
+        raw: "agent:main:Test1",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:test1");
+    // Uppercase in bare form (prefixed by currentAgentId)
+    expect(
+      resolveTuiSessionKey({
+        raw: "Test1",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:test1");
+  });
+});
+
+describe("resolveInitialTuiAgentId", () => {
+  const cfg: OpenClawConfig = {
+    agents: {
+      list: [
+        { id: "main", workspace: "/tmp/openclaw" },
+        { id: "ops", workspace: "/tmp/openclaw/projects/ops" },
+      ],
+    },
+  };
+
+  it("infers agent from cwd when session is not agent-prefixed", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg,
+        fallbackAgentId: "main",
+        initialSessionInput: "",
+        cwd: "/tmp/openclaw/projects/ops/src",
+      }),
+    ).toBe("ops");
+  });
+
+  it("keeps explicit agent prefix from --session", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg,
+        fallbackAgentId: "main",
+        initialSessionInput: "agent:main:incident",
+        cwd: "/tmp/openclaw/projects/ops/src",
+      }),
+    ).toBe("main");
+  });
+
+  it("falls back when cwd has no matching workspace", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg,
+        fallbackAgentId: "main",
+        initialSessionInput: "",
+        cwd: "/var/tmp/unrelated",
+      }),
+    ).toBe("main");
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {
@@ -88,20 +166,6 @@ describe("resolveGatewayDisconnectState", () => {
     expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
     expect(state.activityStatus).toBe("idle");
     expect(state.pairingHint).toBeUndefined();
-  });
-});
-
-describe("isBusyActivityStatus", () => {
-  it("treats dynamic running/routing labels as busy", () => {
-    expect(isBusyActivityStatus("running (think auto→medium)")).toBe(true);
-    expect(isBusyActivityStatus("routing (think auto→low)")).toBe(true);
-    expect(isBusyActivityStatus("generating output")).toBe(true);
-    expect(isBusyActivityStatus("running(think auto→high)")).toBe(true);
-  });
-
-  it("does not treat idle/error as busy", () => {
-    expect(isBusyActivityStatus("idle")).toBe(false);
-    expect(isBusyActivityStatus("error")).toBe(false);
   });
 });
 
@@ -163,5 +227,38 @@ describe("resolveCtrlCAction", () => {
       action: "warn",
       nextLastCtrlCAt: 3501,
     });
+  });
+});
+
+describe("TUI shutdown safety", () => {
+  it("treats setRawMode EBADF errors as ignorable", () => {
+    expect(isIgnorableTuiStopError(new Error("setRawMode EBADF"))).toBe(true);
+    expect(
+      isIgnorableTuiStopError({
+        code: "EBADF",
+        syscall: "setRawMode",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not ignore unrelated stop errors", () => {
+    expect(isIgnorableTuiStopError(new Error("something else failed"))).toBe(false);
+    expect(isIgnorableTuiStopError({ code: "EIO", syscall: "write" })).toBe(false);
+  });
+
+  it("swallows only ignorable stop errors", () => {
+    expect(() => {
+      stopTuiSafely(() => {
+        throw new Error("setRawMode EBADF");
+      });
+    }).not.toThrow();
+  });
+
+  it("rethrows non-ignorable stop errors", () => {
+    expect(() => {
+      stopTuiSafely(() => {
+        throw new Error("boom");
+      });
+    }).toThrow("boom");
   });
 });

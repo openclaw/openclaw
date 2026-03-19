@@ -1,9 +1,9 @@
 import {
   formatAllowlistMatchMeta,
-  issuePairingChallenge,
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
-} from "openclaw/plugin-sdk";
+  resolveSenderScopedGroupPolicy,
+} from "../../../runtime-api.js";
 import {
   normalizeMatrixAllowList,
   resolveMatrixAllowListMatch,
@@ -32,12 +32,10 @@ export async function resolveMatrixAccessState(params: {
       })
     : [];
   const normalizedGroupAllowFrom = normalizeMatrixAllowList(params.groupAllowFrom);
-  const senderGroupPolicy =
-    params.groupPolicy === "disabled"
-      ? "disabled"
-      : normalizedGroupAllowFrom.length > 0
-        ? "allowlist"
-        : "open";
+  const senderGroupPolicy = resolveSenderScopedGroupPolicy({
+    groupPolicy: params.groupPolicy,
+    groupAllowFrom: normalizedGroupAllowFrom,
+  });
   const access = resolveDmGroupAccessWithLists({
     isGroup: !params.isDirectMessage,
     dmPolicy: params.dmPolicy,
@@ -69,13 +67,15 @@ export async function enforceMatrixDirectMessageAccess(params: {
   senderId: string;
   senderName: string;
   effectiveAllowFrom: string[];
-  upsertPairingRequest: (input: {
-    id: string;
+  issuePairingChallenge: (params: {
+    senderId: string;
+    senderIdLine: string;
     meta?: Record<string, string | undefined>;
-  }) => Promise<{
-    code: string;
-    created: boolean;
-  }>;
+    buildReplyText: (params: { code: string }) => string;
+    sendPairingReply: (text: string) => Promise<void>;
+    onCreated: () => void;
+    onReplyError: (err: unknown) => void;
+  }) => Promise<{ created: boolean; code?: string }>;
   sendPairingReply: (text: string) => Promise<void>;
   logVerboseMessage: (message: string) => void;
 }): Promise<boolean> {
@@ -91,12 +91,10 @@ export async function enforceMatrixDirectMessageAccess(params: {
   });
   const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
   if (params.accessDecision === "pairing") {
-    await issuePairingChallenge({
-      channel: "matrix",
+    await params.issuePairingChallenge({
       senderId: params.senderId,
       senderIdLine: `Matrix user id: ${params.senderId}`,
       meta: { name: params.senderName },
-      upsertPairingRequest: params.upsertPairingRequest,
       buildReplyText: ({ code }) =>
         [
           "OpenClaw: access not configured.",

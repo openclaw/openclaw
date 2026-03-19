@@ -21,37 +21,6 @@ export type AgentModelListConfig = {
   fallbacks?: string[];
 };
 
-export type AutoModelRouterConfig = {
-  /** TTL for in-flight dedupe key (ms). */
-  dedupeTtlMs?: number;
-  /** TTL for cache entries (ms). */
-  cacheTtlMs?: number;
-  /** Optional micro-batch window (ms). */
-  microBatchMs?: number;
-  /** Optional micro-batch size. */
-  microBatchSize?: number;
-};
-
-export type AutoModelRoutingConfig = {
-  /** Enable auto model routing when modelOverride is AUTO_MODEL (default: false). */
-  enabled?: boolean;
-  /** Per-tag model lists (provider/model). Tag keys use ROUTING_TAG constants. */
-  byTag?: Partial<Record<string, string | { primary?: string; fallbacks?: string[] }>>;
-  /** Router orchestration: dedupe, cache, micro-batching. */
-  router?: AutoModelRouterConfig;
-};
-
-export type AutoReasoningConfig = {
-  /** Enable auto-reasoning selector when no inline/session directive sets thinking level (default: false). */
-  enabled?: boolean;
-  /** Timeout in ms for selector LLM call when used (optional). */
-  selectorTimeoutMs?: number;
-  /** Max output tokens for selector LLM call when used (optional). */
-  selectorMaxOutputTokens?: number;
-  /** Emit generating field for typing/status when selector runs (default: true). */
-  emitGeneratingField?: boolean;
-};
-
 export type AgentContextPruningConfig = {
   mode?: "off" | "cache-ttl";
   /** TTL to consider cache expired (duration string, default unit: minutes). */
@@ -153,6 +122,14 @@ export type AgentDefaultsConfig = {
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentModelConfig;
+  /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
+  imageGenerationModel?: AgentModelConfig;
+  /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
+  pdfModel?: AgentModelConfig;
+  /** Maximum PDF file size in megabytes (default: 10). */
+  pdfMaxBytesMb?: number;
+  /** Maximum number of PDF pages to process (default: 20). */
+  pdfMaxPages?: number;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
@@ -165,6 +142,13 @@ export type AgentDefaultsConfig = {
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
+  /**
+   * Agent-visible bootstrap truncation warning mode:
+   * - off: do not inject warning text
+   * - once: inject once per unique truncation signature (default)
+   * - always: inject on every run with truncation
+   */
+  bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
@@ -202,11 +186,7 @@ export type AgentDefaultsConfig = {
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-  /** Auto-reasoning: automatically select thinking level per message when no directive is set. */
-  autoReasoning?: AutoReasoningConfig;
-  /** Auto model routing: select model per turn when modelOverride is "auto". */
-  autoModelRouting?: AutoModelRoutingConfig;
+  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
@@ -271,6 +251,18 @@ export type AgentDefaultsConfig = {
     /** Suppress tool error warning payloads during heartbeat runs. */
     suppressToolErrorWarnings?: boolean;
     /**
+     * If true, run heartbeat turns with lightweight bootstrap context.
+     * Lightweight mode keeps only HEARTBEAT.md from workspace bootstrap files.
+     */
+    lightContext?: boolean;
+    /**
+     * If true, run heartbeat turns in an isolated session with no prior
+     * conversation history. The heartbeat only sees its bootstrap context
+     * (HEARTBEAT.md when lightContext is also enabled). Dramatically reduces
+     * per-heartbeat token cost by avoiding the full session transcript.
+     */
+    isolatedSession?: boolean;
+    /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
      *
@@ -296,7 +288,7 @@ export type AgentDefaultsConfig = {
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
-    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
+    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     announceTimeoutMs?: number;
   };
   /** Optional sandbox settings for non-main sessions. */
@@ -304,6 +296,14 @@ export type AgentDefaultsConfig = {
 };
 
 export type AgentCompactionMode = "default" | "safeguard";
+export type AgentCompactionPostIndexSyncMode = "off" | "async" | "await";
+export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
+export type AgentCompactionQualityGuardConfig = {
+  /** Enable compaction summary quality audits and regeneration retries. Default: false. */
+  enabled?: boolean;
+  /** Maximum regeneration retries after a failed quality audit. Default: 1 when enabled. */
+  maxRetries?: number;
+};
 
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
@@ -316,8 +316,32 @@ export type AgentCompactionConfig = {
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;
+  /** Additional compaction-summary instructions that can preserve language or persona continuity. */
+  customInstructions?: string;
+  /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
+  recentTurnsPreserve?: number;
+  /** Identifier-preservation instruction policy for compaction summaries. */
+  identifierPolicy?: AgentCompactionIdentifierPolicy;
+  /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
+  identifierInstructions?: string;
+  /** Optional quality-audit retries for safeguard compaction summaries. */
+  qualityGuard?: AgentCompactionQualityGuardConfig;
+  /** Post-compaction session memory index sync mode. */
+  postIndexSync?: AgentCompactionPostIndexSyncMode;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /**
+   * H2/H3 section names from AGENTS.md to inject after compaction.
+   * Defaults to ["Session Startup", "Red Lines"] when unset.
+   * Set to [] to disable post-compaction context injection entirely.
+   */
+  postCompactionSections?: string[];
+  /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-5").
+   * When set, compaction uses this model instead of the agent's primary model.
+   * Falls back to the primary model when unset. */
+  model?: string;
+  /** Maximum time in seconds for a single compaction operation (default: 900). */
+  timeoutSeconds?: number;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
@@ -325,6 +349,11 @@ export type AgentCompactionMemoryFlushConfig = {
   enabled?: boolean;
   /** Run the memory flush when context is within this many tokens of the compaction threshold. */
   softThresholdTokens?: number;
+  /**
+   * Force a memory flush when transcript size reaches this threshold
+   * (bytes, or byte-size string like "2mb"). Set to 0 to disable.
+   */
+  forceFlushTranscriptBytes?: number | string;
   /** User prompt used for the memory flush turn (NO_REPLY is enforced if missing). */
   prompt?: string;
   /** System prompt appended for the memory flush turn. */

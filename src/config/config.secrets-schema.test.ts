@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
+import {
+  INVALID_EXEC_SECRET_REF_IDS,
+  VALID_EXEC_SECRET_REF_IDS,
+} from "../test-utils/secret-ref-test-vectors.js";
 import { validateConfigObjectRaw } from "./validation.js";
+
+function validateOpenAiApiKeyRef(apiKey: unknown) {
+  return validateConfigObjectRaw({
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey,
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    },
+  });
+}
 
 describe("config secret refs schema", () => {
   it("accepts top-level secrets sources and model apiKey refs", () => {
@@ -108,16 +126,10 @@ describe("config secret refs schema", () => {
   });
 
   it("rejects invalid secret ref id", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "bad id with spaces" },
-            models: [{ id: "gpt-5", name: "gpt-5" }],
-          },
-        },
-      },
+    const result = validateOpenAiApiKeyRef({
+      source: "env",
+      provider: "default",
+      id: "bad id with spaces",
     });
 
     expect(result.ok).toBe(false);
@@ -129,16 +141,10 @@ describe("config secret refs schema", () => {
   });
 
   it("rejects env refs that are not env var names", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "/providers/openai/apiKey" },
-            models: [{ id: "gpt-5", name: "gpt-5" }],
-          },
-        },
-      },
+    const result = validateOpenAiApiKeyRef({
+      source: "env",
+      provider: "default",
+      id: "/providers/openai/apiKey",
     });
 
     expect(result.ok).toBe(false);
@@ -154,16 +160,10 @@ describe("config secret refs schema", () => {
   });
 
   it("rejects file refs that are not absolute JSON pointers", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "file", provider: "default", id: "providers/openai/apiKey" },
-            models: [{ id: "gpt-5", name: "gpt-5" }],
-          },
-        },
-      },
+    const result = validateOpenAiApiKeyRef({
+      source: "file",
+      provider: "default",
+      id: "providers/openai/apiKey",
     });
 
     expect(result.ok).toBe(false);
@@ -175,6 +175,33 @@ describe("config secret refs schema", () => {
             issue.message.includes("absolute JSON pointer"),
         ),
       ).toBe(true);
+    }
+  });
+
+  it("accepts valid exec secret reference ids", () => {
+    for (const id of VALID_EXEC_SECRET_REF_IDS) {
+      const result = validateOpenAiApiKeyRef({
+        source: "exec",
+        provider: "vault",
+        id,
+      });
+      expect(result.ok, `expected valid exec ref id: ${id}`).toBe(true);
+    }
+  });
+
+  it("rejects invalid exec secret reference ids", () => {
+    for (const id of INVALID_EXEC_SECRET_REF_IDS) {
+      const result = validateOpenAiApiKeyRef({
+        source: "exec",
+        provider: "vault",
+        id,
+      });
+      expect(result.ok, `expected invalid exec ref id: ${id}`).toBe(false);
+      if (!result.ok) {
+        expect(
+          result.issues.some((issue) => issue.path.includes("models.providers.openai.apiKey")),
+        ).toBe(true);
+      }
     }
   });
 });

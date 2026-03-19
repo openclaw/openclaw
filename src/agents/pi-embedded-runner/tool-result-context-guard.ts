@@ -1,17 +1,31 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
+  type MessageCharEstimateCache,
+  createMessageCharEstimateCache,
+  estimateContextChars,
+  estimateMessageCharsCached,
+  getToolResultText,
+  invalidateMessageCharsCacheEntry,
+  isToolResultMessage,
+} from "./tool-result-char-estimator.js";
 
-const CHARS_PER_TOKEN_ESTIMATE = 4;
 // Keep a conservative input budget to absorb tokenizer variance and provider framing overhead.
 const CONTEXT_INPUT_HEADROOM_RATIO = 0.75;
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
-const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
-const IMAGE_CHAR_ESTIMATE = 8_000;
+// High-water mark: if context exceeds this ratio after tool-result compaction,
+// trigger full session compaction via the existing overflow recovery cascade.
+const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
 
 export const CONTEXT_LIMIT_TRUNCATION_NOTICE = "[truncated: output exceeded context limit]";
 const CONTEXT_LIMIT_TRUNCATION_SUFFIX = `\n${CONTEXT_LIMIT_TRUNCATION_NOTICE}`;
 
 export const PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER =
   "[compacted: tool output removed to free context]";
+
+export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
+  "Preemptive context overflow: estimated context size exceeds safe threshold during tool loop";
 
 type GuardableTransformContext = (
   messages: AgentMessage[],
@@ -23,141 +37,6 @@ type GuardableAgent = object;
 type GuardableAgentRecord = {
   transformContext?: GuardableTransformContext;
 };
-
-function isTextBlock(block: unknown): block is { type: "text"; text: string } {
-  return !!block && typeof block === "object" && (block as { type?: unknown }).type === "text";
-}
-
-function isImageBlock(block: unknown): boolean {
-  return !!block && typeof block === "object" && (block as { type?: unknown }).type === "image";
-}
-
-function estimateUnknownChars(value: unknown): number {
-  if (typeof value === "string") {
-    return value.length;
-  }
-  if (value === undefined) {
-    return 0;
-  }
-  try {
-    const serialized = JSON.stringify(value);
-    return typeof serialized === "string" ? serialized.length : 0;
-  } catch {
-    return 256;
-  }
-}
-
-function isToolResultMessage(msg: AgentMessage): boolean {
-  const role = (msg as { role?: unknown }).role;
-  const type = (msg as { type?: unknown }).type;
-  return role === "toolResult" || role === "tool" || type === "toolResult";
-}
-
-function getToolResultContent(msg: AgentMessage): unknown[] {
-  if (!isToolResultMessage(msg)) {
-    return [];
-  }
-  const content = (msg as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return [{ type: "text", text: content }];
-  }
-  return Array.isArray(content) ? content : [];
-}
-
-function getToolResultText(msg: AgentMessage): string {
-  const content = getToolResultContent(msg);
-  const chunks: string[] = [];
-  for (const block of content) {
-    if (isTextBlock(block)) {
-      chunks.push(block.text);
-    }
-  }
-  return chunks.join("\n");
-}
-
-function estimateMessageChars(msg: AgentMessage): number {
-  if (!msg || typeof msg !== "object") {
-    return 0;
-  }
-
-  if (msg.role === "user") {
-    const content = msg.content;
-    if (typeof content === "string") {
-      return content.length;
-    }
-    let chars = 0;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (isTextBlock(block)) {
-          chars += block.text.length;
-        } else if (isImageBlock(block)) {
-          chars += IMAGE_CHAR_ESTIMATE;
-        } else {
-          chars += estimateUnknownChars(block);
-        }
-      }
-    }
-    return chars;
-  }
-
-  if (msg.role === "assistant") {
-    let chars = 0;
-    const content = (msg as { content?: unknown }).content;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (!block || typeof block !== "object") {
-          continue;
-        }
-        const typed = block as {
-          type?: unknown;
-          text?: unknown;
-          thinking?: unknown;
-          arguments?: unknown;
-        };
-        if (typed.type === "text" && typeof typed.text === "string") {
-          chars += typed.text.length;
-        } else if (typed.type === "thinking" && typeof typed.thinking === "string") {
-          chars += typed.thinking.length;
-        } else if (typed.type === "toolCall") {
-          try {
-            chars += JSON.stringify(typed.arguments ?? {}).length;
-          } catch {
-            chars += 128;
-          }
-        } else {
-          chars += estimateUnknownChars(block);
-        }
-      }
-    }
-    return chars;
-  }
-
-  if (isToolResultMessage(msg)) {
-    let chars = 0;
-    const content = getToolResultContent(msg);
-    for (const block of content) {
-      if (isTextBlock(block)) {
-        chars += block.text.length;
-      } else if (isImageBlock(block)) {
-        chars += IMAGE_CHAR_ESTIMATE;
-      } else {
-        chars += estimateUnknownChars(block);
-      }
-    }
-    const details = (msg as { details?: unknown }).details;
-    chars += estimateUnknownChars(details);
-    const weightedChars = Math.ceil(
-      chars * (CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE),
-    );
-    return Math.max(chars, weightedChars);
-  }
-
-  return 256;
-}
-
-function estimateContextChars(messages: AgentMessage[]): number {
-  return messages.reduce((sum, msg) => sum + estimateMessageChars(msg), 0);
-}
 
 function truncateTextToBudget(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
@@ -195,12 +74,16 @@ function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
   } as AgentMessage;
 }
 
-function truncateToolResultToChars(msg: AgentMessage, maxChars: number): AgentMessage {
+function truncateToolResultToChars(
+  msg: AgentMessage,
+  maxChars: number,
+  cache: MessageCharEstimateCache,
+): AgentMessage {
   if (!isToolResultMessage(msg)) {
     return msg;
   }
 
-  const estimatedChars = estimateMessageChars(msg);
+  const estimatedChars = estimateMessageCharsCached(msg, cache);
   if (estimatedChars <= maxChars) {
     return msg;
   }
@@ -217,8 +100,9 @@ function truncateToolResultToChars(msg: AgentMessage, maxChars: number): AgentMe
 function compactExistingToolResultsInPlace(params: {
   messages: AgentMessage[];
   charsNeeded: number;
+  cache: MessageCharEstimateCache;
 }): number {
-  const { messages, charsNeeded } = params;
+  const { messages, charsNeeded, cache } = params;
   if (charsNeeded <= 0) {
     return 0;
   }
@@ -230,14 +114,14 @@ function compactExistingToolResultsInPlace(params: {
       continue;
     }
 
-    const before = estimateMessageChars(msg);
+    const before = estimateMessageCharsCached(msg, cache);
     if (before <= PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER.length) {
       continue;
     }
 
     const compacted = replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    applyMessageMutationInPlace(msg, compacted);
-    const after = estimateMessageChars(msg);
+    applyMessageMutationInPlace(msg, compacted, cache);
+    const after = estimateMessageCharsCached(msg, cache);
     if (after >= before) {
       continue;
     }
@@ -251,7 +135,11 @@ function compactExistingToolResultsInPlace(params: {
   return reduced;
 }
 
-function applyMessageMutationInPlace(target: AgentMessage, source: AgentMessage): void {
+function applyMessageMutationInPlace(
+  target: AgentMessage,
+  source: AgentMessage,
+  cache?: MessageCharEstimateCache,
+): void {
   if (target === source) {
     return;
   }
@@ -264,6 +152,9 @@ function applyMessageMutationInPlace(target: AgentMessage, source: AgentMessage)
     }
   }
   Object.assign(targetRecord, sourceRecord);
+  if (cache) {
+    invalidateMessageCharsCacheEntry(cache, target);
+  }
 }
 
 function enforceToolResultContextBudgetInPlace(params: {
@@ -272,17 +163,18 @@ function enforceToolResultContextBudgetInPlace(params: {
   maxSingleToolResultChars: number;
 }): void {
   const { messages, contextBudgetChars, maxSingleToolResultChars } = params;
+  const estimateCache = createMessageCharEstimateCache();
 
   // Ensure each tool result has an upper bound before considering total context usage.
   for (const message of messages) {
     if (!isToolResultMessage(message)) {
       continue;
     }
-    const truncated = truncateToolResultToChars(message, maxSingleToolResultChars);
-    applyMessageMutationInPlace(message, truncated);
+    const truncated = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
+    applyMessageMutationInPlace(message, truncated, estimateCache);
   }
 
-  let currentChars = estimateContextChars(messages);
+  let currentChars = estimateContextChars(messages, estimateCache);
   if (currentChars <= contextBudgetChars) {
     return;
   }
@@ -291,6 +183,7 @@ function enforceToolResultContextBudgetInPlace(params: {
   compactExistingToolResultsInPlace({
     messages,
     charsNeeded: currentChars - contextBudgetChars,
+    cache: estimateCache,
   });
 }
 
@@ -309,6 +202,10 @@ export function installToolResultContextGuard(params: {
       contextWindowTokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * SINGLE_TOOL_RESULT_CONTEXT_SHARE,
     ),
   );
+  const preemptiveOverflowChars = Math.max(
+    contextBudgetChars,
+    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * PREEMPTIVE_OVERFLOW_RATIO),
+  );
 
   // Agent.transformContext is private in pi-coding-agent, so access it via a
   // narrow runtime view to keep callsites type-safe while preserving behavior.
@@ -326,6 +223,18 @@ export function installToolResultContextGuard(params: {
       contextBudgetChars,
       maxSingleToolResultChars,
     });
+
+    // After tool-result compaction, check if context still exceeds the high-water mark.
+    // If it does, non-tool-result content dominates and only full LLM-based session
+    // compaction can reduce context size. Throwing a context overflow error triggers
+    // the existing overflow recovery cascade in run.ts.
+    const postEnforcementChars = estimateContextChars(
+      contextMessages,
+      createMessageCharEstimateCache(),
+    );
+    if (postEnforcementChars > preemptiveOverflowChars) {
+      throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+    }
 
     return contextMessages;
   }) as GuardableTransformContext;

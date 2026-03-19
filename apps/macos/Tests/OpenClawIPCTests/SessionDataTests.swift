@@ -2,27 +2,26 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite
 struct SessionDataTests {
-    @Test func sessionKindFromKeyDetectsCommonKinds() {
+    @Test func `session kind from key detects common kinds`() {
         #expect(SessionKind.from(key: "global") == .global)
         #expect(SessionKind.from(key: "discord:group:engineering") == .group)
         #expect(SessionKind.from(key: "unknown") == .unknown)
         #expect(SessionKind.from(key: "user@example.com") == .direct)
     }
 
-    @Test func sessionTokenStatsFormatKTokensRoundsAsExpected() {
+    @Test func `session token stats format K tokens rounds as expected`() {
         #expect(SessionTokenStats.formatKTokens(999) == "999")
         #expect(SessionTokenStats.formatKTokens(1000) == "1.0k")
         #expect(SessionTokenStats.formatKTokens(12340) == "12k")
     }
 
-    @Test func sessionTokenStatsPercentUsedClampsTo100() {
+    @Test func `session token stats percent used clamps to100`() {
         let stats = SessionTokenStats(input: 0, output: 0, total: 250_000, contextTokens: 200_000)
         #expect(stats.percentUsed == 100)
     }
 
-    @Test func sessionRowFlagLabelsIncludeNonDefaultFlags() {
+    @Test func `session row flag labels include non default flags`() {
         let row = SessionRow(
             id: "x",
             key: "user@example.com",

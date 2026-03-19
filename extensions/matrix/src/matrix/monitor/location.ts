@@ -3,7 +3,7 @@ import {
   formatLocationText,
   toLocationContext,
   type NormalizedLocation,
-} from "openclaw/plugin-sdk";
+} from "../../../runtime-api.js";
 import { EventType } from "./types.js";
 
 export type MatrixLocationPayload = {

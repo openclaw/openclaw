@@ -1,5 +1,6 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { ReasoningLevel, VerboseLevel } from "../auto-reply/thinking.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GeneratingSelector, GeneratingSource } from "../infra/generating-metadata.js";
 import type { HookRunner } from "../plugins/hooks.js";
@@ -17,7 +18,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   toolResultFormat?: ToolResultFormat;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
-  onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;
@@ -45,6 +46,10 @@ export type SubscribeEmbeddedPiSessionParams = {
   generatingSelector?: GeneratingSelector;
   /** For generating metadata: emit switch (default true). */
   emitGeneratingField?: boolean;
+  /** Ephemeral session UUID — regenerated on /new and /reset. */
+  sessionId?: string;
+  /** Agent identity for hook context — resolved from session config in attempt.ts. */
+  agentId?: string;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

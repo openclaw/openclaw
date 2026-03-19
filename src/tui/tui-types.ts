@@ -16,7 +16,17 @@ export type ChatEvent = {
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
-  usage?: unknown;
+};
+
+export type BtwEvent = {
+  kind: "btw";
+  runId?: string;
+  sessionKey?: string;
+  question: string;
+  text: string;
+  isError?: boolean;
+  seq?: number;
+  ts?: number;
 };
 
 export type AgentEvent = {
@@ -27,26 +37,13 @@ export type AgentEvent = {
 
 export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
-/** Token usage for a single pass (router or generation). */
-export type PassTokenUsage = {
-  input?: number;
-  output?: number;
-};
-
 export type SessionInfo = {
   thinkingLevel?: string;
-  configuredThink?: string;
-  effectiveThink?: string;
-  lastEffectiveThink?: string;
-  currentRunId?: string;
-  lastRunId?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
   model?: string;
   modelProvider?: string;
-  /** Runtime-resolved model currently being served for the active run. */
-  servedModel?: string;
-  servedModelProvider?: string;
   contextTokens?: number | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
@@ -54,10 +51,6 @@ export type SessionInfo = {
   responseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;
-  /** Router pass token usage (from generating.routingPass.pass1TokenUsage). */
-  routerPassTokens?: PassTokenUsage | null;
-  /** Generation pass token usage (from generating.routingPass.pass2TokenUsage or session). */
-  generationPassTokens?: PassTokenUsage | null;
 };
 
 export type SessionScope = "per-sender" | "global";
@@ -68,6 +61,7 @@ export type AgentSummary = {
 };
 
 export type GatewayStatusSummary = {
+  runtimeVersion?: string | null;
   linkChannel?: {
     id?: string;
     label?: string;

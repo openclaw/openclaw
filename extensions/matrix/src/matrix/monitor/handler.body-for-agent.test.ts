@@ -1,8 +1,28 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
-import { createMatrixRoomMessageHandler } from "./handler.js";
+import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "../../../runtime-api.js";
+import {
+  createMatrixRoomMessageHandler,
+  resolveMatrixBaseRouteSession,
+  shouldOverrideMatrixDmToGroup,
+} from "./handler.js";
 import { EventType, type MatrixRawEvent } from "./types.js";
+
+const dispatchReplyFromConfigWithSettledDispatcherMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    queuedFinal: false,
+    counts: { final: 0, partial: 0, tool: 0 },
+  }),
+);
+
+vi.mock("../../../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../runtime-api.js")>();
+  return {
+    ...actual,
+    dispatchReplyFromConfigWithSettledDispatcher: (...args: unknown[]) =>
+      dispatchReplyFromConfigWithSettledDispatcherMock(...args),
+  };
+});
 
 describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
   it("stores sender-labeled BodyForAgent for group thread messages", async () => {
@@ -18,8 +38,15 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
       channel: {
         pairing: {
           readAllowFromStore: vi.fn().mockResolvedValue([]),
+          upsertPairingRequest: vi.fn().mockResolvedValue(undefined),
         },
         routing: {
+          buildAgentSessionKey: vi
+            .fn()
+            .mockImplementation(
+              (params: { agentId: string; channel: string; peer?: { kind: string; id: string } }) =>
+                `agent:${params.agentId}:${params.channel}:${params.peer?.kind ?? "direct"}:${params.peer?.id ?? "unknown"}`,
+            ),
           resolveAgentRoute: vi.fn().mockReturnValue({
             agentId: "main",
             accountId: undefined,
@@ -138,5 +165,49 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
         }),
       }),
     );
+    expect(dispatchReplyFromConfigWithSettledDispatcherMock).toHaveBeenCalled();
+  });
+
+  it("uses room-scoped session keys for DM rooms matched via parentPeer binding", () => {
+    const buildAgentSessionKey = vi
+      .fn()
+      .mockReturnValue("agent:main:matrix:channel:!dmroom:example.org");
+
+    const resolved = resolveMatrixBaseRouteSession({
+      buildAgentSessionKey,
+      baseRoute: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        mainSessionKey: "agent:main:main",
+        matchedBy: "binding.peer.parent",
+      },
+      isDirectMessage: true,
+      roomId: "!dmroom:example.org",
+      accountId: undefined,
+    });
+
+    expect(buildAgentSessionKey).toHaveBeenCalledWith({
+      agentId: "main",
+      channel: "matrix",
+      accountId: undefined,
+      peer: { kind: "channel", id: "!dmroom:example.org" },
+    });
+    expect(resolved).toEqual({
+      sessionKey: "agent:main:matrix:channel:!dmroom:example.org",
+      lastRoutePolicy: "session",
+    });
+  });
+
+  it("does not override DMs to groups for explicit allow:false room config", () => {
+    expect(
+      shouldOverrideMatrixDmToGroup({
+        isDirectMessage: true,
+        roomConfigInfo: {
+          config: { allow: false },
+          allowed: false,
+          matchSource: "direct",
+        },
+      }),
+    ).toBe(false);
   });
 });

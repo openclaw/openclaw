@@ -1,7 +1,7 @@
 ---
-summary: "Directive syntax for /think + /verbose and how they affect model reasoning"
+summary: "Directive syntax for /think, /fast, /verbose, and reasoning visibility"
 read_when:
-  - Adjusting thinking or verbose directive parsing or defaults
+  - Adjusting thinking, fast-mode, or verbose directive parsing or defaults
 title: "Thinking Levels"
 ---
 
@@ -10,17 +10,20 @@ title: "Thinking Levels"
 ## What it does
 
 - Inline directive in any inbound body: `/t <level>`, `/think:<level>`, or `/thinking <level>`.
-- Levels (aliases): `off | minimal | low | medium | high | xhigh` (GPT-5.2 + Codex models only)
+- Levels (aliases): `off | minimal | low | medium | high | xhigh | adaptive`
   - minimal → “think”
   - low → “think hard”
   - medium → “think harder”
   - high → “ultrathink” (max budget)
   - xhigh → “ultrathink+” (GPT-5.2 + Codex models only)
+  - adaptive → provider-managed adaptive reasoning budget (supported for Anthropic Claude 4.6 model family)
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
   - `highest`, `max` map to `high`.
 - Provider notes:
+  - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
   - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
 - When `xhigh` is requested but the model does not support it (e.g. GPT-4.1-mini), OpenClaw degrades to `high` and metadata reflects the effective level.
+  - Moonshot (`moonshot/*`) maps `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
 
 ## Resolution order
 
@@ -28,7 +31,7 @@ title: "Thinking Levels"
 2. Session override (set by sending a directive-only message).
 3. Auto-reasoning selector (when `agents.defaults.autoReasoning.enabled` is true): picks level per message using capability-aware heuristics.
 4. Global default (`agents.defaults.thinkingDefault` in config).
-5. Fallback: low for reasoning-capable models; off otherwise.
+5. Fallback: `adaptive` for Anthropic Claude 4.6 models, `low` for other reasoning-capable models, `off` otherwise.
 
 ## Auto-reasoning
 
@@ -58,6 +61,21 @@ Troubleshooting (auto-reasoning not activating):
 ## Application by agent
 
 - **Embedded Pi**: the resolved level is passed to the in-process Pi agent runtime.
+
+## Fast mode (/fast)
+
+- Levels: `on|off`.
+- Directive-only message toggles a session fast-mode override and replies `Fast mode enabled.` / `Fast mode disabled.`.
+- Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
+- OpenClaw resolves fast mode in this order:
+  1. Inline/directive-only `/fast on|off`
+  2. Session override
+  3. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
+  4. Fallback: `off`
+- For `openai/*`, fast mode applies the OpenAI fast profile: `service_tier=priority` when supported, plus low reasoning effort and low text verbosity.
+- For `openai-codex/*`, fast mode applies the same low-latency profile on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
+- For direct `anthropic/*` API-key requests, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
+- Anthropic fast mode is API-key only. OpenClaw skips Anthropic service-tier injection for Claude setup-token / OAuth auth and for non-Anthropic proxy base URLs.
 
 ## Verbose directives (/verbose or /v)
 

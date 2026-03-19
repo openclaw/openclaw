@@ -16,13 +16,14 @@ vi.mock("../config/paths.js", () => ({
   resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
 }));
 
-import {
-  __testing,
-  cleanStaleGatewayProcessesSync,
-  findGatewayPidsOnPortSync,
-} from "./restart-stale-pids.js";
+let __testing: typeof import("./restart-stale-pids.js").__testing;
+let cleanStaleGatewayProcessesSync: typeof import("./restart-stale-pids.js").cleanStaleGatewayProcessesSync;
+let findGatewayPidsOnPortSync: typeof import("./restart-stale-pids.js").findGatewayPidsOnPortSync;
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
+    await import("./restart-stale-pids.js"));
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
   resolveGatewayPortMock.mockReset();
@@ -93,6 +94,27 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
     expect(killSpy).toHaveBeenCalledWith(6002, "SIGTERM");
     expect(killSpy).toHaveBeenCalledWith(6001, "SIGKILL");
     expect(killSpy).toHaveBeenCalledWith(6002, "SIGKILL");
+  });
+
+  it("uses explicit port override when provided", () => {
+    spawnSyncMock.mockReturnValue({
+      error: undefined,
+      status: 0,
+      stdout: ["p7001", "copenclaw"].join("\n"),
+    });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    const killed = cleanStaleGatewayProcessesSync(19999);
+
+    expect(killed).toEqual([7001]);
+    expect(resolveGatewayPortMock).not.toHaveBeenCalled();
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "/usr/sbin/lsof",
+      ["-nP", "-iTCP:19999", "-sTCP:LISTEN", "-Fpc"],
+      expect.objectContaining({ encoding: "utf8", timeout: 2000 }),
+    );
+    expect(killSpy).toHaveBeenCalledWith(7001, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(7001, "SIGKILL");
   });
 
   it("returns empty when no stale listeners are found", () => {

@@ -5,7 +5,7 @@ import {
   readNumberParam,
   readReactionParams,
   readStringParam,
-} from "openclaw/plugin-sdk";
+} from "../runtime-api.js";
 import {
   deleteMatrixMessage,
   editMatrixMessage,

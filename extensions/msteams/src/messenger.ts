@@ -5,9 +5,10 @@ import {
   type MarkdownTableMode,
   type MSTeamsReplyStyle,
   type ReplyPayload,
+  resolveSendableOutboundReplyParts,
   SILENT_REPLY_TOKEN,
   sleep,
-} from "openclaw/plugin-sdk";
+} from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
@@ -20,6 +21,7 @@ import {
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 import { parseMentions } from "./mentions.js";
+import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
 /**
@@ -215,41 +217,39 @@ export function renderReplyPayloadsToMessages(
     });
 
   for (const payload of replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const text = getMSTeamsRuntime().channel.text.convertMarkdownTables(
-      payload.text ?? "",
-      tableMode,
-    );
+    const reply = resolveSendableOutboundReplyParts(payload, {
+      text: getMSTeamsRuntime().channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+    });
 
-    if (!text && mediaList.length === 0) {
+    if (!reply.hasContent) {
       continue;
     }
 
-    if (mediaList.length === 0) {
-      pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
+    if (!reply.hasMedia) {
+      pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
       continue;
     }
 
     if (mediaMode === "inline") {
       // For inline mode, combine text with first media as attachment
-      const firstMedia = mediaList[0];
+      const firstMedia = reply.mediaUrls[0];
       if (firstMedia) {
-        out.push({ text: text || undefined, mediaUrl: firstMedia });
+        out.push({ text: reply.text || undefined, mediaUrl: firstMedia });
         // Additional media URLs as separate messages
-        for (let i = 1; i < mediaList.length; i++) {
-          if (mediaList[i]) {
-            out.push({ mediaUrl: mediaList[i] });
+        for (let i = 1; i < reply.mediaUrls.length; i++) {
+          if (reply.mediaUrls[i]) {
+            out.push({ mediaUrl: reply.mediaUrls[i] });
           }
         }
       } else {
-        pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
+        pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
       }
       continue;
     }
 
     // mediaMode === "split"
-    pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
-    for (const mediaUrl of mediaList) {
+    pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
+    for (const mediaUrl of reply.mediaUrls) {
       if (!mediaUrl) {
         continue;
       }
@@ -441,24 +441,53 @@ export async function sendMSTeamsMessages(params: {
     }
   };
 
-  const sendMessagesInContext = async (ctx: SendContext): Promise<string[]> => {
-    const messageIds: string[] = [];
-    for (const [idx, message] of messages.entries()) {
-      const response = await sendWithRetry(
-        async () =>
-          await ctx.sendActivity(
-            await buildActivity(
-              message,
-              params.conversationRef,
-              params.tokenProvider,
-              params.sharePointSiteId,
-              params.mediaMaxBytes,
-            ),
+  const sendMessageInContext = async (
+    ctx: SendContext,
+    message: MSTeamsRenderedMessage,
+    messageIndex: number,
+  ): Promise<string> => {
+    const response = await sendWithRetry(
+      async () =>
+        await ctx.sendActivity(
+          await buildActivity(
+            message,
+            params.conversationRef,
+            params.tokenProvider,
+            params.sharePointSiteId,
+            params.mediaMaxBytes,
           ),
-        { messageIndex: idx, messageCount: messages.length },
-      );
-      messageIds.push(extractMessageId(response) ?? "unknown");
+        ),
+      { messageIndex, messageCount: messages.length },
+    );
+    return extractMessageId(response) ?? "unknown";
+  };
+
+  const sendMessageBatchInContext = async (
+    ctx: SendContext,
+    batch: MSTeamsRenderedMessage[],
+    startIndex: number,
+  ): Promise<string[]> => {
+    const messageIds: string[] = [];
+    for (const [idx, message] of batch.entries()) {
+      messageIds.push(await sendMessageInContext(ctx, message, startIndex + idx));
     }
+    return messageIds;
+  };
+
+  const sendProactively = async (
+    batch: MSTeamsRenderedMessage[],
+    startIndex: number,
+  ): Promise<string[]> => {
+    const baseRef = buildConversationReference(params.conversationRef);
+    const proactiveRef: MSTeamsConversationReference = {
+      ...baseRef,
+      activityId: undefined,
+    };
+
+    const messageIds: string[] = [];
+    await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
+      messageIds.push(...(await sendMessageBatchInContext(ctx, batch, startIndex)));
+    });
     return messageIds;
   };
 
@@ -467,18 +496,28 @@ export async function sendMSTeamsMessages(params: {
     if (!ctx) {
       throw new Error("Missing context for replyStyle=thread");
     }
-    return await sendMessagesInContext(ctx);
+    const messageIds: string[] = [];
+    for (const [idx, message] of messages.entries()) {
+      const result = await withRevokedProxyFallback({
+        run: async () => ({
+          ids: [await sendMessageInContext(ctx, message, idx)],
+          fellBack: false,
+        }),
+        onRevoked: async () => {
+          const remaining = messages.slice(idx);
+          return {
+            ids: remaining.length > 0 ? await sendProactively(remaining, idx) : [],
+            fellBack: true,
+          };
+        },
+      });
+      messageIds.push(...result.ids);
+      if (result.fellBack) {
+        return messageIds;
+      }
+    }
+    return messageIds;
   }
 
-  const baseRef = buildConversationReference(params.conversationRef);
-  const proactiveRef: MSTeamsConversationReference = {
-    ...baseRef,
-    activityId: undefined,
-  };
-
-  const messageIds: string[] = [];
-  await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
-    messageIds.push(...(await sendMessagesInContext(ctx)));
-  });
-  return messageIds;
+  return await sendProactively(messages, 0);
 }

@@ -80,6 +80,13 @@ async function requestAllowOnceApproval(
     id: approvalId,
     command,
     commandArgv,
+    systemRunPlan: {
+      argv: commandArgv,
+      cwd: null,
+      rawCommand: command,
+      agentId: null,
+      sessionKey: null,
+    },
     nodeId,
     cwd: null,
     host: "node",

@@ -1,13 +1,62 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type {
-  AgentDefaultsConfig,
-  AutoModelRoutingConfig,
-  AutoReasoningConfig,
-} from "./types.agent-defaults.js";
+import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
+
+export type AgentRuntimeAcpConfig = {
+  /** ACP harness adapter id (for example codex, claude). */
+  agent?: string;
+  /** Optional ACP backend override for this agent runtime. */
+  backend?: string;
+  /** Optional ACP session mode override. */
+  mode?: "persistent" | "oneshot";
+  /** Optional runtime working directory override. */
+  cwd?: string;
+};
+
+export type AgentRuntimeConfig =
+  | {
+      type: "embedded";
+    }
+  | {
+      type: "acp";
+      acp?: AgentRuntimeAcpConfig;
+    };
+
+export type AgentBindingMatch = {
+  channel: string;
+  accountId?: string;
+  peer?: { kind: ChatType; id: string };
+  guildId?: string;
+  teamId?: string;
+  /** Discord role IDs used for role-based routing. */
+  roles?: string[];
+};
+
+export type AgentRouteBinding = {
+  /** Missing type is interpreted as route for backward compatibility. */
+  type?: "route";
+  agentId: string;
+  comment?: string;
+  match: AgentBindingMatch;
+};
+
+export type AgentAcpBinding = {
+  type: "acp";
+  agentId: string;
+  comment?: string;
+  match: AgentBindingMatch;
+  acp?: {
+    mode?: "persistent" | "oneshot";
+    label?: string;
+    cwd?: string;
+    backend?: string;
+  };
+};
+
+export type AgentBinding = AgentRouteBinding | AgentAcpBinding;
 
 export type AgentConfig = {
   id: string;
@@ -36,27 +85,11 @@ export type AgentConfig = {
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
   params?: Record<string, unknown>;
   tools?: AgentToolsConfig;
-  /** Optional per-agent auto-reasoning override (merges with agents.defaults.autoReasoning). */
-  autoReasoning?: AutoReasoningConfig;
-  /** Optional per-agent auto model routing override (merges with agents.defaults.autoModelRouting). */
-  autoModelRouting?: AutoModelRoutingConfig;
+  /** Optional runtime descriptor for this agent. */
+  runtime?: AgentRuntimeConfig;
 };
 
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
   list?: AgentConfig[];
-};
-
-export type AgentBinding = {
-  agentId: string;
-  comment?: string;
-  match: {
-    channel: string;
-    accountId?: string;
-    peer?: { kind: ChatType; id: string };
-    guildId?: string;
-    teamId?: string;
-    /** Discord role IDs used for role-based routing. */
-    roles?: string[];
-  };
 };

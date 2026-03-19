@@ -6,16 +6,16 @@ import {
   type ChannelMessageActionContext,
   type ChannelMessageActionName,
   type ChannelToolSend,
-} from "openclaw/plugin-sdk";
+} from "../runtime-api.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { handleMatrixAction } from "./tool-actions.js";
 import type { CoreConfig } from "./types.js";
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
+  describeMessageTool: ({ cfg }) => {
     const account = resolveMatrixAccount({ cfg: cfg as CoreConfig });
     if (!account.enabled || !account.configured) {
-      return [];
+      return null;
     }
     const gate = createActionGate((cfg as CoreConfig).channels?.matrix?.actions);
     const actions = new Set<ChannelMessageActionName>(["send", "poll"]);
@@ -39,7 +39,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     if (gate("channelInfo")) {
       actions.add("channel-info");
     }
-    return Array.from(actions);
+    return { actions: Array.from(actions) };
   },
   supportsAction: ({ action }) => action !== "poll",
   extractToolSend: ({ args }): ChannelToolSend | null => {

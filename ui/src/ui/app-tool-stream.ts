@@ -1,5 +1,4 @@
 import { truncateText } from "./format.ts";
-import type { RunPhase } from "./run-status.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -29,10 +28,9 @@ export type ToolStreamEntry = {
 type ToolStreamHost = {
   sessionKey: string;
   chatRunId: string | null;
-  chatConfiguredThink: string | null;
-  chatEffectiveThink: string | null;
-  chatRunPhase: RunPhase | null;
-  chatRunPhaseSuffix: string | null;
+  chatStream: string | null;
+  chatStreamStartedAt: number | null;
+  chatStreamSegments: Array<{ text: string; ts: number }>;
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
@@ -45,29 +43,6 @@ function toTrimmedString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
-}
-
-function extractGeneratingThinkingLevel(data: Record<string, unknown>): string | null {
-  const generating = data.generating;
-  if (!generating || typeof generating !== "object") {
-    return null;
-  }
-  const record = generating as Record<string, unknown>;
-  return toTrimmedString(record.thinkingLevel);
-}
-
-function setRunPhase(host: ToolStreamHost, phase: RunPhase | null, suffix: string | null = null) {
-  if (host.chatRunPhase === phase && host.chatRunPhaseSuffix === suffix) {
-    return;
-  }
-  host.chatRunPhase = phase;
-  host.chatRunPhaseSuffix = suffix;
-  console.debug("[chat] phase_changed", {
-    phase,
-    suffix,
-    runId: host.chatRunId,
-    sessionKey: host.sessionKey,
-  });
 }
 
 function resolveModelLabel(provider: unknown, model: unknown): string | null {
@@ -259,10 +234,14 @@ export function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
 }
 
 export function resetToolStream(host: ToolStreamHost) {
+  if (host.toolStreamSyncTimer != null) {
+    clearTimeout(host.toolStreamSyncTimer);
+    host.toolStreamSyncTimer = null;
+  }
   host.toolStreamById.clear();
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
-  flushToolStreamSync(host);
+  host.chatStreamSegments = [];
 }
 
 export type CompactionStatus = {
@@ -404,11 +383,6 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
     attempts,
     occurredAt: Date.now(),
   };
-  if (phase === "fallback") {
-    setRunPhase(host, "fallback.active", "retrying");
-  } else if (phase === "fallback_cleared" && host.chatRunPhaseSuffix === "retrying") {
-    setRunPhase(host, host.chatRunPhase, null);
-  }
   host.fallbackClearTimer = window.setTimeout(() => {
     host.fallbackStatus = null;
     host.fallbackClearTimer = null;
@@ -428,62 +402,20 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
 
   if (payload.stream === "lifecycle" || payload.stream === "fallback") {
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
-    if (payload.stream === "fallback") {
-      return;
-    }
-    const data = payload.data ?? {};
-    const phase = toTrimmedString(data.phase)?.toLowerCase();
-    const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
-    if (!accepted.accepted) {
-      return;
-    }
-    if (phase === "start") {
-      host.chatRunId = payload.runId;
-      host.chatConfiguredThink = toTrimmedString(data.configuredThink) ?? host.chatConfiguredThink;
-      host.chatEffectiveThink =
-        toTrimmedString(data.effectiveThink) ??
-        extractGeneratingThinkingLevel(data) ??
-        host.chatEffectiveThink;
-      setRunPhase(host, "lifecycle.start");
-      return;
-    }
-    if (phase === "end") {
-      setRunPhase(host, "lifecycle.end");
-      return;
-    }
-    if (phase === "error") {
-      setRunPhase(host, "lifecycle.error", "error");
-      return;
-    }
-    return;
-  }
-
-  if (payload.stream === "assistant") {
-    const accepted = resolveAcceptedSession(host, payload);
-    if (!accepted.accepted) {
-      return;
-    }
-    setRunPhase(host, "assistant.stream");
-    return;
-  }
-
-  if (payload.stream === "reasoning") {
-    const accepted = resolveAcceptedSession(host, payload);
-    if (!accepted.accepted) {
-      return;
-    }
-    setRunPhase(host, "reasoning.stream");
     return;
   }
 
   if (payload.stream !== "tool") {
     return;
   }
-  const accepted = resolveAcceptedSession(host, payload);
-  if (!accepted.accepted) {
+
+  // Filter by session only. Don't check chatRunId because the client sets it
+  // to a client-generated UUID (via generateUUID in sendChatMessage), while
+  // tool events arrive with the server's engine runId — they can never match.
+  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+  if (sessionKey && sessionKey !== host.sessionKey) {
     return;
   }
-  const sessionKey = accepted.sessionKey;
 
   const data = payload.data ?? {};
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
@@ -492,11 +424,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
-  if (phase === "start" || phase === "update") {
-    setRunPhase(host, `tool.${phase}`);
-  } else if (phase === "result") {
-    setRunPhase(host, "tool.result");
-  }
   const args = phase === "start" ? data.args : undefined;
   const output =
     phase === "update"
@@ -508,6 +435,13 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   const now = Date.now();
   let entry = host.toolStreamById.get(toolCallId);
   if (!entry) {
+    // Commit any in-progress streaming text as a segment so it renders
+    // above the tool card instead of below it.
+    if (host.chatStream && host.chatStream.trim().length > 0) {
+      host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
+      host.chatStream = null;
+      host.chatStreamStartedAt = null;
+    }
     entry = {
       toolCallId,
       runId: payload.runId,

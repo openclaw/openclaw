@@ -1,5 +1,9 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
+import {
+  deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
+import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "../../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { sendMessageMatrix } from "../send.js";
 
@@ -32,8 +36,10 @@ export async function deliverMatrixReplies(params: {
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "matrix", params.accountId);
   let hasReplied = false;
   for (const reply of params.replies) {
-    const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
-    if (!reply?.text && !hasMedia) {
+    const rawText = reply.text ?? "";
+    const text = core.channel.text.convertMarkdownTables(rawText, tableMode);
+    const replyContent = resolveSendableOutboundReplyParts(reply, { text });
+    if (!replyContent.hasContent) {
       if (reply?.audioAsVoice) {
         logVerbose("matrix reply has audioAsVoice without media/text; skipping");
         continue;
@@ -48,57 +54,39 @@ export async function deliverMatrixReplies(params: {
     }
     const replyToIdRaw = reply.replyToId?.trim();
     const replyToId = params.threadId || params.replyToMode === "off" ? undefined : replyToIdRaw;
-    const rawText = reply.text ?? "";
-    const text = core.channel.text.convertMarkdownTables(rawText, tableMode);
-    const mediaList = reply.mediaUrls?.length
-      ? reply.mediaUrls
-      : reply.mediaUrl
-        ? [reply.mediaUrl]
-        : [];
 
     const shouldIncludeReply = (id?: string) =>
       Boolean(id) && (params.replyToMode === "all" || !hasReplied);
     const replyToIdForReply = shouldIncludeReply(replyToId) ? replyToId : undefined;
 
-    if (mediaList.length === 0) {
-      let sentTextChunk = false;
-      for (const chunk of core.channel.text.chunkMarkdownTextWithMode(
-        text,
-        chunkLimit,
-        chunkMode,
-      )) {
-        const trimmed = chunk.trim();
-        if (!trimmed) {
-          continue;
-        }
+    const delivered = await deliverTextOrMediaReply({
+      payload: reply,
+      text: replyContent.text,
+      chunkText: (value) =>
+        core.channel.text
+          .chunkMarkdownTextWithMode(value, chunkLimit, chunkMode)
+          .map((chunk) => chunk.trim())
+          .filter(Boolean),
+      sendText: async (trimmed) => {
         await sendMessageMatrix(params.roomId, trimmed, {
           client: params.client,
           replyToId: replyToIdForReply,
           threadId: params.threadId,
           accountId: params.accountId,
         });
-        sentTextChunk = true;
-      }
-      if (replyToIdForReply && !hasReplied && sentTextChunk) {
-        hasReplied = true;
-      }
-      continue;
-    }
-
-    let first = true;
-    for (const mediaUrl of mediaList) {
-      const caption = first ? text : "";
-      await sendMessageMatrix(params.roomId, caption, {
-        client: params.client,
-        mediaUrl,
-        replyToId: replyToIdForReply,
-        threadId: params.threadId,
-        audioAsVoice: reply.audioAsVoice,
-        accountId: params.accountId,
-      });
-      first = false;
-    }
-    if (replyToIdForReply && !hasReplied) {
+      },
+      sendMedia: async ({ mediaUrl, caption }) => {
+        await sendMessageMatrix(params.roomId, caption ?? "", {
+          client: params.client,
+          mediaUrl,
+          replyToId: replyToIdForReply,
+          threadId: params.threadId,
+          audioAsVoice: reply.audioAsVoice,
+          accountId: params.accountId,
+        });
+      },
+    });
+    if (replyToIdForReply && !hasReplied && delivered !== "empty") {
       hasReplied = true;
     }
   }

@@ -7,13 +7,17 @@ import {
 } from "../routing/session-key.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
-import { collectUserPromptPivots } from "./prompt-ids.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
+
+type SessionActionBtwPresenter = {
+  clear: () => void;
+};
 
 type SessionActionContext = {
   client: GatewayChatClient;
   chatLog: ChatLog;
+  btw: SessionActionBtwPresenter;
   tui: TUI;
   opts: TuiOptions;
   state: TuiStateAccess;
@@ -43,6 +47,7 @@ export function createSessionActions(context: SessionActionContext) {
   const {
     client,
     chatLog,
+    btw,
     tui,
     opts,
     state,
@@ -152,17 +157,12 @@ export function createSessionActions(context: SessionActionContext) {
 
     const entryUpdatedAt = entry?.updatedAt ?? null;
     const currentUpdatedAt = state.sessionInfo.updatedAt ?? null;
-    const modelChanged =
-      (entry?.modelProvider !== undefined &&
-        entry.modelProvider !== state.sessionInfo.modelProvider) ||
-      (entry?.model !== undefined && entry.model !== state.sessionInfo.model);
     if (
       !params.force &&
       entryUpdatedAt !== null &&
       currentUpdatedAt !== null &&
       entryUpdatedAt < currentUpdatedAt &&
-      !defaultsChanged &&
-      !modelChanged
+      !defaultsChanged
     ) {
       return;
     }
@@ -171,22 +171,8 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.thinkingLevel !== undefined) {
       next.thinkingLevel = entry.thinkingLevel;
     }
-    if (entry?.configuredThink !== undefined) {
-      next.configuredThink = entry.configuredThink;
-    } else if (entry?.thinkingLevel !== undefined) {
-      next.configuredThink = entry.thinkingLevel;
-    }
-    if (entry?.effectiveThink !== undefined) {
-      next.effectiveThink = entry.effectiveThink;
-    }
-    if (entry?.lastEffectiveThink !== undefined) {
-      next.lastEffectiveThink = entry.lastEffectiveThink;
-    }
-    if (entry?.currentRunId !== undefined) {
-      next.currentRunId = entry.currentRunId;
-    }
-    if (entry?.lastRunId !== undefined) {
-      next.lastRunId = entry.lastRunId;
+    if (entry?.fastMode !== undefined) {
+      next.fastMode = entry.fastMode;
     }
     if (entry?.verboseLevel !== undefined) {
       next.verboseLevel = entry.verboseLevel;
@@ -309,24 +295,17 @@ export function createSessionActions(context: SessionActionContext) {
         messages?: unknown[];
         sessionId?: string;
         thinkingLevel?: string;
+        fastMode?: boolean;
         verboseLevel?: string;
       };
       state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
       state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
-      state.sessionInfo.configuredThink =
-        record.thinkingLevel ??
-        state.sessionInfo.configuredThink ??
-        state.sessionInfo.thinkingLevel;
+      state.sessionInfo.fastMode = record.fastMode ?? state.sessionInfo.fastMode;
       state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       chatLog.clearAll();
+      btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
-      const promptPivots = collectUserPromptPivots(record.messages ?? []);
-      const promptIdByUserIndex = new Map<number, string>();
-      for (const pivot of promptPivots) {
-        promptIdByUserIndex.set(pivot.userMessageIndex, pivot.promptId);
-      }
-      let userMessageIndex = 0;
       for (const entry of record.messages ?? []) {
         if (!entry || typeof entry !== "object") {
           continue;
@@ -342,9 +321,8 @@ export function createSessionActions(context: SessionActionContext) {
         if (message.role === "user") {
           const text = extractTextFromMessage(message);
           if (text) {
-            chatLog.addUser(text, promptIdByUserIndex.get(userMessageIndex));
+            chatLog.addUser(text);
           }
-          userMessageIndex += 1;
           continue;
         }
         if (message.role === "assistant") {
@@ -391,8 +369,12 @@ export function createSessionActions(context: SessionActionContext) {
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
     state.currentSessionId = null;
+    // Session keys can move backwards in updatedAt ordering; drop previous session freshness
+    // so refresh data for the newly selected session isn't rejected as stale.
+    state.sessionInfo.updatedAt = null;
     state.historyLoaded = false;
     clearLocalRunIds?.();
+    btw.clear();
     updateHeader();
     updateFooter();
     await loadHistory();

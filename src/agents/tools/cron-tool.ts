@@ -28,23 +28,26 @@ const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
 // Flattened schema: runtime validates per-action requirements.
-const CronToolSchema = Type.Object({
-  action: stringEnum(CRON_ACTIONS),
-  gatewayUrl: Type.Optional(Type.String()),
-  gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-  includeDisabled: Type.Optional(Type.Boolean()),
-  job: Type.Optional(Type.Object({}, { additionalProperties: true })),
-  jobId: Type.Optional(Type.String()),
-  id: Type.Optional(Type.String()),
-  patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
-  text: Type.Optional(Type.String()),
-  mode: optionalStringEnum(CRON_WAKE_MODES),
-  runMode: optionalStringEnum(CRON_RUN_MODES),
-  contextMessages: Type.Optional(
-    Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
-  ),
-});
+const CronToolSchema = Type.Object(
+  {
+    action: stringEnum(CRON_ACTIONS),
+    gatewayUrl: Type.Optional(Type.String()),
+    gatewayToken: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Number()),
+    includeDisabled: Type.Optional(Type.Boolean()),
+    job: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    jobId: Type.Optional(Type.String()),
+    id: Type.Optional(Type.String()),
+    patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    text: Type.Optional(Type.String()),
+    mode: optionalStringEnum(CRON_WAKE_MODES),
+    runMode: optionalStringEnum(CRON_RUN_MODES),
+    contextMessages: Type.Optional(
+      Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
+    ),
+  },
+  { additionalProperties: true },
+);
 
 type CronToolOptions = {
   agentSessionKey?: string;
@@ -227,10 +230,21 @@ JOB SCHEMA (for add action):
   "name": "string (optional)",
   "schedule": { ... },      // Required: when to run
   "payload": { ... },       // Required: what to execute
-  "delivery": { ... },      // Optional: announce summary or webhook POST
-  "sessionTarget": "main" | "isolated",  // Required
+  "delivery": { ... },      // Optional: announce summary (isolated/current/session:xxx only) or webhook POST
+  "sessionTarget": "main" | "isolated" | "current" | "session:<custom-id>",  // Optional, defaults based on context
   "enabled": true | false   // Optional, default true
 }
+
+SESSION TARGET OPTIONS:
+- "main": Run in the main session (requires payload.kind="systemEvent")
+- "isolated": Run in an ephemeral isolated session (requires payload.kind="agentTurn")
+- "current": Bind to the current session where the cron is created (resolved at creation time)
+- "session:<custom-id>": Run in a persistent named session (e.g., "session:project-alpha-daily")
+
+DEFAULT BEHAVIOR (unchanged for backward compatibility):
+- payload.kind="systemEvent" → defaults to "main"
+- payload.kind="agentTurn" → defaults to "isolated"
+To use current session binding, explicitly set sessionTarget="current".
 
 SCHEDULE TYPES (schedule.kind):
 - "at": One-shot at absolute time
@@ -257,9 +271,9 @@ DELIVERY (top-level):
 
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
-- sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
+- sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn"
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
-Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
+Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
@@ -343,7 +357,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!params.job || typeof params.job !== "object") {
             throw new Error("job required");
           }
-          const job = normalizeCronJobCreate(params.job) ?? params.job;
+          const job =
+            normalizeCronJobCreate(params.job, {
+              sessionContext: { sessionKey: opts?.agentSessionKey },
+            }) ?? params.job;
           if (job && typeof job === "object") {
             const cfg = loadConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -435,6 +452,42 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
+
+          // Flat-params recovery for patch
+          if (
+            !params.patch ||
+            (typeof params.patch === "object" &&
+              params.patch !== null &&
+              Object.keys(params.patch as Record<string, unknown>).length === 0)
+          ) {
+            const PATCH_KEYS: ReadonlySet<string> = new Set([
+              "name",
+              "schedule",
+              "payload",
+              "delivery",
+              "enabled",
+              "description",
+              "deleteAfterRun",
+              "agentId",
+              "sessionKey",
+              "sessionTarget",
+              "wakeMode",
+              "failureAlert",
+              "allowUnsafeExternalContent",
+            ]);
+            const synthetic: Record<string, unknown> = {};
+            let found = false;
+            for (const key of Object.keys(params)) {
+              if (PATCH_KEYS.has(key) && params[key] !== undefined) {
+                synthetic[key] = params[key];
+                found = true;
+              }
+            }
+            if (found) {
+              params.patch = synthetic;
+            }
+          }
+
           if (!params.patch || typeof params.patch !== "object") {
             throw new Error("patch required");
           }
