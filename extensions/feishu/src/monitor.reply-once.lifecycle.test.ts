@@ -10,7 +10,14 @@ const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 const createFeishuReplyDispatcherMock = vi.hoisted(() => vi.fn());
-const resolveBoundConversationMock = vi.hoisted(() => vi.fn(() => null));
+const resolveBoundConversationMock = vi.hoisted(() =>
+  vi.fn<
+    () => {
+      bindingId: string;
+      targetSessionKey: string;
+    } | null
+  >(() => null),
+);
 const touchBindingMock = vi.hoisted(() => vi.fn());
 const resolveAgentRouteMock = vi.hoisted(() => vi.fn());
 const dispatchReplyFromConfigMock = vi.hoisted(() => vi.fn());
@@ -110,6 +117,7 @@ function createLifecycleConfig(): ClawdbotConfig {
 function createLifecycleAccount(): ResolvedFeishuAccount {
   return {
     accountId: "acct-lifecycle",
+    selectionSource: "explicit",
     enabled: true,
     configured: true,
     appId: "cli_test",
@@ -129,7 +137,7 @@ function createLifecycleAccount(): ResolvedFeishuAccount {
         },
       },
     },
-  } as ResolvedFeishuAccount;
+  } as unknown as ResolvedFeishuAccount;
 }
 
 function createRuntimeEnv(): RuntimeEnv {
