@@ -870,6 +870,16 @@ function extractEmbeddedHttpStatus(raw: string): number | null {
   return code >= 100 && code < 600 ? code : null;
 }
 
+/**
+ * Returns true for 4xx status codes that represent permanent client errors
+ * (auth, billing, bad request, etc.) which should NOT trigger model fallback.
+ * Excludes 408 (Request Timeout) and 499 (Client Closed Request) which are
+ * retryable per classifyFailoverReasonFromHttpStatus().
+ */
+function isPermanent4xx(code: number): boolean {
+  return code >= 400 && code < 500 && code !== 408 && code !== 499;
+}
+
 function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {
     return false;
@@ -886,17 +896,20 @@ function isJsonApiInternalServerError(raw: string): boolean {
   // extractLeadingHttpStatus only catches codes at the start of the string, so we
   // also scan for embedded status codes to avoid misclassifying permanent 4xx errors
   // as retryable timeouts.
+  //
+  // Note: 408 and 499 are retryable (timeout/overload) per
+  // classifyFailoverReasonFromHttpStatus(), so we must NOT exclude them here.
   if (!value.includes('"type":"api_error"')) {
     return false;
   }
   // Check leading status first (fast path).
   const leadingStatus = extractLeadingHttpStatus(raw.trim());
-  if (leadingStatus && leadingStatus.code >= 400 && leadingStatus.code < 500) {
+  if (leadingStatus && isPermanent4xx(leadingStatus.code)) {
     return false;
   }
   // Check embedded status for wrapped error formats (e.g. "Ollama API error 400: ...").
   const embeddedCode = extractEmbeddedHttpStatus(raw);
-  if (embeddedCode !== null && embeddedCode >= 400 && embeddedCode < 500) {
+  if (embeddedCode !== null && isPermanent4xx(embeddedCode)) {
     return false;
   }
   return true;
