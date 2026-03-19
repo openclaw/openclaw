@@ -1,0 +1,9 @@
+{
+  "name": "openclaw-calendar-service",
+  "version": "1.0.0",
+  "description": "Apple Calendar service for Stitch via file-based communication",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  }
+}
