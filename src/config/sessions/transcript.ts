@@ -10,7 +10,7 @@ import {
   resolveSessionTranscriptPath,
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { loadSessionStore } from "./store.js";
+import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 function stripQuery(value: string): string {
@@ -154,7 +154,8 @@ export async function appendAssistantMessageToSessionTranscript(params: {
 
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
   const store = loadSessionStore(storePath, { skipCache: true });
-  const entry = store[sessionKey] as SessionEntry | undefined;
+  const normalizedKey = normalizeStoreSessionKey(sessionKey);
+  const entry = (store[normalizedKey] ?? store[sessionKey]) as SessionEntry | undefined;
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }

@@ -143,6 +143,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -253,6 +254,59 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         isCronSystemEvent: () => true,
       }),
     ).toBe(false);
+  });
+
+  it("skips stale cron deliveries while still suppressing fallback main summary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "Yesterday's morning briefing." });
+    (params.job as { state?: { nextRunAtMs?: number } }).state = {
+      nextRunAtMs: Date.now() - (3 * 60 * 60_000 + 1),
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        delivered: false,
+        deliveryAttempted: true,
+      }),
+    );
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(
+      shouldEnqueueCronMainSummary({
+        summaryText: "Yesterday's morning briefing.",
+        deliveryRequested: true,
+        delivered: state.result?.delivered,
+        deliveryAttempted: state.result?.deliveryAttempted,
+        suppressMainSummary: false,
+        isCronSystemEvent: () => true,
+      }),
+    ).toBe(false);
+  });
+
+  it("still delivers when the run started on time but finished more than three hours later", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const params = makeBaseParams({ synthesizedText: "Long running report finished." });
+    params.runStartedAt = Date.now() - (3 * 60 * 60_000 + 1);
+    (params.job as { state?: { nextRunAtMs?: number } }).state = {
+      nextRunAtMs: params.runStartedAt,
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
   });
 
   it("text delivery fires exactly once (no double-deliver)", async () => {

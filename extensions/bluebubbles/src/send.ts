@@ -312,16 +312,20 @@ export async function resolveChatGuidForTarget(params: {
 }
 
 /**
- * Creates a new chat (DM) and optionally sends an initial message.
+ * Creates a new DM chat for the given address and returns the chat GUID.
  * Requires Private API to be enabled in BlueBubbles.
+ *
+ * If a `message` is provided it is sent as the initial message in the new chat;
+ * otherwise an empty-string message body is used (BlueBubbles still creates the
+ * chat but will not deliver a visible bubble).
  */
-async function createNewChatWithMessage(params: {
+export async function createChatForHandle(params: {
   baseUrl: string;
   password: string;
   address: string;
-  message: string;
+  message?: string;
   timeoutMs?: number;
-}): Promise<BlueBubblesSendResult> {
+}): Promise<{ chatGuid: string | null; messageId: string }> {
   const url = buildBlueBubblesApiUrl({
     baseUrl: params.baseUrl,
     path: "/api/v1/chat/new",
@@ -329,7 +333,7 @@ async function createNewChatWithMessage(params: {
   });
   const payload = {
     addresses: [params.address],
-    message: params.message,
+    message: params.message ?? "",
     tempGuid: `temp-${crypto.randomUUID()}`,
   };
   const res = await blueBubblesFetchWithTimeout(
@@ -343,7 +347,6 @@ async function createNewChatWithMessage(params: {
   );
   if (!res.ok) {
     const errorText = await res.text();
-    // Check for Private API not enabled error
     if (
       res.status === 400 ||
       res.status === 403 ||
@@ -355,7 +358,64 @@ async function createNewChatWithMessage(params: {
     }
     throw new Error(`BlueBubbles create chat failed (${res.status}): ${errorText || "unknown"}`);
   }
-  return parseBlueBubblesMessageResponse(res);
+  const body = await res.text();
+  let messageId = "ok";
+  let chatGuid: string | null = null;
+  if (body) {
+    try {
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+      messageId = extractBlueBubblesMessageId(parsed);
+      // Extract chatGuid from the response data
+      const data = parsed.data as Record<string, unknown> | undefined;
+      if (data) {
+        chatGuid =
+          (typeof data.chatGuid === "string" && data.chatGuid) ||
+          (typeof data.guid === "string" && data.guid) ||
+          null;
+        // Also try nested chats array (some BB versions nest it)
+        if (!chatGuid) {
+          const chats = data.chats ?? data.chat;
+          if (Array.isArray(chats) && chats.length > 0) {
+            const first = chats[0] as Record<string, unknown> | undefined;
+            chatGuid =
+              (typeof first?.guid === "string" && first.guid) ||
+              (typeof first?.chatGuid === "string" && first.chatGuid) ||
+              null;
+          } else if (chats && typeof chats === "object" && !Array.isArray(chats)) {
+            const chatObj = chats as Record<string, unknown>;
+            chatGuid =
+              (typeof chatObj.guid === "string" && chatObj.guid) ||
+              (typeof chatObj.chatGuid === "string" && chatObj.chatGuid) ||
+              null;
+          }
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+  return { chatGuid, messageId };
+}
+
+/**
+ * Creates a new chat (DM) and sends an initial message.
+ * Requires Private API to be enabled in BlueBubbles.
+ */
+async function createNewChatWithMessage(params: {
+  baseUrl: string;
+  password: string;
+  address: string;
+  message: string;
+  timeoutMs?: number;
+}): Promise<BlueBubblesSendResult> {
+  const result = await createChatForHandle({
+    baseUrl: params.baseUrl,
+    password: params.password,
+    address: params.address,
+    message: params.message,
+    timeoutMs: params.timeoutMs,
+  });
+  return { messageId: result.messageId };
 }
 
 export async function sendMessageBlueBubbles(
