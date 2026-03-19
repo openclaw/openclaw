@@ -360,6 +360,26 @@ describe("normalizeModelCompat", () => {
     });
   });
 
+  it("keeps supportsUsageInStreaming off for Azure OpenAI legacy api-version endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "azure-openai",
+      baseUrl:
+        "https://my-deployment.openai.azure.com/openai/deployments/gpt-4o?api-version=2024-08-01-preview",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model as Model<Api>);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+  });
+
+  it("defaults supportsUsageInStreaming on for Azure OpenAI modern api-version endpoints", () => {
+    expectSupportsUsageInStreamingForcedOn({
+      provider: "azure-openai",
+      baseUrl:
+        "https://my-deployment.openai.azure.com/openai/deployments/gpt-4o?api-version=2024-10-21",
+    });
+  });
+
   it("forces supportsStrictMode off for z.ai models", () => {
     expectSupportsStrictModeForcedOff();
   });
