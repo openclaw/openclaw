@@ -38,10 +38,9 @@ import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./re
 import type { OpenClawConfig } from "./runtime-api.js";
 import {
   DM_GROUP_ACCESS_REASON,
-  createScopedPairingAccess,
-  createReplyPrefixOptions,
+  createChannelPairingController,
+  createChannelReplyPipeline,
   evictOldHistoryKeys,
-  issuePairingChallenge,
   logAckFailure,
   logInboundDrop,
   logTypingFailure,
@@ -452,7 +451,7 @@ export async function processMessage(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: "bluebubbles",
     accountId: account.accountId,
@@ -654,12 +653,10 @@ export async function processMessage(
     }
 
     if (accessDecision.decision === "pairing") {
-      await issuePairingChallenge({
-        channel: "bluebubbles",
+      await pairing.issueChallenge({
         senderId: message.senderId,
         senderIdLine: `Your BlueBubbles sender id: ${message.senderId}`,
         meta: { name: message.senderName },
-        upsertPairingRequest: pairing.upsertPairingRequest,
         onCreated: () => {
           runtime.log?.(`[bluebubbles] pairing request sender=${message.senderId} created=true`);
           logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
@@ -1228,17 +1225,47 @@ export async function processMessage(
     }, typingRestartDelayMs);
   };
   try {
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
       cfg: config,
       agentId: route.agentId,
       channel: "bluebubbles",
       accountId: account.accountId,
+      typingCallbacks: {
+        onReplyStart: async () => {
+          if (!chatGuidForActions) {
+            return;
+          }
+          if (!baseUrl || !password) {
+            return;
+          }
+          streamingActive = true;
+          clearTypingRestartTimer();
+          try {
+            await sendBlueBubblesTyping(chatGuidForActions, true, {
+              cfg: config,
+              accountId: account.accountId,
+            });
+          } catch (err) {
+            runtime.error?.(`[bluebubbles] typing start failed: ${String(err)}`);
+          }
+        },
+        onIdle: () => {
+          if (!chatGuidForActions) {
+            return;
+          }
+          if (!baseUrl || !password) {
+            return;
+          }
+          // Intentionally no-op for block streaming. We stop typing in finally
+          // after the run completes to avoid flicker between paragraph blocks.
+        },
+      },
     });
     await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: config,
       dispatcherOptions: {
-        ...prefixOptions,
+        ...replyPipeline,
         deliver: async (payload, info) => {
           const rawReplyToId =
             privateApiEnabled && typeof payload.replyToId === "string"
@@ -1356,34 +1383,8 @@ export async function processMessage(
             }
           }
         },
-        onReplyStart: async () => {
-          if (!chatGuidForActions) {
-            return;
-          }
-          if (!baseUrl || !password) {
-            return;
-          }
-          streamingActive = true;
-          clearTypingRestartTimer();
-          try {
-            await sendBlueBubblesTyping(chatGuidForActions, true, {
-              cfg: config,
-              accountId: account.accountId,
-            });
-          } catch (err) {
-            runtime.error?.(`[bluebubbles] typing start failed: ${String(err)}`);
-          }
-        },
-        onIdle: async () => {
-          if (!chatGuidForActions) {
-            return;
-          }
-          if (!baseUrl || !password) {
-            return;
-          }
-          // Intentionally no-op for block streaming. We stop typing in finally
-          // after the run completes to avoid flicker between paragraph blocks.
-        },
+        onReplyStart: typingCallbacks?.onReplyStart,
+        onIdle: typingCallbacks?.onIdle,
         onError: (err, info) => {
           runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${String(err)}`);
         },
@@ -1447,7 +1448,7 @@ export async function processReaction(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core } = target;
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: "bluebubbles",
     accountId: account.accountId,
