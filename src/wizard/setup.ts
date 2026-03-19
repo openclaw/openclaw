@@ -482,7 +482,9 @@ export async function runSetupWizard(
     }
   }
 
-  if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
+  const shouldPromptModelSelection =
+    authChoice !== "custom-api-key" && (authChoiceFromPrompt || authChoice === "ollama");
+  if (shouldPromptModelSelection) {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
       prompter,

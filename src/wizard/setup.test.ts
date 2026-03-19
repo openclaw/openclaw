@@ -410,6 +410,33 @@ describe("runSetupWizard", () => {
     }
   });
 
+  it("prompts for a model during explicit interactive Ollama setup", async () => {
+    promptDefaultModel.mockClear();
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "ollama",
+        installDaemon: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(promptDefaultModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowKeep: false,
+      }),
+    );
+  });
+
   it("shows plugin compatibility notices for an existing valid config", async () => {
     buildPluginCompatibilityNotices.mockReturnValue([
       {
