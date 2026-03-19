@@ -904,13 +904,25 @@ describe("update-cli", () => {
     testCase.assertExtra();
   });
 
-  it("updateCommand uses Windows stale-listener fallback for detached restart health recovery", async () => {
+  it("updateCommand delays Windows stale-listener fallback until detached restart retries finish", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     serviceLoaded.mockResolvedValue(true);
     waitForGatewayHealthyRestart
       .mockResolvedValueOnce({
         healthy: false,
+        staleGatewayPids: [],
+        runtime: { status: "stopped" },
+        portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      })
+      .mockResolvedValueOnce({
+        healthy: false,
         staleGatewayPids: [1993],
+        runtime: { status: "stopped" },
+        portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      })
+      .mockResolvedValueOnce({
+        healthy: false,
+        staleGatewayPids: [],
         runtime: { status: "stopped" },
         portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
       })
@@ -930,19 +942,34 @@ describe("update-cli", () => {
     }
 
     expect(runRestartScript).toHaveBeenCalled();
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(4);
+    expect(waitForGatewayHealthyRestart.mock.calls[0]?.[0]).toMatchObject({
+      port: 18789,
+    });
+    expect(waitForGatewayHealthyRestart.mock.calls[0]?.[0]).not.toHaveProperty(
+      "includeUnknownListenersAsStale",
+    );
     expect(waitForGatewayHealthyRestart).toHaveBeenNthCalledWith(
-      1,
+      2,
       expect.objectContaining({
         port: 18789,
+        attempts: 0,
         includeUnknownListenersAsStale: true,
       }),
     );
     expect(terminateStaleGatewayPids).toHaveBeenCalledWith([1993]);
     expect(runDaemonRestart).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyRestart.mock.calls[2]?.[0]).toMatchObject({
+      port: 18789,
+    });
+    expect(waitForGatewayHealthyRestart.mock.calls[2]?.[0]).not.toHaveProperty(
+      "includeUnknownListenersAsStale",
+    );
     expect(waitForGatewayHealthyRestart).toHaveBeenNthCalledWith(
-      2,
+      4,
       expect.objectContaining({
         port: 18789,
+        attempts: 0,
         includeUnknownListenersAsStale: true,
       }),
     );
