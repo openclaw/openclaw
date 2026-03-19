@@ -7,7 +7,7 @@ const defaultGatewayMock = async (
   method: string,
   _opts: unknown,
   params?: unknown,
-  _timeoutMs?: number,
+  _extra?: { expectFinal?: boolean; progress?: boolean; quiet?: boolean },
 ) => {
   if (method === "cron.status") {
     return { enabled: true };
@@ -20,8 +20,12 @@ vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
     ...actual,
-    callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-      callGatewayFromCli(method, opts, params, extra),
+    callGatewayFromCli: (
+      method: string,
+      opts: unknown,
+      params?: unknown,
+      extra?: { expectFinal?: boolean; progress?: boolean; quiet?: boolean },
+    ) => callGatewayFromCli(method, opts, params, extra),
   };
 });
 
