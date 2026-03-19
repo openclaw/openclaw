@@ -536,7 +536,7 @@ importers:
   extensions/tlon:
     dependencies:
       '@tloncorp/api':
-        specifier: https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87
+        specifier: git+https://github.com/tloncorp/api-beta.git#7eede1c1a756977b09f96aa14a92e2b06318ae87
         version: https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87
       '@tloncorp/tlon-skill':
         specifier: 0.2.2
@@ -544,6 +544,9 @@ importers:
       '@urbit/aura':
         specifier: ^3.0.0
         version: 3.0.0
+      openclaw:
+        specifier: '>=2026.3.11'
+        version: 2026.3.13(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(jimp@1.6.0)(node-llama-cpp@3.16.2(typescript@5.9.3))
       zod:
         specifier: ^4.3.6
         version: 4.3.6
