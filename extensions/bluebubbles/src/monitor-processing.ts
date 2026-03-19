@@ -883,12 +883,12 @@ export async function processMessage(
   }
 
   if (isTapbackMessage && tapbackParsed?.action !== "removed" && replyToBody) {
+    const tapbackEmoji = tapbackParsed.emoji;
     const approvalId =
       replyToBody.match(/Full id:\s*`?([^\s`]+)`?/i)?.[1]?.trim() ||
       replyToBody.match(/\/approve\s+([^\s`]+)\s+allow-(?:once|always)/i)?.[1]?.trim() ||
       replyToBody.match(/Approval required \(id ([a-z0-9-]{8,})(?:,|\))/i)?.[1]?.trim();
-    const decision =
-      tapbackParsed.emoji === "👍" ? "allow-once" : tapbackParsed.emoji === "👎" ? "deny" : null;
+    const decision = tapbackEmoji === "👍" ? "allow-once" : tapbackEmoji === "👎" ? "deny" : null;
     if (approvalId && decision) {
       if (!commandAuthorized) {
         logInboundDrop({
@@ -909,7 +909,7 @@ export async function processMessage(
         logVerbose(
           core,
           runtime,
-          `bluebubbles: resolved exec approval ${approvalId} via tapback ${tapbackParsed.emoji}`,
+          `bluebubbles: resolved exec approval ${approvalId} via tapback ${tapbackEmoji}`,
         );
         return;
       } catch (err) {
