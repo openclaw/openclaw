@@ -135,6 +135,7 @@ Docs: https://docs.openclaw.ai
 - Tests/OpenAI Codex auth: align login expectations with the default `gpt-5.4` model so CI coverage stays consistent with the current OpenAI Codex default. (#44367) Thanks @jrrcdev.
 - Discord: enforce strict DM component allowlist auth (#49997) Thanks @joshavant.
 - Stabilize plugin loader and Docker extension smoke (#50058) Thanks @joshavant.
+- Telegram: stabilize pairing/session/forum routing and reply formatting tests (#50155) Thanks @joshavant.
 
 ### Fixes
 

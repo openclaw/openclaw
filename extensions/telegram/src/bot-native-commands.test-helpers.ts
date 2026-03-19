@@ -123,9 +123,15 @@ export function createNativeCommandsHarness(params?: {
     loadConfig: vi.fn(() => params?.cfg ?? ({} as OpenClawConfig)),
     resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/sessions.json"),
     readChannelAllowFromStore: vi.fn(async () => []),
+    upsertChannelPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
     enqueueSystemEvent: vi.fn(),
     dispatchReplyWithBufferedBlockDispatcher:
       replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
+    buildModelsProviderData: vi.fn(async () => ({
+      byProvider: new Map<string, Set<string>>(),
+      providers: [],
+      resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+    })),
     listSkillCommandsForAgents: vi.fn(() => []),
     wasSentByBot: vi.fn(() => false),
   };
