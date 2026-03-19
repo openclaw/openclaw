@@ -1463,6 +1463,11 @@ export async function runReplyAgent(params: {
       // Intentionally uses replyPayloads (pre-guard) rather than guardedReplyPayloads:
       // gen_ai.completion should capture model-originated output, not system-injected
       // post-processing like reminder notes or usage lines.
+      // Note: followupRun.prompt is the queue body, which may diverge from the
+      // effective prompt the model actually sees (attempt.ts adds bootstrap warnings,
+      // hook context, thread-history notes, etc.). This is a known approximation at
+      // the reply layer; the model.content event in attempt.ts captures the true
+      // effectivePrompt when the extended content-telemetry path is enabled.
       const cc = cfg.diagnostics?.otel?.captureContent;
       if (cc === true || (typeof cc === "object" && cc && "enabled" in cc && cc.enabled)) {
         if (typeof followupRun.prompt === "string") {

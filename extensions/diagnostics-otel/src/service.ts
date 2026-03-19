@@ -106,18 +106,23 @@ function formatError(err: unknown): string {
   }
 }
 
-/** Truncate a string to at most `maxBytes` UTF-8 bytes, avoiding mid-codepoint cuts. */
+const TRUNCATION_MARKER = "…[truncated]";
+const TRUNCATION_MARKER_BYTES = Buffer.byteLength(TRUNCATION_MARKER, "utf8");
+
+/** Truncate a string to at most `maxBytes` UTF-8 bytes (including the marker), avoiding mid-codepoint cuts. */
 function truncateToBytes(text: string, maxBytes: number): string {
   const buf = Buffer.from(text, "utf8");
   if (buf.length <= maxBytes) {
     return text;
   }
+  // Reserve space for the marker so the total stays within maxBytes.
+  const cutoff = Math.max(0, maxBytes - TRUNCATION_MARKER_BYTES);
   // Decode back to avoid splitting a multi-byte character.
   return (
     buf
-      .subarray(0, maxBytes)
+      .subarray(0, cutoff)
       .toString("utf8")
-      .replace(/\uFFFD$/, "") + "…[truncated]"
+      .replace(/\uFFFD$/, "") + TRUNCATION_MARKER
   );
 }
 
