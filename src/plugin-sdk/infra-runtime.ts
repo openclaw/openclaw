@@ -20,6 +20,7 @@ export * from "../infra/heartbeat-visibility.ts";
 export * from "../infra/home-dir.js";
 export * from "../infra/http-body.js";
 export * from "../infra/json-files.js";
+export type * from "../infra/json-files.js";
 export * from "../infra/map-size.js";
 export * from "../infra/net/hostname.ts";
 export * from "../infra/net/fetch-guard.js";
