@@ -10,6 +10,26 @@ export type SessionHistoryMessage = {
   content: string;
 };
 
+const SKIP_BLOCK_TYPES = new Set([
+  // snake_case variants
+  "tool_use",
+  "tool_result",
+  "tool_call",
+  // camelCase variants
+  "toolCall",
+  "toolUse",
+  "toolResult",
+  "functionCall",
+  // internal aliases
+  "toolcall",
+  // reasoning blocks (not user-visible)
+  "thinking",
+]);
+
+function isToolOrReasoningBlock(type?: string): boolean {
+  return !!type && SKIP_BLOCK_TYPES.has(type);
+}
+
 function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -21,14 +41,8 @@ function extractTextContent(content: unknown): string {
         parts.push(c.text);
       } else if (c.type === "image") {
         parts.push("[image]");
-      } else if (
-        c.type === "tool_use" ||
-        c.type === "tool_result" ||
-        c.type === "toolCall" ||
-        c.type === "toolUse" ||
-        c.type === "toolResult"
-      ) {
-        // skip tool blocks (both snake_case and camelCase variants)
+      } else if (isToolOrReasoningBlock(c.type)) {
+        // skip tool and reasoning blocks
       } else if (c.type) {
         parts.push(`[${c.type}]`);
       }
