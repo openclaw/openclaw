@@ -36,11 +36,7 @@ import {
 } from "./internal.js";
 import { type MemoryFileEntry } from "./internal.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
-import {
-  buildCaseInsensitiveExtensionGlob,
-  classifyMemoryMultimodalPath,
-  getMemoryMultimodalExtensions,
-} from "./multimodal.js";
+import { classifyMemoryMultimodalPath } from "./multimodal.js";
 import type { SessionFileEntry } from "./session-files.js";
 import {
   buildSessionEntry,
@@ -418,7 +414,9 @@ export abstract class MemoryManagerSyncOps {
       ignoreInitial: true,
       ignored: (watchPath: string, stats?: import("fs").Stats) =>
         shouldIgnoreMemoryWatchPath(String(watchPath)) ||
-        (stats?.isFile() === true && !String(watchPath).toLowerCase().endsWith(".md")),
+        (stats?.isFile() === true &&
+          !String(watchPath).toLowerCase().endsWith(".md") &&
+          classifyMemoryMultimodalPath(String(watchPath), this.settings.multimodal) === null),
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
         pollInterval: 100,
