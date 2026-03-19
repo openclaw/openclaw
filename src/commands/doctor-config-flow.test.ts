@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveMatrixAccountStorageRoot } from "../../extensions/matrix/runtime-api.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import * as noteModule from "../terminal/note.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
@@ -201,6 +202,250 @@ describe("doctor config flow", () => {
     expect(
       ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
     ).toBe("existing-session");
+  });
+
+  it("previews Matrix legacy sync-store migration in read-only mode", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await withTempHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        await fs.mkdir(path.join(stateDir, "matrix"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "openclaw.json"),
+          JSON.stringify({
+            channels: {
+              matrix: {
+                homeserver: "https://matrix.example.org",
+                userId: "@bot:example.org",
+                accessToken: "tok-123",
+              },
+            },
+          }),
+        );
+        await fs.writeFile(
+          path.join(stateDir, "matrix", "bot-storage.json"),
+          '{"next_batch":"s1"}',
+        );
+        await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true },
+          confirm: async () => false,
+        });
+      });
+
+      const warning = noteSpy.mock.calls.find(
+        (call) =>
+          call[1] === "Doctor warnings" &&
+          String(call[0]).includes("Matrix plugin upgraded in place."),
+      );
+      expect(warning?.[0]).toContain("Legacy sync store:");
+      expect(warning?.[0]).toContain(
+        'Run "openclaw doctor --fix" to migrate this Matrix state now.',
+      );
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("previews Matrix encrypted-state migration in read-only mode", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await withTempHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        const { rootDir: accountRoot } = resolveMatrixAccountStorageRoot({
+          stateDir,
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok-123",
+        });
+        await fs.mkdir(path.join(accountRoot, "crypto"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "openclaw.json"),
+          JSON.stringify({
+            channels: {
+              matrix: {
+                homeserver: "https://matrix.example.org",
+                userId: "@bot:example.org",
+                accessToken: "tok-123",
+              },
+            },
+          }),
+        );
+        await fs.writeFile(
+          path.join(accountRoot, "crypto", "bot-sdk.json"),
+          JSON.stringify({ deviceId: "DEVICE123" }),
+        );
+        await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true },
+          confirm: async () => false,
+        });
+      });
+
+      const warning = noteSpy.mock.calls.find(
+        (call) =>
+          call[1] === "Doctor warnings" &&
+          String(call[0]).includes("Matrix encrypted-state migration is pending"),
+      );
+      expect(warning?.[0]).toContain("Legacy crypto store:");
+      expect(warning?.[0]).toContain("New recovery key file:");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("migrates Matrix legacy state on doctor repair", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await withTempHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        await fs.mkdir(path.join(stateDir, "matrix"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "openclaw.json"),
+          JSON.stringify({
+            channels: {
+              matrix: {
+                homeserver: "https://matrix.example.org",
+                userId: "@bot:example.org",
+                accessToken: "tok-123",
+              },
+            },
+          }),
+        );
+        await fs.writeFile(
+          path.join(stateDir, "matrix", "bot-storage.json"),
+          '{"next_batch":"s1"}',
+        );
+        await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true, repair: true },
+          confirm: async () => false,
+        });
+
+        const migratedRoot = path.join(
+          stateDir,
+          "matrix",
+          "accounts",
+          "default",
+          "matrix.example.org__bot_example.org",
+        );
+        const migratedChildren = await fs.readdir(migratedRoot);
+        expect(migratedChildren.length).toBe(1);
+        expect(
+          await fs
+            .access(path.join(migratedRoot, migratedChildren[0] ?? "", "bot-storage.json"))
+            .then(() => true)
+            .catch(() => false),
+        ).toBe(true);
+        expect(
+          await fs
+            .access(path.join(stateDir, "matrix", "bot-storage.json"))
+            .then(() => true)
+            .catch(() => false),
+        ).toBe(false);
+      });
+
+      expect(
+        noteSpy.mock.calls.some(
+          (call) =>
+            call[1] === "Doctor changes" &&
+            String(call[0]).includes("Matrix plugin upgraded in place."),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("creates a Matrix migration snapshot before doctor repair mutates Matrix state", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      await fs.mkdir(path.join(stateDir, "matrix"), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({
+          channels: {
+            matrix: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot:example.org",
+              accessToken: "tok-123",
+            },
+          },
+        }),
+      );
+      await fs.writeFile(path.join(stateDir, "matrix", "bot-storage.json"), '{"next_batch":"s1"}');
+
+      await loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+
+      const snapshotDir = path.join(home, "Backups", "openclaw-migrations");
+      const snapshotEntries = await fs.readdir(snapshotDir);
+      expect(snapshotEntries.some((entry) => entry.endsWith(".tar.gz"))).toBe(true);
+
+      const marker = JSON.parse(
+        await fs.readFile(path.join(stateDir, "matrix", "migration-snapshot.json"), "utf8"),
+      ) as {
+        archivePath: string;
+      };
+      expect(marker.archivePath).toContain(path.join("Backups", "openclaw-migrations"));
+    });
+  });
+
+  it("warns when Matrix is installed from a stale custom path", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: "tok-123",
+        },
+      },
+      plugins: {
+        installs: {
+          matrix: {
+            source: "path",
+            sourcePath: "/tmp/openclaw-matrix-missing",
+            installPath: "/tmp/openclaw-matrix-missing",
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) => line.includes("custom path") && line.includes("/tmp/openclaw-matrix-missing"),
+      ),
+    ).toBe(true);
+  });
+
+  it("warns when Matrix is installed from an existing custom path", async () => {
+    await withTempHome(async (home) => {
+      const pluginPath = path.join(home, "matrix-plugin");
+      await fs.mkdir(pluginPath, { recursive: true });
+
+      const doctorWarnings = await collectDoctorWarnings({
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            accessToken: "tok-123",
+          },
+        },
+        plugins: {
+          installs: {
+            matrix: {
+              source: "path",
+              sourcePath: pluginPath,
+              installPath: pluginPath,
+            },
+          },
+        },
+      });
+
+      expect(
+        doctorWarnings.some((line) => line.includes("Matrix is installed from a custom path")),
+      ).toBe(true);
+      expect(
+        doctorWarnings.some((line) => line.includes("will not automatically replace that plugin")),
+      ).toBe(true);
+    });
   });
 
   it("notes legacy browser extension migration changes", async () => {
