@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, migrateLegacyConfig, readConfigFileSnapshot } from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveStateDir } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
@@ -76,6 +77,143 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+const HAPPY_PATH_AGENT_IDS = [
+  "tony",
+  "scout",
+  "angela",
+  "salt",
+  "pepper",
+  "kit",
+  "kat",
+  "mariah",
+  "martina",
+  "maria",
+  "martin",
+  "margaret",
+  "marcedes",
+  "reverend-run",
+  "dmc",
+  "jam-master-jay",
+] as const;
+
+function getAgentEntry(cfg: OpenClawConfig, agentId: string): Record<string, unknown> | null {
+  const list = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const entry of list) {
+    if (entry?.id === agentId) {
+      return entry as Record<string, unknown>;
+    }
+  }
+  return null;
+}
+
+function listPolicyEntries(value: unknown, key: "alsoAllow" | "deny"): string[] {
+  const tools = asObjectRecord(value);
+  const entries = tools?.[key];
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries.map((entry) => String(entry ?? "").trim()).filter((entry) => entry.length > 0);
+}
+
+function toolExplicitlyDenied(agent: Record<string, unknown> | null, toolName: string): boolean {
+  return listPolicyEntries(agent?.tools, "deny").includes(toolName);
+}
+
+function toolExplicitlyAllowed(agent: Record<string, unknown> | null, toolName: string): boolean {
+  return listPolicyEntries(agent?.tools, "alsoAllow").includes(toolName);
+}
+
+async function pathExists(pathname: string): Promise<boolean> {
+  try {
+    await fs.access(pathname);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function collectHappyPathTopologyWarnings(cfg: OpenClawConfig): Promise<string[]> {
+  const warnings: string[] = [];
+  const tony = getAgentEntry(cfg, "tony");
+  if (
+    tony &&
+    (toolExplicitlyDenied(tony, "sessions_spawn") || !toolExplicitlyAllowed(tony, "sessions_spawn"))
+  ) {
+    warnings.push(
+      "- tony: front-door flow still blocks direct Scout dispatch; allow sessions_spawn without granting direct web/browser.",
+    );
+  }
+
+  const angelaSpecialists = ["salt", "pepper", "kit", "kat", "mariah"];
+  for (const agentId of angelaSpecialists) {
+    const agent = getAgentEntry(cfg, agentId);
+    if (
+      agent &&
+      (toolExplicitlyDenied(agent, "sessions_spawn") ||
+        !toolExplicitlyAllowed(agent, "sessions_spawn"))
+    ) {
+      warnings.push(
+        `- ${agentId}: Angela department head cannot escalate to Scout because sessions_spawn is still blocked.`,
+      );
+    }
+  }
+
+  const martinaWebAgents = ["martina", "maria", "martin", "marcedes", "margaret"];
+  for (const agentId of martinaWebAgents) {
+    const agent = getAgentEntry(cfg, agentId);
+    if (!agent) {
+      continue;
+    }
+    if (toolExplicitlyDenied(agent, "web_search") || !toolExplicitlyAllowed(agent, "web_search")) {
+      warnings.push(`- ${agentId}: Martina web lane is missing direct web_search access.`);
+    }
+    if (toolExplicitlyDenied(agent, "web_fetch") || !toolExplicitlyAllowed(agent, "web_fetch")) {
+      warnings.push(`- ${agentId}: Martina web lane is missing direct web_fetch access.`);
+    }
+  }
+
+  const margaret = getAgentEntry(cfg, "margaret");
+  if (margaret) {
+    if (cfg.browser == null) {
+      warnings.push("- margaret: browser specialist is configured but browser config is null.");
+    }
+    if (toolExplicitlyDenied(margaret, "browser") || !toolExplicitlyAllowed(margaret, "browser")) {
+      warnings.push("- margaret: browser specialist is missing direct browser access.");
+    }
+  }
+
+  for (const agentId of ["dmc", "jam-master-jay"]) {
+    const agent = getAgentEntry(cfg, agentId);
+    if (
+      agent &&
+      (toolExplicitlyDenied(agent, "sessions_spawn") ||
+        !toolExplicitlyAllowed(agent, "sessions_spawn"))
+    ) {
+      warnings.push(
+        `- ${agentId}: Reverend Run runtime worker cannot escalate to Scout because sessions_spawn is still blocked.`,
+      );
+    }
+  }
+
+  const stateDir = resolveStateDir();
+  for (const agentId of HAPPY_PATH_AGENT_IDS) {
+    const agent = getAgentEntry(cfg, agentId);
+    if (!agent) {
+      continue;
+    }
+    const agentDir = path.join(stateDir, "agents", agentId, "agent");
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    if (!(await pathExists(agentDir))) {
+      warnings.push(`- ${agentId}: missing local agent state dir at ${agentDir}.`);
+    }
+    if (!(await pathExists(sessionsDir))) {
+      warnings.push(`- ${agentId}: missing local sessions dir at ${sessionsDir}.`);
+    }
+  }
+
+  return warnings;
 }
 
 function normalizeBindingChannelKey(raw?: string | null): string {
@@ -1950,6 +2088,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         );
       }
       note(lines.join("\n"), "Doctor warnings");
+    }
+
+    const happyPathTopologyWarnings = await collectHappyPathTopologyWarnings(candidate);
+    if (happyPathTopologyWarnings.length > 0) {
+      note(happyPathTopologyWarnings.slice(0, 12).join("\n"), "Doctor warnings");
     }
   }
 

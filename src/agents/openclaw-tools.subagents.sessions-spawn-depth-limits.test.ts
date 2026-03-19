@@ -42,6 +42,19 @@ function setSubagentLimits(subagents: Record<string, unknown>) {
   };
 }
 
+function setAgentList(agentList: Record<string, unknown>[]) {
+  configOverride = {
+    ...configOverride,
+    session: createPerSenderSessionConfig({ store: storeTemplatePath }),
+    agents: {
+      ...(typeof configOverride.agents === "object" && configOverride.agents
+        ? configOverride.agents
+        : {}),
+      list: agentList,
+    },
+  };
+}
+
 function seedDepthTwoAncestryStore(params?: { sessionIds?: boolean }) {
   const depth1 = "agent:main:subagent:depth-1";
   const callerKey = "agent:main:subagent:depth-2";
@@ -262,5 +275,29 @@ describe("sessions_spawn depth + child limits", () => {
         (call) => (call[0] as { method?: string }).method === "agent",
       ),
     ).toBe(false);
+  });
+
+  it("allows leaf callers to spawn Scout as the universal target", async () => {
+    setSubagentLimits({ maxSpawnDepth: 2 });
+    const { callerKey } = seedDepthTwoAncestryStore();
+    const scoutWorkspace = path.join(
+      os.tmpdir(),
+      `openclaw-scout-ready-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    fs.mkdirSync(scoutWorkspace, { recursive: true });
+    fs.writeFileSync(path.join(scoutWorkspace, "AGENTS.md"), "# scout\n", "utf-8");
+    setAgentList([{ id: "main" }, { id: "scout", workspace: scoutWorkspace }]);
+
+    const tool = createSessionsSpawnTool({ agentSessionKey: callerKey });
+    const result = await tool.execute("call-depth-leaf-scout", {
+      task: "research this quickly",
+      agentId: "scout",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: expect.stringMatching(/^agent:scout:subagent:/),
+      runId: "run-depth",
+    });
   });
 });

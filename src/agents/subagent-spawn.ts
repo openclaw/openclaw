@@ -44,7 +44,10 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "./tools/sessions-helpers.js";
-import { resolveRequesterSubagentAllowlist } from "./universal-targets.js";
+import {
+  isUniversalSubagentTarget,
+  resolveRequesterSubagentAllowlist,
+} from "./universal-targets.js";
 export {
   SUBAGENT_SPAWN_MODES,
   SUBAGENT_SPAWN_SANDBOX_MODES,
@@ -378,22 +381,6 @@ export async function spawnSubagentDirect(
   const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
   const maxSpawnDepth =
     cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
-  if (callerDepth >= maxSpawnDepth) {
-    return {
-      status: "forbidden",
-      error: `sessions_spawn is not allowed at this depth (current depth: ${callerDepth}, max: ${maxSpawnDepth})`,
-    };
-  }
-
-  const maxChildren = cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
-  const activeChildren = countActiveRunsForSession(requesterInternalKey);
-  if (activeChildren >= maxChildren) {
-    return {
-      status: "forbidden",
-      error: `sessions_spawn has reached max active children for this session (${activeChildren}/${maxChildren})`,
-    };
-  }
-
   const requesterAgentId = normalizeAgentId(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
@@ -423,6 +410,24 @@ export async function spawnSubagentDirect(
       };
     }
   }
+  const universalTarget =
+    targetAgentId !== requesterAgentId && isUniversalSubagentTarget(targetAgentId);
+  if (callerDepth >= maxSpawnDepth && !universalTarget) {
+    return {
+      status: "forbidden",
+      error: `sessions_spawn is not allowed at this depth (current depth: ${callerDepth}, max: ${maxSpawnDepth})`,
+    };
+  }
+
+  const maxChildren = cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
+  const activeChildren = countActiveRunsForSession(requesterInternalKey);
+  if (activeChildren >= maxChildren) {
+    return {
+      status: "forbidden",
+      error: `sessions_spawn has reached max active children for this session (${activeChildren}/${maxChildren})`,
+    };
+  }
+
   if (targetAgentId !== requesterAgentId) {
     const { allowAny, allowSet, explicitAllowSet } = resolveRequesterSubagentAllowlist({
       cfg,

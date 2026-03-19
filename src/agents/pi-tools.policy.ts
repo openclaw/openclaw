@@ -44,15 +44,17 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
  * Additional tools denied for leaf sub-agents (depth >= maxSpawnDepth).
  * These are tools that only make sense for orchestrator sub-agents that can spawn children.
  */
-const SUBAGENT_TOOL_DENY_LEAF = ["subagents", "sessions_schedule", "sessions_spawn"];
+// Leaf sessions keep sessions_spawn so they can still summon universal targets
+// like Scout. spawnSubagentDirect enforces the actual target restrictions.
+const SUBAGENT_TOOL_DENY_LEAF = ["subagents", "sessions_schedule"];
 
 /**
  * Build the deny list for a sub-agent at a given depth.
  *
  * - Depth 1 with maxSpawnDepth >= 2 (orchestrator): allowed to use sessions_spawn
  *   and subagents so it can manage its children without polling transcripts.
- * - Depth >= maxSpawnDepth (leaf): denied subagents, sessions_spawn, and
- *   session management tools.
+ * - Depth >= maxSpawnDepth (leaf): denied subagents and session-management
+ *   tools, but sessions_spawn stays available for universal-target dispatch.
  */
 function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[] {
   const isLeaf = depth >= Math.max(1, Math.floor(maxSpawnDepth));

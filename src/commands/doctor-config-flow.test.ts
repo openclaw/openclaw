@@ -184,6 +184,52 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
+  it("warns when happy-path topology still blocks Tony, Martina web lanes, and Margaret browser access", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      agents: {
+        list: [
+          {
+            id: "tony",
+            tools: {
+              alsoAllow: ["sessions_send"],
+              deny: ["sessions_spawn", "web_fetch", "web_search", "browser"],
+            },
+          },
+          {
+            id: "martina",
+            tools: {
+              alsoAllow: ["sessions_spawn"],
+              deny: ["browser", "web_fetch", "web_search"],
+            },
+          },
+          {
+            id: "margaret",
+            tools: {
+              alsoAllow: ["web_fetch", "web_search"],
+              deny: ["browser"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(
+      doctorWarnings.some((line) =>
+        line.includes("tony: front-door flow still blocks direct Scout dispatch"),
+      ),
+    ).toBe(true);
+    expect(
+      doctorWarnings.some((line) =>
+        line.includes("martina: Martina web lane is missing direct web_search access"),
+      ),
+    ).toBe(true);
+    expect(
+      doctorWarnings.some((line) =>
+        line.includes("margaret: browser specialist is configured but browser config is null"),
+      ),
+    ).toBe(true);
+  });
+
   it("drops unknown keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,

@@ -6,6 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Repo: https://github.com/openclaw/openclaw
 - In chat replies, file references must be repo-root relative only (example: `extensions/bluebubbles/src/channel.ts:80`); never absolute paths or `~/...`.
+- Local safety override: do not edit `.env`, `.env.*`, or any live `~/.openclaw/**` config/runtime files unless the user explicitly authorizes that exact edit in the current turn.
+- Local safety override: do not create, start, stop, restart, reinstall, or replace any local gateway process, service, or container unless the user explicitly requests that action in the current turn.
+- Local safety override: when checking the Docker gateway, stay read-only unless the user explicitly asks for a container or service change.
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 - GitHub comment footgun: never use `gh issue/pr comment -b "..."` when body contains backticks or shell chars. Always use single-quoted heredoc (`-F - <<'EOF'`) so no command substitution/escaping corruption.
 - GitHub linking footgun: don’t wrap issue/PR refs like `#24643` in backticks when you want auto-linking. Use plain `#24643` (optionally add full URL).

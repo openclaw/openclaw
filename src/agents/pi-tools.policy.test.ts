@@ -133,9 +133,9 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(false);
   });
 
-  it("depth-2 leaf denies sessions_spawn", () => {
+  it("depth-2 leaf keeps sessions_spawn for universal-target dispatch", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 2);
-    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
   });
 
   it("depth-2 orchestrator (maxSpawnDepth=3) allows sessions_spawn", () => {
@@ -143,9 +143,9 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
   });
 
-  it("depth-3 leaf (maxSpawnDepth=3) denies sessions_spawn", () => {
+  it("depth-3 leaf (maxSpawnDepth=3) keeps sessions_spawn for universal-target dispatch", () => {
     const policy = resolveSubagentToolPolicy(deepCfg, 3);
-    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
   });
 
   it("depth-2 leaf denies subagents", () => {
@@ -159,9 +159,9 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_history", policy)).toBe(false);
   });
 
-  it("depth-1 leaf (maxSpawnDepth=1) denies sessions_spawn", () => {
+  it("depth-1 leaf (maxSpawnDepth=1) keeps sessions_spawn for universal-target dispatch", () => {
     const policy = resolveSubagentToolPolicy(leafCfg, 1);
-    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
   });
 
   it("depth-1 leaf (maxSpawnDepth=1) denies sessions_list", () => {
@@ -200,20 +200,20 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     } as unknown as OpenClawConfig;
 
     const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");
-    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
     expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
   });
 
-  it("defaults to leaf behavior when no depth is provided", () => {
+  it("defaults to orchestrator behavior when no depth is provided", () => {
     const policy = resolveSubagentToolPolicy(baseCfg);
     // Default depth=1, maxSpawnDepth=2 → orchestrator
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
   });
 
-  it("defaults to leaf behavior when depth is undefined and maxSpawnDepth is 1", () => {
+  it("keeps sessions_spawn available when depth is undefined and maxSpawnDepth is 1", () => {
     const policy = resolveSubagentToolPolicy(leafCfg);
     // Default depth=1, maxSpawnDepth=1 → leaf
-    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
   });
 });
 
