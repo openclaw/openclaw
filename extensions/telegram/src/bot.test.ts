@@ -555,27 +555,29 @@ describe("createTelegramBot", () => {
 
     const modelId = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
     const storePath = `/tmp/openclaw-telegram-model-compact-${process.pid}-${Date.now()}.json`;
+    const config = {
+      agents: {
+        defaults: {
+          model: `bedrock/${modelId}`,
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+      session: {
+        store: storePath,
+      },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 
     await rm(storePath, { force: true });
     try {
+      loadConfig.mockReturnValue(config);
       createTelegramBot({
         token: "tok",
-        config: {
-          agents: {
-            defaults: {
-              model: `bedrock/${modelId}`,
-            },
-          },
-          channels: {
-            telegram: {
-              dmPolicy: "open",
-              allowFrom: ["*"],
-            },
-          },
-          session: {
-            store: storePath,
-          },
-        },
+        config,
       });
       const callbackHandler = onSpy.mock.calls.find(
         (call) => call[0] === "callback_query",
