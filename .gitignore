@@ -100,8 +100,6 @@ USER.md
 /local/
 package-lock.json
 .claude/
-.agents/
-.agents
 .agent/
 skills-lock.json
 
