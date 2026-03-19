@@ -123,6 +123,31 @@ function readHeaderValue(
   return undefined;
 }
 
+/**
+ * Attempt to recover a UTF-8 filename that was incorrectly decoded as Latin-1
+ * by the HTTP parser (Node.js decodes header values as ISO-8859-1 per RFC 7230).
+ * If every code-point is in the Latin-1 range and the resulting bytes form valid
+ * UTF-8, return the corrected string; otherwise return the original unchanged.
+ */
+function tryRecoverLatin1AsUtf8(text: string): string {
+  // Fast path: all ASCII — no recovery needed
+  if (/^[\x00-\x7F]*$/.test(text)) {
+    return text;
+  }
+  // Only attempt recovery when every char is in the Latin-1 range (U+0000–U+00FF).
+  // Characters outside that range mean the string was NOT decoded as Latin-1.
+  if (/[^\x00-\xFF]/.test(text)) {
+    return text;
+  }
+  try {
+    const bytes = new Uint8Array([...text].map((ch) => ch.charCodeAt(0)));
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return decoded;
+  } catch {
+    return text;
+  }
+}
+
 function decodeDispositionFileName(value: string): string | undefined {
   const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
   if (utf8Match?.[1]) {
@@ -134,7 +159,11 @@ function decodeDispositionFileName(value: string): string | undefined {
   }
 
   const plainMatch = value.match(/filename="?([^";]+)"?/i);
-  return plainMatch?.[1]?.trim();
+  if (plainMatch?.[1]) {
+    const raw = plainMatch[1].trim();
+    return tryRecoverLatin1AsUtf8(raw);
+  }
+  return undefined;
 }
 
 function extractFeishuDownloadMetadata(response: FeishuDownloadResponse): {

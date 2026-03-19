@@ -608,4 +608,50 @@ describe("downloadMessageResourceFeishu", () => {
       fileName: "clip.mp4",
     });
   });
+
+  it("recovers Chinese filenames from Latin-1 mojibake in Content-Disposition", async () => {
+    // Simulate what Node.js HTTP parser does: UTF-8 bytes decoded as Latin-1
+    // "何不同舟渡_2.txt" in UTF-8 → bytes → interpreted as Latin-1 characters
+    const originalName = "何不同舟渡_2.txt";
+    const utf8Bytes = Buffer.from(originalName, "utf-8");
+    const latin1Garbled = Array.from(utf8Bytes)
+      .map((b) => String.fromCharCode(b))
+      .join("");
+
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("file-content"),
+      headers: {
+        "content-type": "text/plain",
+        "content-disposition": `attachment; filename="${latin1Garbled}"`,
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: {} as any,
+      messageId: "om_chinese_file",
+      fileKey: "file_key_cn",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe(originalName);
+  });
+
+  it("preserves ASCII filenames without modification", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("data"),
+      headers: {
+        "content-type": "application/pdf",
+        "content-disposition": `attachment; filename="report.pdf"`,
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: {} as any,
+      messageId: "om_ascii_file",
+      fileKey: "file_key_ascii",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe("report.pdf");
+  });
 });
