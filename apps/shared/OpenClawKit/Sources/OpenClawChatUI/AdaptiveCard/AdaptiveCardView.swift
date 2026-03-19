@@ -49,6 +49,10 @@ struct AdaptiveCardView: View {
             self.renderImageSet(imgSet)
         case .actionSet(let actSet):
             self.renderActions(actSet.actions)
+        case .icon(let ico):
+            self.renderIcon(ico)
+        case .list(let lst):
+            self.renderList(lst)
         case .unknown:
             EmptyView()
         }
@@ -235,6 +239,89 @@ struct AdaptiveCardView: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: self.imageMaxHeight(size)))], spacing: 6) {
             ForEach(imgSet.images.indices, id: \.self) { i in
                 self.renderImage(imgSet.images[i])
+            }
+        }
+    }
+
+    // MARK: - Icon rendering
+
+    @ViewBuilder
+    private func renderIcon(_ icon: ACIcon) -> some View {
+        self.iconView(icon)
+    }
+
+    /// Builds a view for an ACIcon: SF Symbol when the name matches, otherwise a text label.
+    @ViewBuilder
+    private func iconView(_ icon: ACIcon) -> some View {
+        let iconSize = self.iconFontSize(icon.size)
+        let iconColor = self.iconColor(icon.color)
+
+        // Attempt SF Symbol lookup; fall back to a text label
+        if self.sfSymbolExists(icon.name) {
+            Image(systemName: icon.name)
+                .font(.system(size: iconSize))
+                .foregroundStyle(iconColor)
+        } else {
+            Text(icon.name)
+                .font(.system(size: iconSize))
+                .foregroundStyle(iconColor)
+        }
+    }
+
+    /// Map Adaptive Card icon size tokens to point sizes.
+    private func iconFontSize(_ size: String?) -> CGFloat {
+        switch size?.lowercased() {
+        case "xxs": return 10
+        case "xs": return 12
+        case "sm", "small": return 14
+        case "md", "medium": return 18
+        case "lg", "large": return 24
+        case "xl": return 30
+        case "xxl": return 38
+        default: return 16
+        }
+    }
+
+    /// Resolve Adaptive Card color tokens to SwiftUI colors.
+    private func iconColor(_ color: String?) -> Color {
+        switch color?.lowercased() {
+        case "accent": return .accentColor
+        case "good": return .green
+        case "warning": return .orange
+        case "attention": return .red
+        case "light": return .secondary
+        case "dark": return .primary
+        default: return .primary
+        }
+    }
+
+    /// Check whether an SF Symbol name is valid at runtime.
+    private func sfSymbolExists(_ name: String) -> Bool {
+        #if canImport(UIKit)
+        return UIImage(systemName: name) != nil
+        #elseif canImport(AppKit)
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
+        #else
+        return false
+        #endif
+    }
+
+    // MARK: - List rendering
+
+    @ViewBuilder
+    private func renderList(_ list: ACList) -> some View {
+        let ordered = list.style?.lowercased() == "ordered"
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(list.items.indices, id: \.self) { idx in
+                HStack(alignment: .top, spacing: 4) {
+                    if let icon = list.items[idx].icon {
+                        self.iconView(icon)
+                    }
+                    let prefix = ordered ? "\(idx + 1)." : "\u{2022}"
+                    Text("\(prefix) \(list.items[idx].text)")
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }

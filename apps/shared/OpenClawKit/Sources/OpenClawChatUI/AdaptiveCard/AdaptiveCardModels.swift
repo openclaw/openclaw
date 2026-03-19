@@ -20,6 +20,8 @@ enum CardElement: Codable {
     case codeBlock(CodeBlock)
     case imageSet(ImageSet)
     case actionSet(ActionSet)
+    case icon(ACIcon)
+    case list(ACList)
     case unknown
 
     struct TextBlock: Codable {
@@ -107,6 +109,11 @@ enum CardElement: Codable {
         let actions: [CardAction]
     }
 
+    struct ACListItem: Codable {
+        let text: String
+        let icon: ACIcon?
+    }
+
     // Manual decoding keyed on "type"
     private enum CodingKeys: String, CodingKey {
         case type
@@ -137,6 +144,10 @@ enum CardElement: Codable {
             self = .imageSet(try ImageSet(from: decoder))
         case "ActionSet":
             self = .actionSet(try ActionSet(from: decoder))
+        case "Icon":
+            self = .icon(try ACIcon(from: decoder))
+        case "List":
+            self = .list(try ACList(from: decoder))
         default:
             self = .unknown
         }
@@ -175,10 +186,32 @@ enum CardElement: Codable {
         case .actionSet(let actSet):
             try container.encode("ActionSet", forKey: .type)
             try actSet.encode(to: encoder)
+        case .icon(let ico):
+            try container.encode("Icon", forKey: .type)
+            try ico.encode(to: encoder)
+        case .list(let lst):
+            try container.encode("List", forKey: .type)
+            try lst.encode(to: encoder)
         case .unknown:
             try container.encode("Unknown", forKey: .type)
         }
     }
+}
+
+// MARK: - Icon element (v4.1.0)
+
+struct ACIcon: Codable {
+    let name: String
+    let size: String?
+    let color: String?
+    let style: String? // "regular" or "filled"
+}
+
+// MARK: - List element (v4.1.0)
+
+struct ACList: Codable {
+    let items: [CardElement.ACListItem]
+    let style: String? // "ordered" or "unordered"
 }
 
 enum CardAction: Codable {
