@@ -16,14 +16,14 @@ import {
   minimaxMediaUnderstandingProvider,
   minimaxPortalMediaUnderstandingProvider,
 } from "./media-understanding-provider.js";
-import { loginMiniMaxPortalOAuth, type MiniMaxRegion } from "./oauth.js";
+import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
 const PROVIDER_LABEL = "MiniMax";
-const DEFAULT_MODEL = "MiniMax-M2.5";
+const DEFAULT_MODEL = "MiniMax-M2.7";
 const DEFAULT_BASE_URL_CN = "https://api.minimaxi.com/anthropic";
 const DEFAULT_BASE_URL_GLOBAL = "https://api.minimax.io/anthropic";
 
@@ -40,7 +40,8 @@ function portalModelRef(modelId: string): string {
 }
 
 function isModernMiniMaxModel(modelId: string): boolean {
-  return modelId.trim().toLowerCase().startsWith("minimax-m2.5");
+  const lower = modelId.trim().toLowerCase();
+  return lower.startsWith("minimax-m2.7") || lower.startsWith("minimax-m2.5");
 }
 
 function buildPortalProviderCatalog(params: { baseUrl: string; apiKey: string }) {
@@ -96,6 +97,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
   return async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
     const progress = ctx.prompter.progress(`Starting MiniMax OAuth (${regionLabel})…`);
     try {
+      const { loginMiniMaxPortalOAuth } = await import("./oauth.runtime.js");
       const result = await loginMiniMaxPortalOAuth({
         openUrl: ctx.openUrl,
         note: ctx.prompter.note,
@@ -129,6 +131,10 @@ function createOAuthHandler(region: MiniMaxRegion) {
           agents: {
             defaults: {
               models: {
+                [portalModelRef("MiniMax-M2.7")]: { alias: "minimax-m2.7" },
+                [portalModelRef("MiniMax-M2.7-highspeed")]: {
+                  alias: "minimax-m2.7-highspeed",
+                },
                 [portalModelRef("MiniMax-M2.5")]: { alias: "minimax-m2.5" },
                 [portalModelRef("MiniMax-M2.5-highspeed")]: {
                   alias: "minimax-m2.5-highspeed",
@@ -190,7 +196,7 @@ export default definePluginEntry({
             choiceHint: "Global endpoint - api.minimax.io",
             groupId: "minimax",
             groupLabel: "MiniMax",
-            groupHint: "M2.5 (recommended)",
+            groupHint: "M2.7 (recommended)",
           },
         }),
         createProviderApiKeyAuthMethod({
@@ -214,7 +220,7 @@ export default definePluginEntry({
             choiceHint: "CN endpoint - api.minimaxi.com",
             groupId: "minimax",
             groupLabel: "MiniMax",
-            groupHint: "M2.5 (recommended)",
+            groupHint: "M2.7 (recommended)",
           },
         }),
       ],
@@ -253,7 +259,7 @@ export default definePluginEntry({
             choiceHint: "Global endpoint - api.minimax.io",
             groupId: "minimax",
             groupLabel: "MiniMax",
-            groupHint: "M2.5 (recommended)",
+            groupHint: "M2.7 (recommended)",
           },
           run: createOAuthHandler("global"),
         },
@@ -268,7 +274,7 @@ export default definePluginEntry({
             choiceHint: "CN endpoint - api.minimaxi.com",
             groupId: "minimax",
             groupLabel: "MiniMax",
-            groupHint: "M2.5 (recommended)",
+            groupHint: "M2.7 (recommended)",
           },
           run: createOAuthHandler("cn"),
         },

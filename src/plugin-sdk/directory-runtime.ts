@@ -4,8 +4,13 @@ export type { ReadOnlyInspectedAccount } from "../channels/read-only-account-ins
 export {
   applyDirectoryQueryAndLimit,
   collectNormalizedDirectoryIds,
+  listDirectoryEntriesFromSources,
   listDirectoryGroupEntriesFromMapKeys,
   listDirectoryGroupEntriesFromMapKeysAndAllowFrom,
+  listInspectedDirectoryEntriesFromSources,
+  listResolvedDirectoryEntriesFromSources,
+  listResolvedDirectoryGroupEntriesFromMapKeys,
+  listResolvedDirectoryUserEntriesFromAllowFrom,
   listDirectoryUserEntriesFromAllowFrom,
   listDirectoryUserEntriesFromAllowFromAndMapKeys,
   toDirectoryEntries,

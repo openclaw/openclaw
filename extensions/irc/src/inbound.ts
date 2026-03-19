@@ -9,15 +9,13 @@ import {
 } from "./policy.js";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
-  createScopedPairingAccess,
+  createChannelPairingController,
+  deliverFormattedTextWithAttachments,
   dispatchInboundReplyWithBase,
-  formatTextWithAttachmentLinks,
-  issuePairingChallenge,
   logInboundDrop,
   isDangerousNameMatchingEnabled,
   readStoreAllowFromForDmPolicy,
   resolveControlCommandGate,
-  resolveOutboundMediaUrls,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveEffectiveAllowFromLists,
@@ -61,23 +59,23 @@ async function deliverIrcReply(params: {
   sendReply?: (target: string, text: string, replyToId?: string) => Promise<void>;
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }) {
-  const combined = formatTextWithAttachmentLinks(
-    params.payload.text,
-    resolveOutboundMediaUrls(params.payload),
-  );
-  if (!combined) {
+  const delivered = await deliverFormattedTextWithAttachments({
+    payload: params.payload,
+    send: async ({ text, replyToId }) => {
+      if (params.sendReply) {
+        await params.sendReply(params.target, text, replyToId);
+      } else {
+        await sendMessageIrc(params.target, text, {
+          accountId: params.accountId,
+          replyTo: replyToId,
+        });
+      }
+      params.statusSink?.({ lastOutboundAt: Date.now() });
+    },
+  });
+  if (!delivered) {
     return;
   }
-
-  if (params.sendReply) {
-    await params.sendReply(params.target, combined, params.payload.replyToId);
-  } else {
-    await sendMessageIrc(params.target, combined, {
-      accountId: params.accountId,
-      replyTo: params.payload.replyToId,
-    });
-  }
-  params.statusSink?.({ lastOutboundAt: Date.now() });
 }
 
 export async function handleIrcInbound(params: {
@@ -91,7 +89,7 @@ export async function handleIrcInbound(params: {
 }): Promise<void> {
   const { message, account, config, runtime, connectedNick, statusSink } = params;
   const core = getIrcRuntime();
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -209,12 +207,10 @@ export async function handleIrcInbound(params: {
       }).allowed;
       if (!dmAllowed) {
         if (dmPolicy === "pairing") {
-          await issuePairingChallenge({
-            channel: CHANNEL_ID,
+          await pairing.issueChallenge({
             senderId: senderDisplay.toLowerCase(),
             senderIdLine: `Your IRC id: ${senderDisplay}`,
             meta: { name: message.senderNick || undefined },
-            upsertPairingRequest: pairing.upsertPairingRequest,
             sendPairingReply: async (text) => {
               await deliverIrcReply({
                 payload: { text },
