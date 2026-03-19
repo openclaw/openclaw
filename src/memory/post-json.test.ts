@@ -50,9 +50,7 @@ describe("postJson", () => {
       parse: (payload) => payload,
     });
 
-    expect(remoteHttpMock).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 5000 }),
-    );
+    expect(remoteHttpMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 5000 }));
   });
 
   it("attaches status to thrown error when requested", async () => {
