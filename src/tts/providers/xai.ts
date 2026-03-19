@@ -10,14 +10,25 @@ async function xaiTTS(params: {
   apiKey: string;
   baseUrl: string;
   voice: string;
+  model?: string;
   language?: string;
   speed?: number;
   outputFormat: XaiTtsOutputFormat;
   sampleRate?: number;
   timeoutMs: number;
 }): Promise<Buffer> {
-  const { text, apiKey, baseUrl, voice, language, speed, outputFormat, sampleRate, timeoutMs } =
-    params;
+  const {
+    text,
+    apiKey,
+    baseUrl,
+    voice,
+    model,
+    language,
+    speed,
+    outputFormat,
+    sampleRate,
+    timeoutMs,
+  } = params;
 
   if (!isValidXaiVoice(voice)) {
     throw new Error(`Invalid xAI TTS voice: ${voice}. Valid voices: ${XAI_TTS_VOICES.join(", ")}`);
@@ -35,8 +46,9 @@ async function xaiTTS(params: {
       },
       body: JSON.stringify({
         text,
+        ...(model && { model }),
         voice_id: voice,
-        ...(language && { language_I10x: language }),
+        ...(language && { language }),
         ...(speed != null && { speed }),
         output_format: outputFormat,
         ...(sampleRate != null && { sample_rate: sampleRate }),
@@ -89,6 +101,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
         apiKey,
         baseUrl,
         voice: req.overrides?.xai?.voice ?? req.config.xai.voice,
+        model: req.overrides?.xai?.model ?? req.config.xai.model,
         language: req.config.xai.language,
         speed: req.config.xai.speed,
         outputFormat,
@@ -115,6 +128,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
         apiKey,
         baseUrl,
         voice: req.config.xai.voice,
+        model: req.config.xai.model,
         language: req.config.xai.language,
         speed: req.config.xai.speed,
         outputFormat,
