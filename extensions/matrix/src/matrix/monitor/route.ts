@@ -3,7 +3,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveConfiguredAcpBindingRecord,
   type PluginRuntime,
-} from "openclaw/plugin-sdk/matrix";
+} from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
 
 type MatrixResolvedRoute = ReturnType<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>;

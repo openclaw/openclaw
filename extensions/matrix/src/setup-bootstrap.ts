@@ -1,7 +1,7 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/matrix";
 import { hasExplicitMatrixAccountConfig } from "./matrix/account-config.js";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { bootstrapMatrixVerification } from "./matrix/actions/verification.js";
+import type { RuntimeEnv } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 export type MatrixSetupVerificationBootstrapResult = {

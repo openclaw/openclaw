@@ -1,3 +1,4 @@
+import { resolveMatrixTargets } from "../../resolve-targets.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -5,8 +6,7 @@ import {
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk/matrix";
-import { resolveMatrixTargets } from "../../resolve-targets.js";
+} from "../../runtime-api.js";
 import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
 
