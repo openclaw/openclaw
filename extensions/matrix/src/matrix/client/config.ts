@@ -19,6 +19,12 @@ import {
   listNormalizedMatrixAccountIds,
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-update.js";
+import {
+  credentialsMatchConfig,
+  loadMatrixCredentials,
+  saveMatrixCredentials,
+  touchMatrixCredentials,
+} from "../credentials.js";
 import { MatrixClient } from "../sdk.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
@@ -338,13 +344,6 @@ export async function resolveMatrixAuth(params?: {
 }): Promise<MatrixAuth> {
   const { cfg, env, accountId, resolved } = resolveMatrixAuthContext(params);
   const homeserver = validateMatrixHomeserverUrl(resolved.homeserver);
-
-  const {
-    loadMatrixCredentials,
-    saveMatrixCredentials,
-    credentialsMatchConfig,
-    touchMatrixCredentials,
-  } = await import("../credentials.js");
 
   const cached = loadMatrixCredentials(env, accountId);
   const cachedCredentials =
