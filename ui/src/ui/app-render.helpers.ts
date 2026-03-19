@@ -549,14 +549,108 @@ function resolveDefaultModelValue(state: AppViewState): string {
   return resolveServerChatModelValue(defaults?.model, defaults?.modelProvider);
 }
 
+type ModelOptionGroup = {
+  provider: string;
+  label: string;
+  options: Array<{ value: string; label: string }>;
+};
+
+type BuildChatModelOptionsResult = {
+  groups: ModelOptionGroup[];
+  ungrouped: Array<{ value: string; label: string }>;
+};
+
+/**
+ * Provider display labels mapping for user-friendly group names.
+ * Maps provider IDs to their canonical display names.
+ */
+const PROVIDER_LABELS: Record<string, string> = {
+  // Major AI providers
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  google: "Google",
+  gemini: "Google Gemini",
+  deepseek: "DeepSeek",
+  mistral: "Mistral AI",
+  meta: "Meta AI",
+  xai: "xAI",
+  cohere: "Cohere",
+  perplexity: "Perplexity",
+  openrouter: "OpenRouter",
+  together: "Together AI",
+  groq: "Groq",
+  cerebras: "Cerebras",
+  ai21: "AI21",
+  alephalpha: "Aleph Alpha",
+  huggingface: "Hugging Face",
+  replicate: "Replicate",
+  fireworks: "Fireworks AI",
+  venice: "Venice AI",
+
+  // Cloud providers
+  aws: "AWS",
+  "amazon-bedrock": "Amazon Bedrock",
+  azure: "Azure OpenAI",
+  "cloudflare-ai-gateway": "Cloudflare AI Gateway",
+  "vercel-ai-gateway": "Vercel AI Gateway",
+
+  // Local/self-hosted
+  ollama: "Ollama",
+  lmstudio: "LM Studio",
+  localai: "LocalAI",
+  vllm: "vLLM",
+  sglang: "SGLang",
+
+  // Chinese providers
+  "volcengine": "Volcengine (火山引擎)",
+  "byteplus": "BytePlus",
+  moonshot: "Moonshot (月之暗面)",
+  zhipu: "Zhipu AI (智谱)",
+  qwen: "Alibaba Qwen (通义千问)",
+  "qwen-portal": "Alibaba Qwen",
+  baichuan: "Baichuan (百川)",
+  minimax: "MiniMax",
+  yi: "01.AI (零一万物)",
+  kimi: "Moonshot Kimi",
+  deepinfra: "DeepInfra",
+  novita: "Novita AI",
+  siliconflow: "SiliconFlow",
+  zai: "Z.ai",
+  qianfan: "Baidu Qianfan (千帆)",
+  modelstudio: "Alibaba ModelStudio",
+  xiaomi: "Xiaomi (小米)",
+
+  // Other providers
+  nvidia: "NVIDIA",
+  "github-copilot": "GitHub Copilot",
+  "copilot-proxy": "Copilot Proxy",
+  opencode: "OpenCode",
+  "opencode-go": "OpenCode Go",
+  synthetic: "Synthetic",
+  fal: "Fal AI",
+  brave: "Brave",
+  "firecrawl": "Firecrawl",
+  openshell: "OpenShell",
+};
+
+/**
+ * Get a user-friendly display label for a provider ID.
+ */
+function getProviderLabel(provider: string): string {
+  const normalized = provider.trim().toLowerCase();
+  return PROVIDER_LABELS[normalized] || provider;
+}
+
 function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
   currentOverride: string,
   defaultModel: string,
-): Array<{ value: string; label: string }> {
+): BuildChatModelOptionsResult {
   const seen = new Set<string>();
-  const options: Array<{ value: string; label: string }> = [];
-  const addOption = (value: string, label?: string) => {
+  const providerGroups = new Map<string, ModelOptionGroup>();
+  const ungrouped: Array<{ value: string; label: string }> = [];
+
+  const addOptionToGroup = (value: string, provider?: string, label?: string) => {
     const trimmed = value.trim();
     if (!trimmed) {
       return;
@@ -566,27 +660,62 @@ function buildChatModelOptions(
       return;
     }
     seen.add(key);
-    options.push({ value: trimmed, label: label ?? trimmed });
+
+    const displayLabel = label ?? trimmed;
+    const option = { value: trimmed, label: displayLabel };
+
+    if (provider) {
+      let group = providerGroups.get(provider);
+      if (!group) {
+        group = { provider, label: getProviderLabel(provider), options: [] };
+        providerGroups.set(provider, group);
+      }
+      group.options.push(option);
+    } else {
+      ungrouped.push(option);
+    }
   };
 
+  // Build groups from catalog
   for (const entry of catalog) {
-    const option = buildChatModelOption(entry);
-    addOption(option.value, option.label);
+    const provider = entry.provider?.trim();
+    const modelId = entry.id?.trim();
+    if (!modelId) continue;
+
+    const value = provider ? `${provider}/${modelId}` : modelId;
+    const displayLabel = entry.name?.trim() || modelId;
+    addOptionToGroup(value, provider, displayLabel);
   }
 
-  if (currentOverride) {
-    addOption(currentOverride);
+  // Add current override if not in catalog
+  if (currentOverride && !seen.has(currentOverride.toLowerCase())) {
+    ungrouped.push({ value: currentOverride, label: currentOverride });
+    seen.add(currentOverride.toLowerCase());
   }
-  if (defaultModel) {
-    addOption(defaultModel);
+
+  // Add default model if not in catalog
+  if (defaultModel && !seen.has(defaultModel.toLowerCase())) {
+    ungrouped.push({ value: defaultModel, label: defaultModel });
+    seen.add(defaultModel.toLowerCase());
   }
-  return options;
+
+  // Sort groups alphabetically by provider name
+  const groups = Array.from(providerGroups.values()).sort((a, b) =>
+    a.provider.localeCompare(b.provider),
+  );
+
+  // Sort options within each group
+  for (const group of groups) {
+    group.options.sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  return { groups, ungrouped };
 }
 
 function renderChatModelSelect(state: AppViewState) {
   const currentOverride = resolveModelOverrideValue(state);
   const defaultModel = resolveDefaultModelValue(state);
-  const options = buildChatModelOptions(
+  const { groups, ungrouped } = buildChatModelOptions(
     state.chatModelCatalog ?? [],
     currentOverride,
     defaultModel,
@@ -595,8 +724,9 @@ function renderChatModelSelect(state: AppViewState) {
   const defaultLabel = defaultModel ? `Default (${defaultDisplay})` : "Default model";
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
+  const totalOptions = groups.reduce((sum, g) => sum + g.options.length, 0) + ungrouped.length;
   const disabled =
-    !state.connected || busy || (state.chatModelsLoading && options.length === 0) || !state.client;
+    !state.connected || busy || (state.chatModelsLoading && totalOptions === 0) || !state.client;
   return html`
     <label class="field chat-controls__session chat-controls__model">
       <select
@@ -609,14 +739,32 @@ function renderChatModelSelect(state: AppViewState) {
         }}
       >
         <option value="" ?selected=${currentOverride === ""}>${defaultLabel}</option>
-        ${repeat(
-          options,
-          (entry) => entry.value,
-          (entry) =>
-            html`<option value=${entry.value} ?selected=${entry.value === currentOverride}>
-              ${entry.label}
-            </option>`,
+        ${groups.map(
+          (group) => html`
+            <optgroup label=${group.label}>
+              ${group.options.map(
+                (opt) => html`
+                  <option value=${opt.value} ?selected=${opt.value === currentOverride}>
+                    ${opt.label}
+                  </option>
+                `,
+              )}
+            </optgroup>
+          `,
         )}
+        ${ungrouped.length > 0
+          ? html`
+              <optgroup label="Other">
+                ${ungrouped.map(
+                  (opt) => html`
+                    <option value=${opt.value} ?selected=${opt.value === currentOverride}>
+                      ${opt.label}
+                    </option>
+                  `,
+                )}
+              </optgroup>
+            `
+          : nothing}
       </select>
     </label>
   `;
