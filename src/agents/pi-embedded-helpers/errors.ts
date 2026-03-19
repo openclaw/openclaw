@@ -848,6 +848,24 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
 
+/**
+ * Match an HTTP status code embedded in a wrapped error message.
+ * Covers formats like:
+ * - Ollama: "Ollama API error 400: ..."
+ * - MiniMax VLM: "MiniMax VLM API error (400)..."
+ * - Generic wrappers: "... error 401: unauthorized"
+ */
+const EMBEDDED_HTTP_STATUS_RE = /\berror\s*[:(]?\s*(\d{3})\b/i;
+
+function extractEmbeddedHttpStatus(raw: string): number | null {
+  const match = raw.match(EMBEDDED_HTTP_STATUS_RE);
+  if (!match) {
+    return null;
+  }
+  const code = Number(match[1]);
+  return code >= 100 && code < 600 ? code : null;
+}
+
 function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {
     return false;
@@ -859,14 +877,22 @@ function isJsonApiInternalServerError(raw: string): boolean {
   // {"type":"api_error","message":"unknown error, 520 (1000)"}
   // Any api_error type indicates a provider-side failure regardless of message text.
   //
-  // However, some proxies (e.g. Ollama) may wrap client-side 4xx failures in
-  // api_error payloads. If a leading 4xx status is present, defer to the
-  // explicit status-based classifiers (auth, billing, format) instead.
+  // However, proxies (e.g. Ollama) may wrap client-side 4xx failures in api_error
+  // payloads like "Ollama API error 400: {\"type\":\"api_error\",...}".
+  // extractLeadingHttpStatus only catches codes at the start of the string, so we
+  // also scan for embedded status codes to avoid misclassifying permanent 4xx errors
+  // as retryable timeouts.
   if (!value.includes('"type":"api_error"')) {
     return false;
   }
-  const status = extractLeadingHttpStatus(raw.trim());
-  if (status && status.code >= 400 && status.code < 500) {
+  // Check leading status first (fast path).
+  const leadingStatus = extractLeadingHttpStatus(raw.trim());
+  if (leadingStatus && leadingStatus.code >= 400 && leadingStatus.code < 500) {
+    return false;
+  }
+  // Check embedded status for wrapped error formats (e.g. "Ollama API error 400: ...").
+  const embeddedCode = extractEmbeddedHttpStatus(raw);
+  if (embeddedCode !== null && embeddedCode >= 400 && embeddedCode < 500) {
     return false;
   }
   return true;
