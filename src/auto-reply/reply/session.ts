@@ -179,16 +179,36 @@ function resolveBoundAcpSessionForReset(params: {
 }): string | undefined {
   const activeSessionKey = normalizeConversationText(params.ctx.SessionKey);
   const bindingContext = resolveAcpResetBindingContext(params.ctx);
-  return resolveEffectiveResetTargetSessionKey({
+  if (!bindingContext) {
+    return undefined;
+  }
+  const resolveOpts = {
     cfg: params.cfg,
-    channel: bindingContext?.channel,
-    accountId: bindingContext?.accountId,
-    conversationId: bindingContext?.conversationId,
-    parentConversationId: bindingContext?.parentConversationId,
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    parentConversationId: bindingContext.parentConversationId,
     activeSessionKey,
     allowNonAcpBindingSessionKey: false,
     skipConfiguredFallbackWhenActiveSessionNonAcp: true,
     fallbackToActiveAcpWhenUnbound: false,
+  } as const;
+  // Feishu group_topic_sender bindings are keyed with :sender:<openId> suffix
+  // that resolveFeishuConversationId does not include. Try sender-scoped first.
+  if (bindingContext.channel === "feishu" && bindingContext.conversationId?.includes(":topic:")) {
+    const senderId = normalizeConversationText(params.ctx.SenderId);
+    if (senderId) {
+      const senderScoped = resolveEffectiveResetTargetSessionKey({
+        ...resolveOpts,
+        conversationId: `${bindingContext.conversationId}:sender:${senderId}`,
+      });
+      if (senderScoped) {
+        return senderScoped;
+      }
+    }
+  }
+  return resolveEffectiveResetTargetSessionKey({
+    ...resolveOpts,
+    conversationId: bindingContext.conversationId,
   });
 }
 

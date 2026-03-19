@@ -412,7 +412,9 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
           conversationId: telegramConversationId,
         })
       : null;
-  const feishuBinding =
+  // Feishu group_topic_sender bindings are keyed with :sender:<openId> suffix
+  // that resolveFeishuConversationId does not include. Try sender-scoped first.
+  let feishuBinding =
     onFeishu && feishuConversationId
       ? sessionBindingService.resolveByConversation({
           channel: "feishu",
@@ -420,6 +422,16 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
           conversationId: feishuConversationId,
         })
       : null;
+  if (!feishuBinding && onFeishu && feishuConversationId?.includes(":topic:")) {
+    const senderId = (params.command.senderId ?? "").trim();
+    if (senderId) {
+      feishuBinding = sessionBindingService.resolveByConversation({
+        channel: "feishu",
+        accountId,
+        conversationId: `${feishuConversationId}:sender:${senderId}`,
+      });
+    }
+  }
   if (onDiscord && !discordBinding) {
     if (onDiscord && !threadId) {
       return {
