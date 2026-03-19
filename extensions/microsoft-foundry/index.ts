@@ -22,7 +22,8 @@ function execCmd(cmd: string): string {
 
 function isAzCliInstalled(): boolean {
   try {
-    execCmd("which az");
+    // "az version" works on Windows, Linux, and macOS
+    execCmd("az version --output none");
     return true;
   } catch {
     return false;

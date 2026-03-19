@@ -244,6 +244,8 @@ importers:
 
   extensions/anthropic: {}
 
+  extensions/azure-foundry: {}
+
   extensions/bluebubbles:
     dependencies:
       zod:
