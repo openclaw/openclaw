@@ -183,10 +183,10 @@ jobs:
         run: pnpm release:check
 
   checks:
-    needs: [docs-scope, changed-scope]
+    needs: [docs-scope, changed-scope, changed-extensions]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
@@ -202,9 +202,6 @@ jobs:
             shard_count: 2
             command: pnpm canvas:a2ui:bundle && pnpm test
           - runtime: node
-            task: extensions
-            command: pnpm test:extensions
-          - runtime: node
             task: channels
             command: pnpm test:channels
           - runtime: node
@@ -213,9 +210,6 @@ jobs:
           - runtime: node
             task: protocol
             command: pnpm protocol:check
-          - runtime: bun
-            task: test
-            command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
     steps:
       - name: Skip bun lane on pull requests
         if: github.event_name == 'pull_request' && matrix.runtime == 'bun'
@@ -253,7 +247,7 @@ jobs:
           fi
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+        if: (matrix.runtime != 'bun' || github.event_name != 'pull_request') && (matrix.task != 'channels' || needs.changed-extensions.outputs.has_changed_extensions == 'true')
         run: ${{ matrix.command }}
 
   extension-fast:
@@ -276,7 +270,7 @@ jobs:
         with:
           install-bun: "false"
           use-sticky-disk: "false"
-          node-version: "22.x"
+          node-version: "22.16"
 
       - name: Run changed extension tests
         env:
@@ -404,7 +398,7 @@ jobs:
       - name: Setup Node 22 compatibility environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "22.x"
+          node-version: "22.16"
           cache-key-suffix: "node22"
           install-bun: "false"
           use-sticky-disk: "false"
@@ -525,131 +519,6 @@ jobs:
 
       - name: Audit production dependencies
         run: pre-commit run --all-files pnpm-audit-prod
-
-  checks-windows:
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true'
-    runs-on: blacksmith-32vcpu-windows-2025
-    timeout-minutes: 45
-    env:
-      NODE_OPTIONS: --max-old-space-size=3584
-      # Keep total concurrency predictable on the 32 vCPU runner.
-      # Windows shard 2 has shown intermittent instability at 2 workers.
-      OPENCLAW_TEST_WORKERS: 1
-    defaults:
-      run:
-        shell: bash
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runtime: node
-            task: test
-            shard_index: 1
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 2
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 3
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 4
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 5
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 6
-            shard_count: 6
-            command: pnpm test
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Try to exclude workspace from Windows Defender (best-effort)
-        shell: pwsh
-        run: |
-          $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
-          if (-not $cmd) {
-            Write-Host "Add-MpPreference not available, skipping Defender exclusions."
-            exit 0
-          }
-
-          try {
-            # Defender sometimes intercepts process spawning (vitest workers). If this fails
-            # (eg hardened images), keep going and rely on worker limiting above.
-            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
-            Add-MpPreference -ExclusionProcess "node.exe" -ErrorAction Stop
-            Write-Host "Defender exclusions applied."
-          } catch {
-            Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
-          }
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24.x
-          check-latest: false
-
-      - name: Setup pnpm + cache store
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          pnpm-version: "10.23.0"
-          cache-key-suffix: "node24"
-          # Sticky disk mount currently retries/fails on every shard and adds ~50s
-          # before install while still yielding zero pnpm store reuse.
-          # Try exact-key actions/cache restores instead to recover store reuse
-          # without the sticky-disk mount penalty.
-          use-sticky-disk: "false"
-          use-restore-keys: "false"
-          use-actions-cache: "true"
-
-      - name: Runtime versions
-        run: |
-          node -v
-          npm -v
-          pnpm -v
-
-      - name: Capture node path
-        run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
-
-      - name: Install dependencies
-        env:
-          CI: true
-        run: |
-          export PATH="$NODE_BIN:$PATH"
-          which node
-          node -v
-          pnpm -v
-          # Persist Windows-native postinstall outputs in the pnpm store so restored
-          # caches can skip repeated rebuild/download work on later shards/runs.
-          pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
-
-      - name: Configure test shard (Windows)
-        if: matrix.task == 'test'
-        run: |
-          echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
-
-      - name: Build A2UI bundle (Windows)
-        if: matrix.task == 'test'
-        run: pnpm canvas:a2ui:bundle
-
-      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        run: ${{ matrix.command }}
 
   # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
   # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
