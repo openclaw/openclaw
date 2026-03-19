@@ -173,6 +173,7 @@ function resolveBindingsPath(params: {
   auth: MatrixAuth;
   accountId: string;
   env?: NodeJS.ProcessEnv;
+  stateDir?: string;
 }): string {
   const storagePaths = resolveMatrixStoragePaths({
     homeserver: params.auth.homeserver,
@@ -181,6 +182,7 @@ function resolveBindingsPath(params: {
     accountId: params.accountId,
     deviceId: params.auth.deviceId,
     env: params.env,
+    stateDir: params.stateDir,
   });
   return path.join(storagePaths.rootDir, "thread-bindings.json");
 }
@@ -341,6 +343,7 @@ export async function createMatrixThreadBindingManager(params: {
   auth: MatrixAuth;
   client: MatrixClient;
   env?: NodeJS.ProcessEnv;
+  stateDir?: string;
   idleTimeoutMs: number;
   maxAgeMs: number;
   enableSweeper?: boolean;
@@ -360,6 +363,7 @@ export async function createMatrixThreadBindingManager(params: {
     auth: params.auth,
     accountId: params.accountId,
     env: params.env,
+    stateDir: params.stateDir,
   });
   const loaded = await loadBindingsFromDisk(filePath, params.accountId);
   for (const record of loaded) {
@@ -621,14 +625,6 @@ export async function createMatrixThreadBindingManager(params: {
       });
       return record ? toSessionBindingRecord(record, defaults) : null;
     },
-    setIdleTimeoutBySession: ({ targetSessionKey, idleTimeoutMs }) =>
-      manager
-        .setIdleTimeoutBySessionKey({ targetSessionKey, idleTimeoutMs })
-        .map((record) => toSessionBindingRecord(record, defaults)),
-    setMaxAgeBySession: ({ targetSessionKey, maxAgeMs }) =>
-      manager
-        .setMaxAgeBySessionKey({ targetSessionKey, maxAgeMs })
-        .map((record) => toSessionBindingRecord(record, defaults)),
     touch: (bindingId, at) => {
       manager.touchBinding(bindingId, at);
     },

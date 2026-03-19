@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { peekSystemEvents } from "../../../src/infra/system-events.js";
 import { resolveAgentRoute } from "../../../src/routing/resolve-route.js";
 import { normalizeE164 } from "../../../src/utils.js";
 import type { SignalDaemonExitEvent } from "./daemon.js";
@@ -16,7 +15,11 @@ import {
 installSignalToolResultTestHooks();
 
 // Import after the harness registers `vi.mock(...)` for Signal internals.
-const { monitorSignalProvider } = await import("./monitor.js");
+vi.resetModules();
+const [{ peekSystemEvents }, { monitorSignalProvider }] = await Promise.all([
+  import("openclaw/plugin-sdk/infra-runtime"),
+  import("./monitor.js"),
+]);
 
 const {
   replyMock,
@@ -76,6 +79,7 @@ function createAutoAbortController() {
 async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider({
     config: config as OpenClawConfig,
+    waitForTransportReady: waitForTransportReadyMock as any,
     ...opts,
   });
 }
