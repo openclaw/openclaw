@@ -46,6 +46,7 @@ const DEFAULT_MAX_HOLD_MS = 5 * 60 * 1000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
 const MAX_LOCK_HOLD_MS = 2_147_000_000;
+const LOCK_SUFFIX = ".lock";
 
 type CleanupState = {
   registered: boolean;
@@ -442,7 +443,7 @@ export async function cleanStaleLockFiles(params: {
 
     // Derive the normalized session file path for checking HELD_LOCKS.
     // Lock files are named <session>.jsonl.lock, so strip the .lock suffix.
-    const sessionFile = lockPath.slice(0, -5); // Remove ".lock"
+    const sessionFile = lockPath.slice(0, -LOCK_SUFFIX.length);
     const orphanSelfLock = shouldTreatAsOrphanSelfLock({
       payload,
       normalizedSessionFile: sessionFile,

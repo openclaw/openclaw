@@ -231,7 +231,19 @@ describe("acquireSessionWriteLock", () => {
     const nowMs = Date.now();
     const staleDeadLock = path.join(sessionsDir, "dead.jsonl.lock");
     const staleAliveLock = path.join(sessionsDir, "old-live.jsonl.lock");
-    const freshAliveLock = path.join(sessionsDir, "fresh-live.jsonl.lock");
+    const freshAliveSession = path.join(sessionsDir, "fresh-live.jsonl");
+    const freshAliveLock = `${freshAliveSession}.lock`;
+
+    // Create the session file so acquireSessionWriteLock can work
+    await fs.writeFile(freshAliveSession, "", "utf8");
+
+    // Acquire a real lock to populate HELD_LOCKS - this is necessary because
+    // locks with matching PID + starttime but NOT in HELD_LOCKS are treated
+    // as orphans (orphan-self-pid detection for lost in-memory state).
+    const heldLock = await acquireSessionWriteLock({
+      sessionFile: freshAliveSession,
+      timeoutMs: 30_000,
+    });
 
     try {
       await fs.writeFile(
@@ -250,16 +262,7 @@ describe("acquireSessionWriteLock", () => {
         }),
         "utf8",
       );
-      await fs.writeFile(
-        freshAliveLock,
-        JSON.stringify({
-          pid: process.pid,
-          createdAt: new Date(nowMs - 1_000).toISOString(),
-          // Include starttime so this lock is not treated as orphan
-          starttime: FAKE_STARTTIME,
-        }),
-        "utf8",
-      );
+      // freshAliveLock is already written by acquireSessionWriteLock above
 
       const result = await cleanStaleLockFiles({
         sessionsDir,
@@ -279,6 +282,7 @@ describe("acquireSessionWriteLock", () => {
       await expect(fs.access(staleAliveLock)).rejects.toThrow();
       await expect(fs.access(freshAliveLock)).resolves.toBeUndefined();
     } finally {
+      await heldLock.release();
       await fs.rm(root, { recursive: true, force: true });
     }
   });
@@ -478,6 +482,47 @@ it("cleans orphan self-lock files with matching starttime (Linux-realistic scena
     expect(result.cleaned).toHaveLength(1);
     expect(result.cleaned[0].staleReasons).toContain("orphan-self-pid");
     await expect(fs.access(orphanWithStarttime)).rejects.toThrow();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+it("cleans lock with recycled PID using recycled-pid reason (not orphan-self-pid)", async () => {
+  // When the lock file has the current PID but a DIFFERENT starttime, the PID
+  // was recycled — this lock belongs to a dead process with the same PID.
+  // inspectLockPayload detects this via "recycled-pid" reason, NOT orphan-self-pid.
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pid-recycled-"));
+  try {
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const recycledPidLock = path.join(sessionsDir, "recycled-pid.jsonl.lock");
+    const nowMs = Date.now();
+    // Use a different starttime (99999 vs mock's 12345) to simulate PID recycle
+    const differentStarttime = 99999;
+    await fs.writeFile(
+      recycledPidLock,
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date(nowMs - 1000).toISOString(), // 1 second ago, fresh timestamp
+        starttime: differentStarttime,
+      }),
+    );
+
+    const result = await cleanStaleLockFiles({
+      sessionsDir,
+      staleMs: 60_000,
+      nowMs,
+    });
+
+    // The lock is cleaned because inspectLockPayload detects recycled PID.
+    // The reason should be "recycled-pid", NOT "orphan-self-pid".
+    expect(result.locks).toHaveLength(1);
+    expect(result.cleaned).toHaveLength(1);
+    expect(result.cleaned[0].staleReasons).toContain("recycled-pid");
+    expect(result.cleaned[0].staleReasons).not.toContain("orphan-self-pid");
+    // Lock should be removed
+    await expect(fs.access(recycledPidLock)).rejects.toThrow();
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
