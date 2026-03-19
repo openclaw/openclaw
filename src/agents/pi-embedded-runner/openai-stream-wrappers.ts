@@ -154,6 +154,18 @@ function shouldStripResponsesStore(
   return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsStore === false;
 }
 
+function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unknown }): boolean {
+  if (typeof model.api !== "string" || !OPENAI_RESPONSES_APIS.has(model.api)) {
+    return false;
+  }
+  // Missing baseUrl means pi-ai will use the default OpenAI endpoint, so keep
+  // prompt cache fields for that direct path.
+  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
+    return false;
+  }
+  return !isDirectOpenAIBaseUrl(model.baseUrl);
+}
+
 function applyOpenAIResponsesPayloadOverrides(params: {
   payloadObj: Record<string, unknown>;
   forceStore: boolean;
@@ -302,14 +314,7 @@ export function createOpenAIResponsesContextManagementWrapper(
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
     const stripStore = shouldStripResponsesStore(model, forceStore);
-    // Strip prompt_cache_key/prompt_cache_retention for openai-responses
-    // streams targeting non-OpenAI endpoints. pi-ai injects these fields
-    // unconditionally, but third-party providers (e.g. Volcano Engine)
-    // reject unknown fields with HTTP 400.
-    const stripPromptCache =
-      typeof model.api === "string" &&
-      OPENAI_RESPONSES_APIS.has(model.api) &&
-      !isDirectOpenAIBaseUrl(model.baseUrl);
+    const stripPromptCache = shouldStripResponsesPromptCache(model);
     if (!forceStore && !useServerCompaction && !stripStore && !stripPromptCache) {
       return underlying(model, context, options);
     }
