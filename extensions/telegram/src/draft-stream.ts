@@ -225,14 +225,15 @@ export function createTelegramDraftStream(params: {
     sendGeneration,
   }: PreviewSendParams): Promise<boolean> => {
     if (typeof streamMessageId === "number") {
+      const existingMessageId = streamMessageId;
       await retryPreviewPreConnect("message edit", async () => {
         if (renderedParseMode) {
-          await params.api.editMessageText(chatId, streamMessageId, renderedText, {
+          await params.api.editMessageText(chatId, existingMessageId, renderedText, {
             parse_mode: renderedParseMode,
           });
           return;
         }
-        await params.api.editMessageText(chatId, streamMessageId, renderedText);
+        await params.api.editMessageText(chatId, existingMessageId, renderedText);
       });
       return true;
     }
