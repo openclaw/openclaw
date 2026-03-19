@@ -197,7 +197,11 @@ export async function scanStatusJsonFast(
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
-  const memory = await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
+  // Keep the lean `status --json` route off the memory manager/runtime graph.
+  // Deep memory inspection is still available on the explicit `--all` path.
+  const memory = opts.all
+    ? await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin })
+    : null;
   const pluginCompatibility = shouldCollectPluginCompatibility(cfg)
     ? await loadPluginStatusModule().then(({ buildPluginCompatibilityNotices }) =>
         // Keep plugin status loading off the empty-config `status --json` fast path.
