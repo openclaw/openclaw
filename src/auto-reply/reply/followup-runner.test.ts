@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
+import * as sessionRunAccounting from "./session-run-accounting.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -484,6 +485,64 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     // Accumulated usage is still stored for usage/cost tracking.
     expect(store[sessionKey]?.inputTokens).toBe(1_000);
     expect(store[sessionKey]?.outputTokens).toBe(50);
+  });
+
+  it("passes queued config into usage persistence during drained followups", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-usage-cfg-")),
+      "sessions.json",
+    );
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await saveSessionStore(storePath, sessionStore);
+
+    const cfg = {
+      messages: {
+        responsePrefix: "agent",
+      },
+    };
+    const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 10, output: 5 },
+          lastCallUsage: { input: 6, output: 3 },
+          model: "claude-opus-4-5",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: createAsyncReplySpy() },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    await expect(
+      runner(
+        createQueuedRun({
+          run: {
+            config: cfg,
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(persistSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath,
+        sessionKey,
+        cfg,
+      }),
+    );
+    persistSpy.mockRestore();
   });
 
   it("does not fall back to dispatcher when cross-channel origin routing fails", async () => {

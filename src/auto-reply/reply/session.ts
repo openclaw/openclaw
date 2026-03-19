@@ -531,6 +531,7 @@ export async function initSessionState(params: {
     sessionEntry.totalTokens = undefined;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
+    sessionEntry.estimatedCostUsd = undefined;
     sessionEntry.contextTokens = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
