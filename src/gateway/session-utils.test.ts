@@ -15,6 +15,7 @@ import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
+  getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
@@ -162,6 +163,73 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
     expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:main:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toBe("agent:main:thread-1");
+  });
+
+  test("getSessionDefaults prefers the default agent primary model over the hardcoded fallback", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            model: {
+              primary: "minimax/MiniMax-M2.5",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(getSessionDefaults(cfg)).toMatchObject({
+      modelProvider: "minimax",
+      model: "MiniMax-M2.5",
+    });
+  });
+
+  test("listSessionsFromStore derives defaults from the requested agent filter", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+            },
+          },
+          {
+            id: "work",
+            model: {
+              primary: "openai/gpt-5.2",
+            },
+          },
+        ],
+      },
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: 1,
+        } as SessionEntry,
+        "agent:work:main": {
+          sessionId: "sess-work",
+          updatedAt: 2,
+        } as SessionEntry,
+      },
+      opts: {
+        agentId: "work",
+      },
+    });
+
+    expect(result.defaults).toMatchObject({
+      modelProvider: "openai",
+      model: "gpt-5.2",
+    });
+    expect(result.sessions.map((session) => session.key)).toEqual(["agent:work:main"]);
   });
 
   test("resolveSessionStoreKey normalizes session key casing", () => {
