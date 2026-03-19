@@ -82,7 +82,18 @@ export function createNacosConfigClient(opts: NacosConfigClientOptions): NacosCo
           if (stopped) return;
           if (res.ok) {
             const text = await res.text();
-            if (text.trim()) onChange();
+            if (text.trim()) {
+              try {
+                const getRes = await doFetch(getConfigUrl());
+                if (getRes.ok) {
+                  const content = await getRes.text();
+                  lastContentMD5 = crypto.createHash("md5").update(content).digest("hex");
+                }
+              } catch {
+                // Keep stale MD5; next poll may get same change again
+              }
+              onChange();
+            }
           }
         } catch {
           await new Promise((r) => setTimeout(r, 5000));
