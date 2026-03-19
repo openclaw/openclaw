@@ -1033,4 +1033,51 @@ describe("gateway agent handler", () => {
     expect(registerThinkingEventRecipient).not.toHaveBeenCalledWith("run-hidden-sibling", "conn-1");
     expect(registerToolEventRecipient).not.toHaveBeenCalledWith("run-hidden-sibling", "conn-1");
   });
+
+  it("does not backfill sessionless runs cross-device when agent is invoked without sessionKey", async () => {
+    // Ad-hoc agent calls without a sessionKey or agentId must not use
+    // getRunIdsBySessionKey at all, because an undefined/empty session key
+    // would match every other sessionless in-flight run and cross-attach
+    // unrelated tool/thinking streams.
+    mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 100 } });
+    // Pre-seed a sessionless run owned by the same device.
+    mocks.agentRunContexts.set("run-sessionless-sibling", {
+      ownerConnId: "conn-1",
+      ownerDeviceId: "dev-1",
+      // no sessionKey
+    });
+
+    const registerThinkingEventRecipient = vi.fn();
+    const registerToolEventRecipient = vi.fn();
+    const context = {
+      ...makeContext(),
+      registerThinkingEventRecipient,
+      registerToolEventRecipient,
+    } as unknown as GatewayRequestContext;
+
+    await invokeAgent(
+      // No sessionKey or agentId — resolvedSessionKey stays undefined.
+      { message: "hello", idempotencyKey: "idem-sessionless" },
+      {
+        context,
+        client: {
+          connId: "conn-1",
+          connect: {
+            caps: [GATEWAY_CLIENT_CAPS.THINKING_EVENTS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+            device: { id: "dev-1" },
+          },
+        } as never,
+      },
+    );
+
+    // The sibling sessionless run must not be cross-registered.
+    expect(registerThinkingEventRecipient).not.toHaveBeenCalledWith(
+      "run-sessionless-sibling",
+      "conn-1",
+    );
+    expect(registerToolEventRecipient).not.toHaveBeenCalledWith(
+      "run-sessionless-sibling",
+      "conn-1",
+    );
+  });
 });

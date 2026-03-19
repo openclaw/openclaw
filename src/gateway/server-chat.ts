@@ -773,7 +773,10 @@ export function createAgentEventHandler({
     if (isControlUiVisible && sessionKey) {
       // Send tool events to node/channel subscribers only when verbose is enabled;
       // WS clients already received the event above via broadcastToConnIds.
-      if (!isToolEvent || toolVerbose !== "off") {
+      // Thinking events are opt-in for WS clients only (THINKING_EVENTS cap) and
+      // must never be forwarded to node/channel subscribers, which have no
+      // capability negotiation and would otherwise receive full reasoning deltas.
+      if (!isThinkingEvent && (!isToolEvent || toolVerbose !== "off")) {
         nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {

@@ -938,8 +938,36 @@ describe("agent event handler", () => {
     const payload = expectSingleFinalChatPayload(broadcast) as {
       message?: { content?: Array<{ text?: string }> };
     };
-    expect(payload.message?.content?.[0]?.text).toBe(
+      expect(payload.message?.content?.[0]?.text).toBe(
       "Disk usage crossed 95 percent on /data and needs cleanup now.",
     );
+  });
+
+  it("does not forward thinking events to node/channel subscribers via nodeSendToSession", () => {
+    // thinking events are opt-in for WS clients only (THINKING_EVENTS cap).
+    // Node subscribers (Android/iOS/macOS) have no capability negotiation, so
+    // they must never receive reasoning deltas via nodeSendToSession.
+    const { broadcastToConnIds, nodeSendToSession, thinkingEventRecipients, handler } =
+      createHarness({ resolveSessionKeyForRun: () => "session-thinking" });
+
+    registerAgentRunContext("run-thinking", { sessionKey: "session-thinking" });
+    thinkingEventRecipients.add("run-thinking", "conn-ws");
+
+    handler({
+      runId: "run-thinking",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "Let me reason about this step by step..." },
+    });
+
+    // WS recipient must receive the event.
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    // Node/channel subscriber must NOT receive the thinking frame.
+    const nodeAgentCalls = (nodeSendToSession as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([, event]) => event === "agent",
+    );
+    expect(nodeAgentCalls).toHaveLength(0);
+    resetAgentRunContextForTest();
   });
 });

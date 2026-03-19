@@ -608,13 +608,17 @@ export const agentHandlers: GatewayRequestHandlers = {
       // or alias and would silently miss every in-progress run.
       // Skip runs marked isControlUiVisible:false — those are external-channel
       // turns whose tool/thinking output must not reach WebSocket clients.
-      for (const [activeRunId, active] of getRunIdsBySessionKey(resolvedSessionKey)) {
-        if (
-          activeRunId !== runId &&
-          active.isControlUiVisible !== false &&
-          isBackfillAuthorized(active.ownerConnId, active.ownerDeviceId, connId, deviceId)
-        ) {
-          context.registerToolEventRecipient(activeRunId, connId);
+      // Guard resolvedSessionKey: without a session, getRunIdsBySessionKey("")
+      // would match every sessionless in-flight run and cross-attach streams.
+      if (resolvedSessionKey) {
+        for (const [activeRunId, active] of getRunIdsBySessionKey(resolvedSessionKey)) {
+          if (
+            activeRunId !== runId &&
+            active.isControlUiVisible !== false &&
+            isBackfillAuthorized(active.ownerConnId, active.ownerDeviceId, connId, deviceId)
+          ) {
+            context.registerToolEventRecipient(activeRunId, connId);
+          }
         }
       }
     }
@@ -627,14 +631,16 @@ export const agentHandlers: GatewayRequestHandlers = {
       // Same backfill via AgentRunContext registry — chatAbortControllers only
       // tracks chat.send runs and would silently miss any in-progress agent run.
       // Use resolvedSessionKey for the same canonical-form reason as above.
-      // Same isControlUiVisible guard as the tool-events loop above.
-      for (const [activeRunId, active] of getRunIdsBySessionKey(resolvedSessionKey)) {
-        if (
-          activeRunId !== runId &&
-          active.isControlUiVisible !== false &&
-          isBackfillAuthorized(active.ownerConnId, active.ownerDeviceId, connId, deviceId)
-        ) {
-          context.registerThinkingEventRecipient(activeRunId, connId);
+      // Same isControlUiVisible and resolvedSessionKey guards as tool-events loop.
+      if (resolvedSessionKey) {
+        for (const [activeRunId, active] of getRunIdsBySessionKey(resolvedSessionKey)) {
+          if (
+            activeRunId !== runId &&
+            active.isControlUiVisible !== false &&
+            isBackfillAuthorized(active.ownerConnId, active.ownerDeviceId, connId, deviceId)
+          ) {
+            context.registerThinkingEventRecipient(activeRunId, connId);
+          }
         }
       }
     }
