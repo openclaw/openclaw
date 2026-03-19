@@ -2,6 +2,7 @@
 export {
   AllowFromListSchema,
   buildCatchallMultiAccountChannelSchema,
+  buildChannelConfigSchema,
   buildNestedDmConfigSchema,
 } from "../channels/plugins/config-schema.js";
 export { DmPolicySchema, GroupPolicySchema } from "../config/zod-schema.core.js";
