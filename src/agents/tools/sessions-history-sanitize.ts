@@ -94,7 +94,8 @@ export function sanitizeHistoryMessage(message: unknown): {
     redacted ||= res.redacted;
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) => sanitizeHistoryContentBlock(block));
-    entry.content = updated.filter((item) => !item.omitted).map((item) => item.block);
+    const kept = updated.filter((item) => !item.omitted).map((item) => item.block);
+    entry.content = kept.length > 0 ? kept : [{ type: "text", text: "" }];
     truncated ||= updated.some((item) => item.truncated);
     redacted ||= updated.some((item) => item.redacted);
   }
