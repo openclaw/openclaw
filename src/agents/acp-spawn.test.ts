@@ -1,9 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as acpSessionManager from "../acp/control-plane/manager.js";
-import type {
-  AcpCloseSessionInput,
-  AcpInitializeSessionInput,
-} from "../acp/control-plane/manager.types.js";
+import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,

@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type {
+  ChannelDirectoryEntryKind,
+  ChannelMessagingAdapter,
+  ChannelOutboundAdapter,
+  ChannelPlugin,
+} from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 const slackConfig = {
@@ -52,48 +61,112 @@ const runDrySend = (params: {
     action: "send",
   });
 
-const createDryRunPlugin = (id: "slack" | "whatsapp" | "telegram" | "imessage"): ChannelPlugin => {
-  const plugin = createOutboundTestPlugin({
-    id,
-    outbound: {} as never,
-  });
+type ResolvedTestTarget = { to: string; kind: ChannelDirectoryEntryKind };
 
-  const resolveTarget: NonNullable<
-    NonNullable<ChannelPlugin["messaging"]>["targetResolver"]
-  >["resolveTarget"] = async ({ input, normalized }) => {
-    if (id === "slack") {
-      const raw = input.replace(/^#/, "");
-      return { to: `channel:${raw}`, kind: "group", source: "normalized" };
-    }
-    if (id === "telegram") {
-      return { to: `group:${normalized || input}`, kind: "group", source: "normalized" };
-    }
-    if (id === "whatsapp") {
-      return { to: `group:${normalized || input}`, kind: "group", source: "normalized" };
-    }
-    return { to: normalized || input, kind: "user", source: "normalized" };
+const directOutbound: ChannelOutboundAdapter = { deliveryMode: "direct" };
+
+function normalizeSlackTarget(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("#")) {
+    return trimmed.slice(1).trim();
+  }
+  if (/^channel:/i.test(trimmed)) {
+    return trimmed.replace(/^channel:/i, "").trim();
+  }
+  if (/^user:/i.test(trimmed)) {
+    return trimmed.replace(/^user:/i, "").trim();
+  }
+  const mention = trimmed.match(/^<@([A-Z0-9]+)>$/i);
+  if (mention?.[1]) {
+    return mention[1];
+  }
+  return trimmed;
+}
+
+function createConfiguredTestPlugin(params: {
+  id: "slack" | "telegram" | "whatsapp";
+  isConfigured: (cfg: OpenClawConfig) => boolean;
+  normalizeTarget: (raw: string) => string | undefined;
+  resolveTarget: (input: string) => ResolvedTestTarget | null;
+}): ChannelPlugin {
+  const messaging: ChannelMessagingAdapter = {
+    normalizeTarget: params.normalizeTarget,
+    targetResolver: {
+      looksLikeId: (raw) => Boolean(params.resolveTarget(raw.trim())),
+      hint: "<id>",
+      resolveTarget: async (resolverParams) => {
+        const resolved = params.resolveTarget(resolverParams.input);
+        return resolved ? { ...resolved, source: "normalized" } : null;
+      },
+    },
+    inferTargetChatType: (inferParams) =>
+      params.resolveTarget(inferParams.to)?.kind === "user" ? "direct" : "group",
   };
-
   return {
-    ...plugin,
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-    },
-    messaging: {
-      inferTargetChatType: ({ to }) => {
-        if (id === "imessage" && to.startsWith("imessage:")) {
-          return "direct";
-        }
-        return "group";
+    ...createChannelTestPluginBase({
+      id: params.id,
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: (_account, cfg) => params.isConfigured(cfg),
       },
-      targetResolver: {
-        looksLikeId: () => true,
-        resolveTarget,
-      },
-    },
+    }),
+    outbound: directOutbound,
+    messaging,
   };
-};
+}
+
+const slackTestPlugin = createConfiguredTestPlugin({
+  id: "slack",
+  isConfigured: (cfg) => Boolean(cfg.channels?.slack?.botToken?.trim()),
+  normalizeTarget: (raw) => normalizeSlackTarget(raw) || undefined,
+  resolveTarget: (input) => {
+    const normalized = normalizeSlackTarget(input);
+    if (!normalized) {
+      return null;
+    }
+    if (/^[A-Z0-9]+$/i.test(normalized)) {
+      const kind = /^U/i.test(normalized) ? "user" : "group";
+      return { to: normalized, kind };
+    }
+    return null;
+  },
+});
+
+const telegramTestPlugin = createConfiguredTestPlugin({
+  id: "telegram",
+  isConfigured: (cfg) => Boolean(cfg.channels?.telegram?.botToken?.trim()),
+  normalizeTarget: (raw) => raw.trim() || undefined,
+  resolveTarget: (input) => {
+    const normalized = input.trim();
+    if (!normalized) {
+      return null;
+    }
+    return {
+      to: normalized.replace(/^telegram:/i, ""),
+      kind: normalized.startsWith("@") ? "user" : "group",
+    };
+  },
+});
+
+const whatsappTestPlugin = createConfiguredTestPlugin({
+  id: "whatsapp",
+  isConfigured: (cfg) => Boolean(cfg.channels?.whatsapp),
+  normalizeTarget: (raw) => raw.trim() || undefined,
+  resolveTarget: (input) => {
+    const normalized = input.trim();
+    if (!normalized) {
+      return null;
+    }
+    return {
+      to: normalized,
+      kind: normalized.endsWith("@g.us") ? "group" : "user",
+    };
+  },
+});
 
 describe("runMessageAction context isolation", () => {
   beforeEach(() => {
@@ -102,22 +175,22 @@ describe("runMessageAction context isolation", () => {
         {
           pluginId: "slack",
           source: "test",
-          plugin: createDryRunPlugin("slack"),
+          plugin: slackTestPlugin,
         },
         {
           pluginId: "whatsapp",
           source: "test",
-          plugin: createDryRunPlugin("whatsapp"),
+          plugin: whatsappTestPlugin,
         },
         {
           pluginId: "telegram",
           source: "test",
-          plugin: createDryRunPlugin("telegram"),
+          plugin: telegramTestPlugin,
         },
         {
           pluginId: "imessage",
           source: "test",
-          plugin: createDryRunPlugin("imessage"),
+          plugin: createIMessageTestPlugin(),
         },
       ]),
     );

@@ -314,6 +314,12 @@ function isUnsupportedSecretsResolveError(err: unknown): boolean {
   );
 }
 
+function isDirectRuntimeWebTargetPath(path: string): boolean {
+  return (
+    path === "tools.web.fetch.firecrawl.apiKey" || /^tools\.web\.search\.[^.]+\.apiKey$/.test(path)
+  );
+}
+
 async function resolveCommandSecretRefsLocally(params: {
   config: OpenClawConfig;
   commandName: string;
@@ -329,12 +335,22 @@ async function resolveCommandSecretRefsLocally(params: {
     env: process.env,
   });
   const localResolutionDiagnostics: string[] = [];
+  const discoveredTargets = discoverConfigSecretTargetsByIds(sourceConfig, params.targetIds).filter(
+    (target) => !params.allowedPaths || params.allowedPaths.has(target.path),
+  );
+  const runtimeWebTargets = discoveredTargets.filter((target) =>
+    targetsRuntimeWebPath(target.path),
+  );
   collectConfigAssignments({
     config: structuredClone(params.config),
     context,
   });
   if (
-    targetsRuntimeWebResolution({ targetIds: params.targetIds, allowedPaths: params.allowedPaths })
+    targetsRuntimeWebResolution({
+      targetIds: params.targetIds,
+      allowedPaths: params.allowedPaths,
+    }) &&
+    !runtimeWebTargets.every((target) => isDirectRuntimeWebTargetPath(target.path))
   ) {
     try {
       await resolveRuntimeWebTools({
@@ -359,13 +375,7 @@ async function resolveCommandSecretRefsLocally(params: {
   );
   const runtimeWebActivePaths = new Set<string>();
   const runtimeWebInactiveDiagnostics: string[] = [];
-  for (const target of discoverConfigSecretTargetsByIds(sourceConfig, params.targetIds)) {
-    if (!targetsRuntimeWebPath(target.path)) {
-      continue;
-    }
-    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
-      continue;
-    }
+  for (const target of runtimeWebTargets) {
     const runtimeState = classifyRuntimeWebTargetPathState({
       config: sourceConfig,
       path: target.path,
@@ -390,10 +400,7 @@ async function resolveCommandSecretRefsLocally(params: {
     .filter((warning) => !params.allowedPaths || params.allowedPaths.has(warning.path))
     .map((warning) => warning.message);
   const activePaths = new Set(context.assignments.map((assignment) => assignment.path));
-  for (const target of discoverConfigSecretTargetsByIds(sourceConfig, params.targetIds)) {
-    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
-      continue;
-    }
+  for (const target of discoveredTargets) {
     await resolveTargetSecretLocally({
       target,
       sourceConfig,
