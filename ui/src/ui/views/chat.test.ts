@@ -704,6 +704,37 @@ describe("chat view", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sends a round-trippable value for same-provider-qualified catalog ids", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state, request } = createChatHeaderState({
+      models: [{ id: "lmstudio_mbp/qwen3.5-9b", name: "Qwen 3.5 9B", provider: "lmstudio_mbp" }],
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+
+    modelSelect!.value = "lmstudio_mbp/qwen3.5-9b";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "lmstudio_mbp/lmstudio_mbp/qwen3.5-9b",
+    });
+    expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("lmstudio_mbp");
+    expect(state.sessionsResult?.sessions[0]?.model).toBe("lmstudio_mbp/qwen3.5-9b");
+    vi.unstubAllGlobals();
+  });
+
   it("clears the session model override back to the default model", async () => {
     vi.stubGlobal(
       "fetch",

@@ -11,6 +11,7 @@ import {
   createChatModelOverride,
   formatChatModelDisplay,
   normalizeChatModelOverrideValue,
+  resolveChatModelPatchValue,
   resolveServerChatModelValue,
 } from "./chat-model-ref.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
@@ -639,9 +640,12 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     [targetSessionKey]: createChatModelOverride(nextModel),
   };
   try {
+    const patchValue = nextModel
+      ? resolveChatModelPatchValue(nextModel, state.chatModelCatalog ?? [])
+      : null;
     await state.client.request("sessions.patch", {
       key: targetSessionKey,
-      model: nextModel || null,
+      model: patchValue,
     });
     await refreshSessionOptions(state);
   } catch (err) {

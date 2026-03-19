@@ -26,6 +26,25 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
     : `${trimmedProvider}/${trimmedModel}`;
 }
 
+export function resolveChatModelPatchValue(value: string, catalog: ModelCatalogEntry[]): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const matchedEntry = catalog.find((entry) => {
+    return (
+      buildQualifiedChatModelValue(entry.id, entry.provider).toLowerCase() === trimmed.toLowerCase()
+    );
+  });
+  const provider = matchedEntry?.provider?.trim();
+  const modelId = matchedEntry?.id.trim();
+  if (!provider || !modelId) {
+    return trimmed;
+  }
+  return `${provider}/${modelId}`;
+}
+
 export function createChatModelOverride(value: string): ChatModelOverride | null {
   const trimmed = value.trim();
   if (!trimmed) {
