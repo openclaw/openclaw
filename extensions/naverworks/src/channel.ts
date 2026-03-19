@@ -12,6 +12,7 @@ import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { getNaverWorksRuntime } from "./runtime.js";
 import { resolveNaverWorksAccessToken, sendMessageNaverWorks } from "./send.js";
+import type { NaverWorksSendDelivery } from "./send.js";
 import type { NaverWorksAccount } from "./types.js";
 import { createNaverWorksWebhookHandler } from "./webhook-handler.js";
 
@@ -63,6 +64,16 @@ const PROCESSING_STICKER_INTERVAL_MS = 60_000;
 const FAILED_REPLY_NOTICE = "처리에 실패했습니다. 잠시 후 다시 시도해주세요.";
 
 type AutoThinkingLevel = "low" | "medium" | "high";
+
+function formatDeliveryLog(delivery: NaverWorksSendDelivery): string {
+  return [
+    `contentType=${delivery.contentType}`,
+    `viaAttachmentUpload=${delivery.viaAttachmentUpload ? "yes" : "no"}`,
+    `mediaKind=${delivery.mediaKind ?? "none"}`,
+    `uploadedFileId=${delivery.uploadedFileId ? "yes" : "no"}`,
+    `remoteMediaUrl=${delivery.remoteMediaUrl ? "yes" : "no"}`,
+  ].join(" ");
+}
 
 function resolveAutoThinkingLevel(params: {
   text?: string;
@@ -325,6 +336,9 @@ export function createNaverWorksPlugin(): ChannelPlugin<NaverWorksAccount> {
             `NAVER WORKS send failed (${sent.reason}, status=${sent.status ?? "unknown"}): ${sent.body?.slice(0, 300) ?? ""}`,
           );
         }
+        getNaverWorksRuntime().log?.info?.(
+          `naverworks[${account.accountId}]: outbound sendText delivered to=${to} ${formatDeliveryLog(sent.delivery)}`,
+        );
         return {
           channel: CHANNEL_ID,
           messageId: `naverworks:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
@@ -334,13 +348,7 @@ export function createNaverWorksPlugin(): ChannelPlugin<NaverWorksAccount> {
         const account = resolveAccount(cfg as Record<string, unknown>, accountId);
         const caption = text?.trim();
         const mediaHref = mediaUrl?.trim();
-        const shouldCombineTextWithRemoteImage = Boolean(
-          caption &&
-          mediaHref &&
-          /^https?:\/\//i.test(mediaHref) &&
-          /\.(png|jpe?g|gif|webp|bmp|heic|svg)(?:\?.*)?$/i.test(mediaHref),
-        );
-        if (caption && !shouldCombineTextWithRemoteImage) {
+        if (caption) {
           const sentText = await sendMessageNaverWorks({
             account,
             toUserId: to,
@@ -348,14 +356,16 @@ export function createNaverWorksPlugin(): ChannelPlugin<NaverWorksAccount> {
           });
           if (!sentText.ok) {
             throw new Error(
-              `NAVER WORKS text preface failed (${sentText.reason}, status=${sentText.status ?? "unknown"}).`,
+              `NAVER WORKS text preface failed (${sentText.reason}, status=${sentText.status ?? "unknown"}, to=${to}, mediaUrl=${mediaHref ?? "none"}): ${sentText.body?.slice(0, 300) ?? ""}`,
             );
           }
+          getNaverWorksRuntime().log?.info?.(
+            `naverworks[${account.accountId}]: outbound sendMedia text preface delivered to=${to} ${formatDeliveryLog(sentText.delivery)}`,
+          );
         }
         const sentMedia = await sendMessageNaverWorks({
           account,
           toUserId: to,
-          text: shouldCombineTextWithRemoteImage ? caption : undefined,
           mediaUrl,
         });
         if (!sentMedia.ok) {
@@ -365,9 +375,12 @@ export function createNaverWorksPlugin(): ChannelPlugin<NaverWorksAccount> {
             );
           }
           throw new Error(
-            `NAVER WORKS media send failed (${sentMedia.reason}, status=${sentMedia.status ?? "unknown"}): ${sentMedia.body?.slice(0, 300) ?? ""}`,
+            `NAVER WORKS media send failed (${sentMedia.reason}, status=${sentMedia.status ?? "unknown"}, to=${to}, mediaUrl=${mediaHref ?? "none"}): ${sentMedia.body?.slice(0, 300) ?? ""}`,
           );
         }
+        getNaverWorksRuntime().log?.info?.(
+          `naverworks[${account.accountId}]: outbound sendMedia delivered to=${to} ${formatDeliveryLog(sentMedia.delivery)}`,
+        );
         return {
           channel: CHANNEL_ID,
           messageId: `naverworks:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
@@ -569,45 +582,13 @@ export function createNaverWorksPlugin(): ChannelPlugin<NaverWorksAccount> {
                       );
                     }
 
-                    const firstRemoteImageIndex = pendingRemoteMedia.findIndex((url) =>
-                      /\.(png|jpe?g|gif|webp|bmp|heic|svg)(?:\?.*)?$/i.test(url),
+                    log?.info?.(
+                      `naverworks[${account.accountId}]: outbound routing pendingText=${pendingText ? "yes" : "no"} remoteMediaRemaining=${pendingRemoteMedia.length} localMediaRemaining=${localMediaPaths.length}`,
                     );
-                    if (pendingText && firstRemoteImageIndex >= 0) {
-                      const [firstRemoteImage] = pendingRemoteMedia.splice(
-                        firstRemoteImageIndex,
-                        1,
-                      );
-                      const sentCombined = await sendMessageNaverWorks({
-                        account,
-                        toUserId: event.userId,
-                        text: pendingText,
-                        mediaUrl: firstRemoteImage,
-                      });
-                      if (!sentCombined.ok) {
-                        if (sentCombined.reason === "not-configured") {
-                          log?.warn?.(
-                            `naverworks[${account.accountId}]: outbound skipped (set botId and auth settings to enable delivery)`,
-                          );
-                          return;
-                        }
-                        if (sentCombined.reason === "auth-error") {
-                          log?.error?.(
-                            `naverworks[${account.accountId}]: outbound combined send auth failed status=${sentCombined.status ?? "unknown"} body=${sentCombined.body?.slice(0, 300) ?? ""}`,
-                          );
-                          return;
-                        }
-                        log?.error?.(
-                          `naverworks[${account.accountId}]: outbound combined send failed status=${sentCombined.status ?? "unknown"} body=${sentCombined.body?.slice(0, 300) ?? ""}`,
-                        );
-                        return;
-                      }
-                      pendingText = undefined;
-                      log?.info?.(
-                        `naverworks[${account.accountId}]: outbound combined flex+image delivered to ${event.userId}`,
-                      );
-                    }
-
                     if (pendingText) {
+                      log?.info?.(
+                        `naverworks[${account.accountId}]: sending standalone text message to ${event.userId} textChars=${pendingText.length}`,
+                      );
                       const sent = await sendMessageNaverWorks({
                         account,
                         toUserId: event.userId,
@@ -634,11 +615,14 @@ export function createNaverWorksPlugin(): ChannelPlugin<NaverWorksAccount> {
                       }
 
                       log?.info?.(
-                        `naverworks[${account.accountId}]: outbound text delivered to ${event.userId}`,
+                        `naverworks[${account.accountId}]: outbound text delivered to ${event.userId} ${formatDeliveryLog(sent.delivery)}`,
                       );
                     }
 
                     for (const mediaUrl of pendingRemoteMedia) {
+                      log?.info?.(
+                        `naverworks[${account.accountId}]: sending standalone remote media to ${event.userId} mediaUrl=${mediaUrl}`,
+                      );
                       const sentMedia = await sendMessageNaverWorks({
                         account,
                         toUserId: event.userId,
@@ -663,11 +647,14 @@ export function createNaverWorksPlugin(): ChannelPlugin<NaverWorksAccount> {
                         return;
                       }
                       log?.info?.(
-                        `naverworks[${account.accountId}]: outbound media delivered to ${event.userId}`,
+                        `naverworks[${account.accountId}]: outbound media delivered to ${event.userId} ${formatDeliveryLog(sentMedia.delivery)}`,
                       );
                     }
 
                     for (const mediaPath of localMediaPaths) {
+                      log?.info?.(
+                        `naverworks[${account.accountId}]: sending local media through attachment upload to ${event.userId} mediaPath=${mediaPath}`,
+                      );
                       const sentMedia = await sendMessageNaverWorks({
                         account,
                         toUserId: event.userId,
@@ -692,7 +679,7 @@ export function createNaverWorksPlugin(): ChannelPlugin<NaverWorksAccount> {
                         return;
                       }
                       log?.info?.(
-                        `naverworks[${account.accountId}]: outbound local media delivered to ${event.userId}`,
+                        `naverworks[${account.accountId}]: outbound local media delivered to ${event.userId} ${formatDeliveryLog(sentMedia.delivery)}`,
                       );
                     }
                   },

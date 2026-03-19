@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { detectMime, normalizeMimeType } from "../../../src/media/mime.js";
 import {
+  createTextLineComponents,
   markdownToNaverWorksFlexTemplate,
   type NaverWorksFlexContainer,
   type NaverWorksFlexComponent,
@@ -11,6 +13,15 @@ import type { NaverWorksAccount, NaverWorksStickerRef } from "./types.js";
 type OAuthTokenCacheEntry = {
   token: string;
   expiresAtMs: number;
+};
+
+export type NaverWorksSendDelivery = {
+  contentType: NaverWorksOutboundContent["type"];
+  viaAttachmentUpload: boolean;
+  mediaKind?: "image" | "audio" | "file";
+  uploadedFileId?: string;
+  localMediaPath?: string;
+  remoteMediaUrl?: string;
 };
 
 const oauthTokenCache = new Map<string, OAuthTokenCacheEntry>();
@@ -276,68 +287,24 @@ function createTextComponents(text: string, theme: NaverWorksAccount["markdownTh
     .filter((line) => line.length > 0);
 
   if (lines.length === 0) {
-    return [
-      {
-        type: "text" as const,
-        text: text.trim() || "OpenClaw message",
-        wrap: true,
-        size: "md" as const,
-        color: textColor,
-      },
-    ];
+    const fallbackText = text.trim() || "OpenClaw message";
+    return createTextLineComponents(fallbackText, { color: textColor, size: "md" });
   }
 
   const [first, ...rest] = lines;
   const components: NaverWorksFlexComponent[] = [
-    {
-      type: "text",
-      text: first,
-      wrap: true,
-      size: "md",
-      weight: "bold",
+    ...createTextLineComponents(first, {
+      bold: true,
       color: sectionTitleColor,
-    },
+      size: "md",
+    }),
   ];
   for (const line of rest) {
-    components.push({
-      type: "text",
-      text: line,
-      wrap: true,
-      size: "md",
-      color: textColor,
-      margin: "sm",
-    });
+    components.push(
+      ...createTextLineComponents(line, { margin: "sm", color: textColor, size: "md" }),
+    );
   }
   return components;
-}
-
-function buildTextImageFlexPayload(params: {
-  text: string;
-  imageUrl: string;
-  markdownTheme: NaverWorksAccount["markdownTheme"];
-}): { altText: string; contents: NaverWorksFlexContainer } {
-  const markdownPayload = markdownToNaverWorksFlexTemplate(params.text, {
-    theme: params.markdownTheme,
-  });
-  return {
-    altText: markdownPayload?.altText ?? buildAltText(params.text),
-    contents: {
-      type: "bubble",
-      body: {
-        type: "box",
-        layout: "vertical",
-        contents: [
-          createImageComponent(params.imageUrl),
-          ...(markdownPayload
-            ? [
-                { type: "separator" as const, margin: "md" as const },
-                ...markdownPayload.contents.body.contents,
-              ]
-            : createTextComponents(params.text, params.markdownTheme)),
-        ],
-      },
-    },
-  };
 }
 
 function toLocalFilePath(mediaUrl: string): string | null {
@@ -377,7 +344,7 @@ async function createAttachment(params: {
     return {
       ok: false,
       status: response.status,
-      body: await response.text().catch(() => ""),
+      body: `phase=attachment-create fileName=${params.fileName} fileSize=${params.fileSize} ${await response.text().catch(() => "")}`.trim(),
     };
   }
   const payload = (await response.json().catch(() => null)) as {
@@ -387,7 +354,10 @@ async function createAttachment(params: {
   const fileId = typeof payload?.fileId === "string" ? payload.fileId.trim() : "";
   const uploadUrl = typeof payload?.uploadUrl === "string" ? payload.uploadUrl.trim() : "";
   if (!fileId || !uploadUrl) {
-    return { ok: false, body: "missing fileId or uploadUrl in attachment response" };
+    return {
+      ok: false,
+      body: `phase=attachment-create fileName=${params.fileName} missing fileId or uploadUrl in attachment response`,
+    };
   }
   return { ok: true, fileId, uploadUrl };
 }
@@ -415,7 +385,7 @@ async function uploadAttachmentBinary(params: {
     return {
       ok: false,
       status: response.status,
-      body: await response.text().catch(() => ""),
+      body: `phase=attachment-upload fileName=${params.fileName} uploadUrl=${params.uploadUrl} ${await response.text().catch(() => "")}`.trim(),
     };
   }
   const payload = (await response.json().catch(() => null)) as { fileId?: unknown } | null;
@@ -433,9 +403,18 @@ async function uploadLocalMediaAsAttachment(params: {
   | { ok: true; fileId: string; mediaKind: "image" | "audio" | "file" }
   | { ok: false; status?: number; body?: string }
 > {
-  const stat = await fs.stat(params.mediaPath);
-  const fileBuffer = await fs.readFile(params.mediaPath);
   const fileName = path.basename(params.mediaPath) || "attachment";
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  let fileBuffer: Buffer;
+  try {
+    stat = await fs.stat(params.mediaPath);
+    fileBuffer = await fs.readFile(params.mediaPath);
+  } catch (error) {
+    return {
+      ok: false,
+      body: `phase=attachment-read mediaPath=${params.mediaPath} error=${String(error)}`,
+    };
+  }
   const created = await createAttachment({
     account: params.account,
     fileName,
@@ -446,12 +425,16 @@ async function uploadLocalMediaAsAttachment(params: {
     return created;
   }
   const mediaKind = inferMediaKindFromUrl(fileName);
+  const detectedContentType = normalizeMimeType(
+    await detectMime({ buffer: fileBuffer.subarray(0, 512), filePath: params.mediaPath }),
+  );
   const contentType =
-    mediaKind === "image"
+    detectedContentType ??
+    (mediaKind === "image"
       ? "image/png"
       : mediaKind === "audio"
         ? "audio/mpeg"
-        : "application/octet-stream";
+        : "application/octet-stream");
   const uploaded = await uploadAttachmentBinary({
     uploadUrl: created.uploadUrl,
     fileName,
@@ -479,23 +462,6 @@ function buildOutboundContent(params: {
 }): NaverWorksOutboundContent | null {
   const text = params.text?.trim();
   const mediaUrl = params.mediaUrl?.trim();
-  if (
-    text &&
-    mediaUrl &&
-    isRemoteHttpUrl(mediaUrl) &&
-    inferMediaKindFromUrl(mediaUrl) === "image"
-  ) {
-    const flexPayload = buildTextImageFlexPayload({
-      text,
-      imageUrl: mediaUrl,
-      markdownTheme: params.markdownTheme,
-    });
-    return {
-      type: "flex",
-      altText: flexPayload.altText,
-      contents: flexPayload.contents,
-    };
-  }
   if (text) {
     if (params.markdownMode === "auto-flex") {
       const flexPayload = markdownToNaverWorksFlexTemplate(text, { theme: params.markdownTheme });
@@ -543,7 +509,7 @@ export async function sendMessageNaverWorks(params: {
   mediaUrl?: string;
   sticker?: NaverWorksStickerRef;
 }): Promise<
-  | { ok: true }
+  | { ok: true; delivery: NaverWorksSendDelivery }
   | {
       ok: false;
       reason: "not-configured" | "auth-error" | "http-error";
@@ -572,6 +538,7 @@ export async function sendMessageNaverWorks(params: {
   let accessToken = accessTokenResult.token;
   const sendWithResolvedToken = async (token: string) => {
     let resolvedFileId = uploadedFileId;
+    let uploadedMediaKind: "image" | "audio" | "file" | undefined;
     if (!resolvedFileId && localMediaPath) {
       const uploaded = await uploadLocalMediaAsAttachment({
         account,
@@ -587,6 +554,7 @@ export async function sendMessageNaverWorks(params: {
         };
       }
       resolvedFileId = uploaded.fileId;
+      uploadedMediaKind = uploaded.mediaKind;
       uploadedFileId = uploaded.fileId;
     }
 
@@ -602,11 +570,27 @@ export async function sendMessageNaverWorks(params: {
       return { ok: false as const, status: undefined, body: undefined, response: null };
     }
 
+    const delivery: NaverWorksSendDelivery = {
+      contentType: content.type,
+      viaAttachmentUpload: Boolean(localMediaPath),
+      mediaKind:
+        uploadedMediaKind ??
+        (content.type === "image" || content.type === "audio" || content.type === "file"
+          ? content.type
+          : undefined),
+      uploadedFileId: resolvedFileId,
+      localMediaPath: localMediaPath ?? undefined,
+      remoteMediaUrl: isRemoteHttpUrl(params.mediaUrl?.trim() ?? "")
+        ? params.mediaUrl?.trim()
+        : undefined,
+    };
+
     return {
       ok: true as const,
       status: undefined,
       body: undefined,
       response: await postUserMessage({ account, toUserId, content, accessToken: token }),
+      delivery,
     };
   };
 
@@ -653,7 +637,7 @@ export async function sendMessageNaverWorks(params: {
   }
 
   if (response.ok) {
-    return { ok: true };
+    return { ok: true, delivery: sendAttempt.delivery };
   }
 
   const body = await response.text().catch(() => "");

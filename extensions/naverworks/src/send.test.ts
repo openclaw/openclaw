@@ -4,6 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { sendMessageNaverWorks } from "./send.js";
 
 describe("sendMessageNaverWorks", () => {
+  function expectOk(
+    result: Awaited<ReturnType<typeof sendMessageNaverWorks>>,
+  ): asserts result is Extract<Awaited<ReturnType<typeof sendMessageNaverWorks>>, { ok: true }> {
+    expect(result.ok).toBe(true);
+  }
+
   function getRequestBody(fetchMock: ReturnType<typeof vi.fn>): string {
     const call = fetchMock.mock.calls[0];
     const options = call?.[1] as { body?: string } | undefined;
@@ -66,7 +72,7 @@ describe("sendMessageNaverWorks", () => {
       text: "hello",
     });
 
-    expect(result).toEqual({ ok: true });
+    expectOk(result);
     expect(fetchMock).toHaveBeenCalledWith(
       "https://www.worksapis.com/v1.0/bots/bot-1/users/user-1/messages",
       expect.objectContaining({ method: "POST" }),
@@ -97,14 +103,14 @@ describe("sendMessageNaverWorks", () => {
       mediaUrl: "https://example.com/photo.png",
     });
 
-    expect(result).toEqual({ ok: true });
+    expectOk(result);
     const body = getRequestBody(fetchMock);
     expect(body).toContain('"type":"image"');
     expect(body).toContain('"previewImageUrl":"https://example.com/photo.png"');
     expect(body).toContain('"originalContentUrl":"https://example.com/photo.png"');
   });
 
-  it("combines remote image and text into a flex payload", async () => {
+  it("prefers standalone text when both text and remote image are provided directly", async () => {
     const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -129,11 +135,11 @@ describe("sendMessageNaverWorks", () => {
       mediaUrl: "https://example.com/photo.png",
     });
 
-    expect(result).toEqual({ ok: true });
+    expectOk(result);
     const body = getRequestBody(fetchMock);
     expect(body).toContain('"type":"flex"');
-    expect(body).toContain('"url":"https://example.com/photo.png"');
     expect(body).toContain('"text":"Report"');
+    expect(body).not.toContain('"previewImageUrl":"https://example.com/photo.png"');
   });
 
   it("uploads local image attachments and sends them as fileId image messages", async () => {
@@ -178,7 +184,13 @@ describe("sendMessageNaverWorks", () => {
         mediaUrl: tempPath,
       });
 
-      expect(result).toEqual({ ok: true });
+      expectOk(result);
+      expect(result.delivery).toMatchObject({
+        contentType: "image",
+        viaAttachmentUpload: true,
+        mediaKind: "image",
+        uploadedFileId: "file-1",
+      });
       expect(fetchMock).toHaveBeenNthCalledWith(
         1,
         "https://www.worksapis.com/v1.0/bots/bot-1/attachments",
@@ -200,6 +212,56 @@ describe("sendMessageNaverWorks", () => {
       expect(getRequestBodyAt(fetchMock, 0)).toContain('"fileSize":4');
       expect(getRequestBodyAt(fetchMock, 2)).toContain('"type":"image"');
       expect(getRequestBodyAt(fetchMock, 2)).toContain('"fileId":"file-1"');
+    } finally {
+      await fs.unlink(tempPath).catch(() => {});
+    }
+  });
+
+  it("uses the detected image MIME when uploading local image attachments", async () => {
+    const tempPath = "/tmp/openclaw-naverworks-send-test.jpg";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ fileId: "file-jpg", uploadUrl: "https://upload.example.com/jpg" }),
+          {
+            status: 200,
+          },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ fileId: "file-jpg" }), { status: 201 }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await fs.writeFile(tempPath, Buffer.from([1, 2, 3, 4]));
+
+    try {
+      const result = await sendMessageNaverWorks({
+        account: {
+          accountId: "default",
+          enabled: true,
+          webhookPath: "/naverworks/events",
+          dmPolicy: "open",
+          allowFrom: [],
+          botName: "bot",
+          strictBinding: true,
+          botId: "bot-1",
+          accessToken: "token-1",
+          tokenUrl: "https://auth.worksmobile.com/oauth2/v2.0/token",
+          apiBaseUrl: "https://www.worksapis.com/v1.0",
+          markdownMode: "auto-flex",
+          markdownTheme: "auto",
+        },
+        toUserId: "user-1",
+        mediaUrl: tempPath,
+      });
+
+      expectOk(result);
+      const uploadOptions = fetchMock.mock.calls[1]?.[1] as { body?: FormData } | undefined;
+      const form = uploadOptions?.body;
+      expect(form).toBeInstanceOf(FormData);
+      const uploadedFile = form?.get("FileData");
+      expect(uploadedFile).toBeInstanceOf(File);
+      expect((uploadedFile as File).type).toBe("image/jpeg");
     } finally {
       await fs.unlink(tempPath).catch(() => {});
     }
@@ -229,7 +291,7 @@ describe("sendMessageNaverWorks", () => {
       mediaUrl: "https://example.com/voice.ogg",
     });
 
-    expect(result).toEqual({ ok: true });
+    expectOk(result);
     const body = getRequestBody(fetchMock);
     expect(body).toContain('"type":"audio"');
     expect(body).toContain('"resourceUrl":"https://example.com/voice.ogg"');
@@ -259,7 +321,7 @@ describe("sendMessageNaverWorks", () => {
       text: "# Report\n- cpu 40%\n- mem 62%",
     });
 
-    expect(result).toEqual({ ok: true });
+    expectOk(result);
     const body = getRequestBody(fetchMock);
     expect(body).toContain('"type":"flex"');
     expect(body).toContain('"altText"');
@@ -290,7 +352,7 @@ describe("sendMessageNaverWorks", () => {
       text: "# Report\n- cpu 40%",
     });
 
-    expect(result).toEqual({ ok: true });
+    expectOk(result);
     const body = getRequestBody(fetchMock);
     expect(body).toContain('"type":"text"');
     expect(body).toContain('"text":"# Report\\n- cpu 40%"');
@@ -323,7 +385,7 @@ describe("sendMessageNaverWorks", () => {
       },
     });
 
-    expect(result).toEqual({ ok: true });
+    expectOk(result);
     const body = getRequestBody(fetchMock);
     expect(body).toContain('"type":"sticker"');
     expect(body).toContain('"packageId":"1"');
@@ -373,7 +435,7 @@ describe("sendMessageNaverWorks", () => {
       text: "hello",
     });
 
-    expect(result).toEqual({ ok: true });
+    expectOk(result);
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "https://auth.worksmobile.com/oauth2/v2.0/token",
@@ -442,7 +504,7 @@ describe("sendMessageNaverWorks", () => {
       text: "hello",
     });
 
-    expect(result).toEqual({ ok: true });
+    expectOk(result);
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,

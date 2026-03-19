@@ -7,6 +7,10 @@ export type NaverWorksFlexComponent =
   | {
       type: "text";
       text: string;
+      action?: {
+        type: "uri";
+        uri: string;
+      };
       size?: "xs" | "sm" | "md";
       weight?: "bold";
       color?: string;
@@ -132,7 +136,75 @@ function normalizeInlineMarkdown(text: string): string {
     .trim();
 }
 
-function toTextComponent(
+const TRAILING_URL_PUNCTUATION_RE = /[.,!?;:)\]}]+$/;
+const CLICKABLE_URL_CANDIDATE_RE =
+  /(?:https?:\/\/|www\.)(?:[^\s<>"']+)|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/gi;
+
+function trimTrailingUrlPunctuation(value: string): string {
+  let trimmed = value.trim();
+  while (TRAILING_URL_PUNCTUATION_RE.test(trimmed)) {
+    trimmed = trimmed.replace(TRAILING_URL_PUNCTUATION_RE, "");
+  }
+  return trimmed;
+}
+
+function normalizeClickableUrl(candidate: string): string | undefined {
+  const trimmed = trimTrailingUrlPunctuation(candidate);
+  if (!trimmed) {
+    return undefined;
+  }
+  const withScheme = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : trimmed.startsWith("www.")
+      ? `https://${trimmed}`
+      : `https://${trimmed}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (!/^https?:$/i.test(parsed.protocol)) {
+      return undefined;
+    }
+    if (!parsed.hostname.includes(".") || /\s/.test(parsed.hostname)) {
+      return undefined;
+    }
+    return parsed.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+export function splitTextIntoClickableSegments(
+  text: string,
+): Array<{ text: string; uri?: string }> {
+  const segments: Array<{ text: string; uri?: string }> = [];
+  CLICKABLE_URL_CANDIDATE_RE.lastIndex = 0;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = CLICKABLE_URL_CANDIDATE_RE.exec(text)) !== null) {
+    const matchedText = match[0] ?? "";
+    const normalizedUrl = normalizeClickableUrl(matchedText);
+    const start = match.index;
+    const trimmedMatch = trimTrailingUrlPunctuation(matchedText);
+    const trimmedLength = trimmedMatch.length;
+    const end = start + trimmedLength;
+
+    if (start > cursor) {
+      segments.push({ text: text.slice(cursor, start) });
+    }
+    if (trimmedLength > 0) {
+      segments.push({
+        text: text.slice(start, end),
+        uri: normalizedUrl,
+      });
+    }
+    cursor = start + matchedText.length;
+  }
+  if (cursor < text.length) {
+    segments.push({ text: text.slice(cursor) });
+  }
+  return segments.filter((segment) => segment.text.length > 0);
+}
+
+export function createTextComponent(
   text: string,
   options?: { bold?: boolean; margin?: "none" | "sm" | "md"; color?: string; size?: "sm" | "md" },
 ) {
@@ -145,6 +217,37 @@ function toTextComponent(
     weight: options?.bold ? ("bold" as const) : undefined,
     margin: options?.margin,
   };
+}
+
+export function createTextLineComponents(
+  text: string,
+  options?: { bold?: boolean; margin?: "none" | "sm" | "md"; color?: string; size?: "sm" | "md" },
+): NaverWorksFlexComponent[] {
+  const segments = splitTextIntoClickableSegments(text);
+  if (segments.length <= 1) {
+    const only = segments[0];
+    return [
+      {
+        ...createTextComponent(text, options),
+        action: only?.uri ? { type: "uri" as const, uri: only.uri } : undefined,
+      },
+    ];
+  }
+  return [
+    {
+      type: "box" as const,
+      layout: "baseline" as const,
+      margin: options?.margin,
+      contents: segments.map((segment) => ({
+        ...createTextComponent(segment.text, {
+          bold: options?.bold,
+          color: options?.color,
+          size: options?.size,
+        }),
+        action: segment.uri ? { type: "uri" as const, uri: segment.uri } : undefined,
+      })),
+    },
+  ];
 }
 
 function buildAltText(text: string): string {
@@ -182,9 +285,13 @@ export function markdownToNaverWorksFlexTemplate(
   const contents: NaverWorksFlexComponent[] = [];
 
   if (lines.length > 0) {
-    contents.push(toTextComponent(lines[0], { bold: true, color: sectionTitleColor, size: "md" }));
+    contents.push(
+      ...createTextLineComponents(lines[0], { bold: true, color: sectionTitleColor, size: "md" }),
+    );
     for (const line of lines.slice(1)) {
-      contents.push(toTextComponent(line, { margin: "sm", color: textColor, size: "md" }));
+      contents.push(
+        ...createTextLineComponents(line, { margin: "sm", color: textColor, size: "md" }),
+      );
     }
   }
 
@@ -194,7 +301,7 @@ export function markdownToNaverWorksFlexTemplate(
     }
     const tableLines = table.split("\n").filter(Boolean);
     contents.push(
-      toTextComponent(tableLines[0] ?? "Table", {
+      ...createTextLineComponents(tableLines[0] ?? "Table", {
         bold: true,
         margin: "sm",
         color: sectionTitleColor,
@@ -202,7 +309,9 @@ export function markdownToNaverWorksFlexTemplate(
       }),
     );
     for (const line of tableLines.slice(1)) {
-      contents.push(toTextComponent(line, { margin: "sm", color: textColor, size: "md" }));
+      contents.push(
+        ...createTextLineComponents(line, { margin: "sm", color: textColor, size: "md" }),
+      );
     }
   }
 
@@ -212,7 +321,7 @@ export function markdownToNaverWorksFlexTemplate(
     }
     const codeLines = codeBlock.split("\n").filter(Boolean);
     contents.push(
-      toTextComponent(codeLines[0] ?? "Code", {
+      ...createTextLineComponents(codeLines[0] ?? "Code", {
         bold: true,
         margin: "sm",
         color: sectionTitleColor,
@@ -220,13 +329,15 @@ export function markdownToNaverWorksFlexTemplate(
       }),
     );
     for (const line of codeLines.slice(1)) {
-      contents.push(toTextComponent(line, { margin: "sm", color: textColor, size: "md" }));
+      contents.push(
+        ...createTextLineComponents(line, { margin: "sm", color: textColor, size: "md" }),
+      );
     }
   }
 
   if (contents.length === 0) {
     contents.push(
-      toTextComponent(normalizedText || trimmed, {
+      ...createTextLineComponents(normalizedText || trimmed, {
         color: textColor,
         size: "md",
       }),

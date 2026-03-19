@@ -19,6 +19,42 @@ describe("markdownToNaverWorksFlexTemplate", () => {
     expect(JSON.stringify(payload)).toContain("OpenClaw (https://openclaw.ai)");
   });
 
+  it("adds uri actions to text nodes that contain URLs", () => {
+    const payload = markdownToNaverWorksFlexTemplate(
+      "# Links\nRead https://docs.openclaw.ai/configuration",
+    );
+
+    expect(payload).toBeTruthy();
+    expect(JSON.stringify(payload)).toContain('"type":"uri"');
+    expect(JSON.stringify(payload)).toContain('"uri":"https://docs.openclaw.ai/configuration"');
+  });
+
+  it("normalizes domain-only URLs and strips trailing punctuation", () => {
+    const payload = markdownToNaverWorksFlexTemplate(
+      "# Links\nRead docs.openclaw.ai/configuration, then www.openclaw.ai/support.",
+    );
+
+    expect(payload).toBeTruthy();
+    const serialized = JSON.stringify(payload);
+    expect(serialized).toContain('"uri":"https://docs.openclaw.ai/configuration"');
+    expect(serialized).toContain('"text":"Read "');
+    expect(serialized).toContain('"text":"docs.openclaw.ai/configuration"');
+    expect(serialized).toContain('"text":" then "');
+    expect(serialized).toContain('"text":"www.openclaw.ai/support"');
+  });
+
+  it("creates separate clickable actions for multiple URLs in one line", () => {
+    const payload = markdownToNaverWorksFlexTemplate(
+      "# Links\nRead docs.openclaw.ai/configuration and https://openclaw.ai/support",
+    );
+
+    expect(payload).toBeTruthy();
+    const serialized = JSON.stringify(payload);
+    expect(serialized).toContain('"layout":"baseline"');
+    expect(serialized).toContain('"uri":"https://docs.openclaw.ai/configuration"');
+    expect(serialized).toContain('"uri":"https://openclaw.ai/support"');
+  });
+
   it("uses higher-contrast text colors and md size for light theme", () => {
     const payload = markdownToNaverWorksFlexTemplate("# Title\n- hello", { theme: "light" });
 

@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveAccount } from "./accounts.js";
 import { createNaverWorksPlugin, resolveAutoThinkingDirective } from "./channel.js";
+import { setNaverWorksRuntime } from "./runtime.js";
 
 describe("naverworks channel plugin", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("marks account configured when botId + auth are present", async () => {
     const plugin = createNaverWorksPlugin();
     const account = resolveAccount(
@@ -49,6 +54,39 @@ describe("naverworks channel plugin", () => {
         text: "hello",
       }),
     ).rejects.toThrow(/not configured for outbound delivery/i);
+  });
+
+  it("sends text and image as separate messages from outbound sendMedia", async () => {
+    const plugin = createNaverWorksPlugin();
+    if (!plugin.outbound?.sendMedia) {
+      throw new Error("outbound.sendMedia missing");
+    }
+
+    const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    setNaverWorksRuntime({ log: { info: vi.fn() } } as never);
+
+    await plugin.outbound.sendMedia({
+      cfg: {
+        channels: {
+          naverworks: {
+            botId: "bot-1",
+            accessToken: "token-1",
+          },
+        },
+      } as never,
+      to: "user-1",
+      text: "caption",
+      mediaUrl: "https://example.com/photo.png",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      String((fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined)?.body ?? ""),
+    ).toContain('"type":"text"');
+    expect(
+      String((fetchMock.mock.calls[1]?.[1] as { body?: string } | undefined)?.body ?? ""),
+    ).toContain('"type":"image"');
   });
 
   it("resolves auto thinking directive from keyword rules", () => {
