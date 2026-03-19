@@ -185,7 +185,7 @@ function resolveRepoRootForDev(): string {
   const parts = normalized.split(path.sep);
   const srcIndex = parts.lastIndexOf("src");
   if (srcIndex === -1) {
-    throw new Error("Dev mode requires running from repo (src/index.ts)");
+    throw new Error("Dev mode requires running from repo (src/entry.ts)");
   }
   return parts.slice(0, srcIndex).join(path.sep);
 }
@@ -242,7 +242,7 @@ async function resolveCliProgramArguments(params: {
   if (runtime === "bun") {
     if (params.dev) {
       const repoRoot = resolveRepoRootForDev();
-      const devCliPath = path.join(repoRoot, "src", "index.ts");
+      const devCliPath = path.join(repoRoot, "src", "entry.ts");
       await fs.access(devCliPath);
       const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
       return {
@@ -275,7 +275,7 @@ async function resolveCliProgramArguments(params: {
 
   // Dev mode: use bun to run TypeScript directly
   const repoRoot = resolveRepoRootForDev();
-  const devCliPath = path.join(repoRoot, "src", "index.ts");
+  const devCliPath = path.join(repoRoot, "src", "entry.ts");
   await fs.access(devCliPath);
 
   // If already running under bun, use current execPath

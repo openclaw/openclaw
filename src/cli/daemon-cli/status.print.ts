@@ -181,6 +181,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       defaultRuntime.log(`${label("RPC probe:")} ${okText("ok")}`);
     } else {
       defaultRuntime.error(`${label("RPC probe:")} ${errorText("failed")}`);
+      if (rpc.authWarning) {
+        defaultRuntime.error(`${label("RPC auth:")} ${warnText(rpc.authWarning)}`);
+      }
       if (rpc.url) {
         defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
       }

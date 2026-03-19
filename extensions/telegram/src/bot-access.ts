@@ -2,9 +2,9 @@ import {
   firstDefined,
   isSenderIdAllowed,
   mergeDmAllowFromSources,
-} from "../../../src/channels/allow-from.js";
-import type { AllowlistMatch } from "../../../src/channels/allowlist-match.js";
-import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
+} from "openclaw/plugin-sdk/channel-runtime";
+import type { AllowlistMatch } from "openclaw/plugin-sdk/channel-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 
 export type NormalizedAllowFrom = {
   entries: string[];
@@ -33,7 +33,7 @@ function warnInvalidAllowFromEntries(entries: string[]) {
         JSON.stringify(entry),
         "- allowFrom/groupAllowFrom authorization expects numeric Telegram sender user IDs only.",
         'To allow a Telegram group or supergroup, add its negative chat ID under "channels.telegram.groups" instead.',
-        'If you had "@username" entries, re-run onboarding (it resolves @username to IDs) or replace them manually.',
+        'If you had "@username" entries, re-run setup (it resolves @username to IDs) or replace them manually.',
       ].join(" "),
     );
   }

@@ -6,6 +6,7 @@ import {
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
 import {
+  applyNativeStreamingUsageCompat,
   enforceSourceManagedProviderSecrets,
   normalizeProviders,
   resolveImplicitProviders,
@@ -126,7 +127,8 @@ export async function planOpenClawModelsJson(params: {
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? mergedProviders;
-  const nextContents = `${JSON.stringify({ providers: secretEnforcedProviders }, null, 2)}\n`;
+  const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
     return { action: "noop" };

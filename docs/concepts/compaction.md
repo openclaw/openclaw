@@ -97,6 +97,25 @@ compaction and can run alongside it.
 
 See [OpenAI provider](/providers/openai) for model params and overrides.
 
+## Custom context engines
+
+Compaction behavior is owned by the active
+[context engine](/concepts/context-engine). The legacy engine uses the built-in
+summarization described above. Plugin engines (selected via
+`plugins.slots.contextEngine`) can implement any compaction strategy — DAG
+summaries, vector retrieval, incremental condensation, etc.
+
+When a plugin engine sets `ownsCompaction: true`, OpenClaw delegates all
+compaction decisions to the engine and does not run built-in auto-compaction.
+
+When `ownsCompaction` is `false` or unset, OpenClaw may still use Pi's
+built-in in-attempt auto-compaction, but the active engine's `compact()` method
+still handles `/compact` and overflow recovery. There is no automatic fallback
+to the legacy engine's compaction path.
+
+If you are building a non-owning context engine, implement `compact()` by
+calling `delegateCompactionToRuntime(...)` from `openclaw/plugin-sdk/core`.
+
 ## Tips
 
 - Use `/compact` when sessions feel stale or context is bloated.

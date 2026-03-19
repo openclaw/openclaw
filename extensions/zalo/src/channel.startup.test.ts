@@ -1,9 +1,9 @@
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/zalo";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   expectPendingUntilAbort,
   startAccountAndTrackLifecycle,
-} from "../../test-utils/start-account-lifecycle.js";
+} from "../../../test/helpers/extensions/start-account-lifecycle.js";
+import type { ChannelAccountSnapshot } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({

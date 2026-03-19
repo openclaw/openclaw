@@ -1,5 +1,10 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/open-prose";
+import { definePluginEntry, type OpenClawPluginApi } from "./runtime-api.js";
 
-export default function register(_api: OpenClawPluginApi) {
-  // OpenProse is delivered via plugin-shipped skills.
-}
+export default definePluginEntry({
+  id: "open-prose",
+  name: "OpenProse",
+  description: "Plugin-shipped prose skills bundle",
+  register(_api: OpenClawPluginApi) {
+    // OpenProse is delivered via plugin-shipped skills.
+  },
+});

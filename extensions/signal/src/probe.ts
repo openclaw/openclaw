@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "../../../src/channels/plugins/types.js";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-runtime";
 import { signalCheck, signalRpcRequest } from "./client.js";
 
 export type SignalProbe = BaseProbeResult & {

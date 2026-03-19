@@ -254,6 +254,71 @@ struct CronJob: Identifiable, Codable, Equatable {
         case state
     }
 
+    init(
+        id: String,
+        agentId: String?,
+        name: String,
+        description: String?,
+        enabled: Bool,
+        deleteAfterRun: Bool?,
+        createdAtMs: Int,
+        updatedAtMs: Int,
+        schedule: CronSchedule,
+        sessionTarget: CronSessionTarget,
+        wakeMode: CronWakeMode,
+        payload: CronPayload,
+        delivery: CronDelivery?,
+        state: CronJobState)
+    {
+        self.init(
+            id: id,
+            agentId: agentId,
+            name: name,
+            description: description,
+            enabled: enabled,
+            deleteAfterRun: deleteAfterRun,
+            createdAtMs: createdAtMs,
+            updatedAtMs: updatedAtMs,
+            schedule: schedule,
+            sessionTarget: .predefined(sessionTarget),
+            wakeMode: wakeMode,
+            payload: payload,
+            delivery: delivery,
+            state: state)
+    }
+
+    init(
+        id: String,
+        agentId: String?,
+        name: String,
+        description: String?,
+        enabled: Bool,
+        deleteAfterRun: Bool?,
+        createdAtMs: Int,
+        updatedAtMs: Int,
+        schedule: CronSchedule,
+        sessionTarget: CronCustomSessionTarget,
+        wakeMode: CronWakeMode,
+        payload: CronPayload,
+        delivery: CronDelivery?,
+        state: CronJobState)
+    {
+        self.id = id
+        self.agentId = agentId
+        self.name = name
+        self.description = description
+        self.enabled = enabled
+        self.deleteAfterRun = deleteAfterRun
+        self.createdAtMs = createdAtMs
+        self.updatedAtMs = updatedAtMs
+        self.schedule = schedule
+        self.sessionTargetRaw = sessionTarget.rawValue
+        self.wakeMode = wakeMode
+        self.payload = payload
+        self.delivery = delivery
+        self.state = state
+    }
+
     /// Parsed session target (predefined or custom session ID)
     var parsedSessionTarget: CronCustomSessionTarget {
         CronCustomSessionTarget.from(self.sessionTargetRaw)
