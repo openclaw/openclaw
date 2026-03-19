@@ -138,13 +138,18 @@ import {
   SecretsResolveResultSchema,
 } from "./secrets.js";
 import {
+  SessionsAbortParamsSchema,
   SessionsCompactParamsSchema,
+  SessionsCreateParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsListParamsSchema,
+  SessionsMessagesSubscribeParamsSchema,
+  SessionsMessagesUnsubscribeParamsSchema,
   SessionsPatchParamsSchema,
   SessionsPreviewParamsSchema,
   SessionsResetParamsSchema,
   SessionsResolveParamsSchema,
+  SessionsSendParamsSchema,
   SessionsUsageParamsSchema,
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
@@ -204,6 +209,11 @@ export const ProtocolSchemas = {
   SessionsListParams: SessionsListParamsSchema,
   SessionsPreviewParams: SessionsPreviewParamsSchema,
   SessionsResolveParams: SessionsResolveParamsSchema,
+  SessionsCreateParams: SessionsCreateParamsSchema,
+  SessionsSendParams: SessionsSendParamsSchema,
+  SessionsMessagesSubscribeParams: SessionsMessagesSubscribeParamsSchema,
+  SessionsMessagesUnsubscribeParams: SessionsMessagesUnsubscribeParamsSchema,
+  SessionsAbortParams: SessionsAbortParamsSchema,
   SessionsPatchParams: SessionsPatchParamsSchema,
   SessionsResetParams: SessionsResetParamsSchema,
   SessionsDeleteParams: SessionsDeleteParamsSchema,
