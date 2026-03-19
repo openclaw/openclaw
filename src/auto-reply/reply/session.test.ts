@@ -1831,12 +1831,16 @@ describe("persistSessionUsageUpdate", () => {
         models: {
           providers: {
             openai: {
+              baseUrl: "https://api.openai.com/v1",
               models: [
                 {
                   id: "gpt-5.4",
-                  label: "GPT 5.4",
-                  baseUrl: "https://api.openai.com/v1",
+                  name: "GPT 5.4",
+                  reasoning: true,
+                  input: ["text"],
                   cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0.5 },
+                  contextWindow: 200_000,
+                  maxTokens: 8_192,
                 },
               ],
             },
@@ -1873,12 +1877,16 @@ describe("persistSessionUsageUpdate", () => {
         models: {
           providers: {
             "openai-codex": {
+              baseUrl: "https://api.openai.com/v1",
               models: [
                 {
                   id: "gpt-5.3-codex-spark",
-                  label: "GPT 5.3 Codex Spark",
-                  baseUrl: "https://api.openai.com/v1",
+                  name: "GPT 5.3 Codex Spark",
+                  reasoning: true,
+                  input: ["text"],
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8_192,
                 },
               ],
             },
