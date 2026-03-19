@@ -1,1 +1,1 @@
-export * from "../../src/plugin-sdk/diagnostics-otel.js";
+export * from "openclaw/plugin-sdk/diagnostics-otel";

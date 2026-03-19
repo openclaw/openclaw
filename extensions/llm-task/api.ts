@@ -1,1 +1,1 @@
-export * from "../../src/plugin-sdk/llm-task.js";
+export * from "openclaw/plugin-sdk/llm-task";
