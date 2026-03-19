@@ -11,7 +11,7 @@ async function prepareRoutedCommand(params: {
   loadPlugins?: boolean | ((argv: string[]) => boolean);
 }) {
   const suppressDoctorStdout = hasFlag(params.argv, "--json");
-  emitCliBanner(VERSION, { argv: params.argv });
+  await emitCliBanner(VERSION, { argv: params.argv });
   const { ensureConfigReady } = await import("./program/config-guard.js");
   await ensureConfigReady({
     runtime: defaultRuntime,

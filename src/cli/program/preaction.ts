@@ -119,9 +119,6 @@ export function registerPreActionHooks(program: Command, programVersion: string)
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
     const argv = process.argv;
-    if (hasHelpOrVersion(argv)) {
-      return;
-    }
     const commandPath = getCommandPathWithRootOptions(argv, 2);
     const hideBanner =
       isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER) ||
@@ -129,7 +126,12 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       commandPath[0] === "completion" ||
       (commandPath[0] === "plugins" && commandPath[1] === "update");
     if (!hideBanner) {
-      emitCliBanner(programVersion);
+      // Emit (or prime the cache for) the banner before any early return so that
+      // formatCliBannerLine called by help.ts also gets the resolved script tagline.
+      await emitCliBanner(programVersion);
+    }
+    if (hasHelpOrVersion(argv)) {
+      return;
     }
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);

@@ -197,9 +197,15 @@ export function tryHandleRootHelpFastPath(
     }
     return true;
   }
-  import("./cli/program/root-help.js")
-    .then(({ outputRootHelp }) => {
-      outputRootHelp();
+  const hideBanner = isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER);
+  Promise.all([
+    import("./cli/banner.js"),
+    import("./cli/program/root-help.js"),
+    import("./version.js"),
+  ])
+    .then(([{ emitCliBanner }, { outputRootHelp }, { VERSION }]) => {
+      const prime = hideBanner ? Promise.resolve() : emitCliBanner(VERSION, { argv });
+      return prime.then(() => outputRootHelp());
     })
     .catch(handleError);
   return true;
