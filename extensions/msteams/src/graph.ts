@@ -1,6 +1,6 @@
 import type { MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
-import { loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -56,10 +56,10 @@ export async function resolveGraphToken(cfg: unknown): Promise<string> {
   if (!creds) {
     throw new Error("MS Teams credentials missing");
   }
-  const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-  const tokenProvider = new sdk.MsalTokenProvider(authConfig);
-  const token = await tokenProvider.getAccessToken("https://graph.microsoft.com");
-  const accessToken = readAccessToken(token);
+  const { app } = await loadMSTeamsSdkWithAuth(creds);
+  const tokenProvider = createMSTeamsTokenProvider(app);
+  const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+  const accessToken = readAccessToken(graphTokenValue);
   if (!accessToken) {
     throw new Error("MS Teams graph token unavailable");
   }

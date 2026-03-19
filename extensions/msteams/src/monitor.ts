@@ -18,7 +18,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { createMSTeamsAdapter, createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 import {
   applyMSTeamsWebhookTimeouts,
@@ -224,14 +224,16 @@ export async function monitorMSTeamsProvider(
   // Dynamic import to avoid loading SDK when provider is disabled
   const express = await import("express");
 
-  const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-  const { ActivityHandler, MsalTokenProvider, authorizeJWT } = sdk;
+  const { sdk, app } = await loadMSTeamsSdkWithAuth(creds);
 
-  // Auth configuration - create early so adapter is available for deliverReplies
-  const tokenProvider = new MsalTokenProvider(authConfig);
-  const adapter = createMSTeamsAdapter(authConfig, sdk);
+  // Build a token provider adapter for Graph API operations
+  const tokenProvider = createMSTeamsTokenProvider(app);
 
-  const handler = registerMSTeamsHandlers(new ActivityHandler() as MSTeamsActivityHandler, {
+  const adapter = createMSTeamsAdapter(app, sdk);
+
+  // Build a simple ActivityHandler-compatible object
+  const handler = buildActivityHandler();
+  registerMSTeamsHandlers(handler, {
     cfg,
     runtime,
     appId,
@@ -319,4 +321,43 @@ export async function monitorMSTeamsProvider(
   });
 
   return { app: expressApp, shutdown };
+}
+
+/**
+ * Build a minimal ActivityHandler-compatible object that supports
+ * onMessage / onMembersAdded registration and a run() method.
+ */
+function buildActivityHandler(): MSTeamsActivityHandler {
+  const messageHandlers: Array<(context: unknown, next: () => Promise<void>) => Promise<void>> = [];
+  const membersAddedHandlers: Array<
+    (context: unknown, next: () => Promise<void>) => Promise<void>
+  > = [];
+
+  const handler: MSTeamsActivityHandler = {
+    onMessage(cb) {
+      messageHandlers.push(cb);
+      return handler;
+    },
+    onMembersAdded(cb) {
+      membersAddedHandlers.push(cb);
+      return handler;
+    },
+    async run(context: unknown) {
+      const ctx = context as { activity?: { type?: string } };
+      const activityType = ctx?.activity?.type;
+      const noop = async () => {};
+
+      if (activityType === "message") {
+        for (const h of messageHandlers) {
+          await h(context, noop);
+        }
+      } else if (activityType === "conversationUpdate") {
+        for (const h of membersAddedHandlers) {
+          await h(context, noop);
+        }
+      }
+    },
+  };
+
+  return handler;
 }
