@@ -154,10 +154,23 @@ function shouldStripResponsesStore(
   return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsStore === false;
 }
 
+function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unknown }): boolean {
+  if (typeof model.api !== "string" || !OPENAI_RESPONSES_APIS.has(model.api)) {
+    return false;
+  }
+  // Missing baseUrl means pi-ai will use the default OpenAI endpoint, so keep
+  // prompt cache fields for that direct path.
+  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
+    return false;
+  }
+  return !isDirectOpenAIBaseUrl(model.baseUrl);
+}
+
 function applyOpenAIResponsesPayloadOverrides(params: {
   payloadObj: Record<string, unknown>;
   forceStore: boolean;
   stripStore: boolean;
+  stripPromptCache: boolean;
   useServerCompaction: boolean;
   compactThreshold: number;
 }): void {
@@ -166,6 +179,10 @@ function applyOpenAIResponsesPayloadOverrides(params: {
   }
   if (params.stripStore) {
     delete params.payloadObj.store;
+  }
+  if (params.stripPromptCache) {
+    delete params.payloadObj.prompt_cache_key;
+    delete params.payloadObj.prompt_cache_retention;
   }
   if (params.useServerCompaction && params.payloadObj.context_management === undefined) {
     params.payloadObj.context_management = [
@@ -297,7 +314,8 @@ export function createOpenAIResponsesContextManagementWrapper(
     const forceStore = shouldForceResponsesStore(model);
     const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
     const stripStore = shouldStripResponsesStore(model, forceStore);
-    if (!forceStore && !useServerCompaction && !stripStore) {
+    const stripPromptCache = shouldStripResponsesPromptCache(model);
+    if (!forceStore && !useServerCompaction && !stripStore && !stripPromptCache) {
       return underlying(model, context, options);
     }
 
@@ -313,6 +331,7 @@ export function createOpenAIResponsesContextManagementWrapper(
             payloadObj: payload as Record<string, unknown>,
             forceStore,
             stripStore,
+            stripPromptCache,
             useServerCompaction,
             compactThreshold,
           });
