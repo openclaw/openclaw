@@ -119,6 +119,7 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
       directTracker: {
         isDirectMessage: vi.fn().mockResolvedValue(true),
       },
+      dropPreStartupMessages: true,
       getRoomInfo: vi.fn().mockResolvedValue({
         name: "Media Room",
         canonicalAlias: "#media:example.org",
