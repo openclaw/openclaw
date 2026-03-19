@@ -50,6 +50,22 @@ describe("resolveBundledPluginsDir", () => {
     );
   });
 
+  it("falls back to built dist/extensions in installed package roots", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-dir-dist-");
+    fs.mkdirSync(path.join(repoRoot, "dist", "extensions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
+      "utf8",
+    );
+
+    process.chdir(repoRoot);
+
+    expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
+      fs.realpathSync(path.join(repoRoot, "dist", "extensions")),
+    );
+  });
+
   it("prefers source extensions under vitest to avoid stale staged plugins", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-dir-vitest-");
     fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
