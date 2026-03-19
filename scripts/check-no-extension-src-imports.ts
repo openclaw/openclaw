@@ -12,6 +12,8 @@ function isSourceFile(filePath: string): boolean {
 
 function isProductionExtensionFile(filePath: string): boolean {
   return !(
+    filePath.endsWith("/runtime-api.ts") ||
+    filePath.endsWith("\\runtime-api.ts") ||
     filePath.includes(".test.") ||
     filePath.includes(".spec.") ||
     filePath.includes(".fixture.") ||
@@ -75,7 +77,7 @@ function main() {
       console.error(`- ${relative}`);
     }
     console.error(
-      "Publish a focused openclaw/plugin-sdk/<subpath> seam or use the extension's own public barrel instead.",
+      "Publish a focused openclaw/plugin-sdk/<subpath> surface or use the extension's own public barrel instead.",
     );
     process.exit(1);
   }

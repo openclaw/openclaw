@@ -1,6 +1,8 @@
 export {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
+  listDiscordDirectoryGroupsFromConfig,
+  listDiscordDirectoryPeersFromConfig,
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
@@ -12,6 +14,7 @@ export {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
+  resolvePollMaxSelections,
   type ActionGate,
   type ChannelPlugin,
   type OpenClawConfig,
@@ -19,9 +22,11 @@ export {
 export { DiscordConfigSchema } from "openclaw/plugin-sdk/discord-core";
 export { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 export {
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
-} from "./directory-config.js";
+  assertMediaNotDataUrl,
+  parseAvailableTags,
+  readReactionParams,
+  withNormalizedTimestamp,
+} from "openclaw/plugin-sdk/discord-core";
 export {
   createHybridChannelConfigAdapter,
   createScopedChannelConfigAdapter,
@@ -40,13 +45,7 @@ export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-runtime";
-export {
-  assertMediaNotDataUrl,
-  parseAvailableTags,
-  readReactionParams,
-  resolvePollMaxSelections,
-  withNormalizedTimestamp,
-} from "openclaw/plugin-sdk/discord-core";
+export type { DiscordConfig } from "openclaw/plugin-sdk/discord";
 export type { DiscordAccountConfig, DiscordActionConfig } from "openclaw/plugin-sdk/discord";
 export {
   hasConfiguredSecretInput,

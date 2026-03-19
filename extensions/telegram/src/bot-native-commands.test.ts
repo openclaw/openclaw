@@ -41,17 +41,26 @@ function createNativeCommandTestParams(
   cfg: OpenClawConfig,
   params: Partial<Parameters<typeof registerTelegramNativeCommands>[0]> = {},
 ) {
+  const dispatchResult: Awaited<
+    ReturnType<TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]>
+  > = {
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  };
   const telegramDeps: TelegramBotDeps = {
-    loadConfig: vi.fn(() => ({})),
-    resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/sessions.json"),
-    readChannelAllowFromStore: vi.fn(async () => []),
-    enqueueSystemEvent: vi.fn(),
-    dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => ({
-      queuedFinal: false,
-      counts: {},
-    })),
+    loadConfig: vi.fn(() => ({}) as OpenClawConfig) as TelegramBotDeps["loadConfig"],
+    resolveStorePath: vi.fn(
+      (storePath?: string) => storePath ?? "/tmp/sessions.json",
+    ) as TelegramBotDeps["resolveStorePath"],
+    readChannelAllowFromStore: vi.fn(
+      async () => [],
+    ) as TelegramBotDeps["readChannelAllowFromStore"],
+    enqueueSystemEvent: vi.fn() as TelegramBotDeps["enqueueSystemEvent"],
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(
+      async () => dispatchResult,
+    ) as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
     listSkillCommandsForAgents: skillCommandMocks.listSkillCommandsForAgents,
-    wasSentByBot: vi.fn(() => false),
+    wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
   };
   return createNativeCommandTestParamsBase(cfg, {
     telegramDeps,

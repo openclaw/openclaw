@@ -1,3 +1,4 @@
+import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
@@ -29,7 +30,7 @@ type SendPayloadAdapter = Pick<
 >;
 
 export function resolvePayloadMediaUrls(payload: SendPayloadContext["payload"]): string[] {
-  return payload.mediaUrls?.length ? payload.mediaUrls : payload.mediaUrl ? [payload.mediaUrl] : [];
+  return resolveOutboundMediaUrls(payload);
 }
 
 export async function sendPayloadMediaSequence<TResult>(params: {
@@ -56,6 +57,41 @@ export async function sendPayloadMediaSequence<TResult>(params: {
     });
   }
   return lastResult;
+}
+
+export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
+  text: string;
+  mediaUrls: readonly string[];
+  send: (input: {
+    text: string;
+    mediaUrl: string;
+    index: number;
+    isFirst: boolean;
+  }) => Promise<TResult>;
+  fallbackResult: TResult;
+  sendNoMedia?: () => Promise<TResult>;
+}): Promise<TResult> {
+  if (params.mediaUrls.length === 0) {
+    return params.sendNoMedia ? await params.sendNoMedia() : params.fallbackResult;
+  }
+  return (await sendPayloadMediaSequence(params)) ?? params.fallbackResult;
+}
+
+export async function sendPayloadMediaSequenceAndFinalize<TMediaResult, TResult>(params: {
+  text: string;
+  mediaUrls: readonly string[];
+  send: (input: {
+    text: string;
+    mediaUrl: string;
+    index: number;
+    isFirst: boolean;
+  }) => Promise<TMediaResult>;
+  finalize: () => Promise<TResult>;
+}): Promise<TResult> {
+  if (params.mediaUrls.length > 0) {
+    await sendPayloadMediaSequence(params);
+  }
+  return await params.finalize();
 }
 
 export async function sendTextMediaPayload(params: {

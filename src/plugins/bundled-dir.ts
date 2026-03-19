@@ -4,6 +4,14 @@ import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveUserPath } from "../utils.js";
 
+function isSourceCheckoutRoot(packageRoot: string): boolean {
+  return (
+    fs.existsSync(path.join(packageRoot, ".git")) &&
+    fs.existsSync(path.join(packageRoot, "src")) &&
+    fs.existsSync(path.join(packageRoot, "extensions"))
+  );
+}
+
 export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   if (override) {
@@ -21,16 +29,22 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     );
     for (const packageRoot of packageRoots) {
       const sourceExtensionsDir = path.join(packageRoot, "extensions");
-      if (preferSourceCheckout && fs.existsSync(sourceExtensionsDir)) {
+      const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
+      if (
+        (preferSourceCheckout || isSourceCheckoutRoot(packageRoot)) &&
+        fs.existsSync(sourceExtensionsDir)
+      ) {
         return sourceExtensionsDir;
       }
       // Local source checkouts stage a runtime-complete bundled plugin tree under
       // dist-runtime/. Prefer that over source extensions only when the paired
       // dist/ tree exists; otherwise wrappers can drift ahead of the last build.
       const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
-      const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
       if (fs.existsSync(runtimeExtensionsDir) && fs.existsSync(builtExtensionsDir)) {
         return runtimeExtensionsDir;
+      }
+      if (fs.existsSync(builtExtensionsDir)) {
+        return builtExtensionsDir;
       }
     }
   } catch {
@@ -40,6 +54,10 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   // bun --compile: ship a sibling `extensions/` next to the executable.
   try {
     const execDir = path.dirname(process.execPath);
+    const siblingBuilt = path.join(execDir, "dist", "extensions");
+    if (fs.existsSync(siblingBuilt)) {
+      return siblingBuilt;
+    }
     const sibling = path.join(execDir, "extensions");
     if (fs.existsSync(sibling)) {
       return sibling;

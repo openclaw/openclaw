@@ -8,7 +8,11 @@ import ts from "typescript";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const extensionsRoot = path.join(repoRoot, "extensions");
 
-const MODES = new Set(["src-outside-plugin-sdk", "plugin-sdk-internal"]);
+const MODES = new Set([
+  "src-outside-plugin-sdk",
+  "plugin-sdk-internal",
+  "relative-outside-package",
+]);
 
 const baselinePathByMode = {
   "src-outside-plugin-sdk": path.join(
@@ -23,6 +27,12 @@ const baselinePathByMode = {
     "fixtures",
     "extension-plugin-sdk-internal-inventory.json",
   ),
+  "relative-outside-package": path.join(
+    repoRoot,
+    "test",
+    "fixtures",
+    "extension-relative-outside-package-inventory.json",
+  ),
 };
 
 const ruleTextByMode = {
@@ -30,6 +40,8 @@ const ruleTextByMode = {
     "Rule: production extensions/** must not import src/** outside src/plugin-sdk/**",
   "plugin-sdk-internal":
     "Rule: production extensions/** must not import src/plugin-sdk-internal/**",
+  "relative-outside-package":
+    "Rule: production extensions/** must not use relative imports that escape their own extension package root",
 };
 
 function normalizePath(filePath) {
@@ -42,7 +54,8 @@ function isCodeFile(fileName) {
 
 function isTestLikeFile(relativePath) {
   return (
-    /(^|\/)(__tests__|fixtures)\//.test(relativePath) ||
+    /(^|\/)(__tests__|fixtures|test|tests)\//.test(relativePath) ||
+    /(^|\/)[^/]*test-(support|helpers)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath) ||
     /\.(test|spec)\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(relativePath)
   );
 }
@@ -88,13 +101,34 @@ function resolveSpecifier(specifier, importerFile) {
   return null;
 }
 
-function classifyReason(mode, kind, resolvedPath) {
+function resolveExtensionRoot(filePath) {
+  const relativePath = normalizePath(filePath);
+  const segments = relativePath.split("/");
+  if (segments[0] !== "extensions" || !segments[1]) {
+    return null;
+  }
+  return `${segments[0]}/${segments[1]}`;
+}
+
+function classifyReason(mode, kind, resolvedPath, specifier) {
   const verb =
     kind === "export"
       ? "re-exports"
       : kind === "dynamic-import"
         ? "dynamically imports"
         : "imports";
+  if (mode === "relative-outside-package") {
+    if (resolvedPath?.startsWith("src/plugin-sdk/")) {
+      return `${verb} plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>`;
+    }
+    if (resolvedPath?.startsWith("src/")) {
+      return `${verb} core src path via relative path outside the extension package`;
+    }
+    if (resolvedPath?.startsWith("extensions/")) {
+      return `${verb} another extension via relative path outside the extension package`;
+    }
+    return `${verb} relative path ${specifier} outside the extension package`;
+  }
   if (mode === "plugin-sdk-internal") {
     return `${verb} src/plugin-sdk-internal from an extension`;
   }
@@ -116,6 +150,9 @@ function compareEntries(left, right) {
 }
 
 function shouldReport(mode, resolvedPath) {
+  if (mode === "relative-outside-package") {
+    return false;
+  }
   if (!resolvedPath?.startsWith("src/")) {
     return false;
   }
@@ -127,10 +164,18 @@ function shouldReport(mode, resolvedPath) {
 
 function collectFromSourceFile(mode, sourceFile, filePath) {
   const entries = [];
+  const extensionRoot = resolveExtensionRoot(filePath);
 
   function push(kind, specifierNode, specifier) {
     const resolvedPath = resolveSpecifier(specifier, filePath);
-    if (!shouldReport(mode, resolvedPath)) {
+    if (mode === "relative-outside-package") {
+      if (!specifier.startsWith(".") || !resolvedPath || !extensionRoot) {
+        return;
+      }
+      if (resolvedPath === extensionRoot || resolvedPath.startsWith(`${extensionRoot}/`)) {
+        return;
+      }
+    } else if (!shouldReport(mode, resolvedPath)) {
       return;
     }
     entries.push({
@@ -139,7 +184,7 @@ function collectFromSourceFile(mode, sourceFile, filePath) {
       kind,
       specifier,
       resolvedPath,
-      reason: classifyReason(mode, kind, resolvedPath),
+      reason: classifyReason(mode, kind, resolvedPath, specifier),
     });
   }
 
@@ -190,7 +235,22 @@ export async function collectExtensionPluginSdkBoundaryInventory(mode) {
 }
 
 export async function readExpectedInventory(mode) {
-  return JSON.parse(await fs.readFile(baselinePathByMode[mode], "utf8"));
+  try {
+    return JSON.parse(await fs.readFile(baselinePathByMode[mode], "utf8"));
+  } catch (error) {
+    if (
+      (mode === "plugin-sdk-internal" ||
+        mode === "src-outside-plugin-sdk" ||
+        mode === "relative-outside-package") &&
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 export function diffInventory(expected, actual) {
