@@ -591,4 +591,54 @@ describe("runSetupWizard", () => {
       }),
     );
   });
+
+  it("threads default onboarding-plan decisions into finalize", async () => {
+    finalizeSetupWizard.mockClear();
+    const workspaceDir = await makeCaseDir("default-plan-workspace-");
+    const prompter = buildWizardPrompter({});
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "local",
+        workspace: workspaceDir,
+        authChoice: "skip",
+        skipProviders: true,
+        skipSearch: true,
+        skipSkills: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(finalizeSetupWizard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intent: {
+          mode: "local",
+          workspaceDir,
+          authChoice: "skip",
+          daemonPreference: "default",
+          healthRequested: true,
+        },
+        onboardingPlan: expect.objectContaining({
+          steps: expect.objectContaining({
+            daemon: expect.objectContaining({
+              decision: "prompt",
+              reason: "advanced-confirmation",
+            }),
+            health: expect.objectContaining({
+              decision: "run",
+              expectation: "pending-daemon-decision",
+            }),
+            channels: expect.objectContaining({
+              decision: "skip",
+              reason: "user-skip",
+            }),
+          }),
+        }),
+      }),
+    );
+  });
 });

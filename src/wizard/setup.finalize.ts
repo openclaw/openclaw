@@ -28,6 +28,7 @@ import {
   resolveLocalSetupExecutionPlan,
   type LocalSetupIntent,
 } from "../commands/onboard-local-plan.js";
+import { createLocalOnboardingPlan, type OnboardingPlan } from "../commands/onboard-plan.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
@@ -48,6 +49,7 @@ type FinalizeOnboardingOptions = {
   nextConfig: OpenClawConfig;
   workspaceDir: string;
   intent: LocalSetupIntent;
+  onboardingPlan: OnboardingPlan;
   settings: GatewayWizardSettings;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -105,12 +107,26 @@ export async function finalizeSetupWizard(
     platform: process.platform,
     systemdAvailable,
   });
-  let installDaemon = setupPlan.daemonDecision === "install";
+  let onboardingPlan = options.onboardingPlan;
+  // Linux systemd availability is only known here, so finalize recomputes the
+  // pure plan once with that fact before executing any daemon/health branches.
+  onboardingPlan = createLocalOnboardingPlan({
+    executionMode: "interactive",
+    flow,
+    intent: onboardingPlan.intent,
+    gatewayState: settings,
+    executionPlan: setupPlan,
+    opts,
+  });
+  let installDaemon = onboardingPlan.steps.daemon.decision === "install";
   if (setupPlan.daemonDecision === "prompt") {
     const installConfirmed = await prompter.confirm({
       message: "Install Gateway service (recommended)",
       initialValue: true,
     });
+    // Interactive finalize is the only place that is allowed to turn the
+    // shared pure plan into a user decision. Once confirmed, recompute the
+    // plan and keep executing from the updated intent instead of branching ad hoc.
     setupPlan = resolveLocalSetupExecutionPlan({
       intent: {
         ...options.intent,
@@ -121,7 +137,18 @@ export async function finalizeSetupWizard(
       platform: process.platform,
       systemdAvailable,
     });
-    installDaemon = setupPlan.daemonDecision === "install";
+    onboardingPlan = createLocalOnboardingPlan({
+      executionMode: "interactive",
+      flow,
+      intent: {
+        ...options.intent,
+        daemonPreference: installConfirmed ? "install" : "skip",
+      },
+      gatewayState: settings,
+      executionPlan: setupPlan,
+      opts,
+    });
+    installDaemon = onboardingPlan.steps.daemon.decision === "install";
   }
 
   if (setupPlan.daemonDecisionReason === "systemd-unavailable") {
@@ -241,7 +268,7 @@ export async function finalizeSetupWizard(
     }
   }
 
-  if (setupPlan.shouldRunHealthCheck) {
+  if (onboardingPlan.steps.health.decision === "run") {
     const probeLinks = resolveLocalGatewayLinks({
       state: settings,
     });
@@ -274,7 +301,7 @@ export async function finalizeSetupWizard(
 
   const controlUiEnabled =
     nextConfig.gateway?.controlUi?.enabled ?? baseConfig.gateway?.controlUi?.enabled ?? true;
-  if (!opts.skipUi && controlUiEnabled) {
+  if (onboardingPlan.steps.ui.decision !== "skip" && controlUiEnabled) {
     const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);
     if (!controlUiAssets.ok && controlUiAssets.message) {
       runtime.error(controlUiAssets.message);
@@ -360,7 +387,7 @@ export async function finalizeSetupWizard(
   let hatchChoice: "tui" | "web" | "later" | null = null;
   let launchedTui = false;
 
-  if (!opts.skipUi && gatewayProbe.ok) {
+  if (onboardingPlan.steps.ui.decision !== "skip" && gatewayProbe.ok) {
     if (hasBootstrap) {
       await prompter.note(
         [
@@ -443,7 +470,7 @@ export async function finalizeSetupWizard(
         "Later",
       );
     }
-  } else if (opts.skipUi) {
+  } else if (onboardingPlan.steps.ui.decision === "skip") {
     await prompter.note("Skipping Control UI/TUI prompts.", "Control UI");
   }
 
@@ -463,7 +490,7 @@ export async function finalizeSetupWizard(
   await setupWizardShellCompletion({ flow, prompter });
 
   const shouldOpenControlUi =
-    !opts.skipUi &&
+    onboardingPlan.steps.ui.decision !== "skip" &&
     settings.authMode === "token" &&
     Boolean(settings.gatewayToken) &&
     hatchChoice === null;

@@ -87,14 +87,14 @@ No user-facing CLI flag removals in stages 1 to 3.
 - Stage 2A: complete with deterministic read and mutation seam splits in config paths, including no-repair plugin validation reads to avoid discovery-side chmod writes during config validation, read-only daemon status config loads, daemon status env-isolated read contexts, and dotenv hydration into read-only env snapshots instead of `process.env`.
 - Stage 2B: complete with `RuntimeStateContainer` seams threaded through startup/runtime overrides, including fallback gateway context lifecycle ownership, remote skills state cleanup, and gateway health runtime-state reset hardening (cache reset plus stale in-flight refresh guard) during shutdown.
 - Stage 3A: complete enough to pause with startup phase extractions for config preflight, secrets precheck, auth bootstrap, runtime policy, explicit runtime-config and control-ui-root helpers, plugin bootstrap, TLS runtime, transport bootstrap, sidecar startup, discovery startup, and Tailscale exposure classification seams, secrets activation controller, and runtime config reloader wiring; early-phase typed startup context handoff and shared startup phase failure reporting now includes secrets-precheck/auth-bootstrap/runtime-policy/plugin-bootstrap/tls-runtime/transport-bootstrap/sidecar-startup/discovery-startup/tailscale-exposure/runtime-config/control-ui-root classification.
-- Stage 3B: started with a shared gateway reachability and health-check workflow, a shared workspace resolution and workspace-config seam, a shared gateway mode probe summary, shared gateway exposure safety normalization reused across onboarding and configure flows, a first shared `LocalSetupIntent` plus execution-plan seam so wizard and non-interactive local setup stop re-deriving daemon and health expectations inline, and a shared `LocalGatewaySetupState` plus reachability-plan seam so both flows carry the same local gateway facts and health inputs.
+- Stage 3B: complete for this maintainability pass with a shared gateway reachability and health-check workflow, a shared workspace resolution and workspace-config seam, a shared gateway mode probe summary, shared gateway exposure safety normalization reused across onboarding and configure flows, a shared `LocalSetupIntent` plus execution-plan seam so wizard and non-interactive local setup stop re-deriving daemon and health expectations inline, a shared `LocalGatewaySetupState` plus reachability-plan seam so both flows carry the same local gateway facts and health inputs, and a shared `OnboardingPlan` decision graph that keeps section/finalize decisions centralized while preserving separate interactive and non-interactive executors.
 - Stages 4 to 5: not started.
 
-## Highest leverage next steps
+## Highest leverage next steps after this pass
 
-1. Stage 3B: extract a shared `LocalGatewaySetupState` so wizard and non-interactive setup carry the same local gateway facts instead of partially overlapping state objects.
-2. Stage 3B: derive shared local setup expectations from that gateway state, especially health auth inputs and reachability metadata, without forcing wizard and non-interactive flows into one executor.
-3. Stage 3B: keep collapsing duplicated gateway and onboarding decisions into pure helpers before attempting a larger planner extraction.
+1. Start a separate Stage 4 initiative for route index, matcher, and cache boundary extraction.
+2. Start a separate Stage 4 initiative for plugin runtime capability facades so plugin startup and routing surfaces stop sharing broad ambient state.
+3. Start a separate Stage 5 initiative for architectural guardrails that prevent implicit config writes, duplicate preflight drift, and unapproved `process.env` mutation from creeping back in.
 
 ## Finish line for this pass
 

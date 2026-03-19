@@ -16,8 +16,8 @@ Current status:
 - Stage 2A initial deterministic-read seam complete
 - Stage 2B startup-threaded container seam complete
 - Stage 3A complete enough to pause (startup phases extracted, typed context threaded across early phases, startup failure classification unified across major boundaries)
-- Stage 3B initial seam in progress
-- Stages 4 to 5 deferred until Stage 3B is complete
+- Stage 3B complete for this maintainability pass
+- Stages 4 to 5 deferred into a separate follow-on initiative
 
 ## Protected runtime slice
 
@@ -104,9 +104,9 @@ Do not edit these files under this plan:
 - [x] Thread a shared `LocalSetupIntent` and execution-plan seam through wizard and non-interactive local setup
 - [x] Extract shared `LocalGatewaySetupState` used by wizard and non-interactive local onboarding
 - [x] Derive shared local gateway reachability inputs from `LocalGatewaySetupState`
-- [ ] Define shared `OnboardingPlan` decision graph
-- [ ] Keep separate interactive and non-interactive executors
-- [ ] Add parity coverage for equivalent inputs
+- [x] Define shared `OnboardingPlan` decision graph
+- [x] Keep separate interactive and non-interactive executors
+- [x] Add parity coverage for equivalent inputs
 
 ### Stage 4: routing and plugin boundary cleanup
 
