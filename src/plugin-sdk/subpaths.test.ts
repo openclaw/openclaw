@@ -55,8 +55,12 @@ const accountHelpersSdk = await import("openclaw/plugin-sdk/account-helpers");
 const allowlistEditSdk = await import("openclaw/plugin-sdk/allowlist-config-edit");
 
 describe("plugin-sdk subpath exports", () => {
-  it("keeps legacy compat out of the curated public list", () => {
+  it("keeps the curated public list free of internal implementation subpaths", () => {
     expect(pluginSdkSubpaths).not.toContain("compat");
+    expect(pluginSdkSubpaths).not.toContain("pairing-access");
+    expect(pluginSdkSubpaths).not.toContain("reply-prefix");
+    expect(pluginSdkSubpaths).not.toContain("typing");
+    expect(pluginSdkSubpaths).not.toContain("provider-model-definitions");
   });
 
   it("keeps core focused on generic shared exports", () => {
@@ -115,12 +119,14 @@ describe("plugin-sdk subpath exports", () => {
   it("exports channel pairing helpers from the dedicated subpath", () => {
     expect(typeof channelPairingSdk.createChannelPairingController).toBe("function");
     expect(typeof channelPairingSdk.createChannelPairingChallengeIssuer).toBe("function");
-    expect(typeof channelPairingSdk.createScopedPairingAccess).toBe("function");
+    expect("createScopedPairingAccess" in asExports(channelPairingSdk)).toBe(false);
   });
 
   it("exports channel reply pipeline helpers from the dedicated subpath", () => {
     expect(typeof channelReplyPipelineSdk.createChannelReplyPipeline).toBe("function");
-    expect(typeof channelReplyPipelineSdk.createTypingCallbacks).toBe("function");
+    expect("createTypingCallbacks" in asExports(channelReplyPipelineSdk)).toBe(false);
+    expect("createReplyPrefixContext" in asExports(channelReplyPipelineSdk)).toBe(false);
+    expect("createReplyPrefixOptions" in asExports(channelReplyPipelineSdk)).toBe(false);
   });
 
   it("exports channel send-result helpers from the dedicated subpath", () => {
