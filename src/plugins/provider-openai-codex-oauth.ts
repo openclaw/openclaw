@@ -1,4 +1,4 @@
-import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai/oauth";
+import { loginOpenAICodex } from "@mariozechner/pi-ai/oauth";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
@@ -13,7 +13,7 @@ export async function loginOpenAICodexOAuth(params: {
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
   localBrowserMessage?: string;
-}): Promise<OAuthCredentials | null> {
+}): Promise<{ access: string; expires?: number; [key: string]: unknown } | null> {
   const { prompter, runtime, isRemote, openUrl, localBrowserMessage } = params;
   const preflight = await runOpenAIOAuthTlsPreflight();
   if (!preflight.ok && preflight.kind === "tls-cert") {

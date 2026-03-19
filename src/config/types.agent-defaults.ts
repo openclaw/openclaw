@@ -117,6 +117,13 @@ export type CliBackendConfig = {
   };
 };
 
+export type AutoReasoningConfig = {
+  enabled?: boolean;
+  selectorTimeoutMs?: number;
+  selectorMaxOutputTokens?: number;
+  emitGeneratingField?: boolean;
+};
+
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
@@ -187,6 +194,8 @@ export type AgentDefaultsConfig = {
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+  /** Auto-reasoning selector (per-message thinking level when think=auto). */
+  autoReasoning?: AutoReasoningConfig;
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */

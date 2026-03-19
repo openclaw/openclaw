@@ -1,9 +1,4 @@
-import {
-  getOAuthApiKey,
-  getOAuthProviders,
-  type OAuthCredentials,
-  type OAuthProvider,
-} from "@mariozechner/pi-ai/oauth";
+import { getOAuthApiKey, getOAuthProviders } from "@mariozechner/pi-ai/oauth";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
@@ -15,9 +10,11 @@ import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileStore, OAuthCredential as StoreOAuthCredential } from "./types.js";
 
-const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
+const OAUTH_PROVIDER_IDS = new Set<string>(
+  getOAuthProviders().map((provider: { id: string }) => provider.id),
+);
 
 let providerRuntimePromise:
   | Promise<typeof import("../../plugins/provider-runtime.runtime.js")>
@@ -28,10 +25,9 @@ function loadProviderRuntime() {
   return providerRuntimePromise;
 }
 
-const isOAuthProvider = (provider: string): provider is OAuthProvider =>
-  OAUTH_PROVIDER_IDS.has(provider);
+const isOAuthProvider = (provider: string): boolean => OAUTH_PROVIDER_IDS.has(provider);
 
-const resolveOAuthProvider = (provider: string): OAuthProvider | null =>
+const resolveOAuthProvider = (provider: string): string | null =>
   isOAuthProvider(provider) ? provider : null;
 
 /** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
@@ -65,7 +61,10 @@ function isProfileConfigCompatible(params: {
   return true;
 }
 
-async function buildOAuthApiKey(provider: string, credentials: OAuthCredential): Promise<string> {
+async function buildOAuthApiKey(
+  provider: string,
+  credentials: StoreOAuthCredential,
+): Promise<string> {
   const { formatProviderAuthProfileApiKeyWithPlugin } = await loadProviderRuntime();
   const formatted = formatProviderAuthProfileApiKeyWithPlugin({
     provider,
@@ -84,7 +83,7 @@ function buildApiKeyProfileResult(params: { apiKey: string; provider: string; em
 
 async function buildOAuthProfileResult(params: {
   provider: string;
-  credentials: OAuthCredential;
+  credentials: StoreOAuthCredential;
   email?: string;
 }) {
   return buildApiKeyProfileResult({
@@ -107,12 +106,21 @@ type ResolveApiKeyForProfileParams = {
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
+type OAuthCredentialWithMeta = {
+  type: "oauth";
+  provider: string;
+  email?: string;
+  access?: string;
+  expires?: number;
+  [key: string]: unknown;
+};
+
 function adoptNewerMainOAuthCredential(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
-  cred: OAuthCredentials & { type: "oauth"; provider: string; email?: string };
-}): (OAuthCredentials & { type: "oauth"; provider: string; email?: string }) | null {
+  cred: OAuthCredentialWithMeta;
+}): OAuthCredentialWithMeta | null {
   if (!params.agentDir) {
     return null;
   }
@@ -123,7 +131,9 @@ function adoptNewerMainOAuthCredential(params: {
       mainCred?.type === "oauth" &&
       mainCred.provider === params.cred.provider &&
       Number.isFinite(mainCred.expires) &&
-      (!Number.isFinite(params.cred.expires) || mainCred.expires > params.cred.expires)
+      (params.cred.expires === undefined ||
+        !Number.isFinite(params.cred.expires) ||
+        mainCred.expires > params.cred.expires)
     ) {
       params.store.profiles[params.profileId] = { ...mainCred };
       saveAuthProfileStore(params.store, params.agentDir);
@@ -132,7 +142,7 @@ function adoptNewerMainOAuthCredential(params: {
         agentDir: params.agentDir,
         expires: new Date(mainCred.expires).toISOString(),
       });
-      return mainCred;
+      return mainCred as OAuthCredentialWithMeta;
     }
   } catch (err) {
     // Best-effort: don't crash if main agent store is missing or unreadable.
@@ -147,7 +157,7 @@ function adoptNewerMainOAuthCredential(params: {
 async function refreshOAuthTokenWithLock(params: {
   profileId: string;
   agentDir?: string;
-}): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
+}): Promise<{ apiKey: string; newCredentials: StoreOAuthCredential } | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
 
@@ -177,7 +187,7 @@ async function refreshOAuthTokenWithLock(params: {
       };
     }
 
-    const oauthCreds: Record<string, OAuthCredentials> = { [cred.provider]: cred };
+    const oauthCreds: Record<string, StoreOAuthCredential> = { [cred.provider]: cred };
     const result =
       String(cred.provider) === "chutes"
         ? await (async () => {
@@ -371,7 +381,7 @@ export async function resolveApiKeyForProfile(
       cred,
     }) ?? cred;
 
-  if (Date.now() < oauthCred.expires) {
+  if (oauthCred.expires !== undefined && Date.now() < oauthCred.expires) {
     return await buildOAuthProfileResult({
       provider: oauthCred.provider,
       credentials: oauthCred,
