@@ -12,6 +12,13 @@ const MAX_PENDING_ENTRIES = 200;
 const MAX_ACTIVE_TURNS = 50;
 
 /**
+ * Hard cap on entries processed from the store during read. Entries beyond
+ * this limit are silently dropped to guard against unbounded processing from
+ * a corrupted or maliciously crafted pending-inbound.json file.
+ */
+const MAX_READ_ENTRIES = 1000;
+
+/**
  * In-process operation queue keyed by resolved file path.
  *
  * `withFileLock` is reentrant for the same process (it increments a counter
@@ -311,6 +318,19 @@ export async function readActiveTurn(
 async function readPendingInboundFile(filePath: string): Promise<PendingInboundFile> {
   const data = await readJsonFile<PendingInboundFile>(filePath);
   if (data && data.version === 1 && typeof data.entries === "object" && data.entries !== null) {
+    // Enforce a hard cap on the number of entries processed to prevent unbounded
+    // memory/CPU usage from a corrupted or oversized pending-inbound.json.
+    const keys = Object.keys(data.entries);
+    if (keys.length > MAX_READ_ENTRIES) {
+      const capped: PendingInboundFile["entries"] = {};
+      for (let i = 0; i < MAX_READ_ENTRIES; i++) {
+        const k = keys[i];
+        if (k !== undefined && k in data.entries) {
+          capped[k] = data.entries[k]!;
+        }
+      }
+      return { version: 1, entries: capped };
+    }
     return data;
   }
   return { version: 1, entries: {} };
