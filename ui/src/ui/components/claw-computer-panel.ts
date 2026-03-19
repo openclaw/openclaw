@@ -88,10 +88,12 @@ export class ClawComputerPanel extends LitElement {
       return;
     }
 
-    const screen = this.shadowRoot.querySelector(".screen");
-    if (!screen) {
+    const screenElement = this.shadowRoot.querySelector(".screen");
+    if (!screenElement) {
       return;
     }
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+    const screen = screenElement as HTMLElement;
 
     const hostHeight = this.offsetHeight;
     const screenHeight = screen.offsetHeight;
