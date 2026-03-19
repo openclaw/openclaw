@@ -12,14 +12,18 @@ function readJson<T>(relativePath: string): T {
 }
 
 describe("bundled plugin runtime dependencies", () => {
-  it("keeps bundled Feishu runtime deps plugin-local instead of mirroring them into the root package", () => {
+  function expectPluginOwnsRuntimeDep(pluginPath: string, dependencyName: string) {
     const rootManifest = readJson<PackageManifest>("package.json");
-    const feishuManifest = readJson<PackageManifest>("extensions/feishu/package.json");
-    const feishuSpec = feishuManifest.dependencies?.["@larksuiteoapi/node-sdk"];
-    const rootSpec = rootManifest.dependencies?.["@larksuiteoapi/node-sdk"];
+    const pluginManifest = readJson<PackageManifest>(pluginPath);
+    const pluginSpec = pluginManifest.dependencies?.[dependencyName];
+    const rootSpec = rootManifest.dependencies?.[dependencyName];
 
-    expect(feishuSpec).toBeTruthy();
+    expect(pluginSpec).toBeTruthy();
     expect(rootSpec).toBeUndefined();
+  }
+
+  it("keeps bundled Feishu runtime deps plugin-local instead of mirroring them into the root package", () => {
+    expectPluginOwnsRuntimeDep("extensions/feishu/package.json", "@larksuiteoapi/node-sdk");
   });
 
   it("keeps bundled memory-lancedb runtime deps available from the root package while its native runtime stays bundled", () => {
@@ -33,12 +37,18 @@ describe("bundled plugin runtime dependencies", () => {
   });
 
   it("keeps bundled Discord runtime deps plugin-local instead of mirroring them into the root package", () => {
-    const rootManifest = readJson<PackageManifest>("package.json");
-    const discordManifest = readJson<PackageManifest>("extensions/discord/package.json");
-    const discordSpec = discordManifest.dependencies?.["@buape/carbon"];
-    const rootSpec = rootManifest.dependencies?.["@buape/carbon"];
+    expectPluginOwnsRuntimeDep("extensions/discord/package.json", "@buape/carbon");
+  });
 
-    expect(discordSpec).toBeTruthy();
-    expect(rootSpec).toBeUndefined();
+  it("keeps bundled Slack runtime deps plugin-local instead of mirroring them into the root package", () => {
+    expectPluginOwnsRuntimeDep("extensions/slack/package.json", "@slack/bolt");
+  });
+
+  it("keeps bundled Telegram runtime deps plugin-local instead of mirroring them into the root package", () => {
+    expectPluginOwnsRuntimeDep("extensions/telegram/package.json", "grammy");
+  });
+
+  it("keeps bundled proxy-agent deps plugin-local instead of mirroring them into the root package", () => {
+    expectPluginOwnsRuntimeDep("extensions/discord/package.json", "https-proxy-agent");
   });
 });
