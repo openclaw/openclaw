@@ -1,5 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { ImageContent } from "../../agents/command/types.js";
+import fs from "node:fs/promises";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -87,6 +89,31 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   }
   return AUDIO_HEADER_RE.test(trimmed);
 };
+
+/** Convert local MediaPaths to ImageContent[] so the agent can see inbound images. */
+async function resolveInboundImages(ctx: FinalizedMsgContext): Promise<ImageContent[] | undefined> {
+  const paths = ctx.MediaPaths ?? (ctx.MediaPath ? [ctx.MediaPath] : []);
+  if (paths.length === 0) {
+    return undefined;
+  }
+  const types = ctx.MediaTypes ?? (ctx.MediaType ? [ctx.MediaType] : []);
+  const results: ImageContent[] = [];
+  for (let i = 0; i < paths.length; i++) {
+    const path = paths[i];
+    const mimeType = (types[i] ?? ctx.MediaType ?? "image/jpeg").split(";")[0].trim();
+    try {
+      const data = await fs.readFile(path);
+      results.push({
+        type: "image",
+        data: data.toString("base64"),
+        mimeType,
+      });
+    } catch (err) {
+      logVerbose(`resolveInboundImages: failed to read ${path}: ${String(err)}`);
+    }
+  }
+  return results.length > 0 ? results : undefined;
+}
 
 const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,
@@ -546,12 +573,18 @@ export async function dispatchReplyFromConfig(params: {
       systemEvent: shouldRouteToOriginating,
     });
 
+    // Convert local MediaPaths to ImageContent[] so the agent can see inbound images.
+    const inboundImages = await resolveInboundImages(ctx);
+
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
         ...params.replyOptions,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
+        images: params.replyOptions?.images
+          ? [...params.replyOptions.images, ...(inboundImages ?? [])]
+          : inboundImages,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({
