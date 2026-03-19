@@ -28,9 +28,35 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-let _currentListener: ActiveWebListener | null = null;
+// Use a process-level singleton to survive bundler code-splitting.
+// Rolldown duplicates this module across multiple output chunks, each with its
+// own module-scoped `listeners` Map. The WhatsApp provider writes to one chunk's
+// Map via setActiveWebListener(), but the outbound send path reads from a
+// different chunk's Map via requireActiveWebListener() — so the listener is
+// never found. Pinning the Map to globalThis ensures all chunks share one
+// instance.  See: https://github.com/openclaw/openclaw/issues/14406
+const GLOBAL_KEY = "__openclaw_wa_listeners" as const;
+const GLOBAL_CURRENT_KEY = "__openclaw_wa_current_listener" as const;
 
-const listeners = new Map<string, ActiveWebListener>();
+type GlobalWithListeners = typeof globalThis & {
+  [GLOBAL_KEY]?: Map<string, ActiveWebListener>;
+  [GLOBAL_CURRENT_KEY]?: ActiveWebListener | null;
+};
+
+const _global = globalThis as GlobalWithListeners;
+
+_global[GLOBAL_KEY] ??= new Map<string, ActiveWebListener>();
+_global[GLOBAL_CURRENT_KEY] ??= null;
+
+const listeners = _global[GLOBAL_KEY];
+
+function getCurrentListener(): ActiveWebListener | null {
+  return _global[GLOBAL_CURRENT_KEY] ?? null;
+}
+
+function setCurrentListener(listener: ActiveWebListener | null): void {
+  _global[GLOBAL_CURRENT_KEY] = listener;
+}
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -74,7 +100,7 @@ export function setActiveWebListener(
     listeners.set(id, listener);
   }
   if (id === DEFAULT_ACCOUNT_ID) {
-    _currentListener = listener;
+    setCurrentListener(listener);
   }
 }
 
