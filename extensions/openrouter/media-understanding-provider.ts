@@ -110,17 +110,20 @@ export const openRouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
     });
 
     const body = buildOpenAiVisionBody(params.model, prompt, params.images, maxTokens);
-    const res = await postJsonRequest({
+    const { response: res, release } = await postJsonRequest({
       url: `${baseUrl}/chat/completions`,
       headers,
       body,
       timeoutMs,
       fetchFn: fetch,
     });
-    await assertOkOrThrowHttpError(res, `${baseUrl}/chat/completions`);
-    const json = (await res.json()) as Record<string, unknown>;
-    const text = extractText(json);
-
-    return { text, model: params.model };
+    try {
+      await assertOkOrThrowHttpError(res, `${baseUrl}/chat/completions`);
+      const json = (await res.json()) as Record<string, unknown>;
+      const text = extractText(json);
+      return { text, model: params.model };
+    } finally {
+      await release();
+    }
   },
 };
