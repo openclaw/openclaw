@@ -414,7 +414,10 @@ export async function handleFeishuMessage(params: {
 
     ({ requireMention } = resolveFeishuReplyPolicy({
       isDirectMessage: false,
-      isThreadReply: groupSession?.threadReply,
+      isThreadReply:
+        groupSession?.threadReply &&
+        (groupSession?.groupSessionScope === "group_topic" ||
+          groupSession?.groupSessionScope === "group_topic_sender"),
       globalConfig: feishuCfg,
       groupConfig,
     }));
