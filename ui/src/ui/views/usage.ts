@@ -51,8 +51,7 @@ function shouldUseDailyTotalsForDisplay(params: {
   return (
     params.selectedSessions.length === 0 &&
     params.selectedDays.length > 0 &&
-    params.selectedHours.length === 0 &&
-    !params.hasQuery
+    params.selectedHours.length === 0
   );
 }
 

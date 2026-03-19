@@ -13,7 +13,7 @@ describe("shouldUseDailyTotalsForDisplay", () => {
     ).toBe(true);
   });
 
-  it("falls back to filtered session totals when a query further narrows a day filter", () => {
+  it("keeps daily totals when a query further narrows a day filter", () => {
     expect(
       shouldUseDailyTotalsForDisplay({
         selectedSessions: [],
@@ -21,6 +21,6 @@ describe("shouldUseDailyTotalsForDisplay", () => {
         selectedHours: [],
         hasQuery: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
