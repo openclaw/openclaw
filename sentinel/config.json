@@ -1,7 +1,8 @@
 {
   "bridge": {
-    "dufu": "http://localhost:18790",
-    "andrew": "http://localhost:18795"
+    "dufu": "http://localhost:18796",
+    "andrew": "http://localhost:18795",
+    "eric": "http://localhost:18797"
   },
   "cruz_chat_id": "448345880",
   "scan_limit": 15,
@@ -19,10 +20,71 @@
       "priority": "high",
       "agent_id": "66-desk"
     },
+    "-5000326699": {
+      "name": "bg666項目組",
+      "bridge": "dufu",
+      "priority": "high",
+      "agent_id": "66-desk"
+    },
+    "-1003337225655": {
+      "name": "666數據需求群",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "66-desk"
+    },
+    "-1003886841948": {
+      "name": "BG考勤群",
+      "bridge": "dufu",
+      "priority": "low",
+      "agent_id": "66-desk"
+    },
+    "-1003883200040": {
+      "name": "666數據日報群",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "66-desk"
+    },
+    "-1003506161262": {
+      "name": "666運營咨詢",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "66-desk"
+    },
+    "-5127586673": {
+      "name": "BG產品需求群",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "66-desk"
+    },
+    "-5262004625": {
+      "name": "66主群",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "66-desk"
+    },
+    "-5173465395": {
+      "name": "666數據日報群(Chat)",
+      "bridge": "dufu",
+      "priority": "low",
+      "agent_id": "66-desk"
+    },
+    "-5049696699": {
+      "name": "BG考勤群(Chat)",
+      "bridge": "dufu",
+      "priority": "low",
+      "agent_id": "66-desk"
+    },
+    "-5210426893": {
+      "name": "BG666-杜甫工作後台",
+      "bridge": "dufu",
+      "priority": "low",
+      "agent_id": "66-desk"
+    },
     "-4745247300": {
       "name": "LoLoTang",
       "bridge": "andrew",
-      "priority": "medium"
+      "priority": "medium",
+      "agent_id": "lolo-care"
     },
     "-1003798513755": {
       "name": "QQ群",
@@ -31,9 +93,10 @@
       "agent_id": "grand-manager"
     },
     "-5160419850": {
-      "name": "Crypto群",
+      "name": "江江群",
       "bridge": "dufu",
-      "priority": "low"
+      "priority": "medium",
+      "agent_id": "jiang-jiang-group"
     },
     "-5191751304": {
       "name": "Mimi",
@@ -42,7 +105,7 @@
       "agent_id": "flipflop"
     },
     "-1003853623705": {
-      "name": "Andrew日報群",
+      "name": "24",
       "bridge": "andrew",
       "priority": "low"
     },
@@ -62,6 +125,12 @@
       "bridge": "dufu",
       "priority": "medium",
       "agent_id": "xo"
+    },
+    "-5058107582": {
+      "name": "AI自媒體課程",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "peiqi-social"
     },
     "-1003849990504": {
       "name": "幣塔管理群",
@@ -158,6 +227,122 @@
       "bridge": "andrew",
       "priority": "low",
       "agent_id": "24bet"
+    },
+    "-5125300409": {
+      "name": "Avery",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "avery"
+    },
+    "-5164354298": {
+      "name": "Threads",
+      "bridge": "dufu",
+      "priority": "high",
+      "agent_id": "wuji"
+    },
+    "-5222229349": {
+      "name": "思考者社群",
+      "bridge": "dufu",
+      "priority": "normal",
+      "agent_id": null,
+      "enabled": true
+    },
+    "-1001548855145": {
+      "name": "海外技术招聘/远程/驻场",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "hr"
+    },
+    "-1001872100502": {
+      "name": "技术招聘-YY直招",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "hr"
+    },
+    "-1001404875757": {
+      "name": "高薪技术程序员招聘",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "hr"
+    },
+    "-1001225704888": {
+      "name": "博聘优选国际猎头",
+      "bridge": "dufu",
+      "priority": "low",
+      "agent_id": "hr"
+    },
+    "-1003298961759": {
+      "name": "海外技术招聘(Eric)",
+      "bridge": "eric",
+      "priority": "medium",
+      "agent_id": "hr"
+    }
+  },
+  "private_chats": {
+    "dufu": {
+      "5308534717": {
+        "name": "Albert",
+        "priority": "medium"
+      },
+      "448345880": {
+        "name": "Andrew (Cruz)",
+        "priority": "high"
+      },
+      "8201198728": {
+        "name": "The Employee",
+        "priority": "medium"
+      },
+      "5256897524": {
+        "name": "Vivi",
+        "priority": "medium"
+      },
+      "8090790323": {
+        "name": "杜甫-Data",
+        "priority": "medium",
+        "agent_id": "66-desk"
+      },
+      "5424220550": {
+        "name": "Davey-CRM",
+        "priority": "medium",
+        "agent_id": "66-desk"
+      },
+      "5919389715": {
+        "name": "YouZi-PM",
+        "priority": "medium",
+        "agent_id": "66-desk"
+      },
+      "5665640546": {
+        "name": "Red-CH",
+        "priority": "low"
+      },
+      "5038335338": {
+        "name": "brandon",
+        "priority": "low"
+      },
+      "7545465225": {
+        "name": "Fendi-Pm",
+        "priority": "medium"
+      },
+      "822815355": {
+        "name": "林美慧",
+        "priority": "medium",
+        "agent_id": "meihui"
+      },
+      "7894747028": {
+        "name": "昱德江",
+        "priority": "low"
+      },
+      "8673075957": {
+        "name": "Aiya",
+        "priority": "low"
+      }
+    },
+    "eric": {
+      "6744154938": {
+        "name": "媛媛(HR)",
+        "priority": "high",
+        "agent_id": "hr"
+      }
     }
   },
   "sync": {
@@ -201,7 +386,7 @@
     "unresponsive_timeout_min": 5
   },
   "severity": {
-    "P0": ["thought_leak", "unresponsive", "gateway_down", "repeated_message"],
+    "P0": ["thought_leak", "unresponsive", "gateway_down", "repeated_message", "stuck_loop"],
     "P1": ["consecutive_messages", "self_evaluation", "menu_listing", "work_avoidance"],
     "P2": ["emoji_headers", "workspace_drift"]
   }

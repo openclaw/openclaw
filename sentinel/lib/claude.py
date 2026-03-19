@@ -12,8 +12,10 @@ _CLAUDE_BIN = os.path.expanduser("~/.local/bin/claude")
 _MODEL_MAP = {
     "claude-haiku-4-5-20251001": "haiku",
     "claude-sonnet-4-5-20250514": "sonnet",
+    "claude-opus-4-6": "opus",
     "haiku": "haiku",
     "sonnet": "sonnet",
+    "opus": "opus",
 }
 
 
@@ -42,7 +44,7 @@ def _increment_daily_calls():
     return count
 
 
-def _run_claude(prompt, model="haiku", timeout=120):
+def _run_claude(prompt, model="haiku", timeout=300):
     """Run claude CLI in one-shot mode. Returns text output."""
     cli_model = _MODEL_MAP.get(model, model)
     env = os.environ.copy()

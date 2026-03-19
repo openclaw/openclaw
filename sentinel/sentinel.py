@@ -8,6 +8,7 @@ import importlib
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 import traceback
@@ -36,6 +37,7 @@ STATE_FILE = BASE / "state.json"
 CONFIG_FILE = BASE / "sentinel.yaml"
 CONFIG_BACKUPS = BASE / "config_backups"
 BULLETIN_SCRIPT = BASE.parent / "workspace" / "scripts" / "bulletin"
+JARVIS_SCRIPT = BASE.parent / "workspace" / "scripts" / "jarvis-status"
 
 
 class Sentinel:
@@ -333,7 +335,10 @@ class Sentinel:
                f"Actual: {delta.get('actual', '?')}\n"
                f"Risk: med — awaiting your confirmation")
         self._notify(msg)
-        self._bulletin_alert(f"[Reconcile] {dkey}: {delta.get('actual', '?')}")
+        # Skip bulletin for known-noise services to avoid flooding
+        noise_keys = {"service:line-bot-b", "service:bridge-dufu", "service:bridge-andrew", "service:openclaw-gateway"}
+        if not any(dkey.startswith(k) for k in noise_keys):
+            self._bulletin_alert(f"[Reconcile] {dkey}: {delta.get('actual', '?')}")
 
         last_notified[dkey] = now.isoformat()
         reconcile["last_med_notify"] = last_notified
@@ -711,8 +716,194 @@ class Sentinel:
 
         return thoughts
 
+    def _get_jarvis_scores(self):
+        """Get JARVIS evolution scores, cached for 5 minutes."""
+        import subprocess as _sp
+        sentinel = self.state["sentinel"]
+        cached = sentinel.get("jarvis_cache", {})
+        cached_at = cached.get("checked_at", "")
+        # Refresh every 5 minutes
+        if cached_at:
+            try:
+                age = (datetime.now() - datetime.fromisoformat(cached_at)).total_seconds()
+                if age < 300:
+                    return cached
+            except (ValueError, TypeError):
+                pass
+        try:
+            r = _sp.run(
+                [sys.executable, str(JARVIS_SCRIPT), "--json"],
+                capture_output=True, text=True, timeout=30
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                data = json.loads(r.stdout)
+                sentinel["jarvis_cache"] = data
+                return data
+            else:
+                self.logger.warning("JARVIS: rc=%d stdout=%d stderr=%s",
+                                    r.returncode, len(r.stdout), r.stderr[:200] if r.stderr else "")
+        except Exception as e:
+            self.logger.warning("JARVIS score fetch failed: %s", e)
+        return cached if cached else None
+
+    def _build_agent_roster(self):
+        """Dynamically build agent roster from openclaw.json + agents-meta.json + config.json."""
+        from collections import defaultdict
+
+        OPENCLAW_CFG = Path.home() / ".openclaw" / "openclaw.json"
+        try:
+            cfg = json.loads(OPENCLAW_CFG.read_text())
+        except Exception as e:
+            self.logger.warning("Cannot read openclaw.json: %s", e)
+            return [], {}, {}
+
+        agents_list = cfg.get("agents", {}).get("list", [])
+        bindings = cfg.get("bindings", [])
+        tg_groups = cfg.get("channels", {}).get("telegram", {}).get("groups", {})
+        default_deny = tg_groups.get("*", {}).get("tools", {}).get("deny", [])
+
+        # agents-meta.json (display metadata)
+        meta_path = BASE / "agents-meta.json"
+        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+
+        # sentinel/config.json (bridge info + monitor-only groups)
+        sentinel_cfg = json.loads((BASE / "config.json").read_text())
+        sentinel_groups = sentinel_cfg.get("groups", {})
+        bridges = sentinel_cfg.get("bridge", {})
+        bridge_ports = {}
+        for name, url in bridges.items():
+            try:
+                bridge_ports[name] = int(url.rsplit(":", 1)[-1])
+            except (ValueError, IndexError):
+                pass
+
+        # agent → chatIds mapping from bindings
+        agent_chats = defaultdict(list)
+        for b in bindings:
+            peer = b.get("match", {}).get("peer", {})
+            if peer.get("kind") == "group" and peer.get("id"):
+                gid = peer["id"]
+                aid = b["agentId"]
+                if gid not in agent_chats[aid]:
+                    agent_chats[aid].append(gid)
+
+        # Add monitor-only groups from sentinel config
+        for gid, g in sentinel_groups.items():
+            aid = g.get("agent_id")
+            if aid and gid not in agent_chats.get(aid, []):
+                agent_chats[aid].append(gid)
+
+        # Build roster
+        CAT_GARDEN = {"work": "tree", "family": "flower", "tools": "mushroom"}
+        roster = []
+        for agent in agents_list:
+            aid = agent["id"]
+            if aid == "wuji":
+                continue
+            m = meta.get(aid, {})
+            cat = m.get("category", "tools")
+            chat_ids = agent_chats.get(aid, [])
+
+            # Per-group permissions
+            perms = {}
+            for gid in chat_ids:
+                gconf = tg_groups.get(gid, {})
+                deny = gconf.get("tools", {}).get("deny", default_deny)
+                perms[gid] = {"deny": deny, "full": len(deny) == 0}
+
+            # Bridge info from primary chat
+            primary = chat_ids[0] if chat_ids else None
+            sg = sentinel_groups.get(primary, {}) if primary else {}
+            bridge_name = sg.get("bridge", "dufu")
+
+            roster.append({
+                "id": m.get("projectId", aid),
+                "name": m.get("name", aid.replace("-", " ").title()),
+                "agentId": aid,
+                "category": cat,
+                "gardenType": m.get("gardenType", CAT_GARDEN.get(cat, "mushroom")),
+                "color": m.get("color", "#888888"),
+                "emoji": m.get("emoji", ""),
+                "chatIds": chat_ids,
+                "model": agent.get("model", {}).get("primary", "default"),
+                "permissions": perms,
+                "bridge": bridge_name,
+                "bridgePort": bridge_ports.get(bridge_name),
+            })
+
+        return roster, bridge_ports, sentinel_groups
+
+    def _get_private_chats_for_dashboard(self, sentinel_groups=None):
+        """Build private chats list + unknown contacts for dashboard."""
+        try:
+            sentinel_cfg = json.loads((BASE / "config.json").read_text())
+        except Exception:
+            return {"known": [], "unknown": []}
+        private = sentinel_cfg.get("private_chats", {})
+        meta_path = BASE / "agents-meta.json"
+        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+
+        # Known contacts
+        known_ids = set()
+        known = []
+        for bridge_name, chats in private.items():
+            for uid, info in chats.items():
+                known_ids.add(uid)
+                aid = info.get("agent_id")
+                m = meta.get(aid, {}) if aid else {}
+                known.append({
+                    "userId": uid,
+                    "name": info.get("name", uid),
+                    "bridge": bridge_name,
+                    "priority": info.get("priority", "low"),
+                    "agentId": aid,
+                    "agentColor": m.get("color", "#888888"),
+                    "status": "known",
+                })
+
+        # Unknown contacts from conversation DB
+        unknown = []
+        import sqlite3
+        db_path = BASE / "data" / "conversations.db"
+        if db_path.exists():
+            try:
+                conn = sqlite3.connect(str(db_path), timeout=5)
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("""
+                    SELECT DISTINCT sender_id, sender_name, chat_id
+                    FROM messages
+                    WHERE CAST(chat_id AS INTEGER) > 0
+                      AND sender_id IS NOT NULL
+                      AND sender_id != ''
+                """).fetchall()
+                conn.close()
+                for row in rows:
+                    sid = str(row["sender_id"])
+                    if sid not in known_ids:
+                        unknown.append({
+                            "userId": sid,
+                            "name": row["sender_name"] or sid,
+                            "bridge": "unknown",
+                            "priority": "unknown",
+                            "agentId": None,
+                            "agentColor": "#EF4444",
+                            "status": "unknown",
+                        })
+            except Exception:
+                pass
+
+        return {"known": known, "unknown": unknown}
+
     def _update_dashboard(self, actual, deltas):
         """Write dashboard-state.js for the HTML dashboard."""
+        # Dynamic agent roster from config files
+        roster, bridge_ports, s_groups = self._build_agent_roster()
+        OPENCLAW_CFG = Path.home() / ".openclaw" / "openclaw.json"
+        try:
+            gateway_port = json.loads(OPENCLAW_CFG.read_text()).get("gateway", {}).get("port", 18789)
+        except Exception:
+            gateway_port = 18789
+
         reconcile = self.state["sentinel"].get("reconcile", {})
 
         # Enrich deltas with depth info: first_seen, backoff state, notify state
@@ -775,9 +966,13 @@ class Sentinel:
         if len(thought_buf) > 60:
             self.state["sentinel"]["thought_stream"] = thought_buf[-60:]
 
+        # JARVIS evolution scores (cached, refresh every 5 min)
+        jarvis = self._get_jarvis_scores()
+
         dashboard_data = {
             "updated_at": datetime.now().isoformat(),
             "started_at": self.state["sentinel"].get("started_at"),
+            "jarvis": jarvis,
             "thought_stream": self.state["sentinel"].get("thought_stream", [])[-60:],
             "observation": {k: v for k, v in actual.items() if k != "details"},
             "services": actual.get("details", {}).get("services", {}),
@@ -796,15 +991,32 @@ class Sentinel:
             "conversation_pulse": self.state["sentinel"].get("conversation_pulse", {}),
             "conversation_sync": self.state["sentinel"].get("conversation_sync", {}),
             "agent_health": self.state["sentinel"].get("agent_health", {}),
+            "gateway_watchdog": self.state.get("gateway_watchdog", {}),
             "observations_24h": self.state["sentinel"].get("observations", [])[-300:],
+            "agent_roster": roster,
             "topology": {
-                "gateway": {"port": 18789},
+                "gateway": {"port": gateway_port},
                 "bridges": {
-                    "bridge-dufu": {"port": 18790, "agents": ["bita", "66-desk", "meihui"]},
-                    "bridge-andrew": {"port": 18795, "agents": ["xo", "grand-manager"]},
+                    f"bridge-{name}": {
+                        "port": port,
+                        "agents": sorted({r["agentId"] for r in roster if r.get("bridge") == name}),
+                    } for name, port in bridge_ports.items()
                 },
                 "tunnel": {"cloudflare-tunnel": {"target": "line-bot-b"}},
             },
+            "agent_chat_map": {
+                r["agentId"]: {
+                    "primary_chat": r["chatIds"][0] if r["chatIds"] else None,
+                    "bridge_port": r.get("bridgePort"),
+                    "label": s_groups.get(r["chatIds"][0], {}).get("name", r["name"]) if r["chatIds"] else r["name"],
+                } for r in roster
+            },
+            "private_chats": self._get_private_chats_for_dashboard(s_groups),
+            "line_stats": self._get_line_stats(),
+            "data_mirror": self._get_data_mirror(),
+            "api_errors": self._get_api_error_stats(),
+            "river": self._get_river_stats(),
+            "matomo_health": self.state["sentinel"].get("matomo_health", {}),
         }
         js_path = BASE / "dashboard-state.js"
         tmp = js_path.with_suffix(".js.tmp")
@@ -816,8 +1028,286 @@ class Sentinel:
                 f.flush()
                 os.fsync(f.fileno())
             tmp.rename(js_path)
+            import shutil
+            # Sync state to all serving locations:
+            # - wuji-empire/dist: serve.sh (port 18800, Safari)
+            # - ~/.openclaw/canvas: canvas host (gateway, fallback)
+            # - src + dist canvas-host/a2ui: A2UI endpoint (iOS app WebView)
+            dist_dir = BASE / "wuji-empire" / "dist"
+            canvas_dir = Path.home() / ".openclaw" / "canvas"
+            a2ui_dirs = [
+                BASE.parent / "src" / "canvas-host" / "a2ui",
+                BASE.parent / "dist" / "canvas-host" / "a2ui",
+            ]
+            for target_dir in [dist_dir, canvas_dir] + a2ui_dirs:
+                if target_dir.is_dir():
+                    shutil.copy2(js_path, target_dir / "dashboard-state.js")
+            # Sync dashboard HTML to a2ui + canvas if stale (after wuji-empire rebuild)
+            if dist_dir.is_dir():
+                dist_html = dist_dir / "index.html"
+                if dist_html.exists():
+                    for target_dir in [canvas_dir] + a2ui_dirs:
+                        if not target_dir.is_dir():
+                            continue
+                        target_html = target_dir / "index.html"
+                        if not target_html.exists() or dist_html.stat().st_mtime > target_html.stat().st_mtime:
+                            for f in ["index.html", "favicon.svg", "manifest.json"]:
+                                src = dist_dir / f
+                                if src.exists():
+                                    shutil.copy2(src, target_dir / f)
         except Exception as e:
             self.logger.warning("Dashboard update failed: %s", e)
+
+    def _get_line_stats(self):
+        """Query OpenClaw timeline.db for LINE message stats."""
+        import sqlite3 as _sqlite3
+        db_path = os.path.expanduser("~/.openclaw/persistent/data/timeline.db")
+        if not os.path.exists(db_path):
+            return {"ok": False, "error": "timeline.db not found"}
+
+        LINE_GROUPS = {
+            "Cf529a05bf3b802a1ef1d4bacf9a5035e": "Let it go 家族群",
+            "Cc2fec0609d256bdec712ef364a47bd64": "運動群",
+            "C51ba089b96b952137055c303bf87006f": "爬山群",
+            "C690db8bc653785775f77caf0cdaf99d8": "可愛的家人",
+            "Cb3c4b97251e270672b444cdbccad7b40": "研究群",
+            "Ca244be51c395d4c71314618bf99eb073": "AI課程1",
+            "Cfd8c85c700f97466b2ced6e0b9b99c45": "AI課程2",
+            "C85d6a096aa8b679d939f96d78410f78b": "AI課程3",
+            "Ce66387c895031972cd1ef47400153793": "AI課程4",
+            "C5a542a4b145e464ad57630a32203771a": "AI課程5",
+        }
+
+        try:
+            conn = _sqlite3.connect(db_path, timeout=5)
+            groups = {}
+            total = 0
+            for row in conn.execute(
+                "SELECT chat_id, COUNT(*), MIN(timestamp), MAX(timestamp) "
+                "FROM messages WHERE channel='line' GROUP BY chat_id"
+            ):
+                chat_id_raw, cnt, earliest, latest = row
+                # Extract group ID from chat_id like "line:group:Cf529..."
+                gid = chat_id_raw.split(":")[-1] if ":" in chat_id_raw else chat_id_raw
+                name = LINE_GROUPS.get(gid, f"未知群 ({gid[:10]})")
+                fresh_h = None
+                if latest:
+                    try:
+                        lt = datetime.fromisoformat(str(latest).replace("Z", ""))
+                        fresh_h = round((datetime.now() - lt).total_seconds() / 3600, 1)
+                    except (ValueError, TypeError):
+                        pass
+                groups[gid] = {
+                    "name": name, "count": cnt,
+                    "earliest": str(earliest)[:10] if earliest else None,
+                    "latest": str(latest)[:10] if latest else None,
+                    "fresh_h": fresh_h,
+                }
+                total += cnt
+
+            # Check recent 24h activity
+            recent_24h = 0
+            try:
+                cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE channel='line' AND timestamp > ?",
+                    (cutoff,)
+                ).fetchone()
+                recent_24h = row[0] if row else 0
+            except Exception:
+                pass
+
+            conn.close()
+            return {
+                "ok": True, "total": total, "recent_24h": recent_24h,
+                "group_count": len(groups), "groups": groups,
+                "queried_at": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            self.logger.warning("LINE stats query failed: %s", e)
+            return {"ok": False, "error": str(e)}
+
+    def _get_data_mirror(self):
+        """Get bg666.db local mirror stats for dashboard."""
+        import sqlite3 as _sqlite3
+        db_path = BASE.parent / "workspace" / "bg666" / "bg666.db"
+        sentinel = self.state.get("sentinel", {})
+        sync_state = sentinel.get("db_sync", {})
+        archive_state = sentinel.get("db_archive", {})
+
+        result = {
+            "db_exists": db_path.exists(),
+            "sync": {
+                "last_synced_date": sync_state.get("last_synced_date"),
+                "last_run": sync_state.get("last_run"),
+            },
+            "archive": {
+                "last_run": archive_state.get("last_run"),
+                "last_result": archive_state.get("last_result"),
+            },
+        }
+
+        if not db_path.exists():
+            return result
+
+        try:
+            size_gb = db_path.stat().st_size / (1024 ** 3)
+            result["size_gb"] = round(size_gb, 2)
+
+            conn = _sqlite3.connect(str(db_path), timeout=5)
+            conn.execute("PRAGMA query_only = ON")
+            tables = {}
+            total_rows = 0
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ):
+                name = row[0]
+                count = conn.execute(f"SELECT COUNT(*) FROM [{name}]").fetchone()[0]
+                tables[name] = {"rows": count}
+                total_rows += count
+
+                # Get date range
+                date_col = "create_time" if name in (
+                    "player_change_record", "player_recharge_order", "player_withdraw_order"
+                ) else "statistics_day"
+                try:
+                    minmax = conn.execute(
+                        f"SELECT MIN({date_col}), MAX({date_col}) FROM [{name}]"
+                    ).fetchone()
+                    tables[name]["earliest"] = str(minmax[0])[:10] if minmax[0] else None
+                    tables[name]["latest"] = str(minmax[1])[:10] if minmax[1] else None
+                except Exception:
+                    pass
+
+            conn.close()
+            result["tables"] = tables
+            result["total_rows"] = total_rows
+        except Exception as e:
+            self.logger.warning("data_mirror query failed: %s", e)
+            result["error"] = str(e)
+
+        return result
+
+    def _get_river_stats(self):
+        """Get River Knowledge Engine stats for dashboard."""
+        try:
+            import sys as _sys
+            river_dir = os.path.join(os.path.dirname(__file__), "..", "workspace", "river")
+            if river_dir not in _sys.path:
+                _sys.path.insert(0, river_dir)
+            from dashboard_state import get_river_state
+            return get_river_state()
+        except Exception as e:
+            self.logger.warning("river stats failed: %s", e)
+            return None
+
+    def _get_api_error_stats(self):
+        """Parse gateway logs for API errors (overloaded, auth, failover)."""
+        import glob as _glob
+        import re
+
+        log_dir = "/tmp/openclaw"
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        # Only match date-named logs (openclaw-YYYY-MM-DD.log), skip restart logs
+        log_files = []
+        for ds in [yesterday_str, today_str]:
+            p = os.path.join(log_dir, f"openclaw-{ds}.log")
+            if os.path.exists(p):
+                log_files.append(p)
+        if not log_files:
+            return {"ok": False, "error": "no gateway logs found"}
+
+        cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
+        errors = []
+        lane_re = re.compile(r'lane=(\S+)')
+        duration_re = re.compile(r'durationMs=(\d+)')
+        error_re = re.compile(r'error="(.+)"$')
+
+        for lf in log_files:
+            try:
+                with open(lf, "r") as f:
+                    for line in f:
+                        if "lane task error" not in line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+
+                        ts = entry.get("time", "")
+                        if ts < cutoff:
+                            continue
+
+                        msg = entry.get("1", "")
+                        lane_m = lane_re.search(msg)
+                        dur_m = duration_re.search(msg)
+                        err_m = error_re.search(msg)
+
+                        lane = lane_m.group(1) if lane_m else "unknown"
+                        # Skip main lane duplicates (same error logged at both main and session lane)
+                        if lane == "main":
+                            continue
+                        duration_ms = int(dur_m.group(1)) if dur_m else 0
+                        error_text = err_m.group(1) if err_m else msg
+
+                        # Classify error type
+                        if "overload" in error_text.lower() or "繁忙" in error_text:
+                            err_type = "overloaded"
+                        elif "FailoverError" in error_text:
+                            err_type = "failover"
+                        elif "401" in error_text or "auth" in error_text.lower():
+                            err_type = "auth"
+                        elif "rate" in error_text.lower() and "limit" in error_text.lower():
+                            err_type = "rate_limit"
+                        elif "5" in error_text[:5] and ("50" in error_text[:5]):
+                            err_type = "server_error"
+                        else:
+                            err_type = "other"
+
+                        # Extract agent from lane (e.g. session:agent:wuji:main → wuji)
+                        agent = "unknown"
+                        if "agent:" in lane:
+                            parts = lane.split(":")
+                            try:
+                                idx = parts.index("agent")
+                                if idx + 1 < len(parts):
+                                    agent = parts[idx + 1]
+                            except ValueError:
+                                pass
+
+                        errors.append({
+                            "ts": ts,
+                            "type": err_type,
+                            "agent": agent,
+                            "lane": lane,
+                            "duration_ms": duration_ms,
+                            "error": error_text[:200],
+                        })
+            except Exception:
+                continue
+
+        # Aggregate stats
+        by_type = {}
+        by_agent = {}
+        hourly = {}
+        for e in errors:
+            t = e["type"]
+            a = e["agent"]
+            by_type[t] = by_type.get(t, 0) + 1
+            by_agent[a] = by_agent.get(a, 0) + 1
+            hour = e["ts"][:13]  # "2026-03-03T12"
+            hourly[hour] = hourly.get(hour, 0) + 1
+
+        return {
+            "ok": True,
+            "total_24h": len(errors),
+            "by_type": by_type,
+            "by_agent": by_agent,
+            "hourly": dict(sorted(hourly.items())),
+            "recent": errors[-20:],  # last 20 errors
+            "queried_at": datetime.now().isoformat(),
+        }
 
     def _snapshot_configs_on_startup(self):
         """Take initial config snapshots and backups on startup."""
@@ -949,7 +1439,7 @@ class Sentinel:
                 self._notify(f"[Sentinel 想問] {detail}")
             elif atype == "note":
                 self.logger.info(f"[Reflect note] {detail}")
-                self._bulletin_alert(f"[Sentinel 觀察] {detail}")
+                # Notes go to log only — bulletin was getting flooded with CPU/swap observations
             elif atype == "repair":
                 self.logger.info(f"[Reflect repair] {detail}")
                 self._notify(f"[Sentinel 建議修復] {detail}\n需要我執行嗎？")
@@ -1061,7 +1551,10 @@ class Sentinel:
                 sched_time = now.replace(hour=sched_hour, minute=sched_min, second=0)
                 if now > sched_time:
                     self.logger.info(f"Catch-up: running missed task {task_name} (was scheduled {sched})")
-                    self.run_task(task_name)
+                    try:
+                        self.run_task(task_name)
+                    except Exception as e:
+                        self.logger.warning(f"Catch-up {task_name} failed, skipping: {e}")
             except (ValueError, TypeError):
                 pass
 
@@ -1074,6 +1567,14 @@ class Sentinel:
         self._snapshot_configs_on_startup()
         self.setup_schedule()
         self._catch_up()
+
+        # Start Config API server
+        try:
+            from api import start_api_server
+            api_port = self.config.get("http_api", {}).get("port", 18801)
+            self._api_thread = start_api_server(port=api_port, logger=self.logger)
+        except Exception as e:
+            self.logger.warning("Config API server failed to start: %s", e)
 
         while self.running:
             schedule.run_pending()

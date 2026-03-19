@@ -36,9 +36,9 @@ def init_bot_ids(config: dict) -> set[int]:
 
 
 def get_groups(config: dict) -> dict:
-    """Parse config.json groups into enriched registry.
+    """Parse config.json groups + private_chats into enriched registry.
 
-    Returns: {chat_id: {name, bridge, bridge_url, agent_id, priority}}
+    Returns: {chat_id: {name, bridge, bridge_url, agent_id, priority, is_dm}}
     """
     bridges = config.get("bridge", {})
     groups = {}
@@ -50,8 +50,44 @@ def get_groups(config: dict) -> dict:
             "bridge_url": bridges.get(bridge_name, "http://localhost:18790").rstrip("/"),
             "agent_id": info.get("agent_id"),
             "priority": info.get("priority", "low"),
+            "is_dm": False,
         }
+
+    # Private chats: keyed by bridge name → {user_id: {name, ...}}
+    for bridge_name, chats in config.get("private_chats", {}).items():
+        bridge_url = bridges.get(bridge_name, "http://localhost:18790").rstrip("/")
+        for user_id, info in chats.items():
+            groups[user_id] = {
+                "name": f"DM:{info.get('name', user_id)}",
+                "bridge": bridge_name,
+                "bridge_url": bridge_url,
+                "agent_id": info.get("agent_id"),
+                "priority": info.get("priority", "low"),
+                "is_dm": True,
+            }
+
     return groups
+
+
+def _load_bridge_token() -> str | None:
+    """Load bridge token from telegram-userbot config."""
+    import pathlib
+    cfg_path = pathlib.Path.home() / "clawd" / "workspace" / "skills" / "telegram-userbot" / "config.json"
+    try:
+        with open(cfg_path) as f:
+            return json.load(f).get("bridge_token")
+    except Exception:
+        return None
+
+
+_BRIDGE_TOKEN: str | None = None
+
+
+def _get_bridge_token() -> str | None:
+    global _BRIDGE_TOKEN
+    if _BRIDGE_TOKEN is None:
+        _BRIDGE_TOKEN = _load_bridge_token() or ""
+    return _BRIDGE_TOKEN or None
 
 
 def fetch_messages(bridge_url: str, chat_id: str, limit: int = 30,
@@ -68,7 +104,11 @@ def fetch_messages(bridge_url: str, chat_id: str, limit: int = 30,
     if offset_id:
         url += f"&offset_id={offset_id}"
     try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
+        req = urllib.request.Request(url, method="GET")
+        token = _get_bridge_token()
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
             # Bridge returns {"ok": true, "messages": [...]} or just a list
             if isinstance(data, list):

@@ -58,15 +58,26 @@ def _check_port(port: int, host: str = "127.0.0.1") -> bool:
 
 
 def _check_health(health_cfg: dict) -> bool:
-    """Perform an HTTP health check. Returns True if status 2xx."""
+    """Perform an HTTP health check. Returns True if status 2xx.
+
+    Uses http.client directly to bypass system proxy (urlopen honours
+    http_proxy env / macOS proxy settings which break localhost checks).
+    """
     if not health_cfg or health_cfg.get("type") != "http":
         return True  # no health check configured = assume healthy
     url = health_cfg.get("url", "")
     timeout = health_cfg.get("timeout", 5)
     try:
-        resp = urlopen(url, timeout=timeout)
-        return 200 <= resp.status < 300
-    except (URLError, OSError, ValueError):
+        from urllib.parse import urlparse
+        import http.client
+        p = urlparse(url)
+        conn = http.client.HTTPConnection(p.hostname, p.port or 80, timeout=timeout)
+        conn.request("GET", p.path or "/")
+        resp = conn.getresponse()
+        ok = 200 <= resp.status < 300
+        conn.close()
+        return ok
+    except (OSError, ValueError):
         return False
 
 

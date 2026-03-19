@@ -12,7 +12,7 @@ import logging
 import os
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 SENTINEL_ROOT = Path(__file__).resolve().parent.parent
@@ -244,8 +244,10 @@ def run(config: dict, state: dict) -> dict:
             fresh_h = None
             if latest:
                 try:
-                    lt = datetime.fromisoformat(str(latest).replace("Z", "+00:00").replace("+00:00", ""))
-                    fresh_h = round((datetime.now() - lt).total_seconds() / 3600, 1)
+                    lt = datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
+                    if lt.tzinfo is None:
+                        lt = lt.replace(tzinfo=timezone.utc)
+                    fresh_h = round((datetime.now(timezone.utc) - lt).total_seconds() / 3600, 1)
                 except (ValueError, TypeError):
                     pass
             group_stats[chat_id_val] = {
@@ -256,6 +258,23 @@ def run(config: dict, state: dict) -> dict:
                 "fresh_h": fresh_h,
                 "agent_id": agent_id,
             }
+
+        # Recent messages per group (20 most recent, text truncated to 200 chars)
+        for chat_id_val in group_stats:
+            recent = []
+            for row in conn2.execute(
+                "SELECT sender_name, text, timestamp FROM messages "
+                "WHERE chat_id = ? ORDER BY timestamp DESC LIMIT 20",
+                (chat_id_val,),
+            ):
+                sender_name, text, ts = row
+                recent.append({
+                    "sender": sender_name or "",
+                    "text": (text or "")[:200],
+                    "ts": ts or "",
+                })
+            group_stats[chat_id_val]["recent_messages"] = recent
+
         conn2.close()
     except Exception as e:
         logger.warning("Failed to collect group stats: %s", e)

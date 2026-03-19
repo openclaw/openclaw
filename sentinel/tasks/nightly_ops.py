@@ -270,6 +270,37 @@ def prune(config: dict, dry_run: bool = False) -> dict:
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def archive_thoughts(dry_run: bool = False) -> str:
+    """Rotate thoughts.log → thoughts-YYYY-MM-DD.log.gz, keep raw data."""
+    thoughts_log = SENTINEL_ROOT / "thoughts.log"
+    if not thoughts_log.exists() or thoughts_log.stat().st_size == 0:
+        return "skip (empty or missing)"
+
+    import gzip
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    archive_dir = SENTINEL_ROOT / "logs" / "thoughts"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = archive_dir / f"thoughts-{yesterday}.log.gz"
+
+    if dry_run:
+        logger.info(f"[dry-run] would archive thoughts.log → {archive_path.name}")
+        return "dry-run"
+
+    try:
+        with open(thoughts_log, "rb") as f_in:
+            with gzip.open(archive_path, "ab") as f_out:  # append if exists
+                f_out.write(f_in.read())
+        # Truncate instead of delete so tail -f keeps working
+        with open(thoughts_log, "w") as f:
+            f.write(f"--- archived to {archive_path.name} ---\n\n")
+        log_event(logger, "archive_thoughts", task_name="nightly_ops",
+                  detail=f"archived → {archive_path.name}")
+        return "ok"
+    except Exception as exc:
+        logger.warning(f"archive_thoughts failed: {exc}")
+        return str(exc)
+
+
 def run(config: dict, state: dict) -> dict:
     """Main entry point called by sentinel.py."""
     logger.info("=== nightly_ops: start ===")
@@ -306,7 +337,14 @@ def run(config: dict, state: dict) -> dict:
                                          "error": str(exc)}
         logger.error(f"memory_consolidate unexpected: {exc}")
 
-    # 5. Prune stale files
+    # 5. Archive thoughts.log
+    try:
+        results["archive_thoughts"] = archive_thoughts(dry_run)
+    except Exception as exc:
+        results["archive_thoughts"] = str(exc)
+        logger.error(f"archive_thoughts unexpected: {exc}")
+
+    # 6. Prune stale files
     try:
         results["prune"] = prune(config, dry_run)
     except Exception as exc:

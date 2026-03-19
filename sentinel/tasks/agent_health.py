@@ -311,7 +311,74 @@ def _check_agent(agent: dict, bindings: dict[str, int], dry_run: bool = False) -
     else:
         result["issues"].append(f"{agent_id}: openclaw.json 無綁定 (0 bindings)")
 
+    # ── 11. Capability matrix — model vs SOUL requirements ──
+    model_id = agent.get("model", {}).get("primary", "")
+    soul_text = ""
+    if soul.exists():
+        try:
+            soul_text = soul.read_text(errors="replace")
+        except OSError:
+            pass
+
+    cap_issues = _check_capability_matrix(agent_id, model_id, soul_text, bind_count)
+    for ci in cap_issues:
+        result["issues"].append(ci)
+
+    # ── 12. MEMORY.md recommended for agents with 3+ bindings ──
+    if bind_count >= 3:
+        memory_md = ws_path / "MEMORY.md"
+        if not memory_md.exists():
+            result["issues"].append(
+                f"{agent_id}: 有 {bind_count} 個 bindings 但無 MEMORY.md — 建議建立持久記憶"
+            )
+
+    # ── 13. BOOTSTRAP.md existence check (P2 advisory, no auto-create) ──
+    bootstrap = ws_path / "BOOTSTRAP.md"
+    if not bootstrap.exists():
+        result["issues"].append(
+            f"{agent_id}: P2 BOOTSTRAP.md missing — agent 缺乏穩定身份 context"
+        )
+
     return result
+
+
+# Models known to NOT support vision (text-only input)
+_NO_VISION_MODELS = {"deepseek/deepseek-chat", "deepseek/deepseek-reasoner"}
+# Models known to have small output limits
+_SMALL_OUTPUT_MODELS = {"deepseek/deepseek-chat": 2048}
+
+# SOUL.md keywords indicating vision requirement
+_VISION_KEYWORDS = re.compile(r"截圖|圖片|screenshot|image|photo|照片|視覺")
+# SOUL.md keywords indicating heavy analysis output
+_ANALYSIS_KEYWORDS = re.compile(r"報告|分析|report|analysis|digest|校準")
+
+
+def _check_capability_matrix(agent_id: str, model_id: str, soul_text: str,
+                              bind_count: int) -> list[str]:
+    """Check if the agent's model matches its SOUL requirements."""
+    issues = []
+
+    if not model_id or not soul_text:
+        return issues
+
+    # Vision check: SOUL mentions images but model is text-only
+    needs_vision = bool(_VISION_KEYWORDS.search(soul_text))
+    if needs_vision and model_id in _NO_VISION_MODELS:
+        issues.append(
+            f"{agent_id}: SOUL 需要圖片處理但 {model_id} 不支援 vision "
+            f"— 需設定 tools.media.image 或換 model"
+        )
+
+    # Output size check: SOUL mentions analysis/reports but model has small output
+    needs_long_output = bool(_ANALYSIS_KEYWORDS.search(soul_text))
+    max_output = _SMALL_OUTPUT_MODELS.get(model_id)
+    if needs_long_output and max_output and max_output < 4096:
+        issues.append(
+            f"{agent_id}: SOUL 需要產出報告/分析但 {model_id} maxTokens={max_output} "
+            f"— 可能截斷輸出"
+        )
+
+    return issues
 
 
 def _should_notify(alert_key: str, known_alerts: dict, now: datetime) -> bool:
@@ -327,6 +394,46 @@ def _should_notify(alert_key: str, known_alerts: dict, now: datetime) -> bool:
         return (now - last_dt).total_seconds() >= NOTIFY_COOLDOWN
     except (ValueError, TypeError):
         return True
+
+
+def _check_binding_completeness(oc_data: dict) -> list[str]:
+    """B2: Check that every group in config.json has a valid agent binding.
+
+    Returns list of P1 issue strings for groups missing agent_id or
+    agent_id not found in openclaw.json bindings.
+    """
+    issues = []
+    config_path = SENTINEL_ROOT / "config.json"
+    if not config_path.exists():
+        return issues
+
+    try:
+        with open(config_path) as f:
+            scan_cfg = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return issues
+
+    groups = scan_cfg.get("groups", {})
+    agent_ids_in_oc = {a["id"] for a in oc_data.get("agents", {}).get("list", [])}
+    binding_ids = {b.get("agentId") for b in oc_data.get("bindings", [])}
+
+    for chat_id, info in groups.items():
+        name = info.get("name", chat_id)
+        priority = info.get("priority", "low")
+        agent_id = info.get("agent_id")
+
+        if not agent_id:
+            if priority in ("high", "medium"):
+                issues.append(f"群組 {name} ({chat_id}): 無 agent_id — {priority} 優先群組未綁定 agent")
+            continue
+
+        if agent_id not in agent_ids_in_oc:
+            issues.append(f"群組 {name} ({chat_id}): agent_id={agent_id} 不在 openclaw.json agents.list")
+
+        if agent_id not in binding_ids:
+            issues.append(f"群組 {name} ({chat_id}): agent_id={agent_id} 無 openclaw.json binding")
+
+    return issues
 
 
 def run(config: dict, state: dict) -> dict:
@@ -362,6 +469,27 @@ def run(config: dict, state: dict) -> dict:
         "agents": {},
     }
     current_alert_keys: set = set()
+
+    # ── B2: Binding completeness — groups vs agent config ──
+    binding_issues = _check_binding_completeness(oc_data)
+    for issue in binding_issues:
+        result["p1_issues"].append(issue)
+        alert_key = f"binding_completeness:{issue[:60]}"
+        current_alert_keys.add(alert_key)
+        if _should_notify(alert_key, known_alerts, now):
+            msg = f"[Sentinel Binding] P1 {issue}"
+            resp = telegram.send(msg, cruz_id)
+            if resp.get("ok") or resp.get("error") is None:
+                logger.info("Notified: %s", msg)
+            if alert_key not in known_alerts:
+                known_alerts[alert_key] = {
+                    "first_seen": now.isoformat(),
+                    "last_notified": now.isoformat(),
+                    "count": 1,
+                }
+            else:
+                known_alerts[alert_key]["last_notified"] = now.isoformat()
+                known_alerts[alert_key]["count"] = known_alerts[alert_key].get("count", 0) + 1
 
     for agent in agents:
         agent_id = agent["id"]
