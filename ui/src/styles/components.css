@@ -1781,7 +1781,14 @@
 .data-table-wrapper {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  overflow: hidden;
+}
+
+.data-table-wrapper:first-child {
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+.data-table-wrapper:last-child {
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
 .data-table-toolbar {
@@ -1820,7 +1827,7 @@
 }
 
 .data-table-container {
-  overflow-x: auto;
+
 }
 
 .data-table {
