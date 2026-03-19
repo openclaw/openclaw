@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
@@ -148,6 +149,7 @@ export async function runAgentTurnWithFallback(params: {
     try {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
+        const reply = resolveSendableOutboundReplyParts(payload);
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
             mode: "message",
@@ -156,7 +158,7 @@ export async function runAgentTurnWithFallback(params: {
             didLogHeartbeatStrip = true;
             logVerbose("Stripped stray HEARTBEAT_OK token from reply");
           }
-          if (stripped.shouldSkip && (payload.mediaUrls?.length ?? 0) === 0) {
+          if (stripped.shouldSkip && !reply.hasMedia) {
             return { skip: true };
           }
           text = stripped.text;
@@ -172,7 +174,7 @@ export async function runAgentTurnWithFallback(params: {
         }
         if (!text) {
           // Allow media-only payloads (e.g. tool result screenshots) through.
-          if ((payload.mediaUrls?.length ?? 0) > 0) {
+          if (reply.hasMedia) {
             return { text: undefined, skip: false };
           }
           return { skip: true };
@@ -323,6 +325,7 @@ export async function runAgentTurnWithFallback(params: {
             try {
               const result = await runEmbeddedPiAgent({
                 ...embeddedContext,
+                allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
                 groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
                 groupChannel:

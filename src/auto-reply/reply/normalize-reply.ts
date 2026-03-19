@@ -1,4 +1,5 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
@@ -31,12 +32,18 @@ export function normalizeReplyPayload(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
 ): ReplyPayload | null {
-  const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);
-  const hasChannelData = Boolean(
-    payload.channelData && Object.keys(payload.channelData).length > 0,
-  );
+  const hasContent = (text: string | undefined) =>
+    hasReplyPayloadContent(
+      {
+        ...payload,
+        text,
+      },
+      {
+        trimText: true,
+      },
+    );
   const trimmed = payload.text?.trim() ?? "";
-  if (!trimmed && !hasMedia && !hasChannelData) {
+  if (!hasContent(trimmed)) {
     opts.onSkip?.("empty");
     return null;
   }
@@ -44,7 +51,7 @@ export function normalizeReplyPayload(
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
   if (text && isSilentReplyText(text, silentToken)) {
-    if (!hasMedia && !hasChannelData) {
+    if (!hasContent("")) {
       opts.onSkip?.("silent");
       return null;
     }
@@ -55,7 +62,7 @@ export function normalizeReplyPayload(
   // silent just like the exact-match path above.  (#30916, #30955)
   if (text && text.includes(silentToken) && !isSilentReplyText(text, silentToken)) {
     text = stripSilentToken(text, silentToken);
-    if (!text && !hasMedia && !hasChannelData) {
+    if (!hasContent(text)) {
       opts.onSkip?.("silent");
       return null;
     }
@@ -71,7 +78,7 @@ export function normalizeReplyPayload(
     if (stripped.didStrip) {
       opts.onHeartbeatStrip?.();
     }
-    if (stripped.shouldSkip && !hasMedia && !hasChannelData) {
+    if (stripped.shouldSkip && !hasContent(stripped.text)) {
       opts.onSkip?.("heartbeat");
       return null;
     }
@@ -81,7 +88,7 @@ export function normalizeReplyPayload(
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
   }
-  if (!text?.trim() && !hasMedia && !hasChannelData) {
+  if (!hasContent(text)) {
     opts.onSkip?.("empty");
     return null;
   }

@@ -253,7 +253,7 @@ describe("docker-setup.sh", () => {
     const sessionsDirStat = await stat(join(configDir, "agents", "main", "sessions"));
     expect(sessionsDirStat.isDirectory()).toBe(true);
 
-    // Verify that a root-user chown step runs before onboarding.
+    // Verify that a root-user chown step runs before setup.
     const log = await readFile(activeSandbox.logPath, "utf8");
     const chownIdx = log.indexOf("--user root");
     const onboardIdx = log.indexOf("onboard");

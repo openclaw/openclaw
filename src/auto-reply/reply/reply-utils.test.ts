@@ -158,10 +158,10 @@ describe("normalizeReplyPayload", () => {
 
     expect(result).not.toBeNull();
     expect(result!.text).toBe("hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
-    expect(result!.channelData).toBeUndefined();
+    expect(result!.interactive).toBeUndefined();
   });
 
-  it("applies responsePrefix before compiling Slack directives into blocks", () => {
+  it("applies responsePrefix before compiling Slack directives into shared interactive blocks", () => {
     const result = normalizeReplyPayload(
       {
         text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
@@ -171,44 +171,26 @@ describe("normalizeReplyPayload", () => {
 
     expect(result).not.toBeNull();
     expect(result!.text).toBe("[bot] hello");
-    expect(result!.channelData).toEqual({
-      slack: {
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: "[bot] hello",
+    expect(result!.interactive).toEqual({
+      blocks: [
+        {
+          type: "text",
+          text: "[bot] hello",
+        },
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Retry",
+              value: "retry",
             },
-          },
-          {
-            type: "actions",
-            block_id: "openclaw_reply_buttons_1",
-            elements: [
-              {
-                type: "button",
-                action_id: "openclaw:reply_button",
-                text: {
-                  type: "plain_text",
-                  text: "Retry",
-                  emoji: true,
-                },
-                value: "reply_1_retry",
-              },
-              {
-                type: "button",
-                action_id: "openclaw:reply_button",
-                text: {
-                  type: "plain_text",
-                  text: "Ignore",
-                  emoji: true,
-                },
-                value: "reply_2_ignore",
-              },
-            ],
-          },
-        ],
-      },
+            {
+              label: "Ignore",
+              value: "ignore",
+            },
+          ],
+        },
+      ],
     });
   });
 });

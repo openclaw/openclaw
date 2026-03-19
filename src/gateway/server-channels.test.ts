@@ -45,6 +45,7 @@ function createTestPlugin(params?: {
   startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
   includeDescribeAccount?: boolean;
   resolveAccount?: ChannelPlugin<TestAccount>["config"]["resolveAccount"];
+  isConfigured?: ChannelPlugin<TestAccount>["config"]["isConfigured"];
 }): ChannelPlugin<TestAccount> {
   const account = params?.account ?? { enabled: true, configured: true };
   const includeDescribeAccount = params?.includeDescribeAccount !== false;
@@ -52,6 +53,7 @@ function createTestPlugin(params?: {
     listAccountIds: () => [DEFAULT_ACCOUNT_ID],
     resolveAccount: params?.resolveAccount ?? (() => account),
     isEnabled: (resolved) => resolved.enabled !== false,
+    ...(params?.isConfigured ? { isConfigured: params.isConfigured } : {}),
   };
   if (includeDescribeAccount) {
     config.describeAccount = (resolved) => ({
@@ -79,6 +81,14 @@ function createTestPlugin(params?: {
   };
 }
 
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise = () => {};
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
+}
+
 function installTestRegistry(plugin: ChannelPlugin<TestAccount>) {
   const registry = createEmptyPluginRegistry();
   registry.channels.push({
@@ -91,6 +101,7 @@ function installTestRegistry(plugin: ChannelPlugin<TestAccount>) {
 
 function createManager(options?: {
   channelRuntime?: PluginRuntime["channel"];
+  resolveChannelRuntime?: () => PluginRuntime["channel"];
   loadConfig?: () => Record<string, unknown>;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
@@ -102,6 +113,9 @@ function createManager(options?: {
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
+    ...(options?.resolveChannelRuntime
+      ? { resolveChannelRuntime: options.resolveChannelRuntime }
+      : {}),
   });
 }
 
@@ -136,7 +150,7 @@ describe("server-channels auto restart", () => {
     const snapshot = manager.getRuntimeSnapshot();
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.running).toBe(false);
-    expect(account?.reconnectAttempts).toBe(10);
+    expect(account?.reconnectAttempts).toBe(11);
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(11);
@@ -182,6 +196,75 @@ describe("server-channels auto restart", () => {
     const manager = createManager({ channelRuntime });
 
     await manager.startChannels();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates concurrent start requests for the same account", async () => {
+    const startupGate = createDeferred();
+    const isConfigured = vi.fn(async () => {
+      await startupGate.promise;
+      return true;
+    });
+    const startAccount = vi.fn(async () => {});
+
+    installTestRegistry(createTestPlugin({ startAccount, isConfigured }));
+    const manager = createManager();
+
+    const firstStart = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    const secondStart = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    await Promise.resolve();
+    expect(isConfigured).toHaveBeenCalledTimes(1);
+    expect(startAccount).not.toHaveBeenCalled();
+
+    startupGate.resolve();
+    await Promise.all([firstStart, secondStart]);
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a pending startup when the account is stopped mid-boot", async () => {
+    const startupGate = createDeferred();
+    const isConfigured = vi.fn(async () => {
+      await startupGate.promise;
+      return true;
+    });
+    const startAccount = vi.fn(async () => {});
+
+    installTestRegistry(createTestPlugin({ startAccount, isConfigured }));
+    const manager = createManager();
+
+    const startTask = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await Promise.resolve();
+
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    startupGate.resolve();
+
+    await Promise.all([startTask, stopTask]);
+
+    expect(startAccount).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve channelRuntime until a channel starts", async () => {
+    const channelRuntime = {
+      marker: "lazy-channel-runtime",
+    } as unknown as PluginRuntime["channel"];
+    const resolveChannelRuntime = vi.fn(() => channelRuntime);
+    const startAccount = vi.fn(async (ctx) => {
+      expect(ctx.channelRuntime).toBe(channelRuntime);
+    });
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({ resolveChannelRuntime });
+
+    expect(resolveChannelRuntime).not.toHaveBeenCalled();
+
+    void manager.getRuntimeSnapshot();
+    expect(resolveChannelRuntime).not.toHaveBeenCalled();
+
+    await manager.startChannels();
+
+    expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 

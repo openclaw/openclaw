@@ -1,21 +1,18 @@
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { GatewayClient } from "../../../src/gateway/client.js";
-import { createOperatorApprovalsGatewayClient } from "../../../src/gateway/operator-approvals-client.js";
-import type { EventFrame } from "../../../src/gateway/protocol/index.js";
-import { resolveExecApprovalCommandDisplay } from "../../../src/infra/exec-approval-command-display.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { createOperatorApprovalsGatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import type { EventFrame } from "openclaw/plugin-sdk/gateway-runtime";
+import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
   type ExecApprovalPendingReplyParams,
-} from "../../../src/infra/exec-approval-reply.js";
-import { resolveExecApprovalSessionTarget } from "../../../src/infra/exec-approval-session-target.js";
-import type {
-  ExecApprovalRequest,
-  ExecApprovalResolved,
-} from "../../../src/infra/exec-approvals.js";
-import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
-import { normalizeAccountId, parseAgentSessionKey } from "../../../src/routing/session-key.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
-import { compileSafeRegex, testRegexWithBoundedInput } from "../../../src/security/safe-regex.js";
+} from "openclaw/plugin-sdk/infra-runtime";
+import { resolveExecApprovalSessionTarget } from "openclaw/plugin-sdk/infra-runtime";
+import type { ExecApprovalRequest, ExecApprovalResolved } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeAccountId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
 import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
 import {
   getTelegramExecApprovalApprovers,

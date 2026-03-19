@@ -2,10 +2,10 @@ import "./test-helpers.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
-import * as ssrf from "../../../src/infra/net/ssrf.js";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
@@ -29,14 +29,18 @@ type MockWebListener = {
 
 export const TEST_NET_IP = "203.0.113.10";
 
-vi.mock("../../../src/agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-}));
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+  return {
+    ...actual,
+    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+    runEmbeddedPiAgent: vi.fn(),
+    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  };
+});
 
 export async function rmDirWithRetries(
   dir: string,
