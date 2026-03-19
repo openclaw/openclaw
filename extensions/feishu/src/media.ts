@@ -439,11 +439,13 @@ export async function sendMediaFeishu(params: {
   let buffer: Buffer;
   let name: string;
 
+  let loaded: { buffer: Buffer; fileName?: string; kind?: string; contentType?: string } | undefined;
+
   if (mediaBuffer) {
     buffer = mediaBuffer;
     name = fileName ?? "file";
   } else if (mediaUrl) {
-    const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
+    loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
       maxBytes: mediaMaxBytes,
       optimizeImages: false,
       localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
@@ -454,15 +456,26 @@ export async function sendMediaFeishu(params: {
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
   }
 
-  // Determine if it's an image based on extension
+  // Determine if it's an image based on extension or loaded kind/contentType
   const ext = path.extname(name).toLowerCase();
-  const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(ext);
+  const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(ext) ||
+    loaded?.kind === "image" ||
+    loaded?.contentType?.startsWith("image/");
 
   if (isImage) {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
   } else {
-    const fileType = detectFileType(name);
+    // Use loaded kind/contentType to determine file type for remote media
+    let fileType: "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream";
+    if (loaded?.kind === "video" || loaded?.contentType?.startsWith("video/")) {
+      fileType = "mp4";
+    } else if (loaded?.kind === "audio" || loaded?.contentType?.startsWith("audio/")) {
+      // Only opus is supported for audio, others fall back to stream
+      fileType = ext === ".opus" || ext === ".ogg" ? "opus" : "stream";
+    } else {
+      fileType = detectFileType(name);
+    }
 
     // Get duration for audio/video files (required by Feishu API)
     let duration: number | undefined;
