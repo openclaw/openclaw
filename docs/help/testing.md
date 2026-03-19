@@ -52,6 +52,10 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI
   - No real keys required
   - Should be fast and stable
+- Scheduler note:
+  - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
+  - Shared unit coverage stays on, but the wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
+  - Refresh the timing snapshot with `pnpm test:perf:update-timings` after major suite shape changes.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
     keep both levels of coverage.
@@ -456,6 +460,55 @@ Future evals should stay deterministic first:
 - A scenario runner using mock providers to assert tool calls + order, skill file reads, and session wiring.
 - A small suite of skill-focused scenarios (use vs avoid, gating, prompt injection).
 - Optional live evals (opt-in, env-gated) only after the CI-safe suite is in place.
+
+## Contract tests (plugin and channel shape)
+
+Contract tests verify that every registered plugin and channel conforms to its
+interface contract. They iterate over all discovered plugins and run a suite of
+shape and behavior assertions.
+
+### Commands
+
+- All contracts: `pnpm test:contracts`
+- Channel contracts only: `pnpm test:contracts:channels`
+- Provider contracts only: `pnpm test:contracts:plugins`
+
+### Channel contracts
+
+Located in `src/channels/plugins/contracts/*.contract.test.ts`:
+
+- **plugin** - Basic plugin shape (id, name, capabilities)
+- **setup** - Setup wizard contract
+- **session-binding** - Session binding behavior
+- **outbound-payload** - Message payload structure
+- **inbound** - Inbound message handling
+- **actions** - Channel action handlers
+- **threading** - Thread ID handling
+- **directory** - Directory/roster API
+- **group-policy** - Group policy enforcement
+- **status** - Channel status probes
+- **registry** - Plugin registry shape
+
+### Provider contracts
+
+Located in `src/plugins/contracts/*.contract.test.ts`:
+
+- **auth** - Auth flow contract
+- **auth-choice** - Auth choice/selection
+- **catalog** - Model catalog API
+- **discovery** - Plugin discovery
+- **loader** - Plugin loading
+- **runtime** - Provider runtime
+- **shape** - Plugin shape/interface
+- **wizard** - Setup wizard
+
+### When to run
+
+- After changing plugin-sdk exports or subpaths
+- After adding or modifying a channel or provider plugin
+- After refactoring plugin registration or discovery
+
+Contract tests run in CI and do not require real API keys.
 
 ## Adding regressions (guidance)
 

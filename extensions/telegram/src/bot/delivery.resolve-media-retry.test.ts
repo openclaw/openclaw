@@ -28,9 +28,13 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
 vi.mock("../sticker-cache.js", () => ({
   cacheSticker: () => {},
   getCachedSticker: () => null,
+  getCacheStats: () => ({ count: 0 }),
+  searchStickers: () => [],
+  getAllCachedStickers: () => [],
+  describeStickerImage: async () => null,
 }));
 
-let resolveMedia: typeof import("./delivery.js").resolveMedia;
+import { resolveMedia } from "./delivery.js";
 
 const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
@@ -165,9 +169,7 @@ async function flushRetryTimers() {
 }
 
 describe("resolveMedia getFile retry", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveMedia } = await import("./delivery.js"));
+  beforeEach(() => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockReset();
     saveMediaBuffer.mockReset();

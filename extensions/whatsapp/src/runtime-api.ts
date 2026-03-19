@@ -26,6 +26,6 @@ export {
   type DmPolicy,
   type GroupPolicy,
   type WhatsAppAccountConfig,
-} from "openclaw/plugin-sdk/whatsapp";
+} from "openclaw/plugin-sdk/whatsapp-shared";
 
-export { monitorWebChannel } from "openclaw/plugin-sdk/whatsapp";
+export { monitorWebChannel } from "./channel.runtime.js";
