@@ -67,6 +67,7 @@ export type ModelProviderConfig = {
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
   injectNumCtxForOpenAICompat?: boolean;
+  injectAgentHeader?: boolean;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
