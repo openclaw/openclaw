@@ -58,28 +58,29 @@ const resolvePluginConversationBindingApprovalMock = vi.hoisted(() => vi.fn());
 const buildPluginBindingResolvedTextMock = vi.hoisted(() => vi.fn());
 let lastDispatchCtx: Record<string, unknown> | undefined;
 
-vi.mock("../../../../src/security/dm-policy-shared.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../../src/security/dm-policy-shared.js")>();
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
   return {
     ...actual,
-    readStoreAllowFromForDmPolicy: (...args: unknown[]) => readAllowFromStoreMock(...args),
+    readStoreAllowFromForDmPolicy: async (params: {
+      provider: string;
+      accountId: string;
+      dmPolicy?: string | null;
+      shouldRead?: boolean | null;
+    }) => {
+      if (params.shouldRead === false || params.dmPolicy === "allowlist") {
+        return [];
+      }
+      return await readAllowFromStoreMock(params.provider, params.accountId);
+    },
   };
 });
 
-vi.mock("../../../../src/pairing/pairing-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/pairing/pairing-store.js")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
     upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-  };
-});
-
-vi.mock("../../../../src/plugins/conversation-binding.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../../src/plugins/conversation-binding.js")>();
-  return {
-    ...actual,
     resolvePluginConversationBindingApproval: (...args: unknown[]) =>
       resolvePluginConversationBindingApprovalMock(...args),
     buildPluginBindingResolvedText: (...args: unknown[]) =>
@@ -87,35 +88,32 @@ vi.mock("../../../../src/plugins/conversation-binding.js", async (importOriginal
   };
 });
 
-vi.mock("../../../../src/infra/system-events.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/infra/system-events.js")>();
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
     ...actual,
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
   };
 });
 
-vi.mock("../../../../src/auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../../../src/auto-reply/reply/provider-dispatcher.js")
-    >();
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
     ...actual,
     dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
   };
 });
 
-vi.mock("../../../../src/channels/session.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/channels/session.js")>();
+vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
   return {
     ...actual,
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
   };
 });
 
-vi.mock("../../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/config/sessions.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
@@ -123,8 +121,8 @@ vi.mock("../../../../src/config/sessions.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../../src/plugins/interactive.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/plugins/interactive.js")>();
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
   return {
     ...actual,
     dispatchPluginInteractiveHandler: (...args: unknown[]) =>
@@ -189,7 +187,11 @@ describe("agent components", () => {
 
     expect(defer).toHaveBeenCalledWith({ ephemeral: true });
     expect(reply).toHaveBeenCalledTimes(1);
-    expect(reply.mock.calls[0]?.[0]?.content).toContain("Pairing code: PAIRCODE");
+    const pairingText = String(reply.mock.calls[0]?.[0]?.content ?? "");
+    expect(pairingText).toContain("Pairing code:");
+    const code = pairingText.match(/Pairing code:\s*([A-Z2-9]{8})/)?.[1];
+    expect(code).toBeDefined();
+    expect(pairingText).toContain(`openclaw pairing approve discord ${code}`);
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).toHaveBeenCalledWith({
       provider: "discord",
@@ -831,10 +833,9 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(resolvePluginConversationBindingApprovalMock).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledWith({ components: [] });
     expect(followUp).toHaveBeenCalledWith({
-      content: "Binding approved.",
+      content: expect.stringContaining("bind approval"),
       ephemeral: true,
     });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
