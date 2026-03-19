@@ -904,13 +904,13 @@
                   "install/gcp",
                   "install/hetzner",
                   "install/kubernetes",
+                  "vps",
                   "install/macos-vm",
                   "install/northflank",
                   "install/oracle",
                   "install/railway",
                   "install/raspberry-pi",
-                  "install/render",
-                  "vps"
+                  "install/render"
                 ]
               },
               {
