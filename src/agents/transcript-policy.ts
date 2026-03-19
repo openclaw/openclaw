@@ -3,7 +3,6 @@ import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
 import {
   isAnthropicProviderFamily,
   isOpenAiProviderFamily,
-  preservesAnthropicThinkingSignatures,
   resolveTranscriptToolCallIdMode,
   shouldDropThinkingBlocksForModel,
   shouldSanitizeGeminiThoughtSignaturesForModel,
