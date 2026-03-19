@@ -127,6 +127,11 @@ export async function resolveGatewayRuntimeConfig(params: {
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
     );
   }
+  if (tailscaleMode !== "off" && authMode === "none") {
+    throw new Error(
+      "tailscale serve/funnel requires gateway auth — refusing to start with auth.mode=none when tailscale is active",
+    );
+  }
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
     throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
   }
