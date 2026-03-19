@@ -210,7 +210,10 @@ export class TelegramPollingSession {
       return;
     }
     try {
-      await bot.api.getUpdates({ offset: lastUpdateId + 1, limit: 1, timeout: 0 });
+      await bot.api.getUpdates(
+        { offset: lastUpdateId + 1, limit: 1, timeout: 0 },
+        { signal: AbortSignal.timeout(10000) },
+      );
     } catch {
       // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
     }
