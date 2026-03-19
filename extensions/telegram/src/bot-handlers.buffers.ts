@@ -305,8 +305,11 @@ export function createTelegramInboundBufferRuntime(params: {
       const combinedText = entries
         .map((entry) => entry.msg.text ?? entry.msg.caption ?? "")
         .filter(Boolean)
-        .join("\n");
-      const combinedMedia = entries.flatMap((entry) => entry.allMedia);
+        .join("
+");
+      // Fix: only use last entry's media to prevent ghost attachments from debounce buffer
+      // See: https://github.com/openclaw/openclaw/issues/46655
+      const combinedMedia = entries.at(-1)?.allMedia ?? [];
       if (!combinedText.trim() && combinedMedia.length === 0) {
         return;
       }
