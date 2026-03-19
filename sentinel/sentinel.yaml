@@ -13,7 +13,12 @@ tasks:
   vivi_learning: { schedule: "every 1h", enabled: true }
   hr_payroll: { schedule: "09:00", enabled: true }
   river_digest: { schedule: "every 4h", enabled: true }
+  matomo_health: { schedule: "every 1h", enabled: true }
+  # data_puzzles: 已遷移到 OpenClaw cron (jobs.json)，不再由 Sentinel 排程
   memory_consolidation: { schedule: "02:30", enabled: true }
+  memory_tower_nightly: { schedule: "00:00", enabled: true }
+  session_digest: { schedule: "23:30", enabled: true }
+  threads_sync: { schedule: "every 6h", enabled: true }
 notifications:
   telegram_bridge: "http://localhost:18796"
   cruz_chat_id: "448345880"
