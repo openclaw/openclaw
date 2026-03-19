@@ -134,6 +134,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/channels: serialize per-account channel startup so overlapping starts do not boot the same provider twice, preventing MS Teams `EADDRINUSE` crash loops during startup and restart. (#49583) Thanks @sudie-codes.
 - Tests/OpenAI Codex auth: align login expectations with the default `gpt-5.4` model so CI coverage stays consistent with the current OpenAI Codex default. (#44367) Thanks @jrrcdev.
 - Discord: enforce strict DM component allowlist auth (#49997) Thanks @joshavant.
+- Stabilize plugin loader and Docker extension smoke (#50058) Thanks @joshavant.
 
 ### Fixes
 
