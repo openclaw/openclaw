@@ -1,16 +1,18 @@
 /**
  * Security Shield plugin for OpenClaw.
  *
- * Registers before_tool_call and after_tool_call hooks to:
+ * Registers hooks to:
  * 1. Block dangerous commands (rm -rf, curl|bash, reverse shells, etc.)
  * 2. Detect and redact secret leaks in tool output (API keys, tokens, etc.)
- * 3. Log all tool activity to an audit trail
+ * 3. Redact secrets from session transcripts before persistence
+ * 4. Log all tool activity to an audit trail
  *
  * Works with all existing tools and extensions — no code changes required.
  */
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { writeAuditEntry, type AuditEntry } from "./src/audit-log.js";
 import { scanForDangerousCommands } from "./src/dangerous-commands.js";
+import { extractCommandParams } from "./src/dangerous-commands.js";
 import { scanForLeaks, redactLeaks } from "./src/leak-detector.js";
 
 type ShieldConfig = {
@@ -51,13 +53,15 @@ const plugin = {
     );
 
     // ── before_tool_call: block dangerous commands ──────────────
-    // Note: scans stringified params broadly. Only "critical" severity
-    // rules trigger blocking to reduce false positives from text fields.
+    // Scans only command-relevant param fields (command, input, code, etc.)
+    // to avoid false positives from text/description fields.
     api.on("before_tool_call", (event) => {
       if (config.enforcement === "off") return;
 
-      const paramsStr = JSON.stringify(event.params ?? {});
-      const matches = scanForDangerousCommands(paramsStr);
+      const commandText = extractCommandParams(event.params ?? {});
+      if (commandText.length === 0) return;
+
+      const matches = scanForDangerousCommands(commandText);
 
       if (matches.length === 0) return;
 
@@ -78,7 +82,7 @@ const plugin = {
         writeAuditEntry({
           timestamp: new Date().toISOString(),
           toolName: event.toolName,
-          params: redactLeaks(paramsStr),
+          params: redactLeaks(JSON.stringify(event.params ?? {})),
           blocked: config.enforcement === "block" && criticals.length > 0,
           blockReason:
             criticals.length > 0 ? criticals.map((m) => m.message).join("; ") : undefined,
@@ -102,9 +106,8 @@ const plugin = {
 
     // ── after_tool_call: log leaks + audit trail (observational) ─
     // Note: after_tool_call is fire-and-forget (void hook), so we cannot
-    // modify event.result here. Actual redaction happens in message_sending.
-    // A future tool_result_persist hook would allow redaction before
-    // transcript storage — see openclaw hook docs for updates.
+    // modify event.result here. Redaction happens in tool_result_persist
+    // (for transcript) and message_sending (for outbound messages).
     api.on("after_tool_call", (event) => {
       const resultStr = event.result != null ? JSON.stringify(event.result) : "";
       const findings: AuditEntry["findings"] = [];
@@ -124,7 +127,7 @@ const plugin = {
         }
       }
 
-      // Audit log (redact params to avoid writing secrets to disk)
+      // Audit log (redact both params and error to avoid writing secrets)
       if (config.auditLog) {
         writeAuditEntry({
           timestamp: new Date().toISOString(),
@@ -136,6 +139,30 @@ const plugin = {
           error: event.error ? redactLeaks(event.error) : undefined,
         });
       }
+    });
+
+    // ── tool_result_persist: redact leaks before transcript storage ──
+    // Synchronous hook that runs before tool results are written to the
+    // session JSONL. This prevents secrets from being persisted to disk.
+    api.on("tool_result_persist", (event) => {
+      if (!config.leakDetection) return;
+
+      const message = event.message;
+      if (!message) return;
+
+      const messageStr = JSON.stringify(message);
+      const leaks = scanForLeaks(messageStr);
+      if (leaks.length === 0) return;
+
+      for (const leak of leaks) {
+        logger.warn(
+          `[Security Shield] Redacting ${leak.message} (${leak.ruleId}) from transcript persistence`,
+        );
+      }
+
+      // Deep-redact the message content before it hits disk
+      const redacted = JSON.parse(redactLeaks(messageStr));
+      return { message: redacted };
     });
 
     // ── message_sending: redact leaks in outbound messages ──────

@@ -22,6 +22,7 @@ export type AuditEntry = {
 };
 
 const MAX_PARAMS_LENGTH = 500;
+const MAX_ERROR_LENGTH = 500;
 
 let logPath: string | null = null;
 
@@ -48,6 +49,10 @@ export function writeAuditEntry(entry: AuditEntry): void {
         entry.params.length > MAX_PARAMS_LENGTH
           ? entry.params.slice(0, MAX_PARAMS_LENGTH) + "...(truncated)"
           : entry.params,
+      error:
+        entry.error && entry.error.length > MAX_ERROR_LENGTH
+          ? entry.error.slice(0, MAX_ERROR_LENGTH) + "...(truncated)"
+          : entry.error,
     });
     const path = getLogPath();
     const isNew = !existsSync(path);

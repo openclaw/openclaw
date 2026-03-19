@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scanForDangerousCommands } from "./dangerous-commands.js";
+import { scanForDangerousCommands, extractCommandParams } from "./dangerous-commands.js";
 
 describe("scanForDangerousCommands", () => {
   // ── Should detect ──────────────────────────────────────────────
@@ -107,5 +107,43 @@ describe("scanForDangerousCommands", () => {
     const m = scanForDangerousCommands('{"command": "chmod 777 /x && rm -rf /"}');
     expect(m.length).toBeGreaterThanOrEqual(2);
     expect(m[0].severity).toBe("critical");
+  });
+});
+
+describe("extractCommandParams", () => {
+  it("extracts known command param keys", () => {
+    const result = extractCommandParams({ command: "rm -rf /", description: "delete files" });
+    expect(result).toBe("rm -rf /");
+    expect(result).not.toContain("delete files");
+  });
+
+  it("extracts multiple command-relevant keys", () => {
+    const result = extractCommandParams({ command: "echo hello", path: "/etc/passwd" });
+    expect(result).toContain("echo hello");
+    expect(result).toContain("/etc/passwd");
+  });
+
+  it("ignores non-string values", () => {
+    const result = extractCommandParams({ command: "ls", count: 42, verbose: true });
+    expect(result).toBe("ls");
+  });
+
+  it("falls back to all string values when no known keys match", () => {
+    const result = extractCommandParams({ custom_field: "rm -rf /" });
+    expect(result).toContain("rm -rf /");
+  });
+
+  it("does not scan description/message fields when command keys present", () => {
+    const result = extractCommandParams({
+      command: "ls -la",
+      description: "rm -rf / is dangerous",
+      message: "please run rm -rf / to clean up",
+    });
+    expect(result).toBe("ls -la");
+  });
+
+  it("returns empty string for empty params", () => {
+    const result = extractCommandParams({});
+    expect(result).toBe("");
   });
 });

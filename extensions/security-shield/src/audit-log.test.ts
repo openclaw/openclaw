@@ -69,4 +69,21 @@ describe("writeAuditEntry", () => {
     expect(lines.length).toBe(2);
     expect(JSON.parse(lines[1]).blocked).toBe(true);
   });
+
+  it("truncates long error messages", () => {
+    const longError = "Error: " + "x".repeat(1000);
+    writeAuditEntry({
+      timestamp: "2026-01-01T00:00:00Z",
+      toolName: "shell",
+      params: "{}",
+      blocked: false,
+      findings: [],
+      error: longError,
+    });
+
+    const content = readFileSync(testPath, "utf-8");
+    const entry = JSON.parse(content.trim());
+    expect(entry.error.length).toBeLessThan(600);
+    expect(entry.error).toContain("...(truncated)");
+  });
 });

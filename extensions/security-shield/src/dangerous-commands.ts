@@ -161,6 +161,63 @@ const RULES: Rule[] = [
 ];
 
 /**
+ * Parameter keys that typically contain executable commands or file paths.
+ * Only these fields are scanned for dangerous patterns, reducing false
+ * positives from benign text fields like descriptions or messages.
+ */
+const COMMAND_PARAM_KEYS = new Set([
+  "command",
+  "input",
+  "code",
+  "script",
+  "shell",
+  "bash",
+  "cmd",
+  "exec",
+  "run",
+  "args",
+  "arguments",
+  "path",
+  "file_path",
+  "filepath",
+  "filename",
+  "file",
+  "source",
+  "destination",
+  "target",
+  "url",
+  "content",
+]);
+
+/**
+ * Extract command-relevant values from tool params.
+ * Only scans keys that are likely to contain executable commands or paths,
+ * avoiding false positives from text/description/message fields.
+ */
+export function extractCommandParams(params: Record<string, unknown>): string {
+  const parts: string[] = [];
+
+  for (const [key, value] of Object.entries(params)) {
+    const lowerKey = key.toLowerCase();
+    if (COMMAND_PARAM_KEYS.has(lowerKey) && typeof value === "string") {
+      parts.push(value);
+    }
+  }
+
+  // If no known command keys matched, fall back to full scan for tools
+  // that use non-standard param names — but only for string values
+  if (parts.length === 0) {
+    for (const value of Object.values(params)) {
+      if (typeof value === "string") {
+        parts.push(value);
+      }
+    }
+  }
+
+  return parts.join("\n");
+}
+
+/**
  * Scan a stringified tool call for dangerous patterns.
  * Returns all matching rules sorted by severity (critical first).
  */
