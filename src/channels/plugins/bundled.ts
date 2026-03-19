@@ -1,7 +1,7 @@
 import { bluebubblesPlugin } from "../../../extensions/bluebubbles/index.js";
 import { discordPlugin, setDiscordRuntime } from "../../../extensions/discord/index.js";
 import { discordSetupPlugin } from "../../../extensions/discord/setup-entry.js";
-import feishuPlugin from "../../../extensions/feishu/index.js";
+import { feishuPlugin } from "../../../extensions/feishu/index.js";
 import { imessagePlugin } from "../../../extensions/imessage/index.js";
 import { imessageSetupPlugin } from "../../../extensions/imessage/setup-entry.js";
 import { ircPlugin } from "../../../extensions/irc/index.js";
