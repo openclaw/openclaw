@@ -1274,9 +1274,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       // conversation's stream.
       const connIdReconnect = normalizeOptionalText(client?.connId);
       const deviceIdReconnect = normalizeOptionalText(client?.connect?.device?.id);
+      // Compare canonical keys so MAIN vs main or bare vs agent:id:main resolve
+      // to the same session; raw equality would reject valid reconnects.
+      let activeCanonical: string;
+      try {
+        activeCanonical = loadSessionEntry(activeExisting.sessionKey).canonicalKey;
+      } catch {
+        activeCanonical = activeExisting.sessionKey;
+      }
       if (
         connIdReconnect &&
-        activeExisting.sessionKey === rawSessionKey &&
+        sessionKey === activeCanonical &&
         isBackfillAuthorized(
           activeExisting.ownerConnId,
           activeExisting.ownerDeviceId,

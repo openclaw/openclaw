@@ -308,7 +308,32 @@ export const agentHandlers: GatewayRequestHandlers = {
       const connIdReconnect = typeof client?.connId === "string" ? client.connId : undefined;
       const deviceIdReconnect = client?.connect?.device?.id?.trim() || undefined;
       const runCtx = getAgentRunContext(idem);
-      if (connIdReconnect && runCtx && runCtx.isControlUiVisible !== false) {
+      // Guard: only subscribe if the replayed request targets the same session
+      // as the run. A stale retry reusing the idempotencyKey from a different
+      // conversation must not receive the wrong session's stream.
+      const agentIdForResolve = request.agentId?.trim()
+        ? normalizeAgentId(request.agentId.trim())
+        : undefined;
+      const requestedKeyRaw =
+        typeof request.sessionKey === "string" && request.sessionKey.trim()
+          ? request.sessionKey.trim()
+          : undefined;
+      const requestedKey =
+        requestedKeyRaw ??
+        resolveExplicitAgentSessionKey({ cfg, agentId: agentIdForResolve });
+      const requestCanonical =
+        requestedKey && requestedKey.trim()
+          ? loadSessionEntry(requestedKey.trim()).canonicalKey
+          : undefined;
+      const sessionMatches =
+        runCtx?.sessionKey === requestCanonical ||
+        (runCtx?.sessionKey === undefined && requestCanonical === undefined);
+      if (
+        connIdReconnect &&
+        runCtx &&
+        runCtx.isControlUiVisible !== false &&
+        sessionMatches
+      ) {
         const runSessionKey = runCtx.sessionKey;
         if (isBackfillAuthorized(runCtx.ownerConnId, runCtx.ownerDeviceId, connIdReconnect, deviceIdReconnect)) {
           if (hasGatewayClientCap(client?.connect?.caps, GATEWAY_CLIENT_CAPS.THINKING_EVENTS)) {

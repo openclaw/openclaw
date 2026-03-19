@@ -947,6 +947,63 @@ describe("gateway agent handler", () => {
     expect(registerToolEventRecipient).toHaveBeenCalledWith(idem, "conn-refresh");
   });
 
+  it("does not register recipients on dedupe reconnect when request sessionKey does not match run", async () => {
+    mocks.loadSessionEntry.mockImplementation((key: string) => ({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess" },
+      canonicalKey: (key?.trim() || "unknown") as string,
+    }));
+    const idem = "idem-dedupe-session-mismatch";
+    const dedupe = new Map([
+      [
+        `agent:${idem}`,
+        { ts: Date.now(), ok: true, payload: { runId: idem, status: "accepted", acceptedAt: Date.now() } },
+      ],
+    ]);
+    mocks.agentRunContexts.set(idem, {
+      sessionKey: "agent:main:main",
+      isControlUiVisible: true,
+      ownerConnId: "conn-1",
+      ownerDeviceId: "dev-1",
+    });
+
+    const registerThinkingEventRecipient = vi.fn();
+    const registerToolEventRecipient = vi.fn();
+    const context = {
+      ...makeContext(),
+      dedupe,
+      registerThinkingEventRecipient,
+      registerToolEventRecipient,
+    } as unknown as GatewayRequestContext;
+
+    const respond = vi.fn();
+    // Same idempotencyKey and device, but request targets a different session.
+    await invokeAgent(
+      { message: "hello", sessionKey: "agent:main:other-session", idempotencyKey: idem },
+      {
+        respond,
+        context,
+        client: {
+          connId: "conn-1",
+          connect: {
+            caps: [GATEWAY_CLIENT_CAPS.THINKING_EVENTS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+            device: { id: "dev-1" },
+          },
+        } as never,
+      },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "accepted" }),
+      undefined,
+      expect.objectContaining({ cached: true }),
+    );
+    expect(registerThinkingEventRecipient).not.toHaveBeenCalled();
+    expect(registerToolEventRecipient).not.toHaveBeenCalled();
+  });
+
   it("does not register recipients on dedupe reconnect when run is hidden from Control UI", async () => {
     const idem = "idem-dedupe-hidden";
     const dedupe = new Map([
