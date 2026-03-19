@@ -2087,7 +2087,7 @@ export async function runEmbeddedAttempt(
 
         if (tailBlocks.length > 0) {
           newMessages.push({
-            role: "system",
+            role: "user",
             content: tailBlocks.join("\n\n---\n\n"),
           } as unknown);
         }
