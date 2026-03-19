@@ -4,6 +4,11 @@
   "private": true,
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
+  "dependencies": {
+    "@grammyjs/runner": "^2.0.3",
+    "@grammyjs/transformer-throttler": "^1.2.1",
+    "grammy": "^1.41.1"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
@@ -18,6 +23,9 @@
       "docsLabel": "telegram",
       "blurb": "simplest way to get started — register a bot with @BotFather and get going.",
       "systemImage": "paperplane"
+    },
+    "bundle": {
+      "stageRuntimeDependencies": true
     }
   }
 }
