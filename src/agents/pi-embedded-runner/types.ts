@@ -74,6 +74,8 @@ export type EmbeddedPiRunResult = {
   messagingToolSentTargets?: MessagingToolSend[];
   // Count of successful cron.add tool calls in this run.
   successfulCronAdds?: number;
+  /** Final auth profile that actually succeeded for this run, after any rotation. */
+  finalAuthProfileId?: string;
 };
 
 export type EmbeddedPiCompactResult = {
