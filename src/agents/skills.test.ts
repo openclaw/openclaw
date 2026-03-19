@@ -362,6 +362,45 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
+  it("allows sensitive-pattern env vars explicitly configured in skills.entries.*.env", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "custom-env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "custom-env-skill",
+      description: "Needs custom env",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["GOG_KEYRING_PASSWORD", "CUSTOM_SERVICE_TOKEN"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "custom-env-skill": {
+                env: {
+                  GOG_KEYRING_PASSWORD: "hunter2",
+                  CUSTOM_SERVICE_TOKEN: "tok-abc123",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.GOG_KEYRING_PASSWORD).toBe("hunter2");
+        expect(process.env.CUSTOM_SERVICE_TOKEN).toBe("tok-abc123");
+      } finally {
+        restore();
+        expect(process.env.GOG_KEYRING_PASSWORD).toBeUndefined();
+        expect(process.env.CUSTOM_SERVICE_TOKEN).toBeUndefined();
+      }
+    });
+  });
+
   it("blocks dangerous host env overrides even when declared", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "dangerous-env-skill");
