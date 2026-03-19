@@ -601,8 +601,8 @@ const PROVIDER_LABELS: Record<string, string> = {
   sglang: "SGLang",
 
   // Chinese providers
-  "volcengine": "Volcengine (火山引擎)",
-  "byteplus": "BytePlus",
+  volcengine: "Volcengine (火山引擎)",
+  byteplus: "BytePlus",
   moonshot: "Moonshot (月之暗面)",
   zhipu: "Zhipu AI (智谱)",
   qwen: "Alibaba Qwen (通义千问)",
@@ -628,7 +628,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   synthetic: "Synthetic",
   fal: "Fal AI",
   brave: "Brave",
-  "firecrawl": "Firecrawl",
+  firecrawl: "Firecrawl",
   openshell: "OpenShell",
 };
 
@@ -751,8 +751,9 @@ function renderChatModelSelect(state: AppViewState) {
             </optgroup>
           `,
         )}
-        ${ungrouped.length > 0
-          ? html`
+        ${
+          ungrouped.length > 0
+            ? html`
               <optgroup label="Other">
                 ${ungrouped.map(
                   (opt) => html`
@@ -763,7 +764,8 @@ function renderChatModelSelect(state: AppViewState) {
                 )}
               </optgroup>
             `
-          : nothing}
+            : nothing
+        }
       </select>
     </label>
   `;
