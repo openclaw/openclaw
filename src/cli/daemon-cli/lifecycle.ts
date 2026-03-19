@@ -207,15 +207,22 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         includeUnknownListenersAsStale: process.platform === "win32",
       });
 
-      if (!health.healthy && health.staleGatewayPids.length > 0) {
-        const staleMsg = `Found stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;
+      const staleGatewayPids = health.staleGatewayPids.filter((pid) => {
+        if (health.runtime.status !== "running") {
+          return true;
+        }
+        return health.runtime.pid == null || pid !== health.runtime.pid;
+      });
+
+      if (!health.healthy && staleGatewayPids.length > 0) {
+        const staleMsg = `Found stale gateway process(es): ${staleGatewayPids.join(", ")}.`;
         warnings.push(staleMsg);
         if (!json) {
           defaultRuntime.log(theme.warn(staleMsg));
           defaultRuntime.log(theme.muted("Stopping stale process(es) and retrying restart..."));
         }
 
-        await terminateStaleGatewayPids(health.staleGatewayPids);
+        await terminateStaleGatewayPids(staleGatewayPids);
         const retryRestart = await service.restart({ env: process.env, stdout });
         if (retryRestart.outcome === "scheduled") {
           return retryRestart;
