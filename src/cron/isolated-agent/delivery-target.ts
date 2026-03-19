@@ -16,7 +16,7 @@ import {
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
-import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export type DeliveryTargetResolution =
   | {
@@ -150,10 +150,11 @@ export async function resolveDeliveryTarget(
   }
 
   let allowFromOverride: string[] | undefined;
+  let allowSendToOverride: string[] | undefined;
   if (channel === "whatsapp") {
     const resolvedAccountId = normalizeAccountId(accountId);
-    const configuredAllowFromRaw =
-      resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? [];
+    const whatsappAccount = resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId });
+    const configuredAllowFromRaw = whatsappAccount.allowFrom ?? [];
     const configuredAllowFrom = configuredAllowFromRaw
       .map((entry) => String(entry).trim())
       .filter((entry) => entry && entry !== "*")
@@ -163,11 +164,33 @@ export async function resolveDeliveryTarget(
       .map((entry) => normalizeWhatsAppTarget(entry))
       .filter((entry): entry is string => Boolean(entry));
     allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
+    allowSendToOverride = whatsappAccount.allowSendTo;
 
-    if (toCandidate && mode === "implicit" && allowFromOverride.length > 0) {
+    // When allowSendTo is explicitly defined, use it for implicit-mode target
+    // validation. Otherwise fall back to allowFromOverride (already normalized
+    // and wildcard-stripped above).
+    const hasExplicitSendTo = allowSendToOverride !== undefined && allowSendToOverride !== null;
+    const normalizedAllowSendTo = allowSendToOverride
+      ?.map((entry) => String(entry).trim())
+      .filter((entry) => entry && entry !== "*")
+      .map((entry) => normalizeWhatsAppTarget(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    const hasSendToWildcard =
+      hasExplicitSendTo &&
+      (allowSendToOverride ?? []).some((entry) => String(entry).trim() === "*");
+    const effectiveSendList = hasExplicitSendTo ? (normalizedAllowSendTo ?? []) : allowFromOverride;
+
+    if (toCandidate && mode === "implicit" && effectiveSendList.length > 0 && !hasSendToWildcard) {
       const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
-      if (!normalizedCurrentTarget || !allowFromOverride.includes(normalizedCurrentTarget)) {
-        toCandidate = allowFromOverride[0];
+      // Group JIDs bypass allowSendTo (governed by groupPolicy instead).
+      if (
+        normalizedCurrentTarget &&
+        !isWhatsAppGroupJid(normalizedCurrentTarget) &&
+        !effectiveSendList.includes(normalizedCurrentTarget)
+      ) {
+        toCandidate = effectiveSendList[0];
+      } else if (!normalizedCurrentTarget) {
+        toCandidate = effectiveSendList[0];
       }
     }
   }
@@ -179,6 +202,7 @@ export async function resolveDeliveryTarget(
     accountId,
     mode,
     allowFrom: allowFromOverride,
+    allowSendTo: allowSendToOverride,
   });
   if (!docked.ok) {
     return {
