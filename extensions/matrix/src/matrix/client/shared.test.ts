@@ -1,85 +1,228 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveSharedMatrixClient, stopSharedClient } from "./shared.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixAuth } from "./types.js";
 
+const resolveMatrixAuthMock = vi.hoisted(() => vi.fn());
+const resolveMatrixAuthContextMock = vi.hoisted(() => vi.fn());
 const createMatrixClientMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./create-client.js", () => ({
-  createMatrixClient: (...args: unknown[]) => createMatrixClientMock(...args),
+vi.mock("./config.js", () => ({
+  resolveMatrixAuth: resolveMatrixAuthMock,
+  resolveMatrixAuthContext: resolveMatrixAuthContextMock,
 }));
 
-function makeAuth(suffix: string): MatrixAuth {
+vi.mock("./create-client.js", () => ({
+  createMatrixClient: createMatrixClientMock,
+}));
+
+import {
+  acquireSharedMatrixClient,
+  releaseSharedClientInstance,
+  resolveSharedMatrixClient,
+  stopSharedClient,
+  stopSharedClientForAccount,
+  stopSharedClientInstance,
+} from "./shared.js";
+
+function authFor(accountId: string): MatrixAuth {
   return {
+    accountId,
     homeserver: "https://matrix.example.org",
-    userId: `@bot-${suffix}:example.org`,
-    accessToken: `token-${suffix}`,
+    userId: `@${accountId}:example.org`,
+    accessToken: `token-${accountId}`,
+    password: "secret", // pragma: allowlist secret
+    deviceId: `${accountId.toUpperCase()}-DEVICE`,
+    deviceName: `${accountId} device`,
+    initialSyncLimit: undefined,
     encryption: false,
   };
 }
 
-function createMockClient(startImpl: () => Promise<void>): MatrixClient {
-  return {
-    start: vi.fn(startImpl),
-    stop: vi.fn(),
-    getJoinedRooms: vi.fn().mockResolvedValue([]),
+function createMockClient(name: string) {
+  const client = {
+    name,
+    start: vi.fn(async () => undefined),
+    stop: vi.fn(() => undefined),
+    getJoinedRooms: vi.fn(async () => [] as string[]),
     crypto: undefined,
-  } as unknown as MatrixClient;
+  };
+  return client;
 }
 
-describe("resolveSharedMatrixClient startup behavior", () => {
+describe("resolveSharedMatrixClient", () => {
+  beforeEach(() => {
+    resolveMatrixAuthMock.mockReset();
+    resolveMatrixAuthContextMock.mockReset();
+    createMatrixClientMock.mockReset();
+    resolveMatrixAuthContextMock.mockImplementation(
+      ({ accountId }: { accountId?: string | null } = {}) => ({
+        cfg: undefined,
+        env: undefined,
+        accountId: accountId ?? "default",
+        resolved: {},
+      }),
+    );
+  });
+
   afterEach(() => {
     stopSharedClient();
-    createMatrixClientMock.mockReset();
-    vi.useRealTimers();
+    vi.clearAllMocks();
   });
 
-  it("propagates the original start error during initialization", async () => {
-    vi.useFakeTimers();
-    const startError = new Error("bad token");
-    const client = createMockClient(
-      () =>
-        new Promise<void>((_resolve, reject) => {
-          setTimeout(() => reject(startError), 1);
-        }),
+  it("keeps account clients isolated when resolves are interleaved", async () => {
+    const mainAuth = authFor("main");
+    const poeAuth = authFor("ops");
+    const mainClient = createMockClient("main");
+    const poeClient = createMockClient("ops");
+
+    resolveMatrixAuthMock.mockImplementation(async ({ accountId }: { accountId?: string }) =>
+      accountId === "ops" ? poeAuth : mainAuth,
     );
-    createMatrixClientMock.mockResolvedValue(client);
-
-    const startPromise = resolveSharedMatrixClient({
-      auth: makeAuth("start-error"),
+    createMatrixClientMock.mockImplementation(async ({ accountId }: { accountId?: string }) => {
+      if (accountId === "ops") {
+        return poeClient;
+      }
+      return mainClient;
     });
-    const startExpectation = expect(startPromise).rejects.toBe(startError);
 
-    await vi.advanceTimersByTimeAsync(2001);
-    await startExpectation;
+    const firstMain = await resolveSharedMatrixClient({ accountId: "main", startClient: false });
+    const firstPoe = await resolveSharedMatrixClient({ accountId: "ops", startClient: false });
+    const secondMain = await resolveSharedMatrixClient({ accountId: "main" });
+
+    expect(firstMain).toBe(mainClient);
+    expect(firstPoe).toBe(poeClient);
+    expect(secondMain).toBe(mainClient);
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
+    expect(mainClient.start).toHaveBeenCalledTimes(1);
+    expect(poeClient.start).toHaveBeenCalledTimes(0);
   });
 
-  it("retries start after a late start-loop failure", async () => {
-    vi.useFakeTimers();
-    let rejectFirstStart: ((err: unknown) => void) | undefined;
-    const firstStart = new Promise<void>((_resolve, reject) => {
-      rejectFirstStart = reject;
-    });
-    const secondStart = new Promise<void>(() => {});
-    const startMock = vi.fn().mockReturnValueOnce(firstStart).mockReturnValueOnce(secondStart);
-    const client = createMockClient(startMock);
-    createMatrixClientMock.mockResolvedValue(client);
+  it("stops only the targeted account client", async () => {
+    const mainAuth = authFor("main");
+    const poeAuth = authFor("ops");
+    const mainClient = createMockClient("main");
+    const poeClient = createMockClient("ops");
 
-    const firstResolve = resolveSharedMatrixClient({
-      auth: makeAuth("late-failure"),
+    resolveMatrixAuthMock.mockImplementation(async ({ accountId }: { accountId?: string }) =>
+      accountId === "ops" ? poeAuth : mainAuth,
+    );
+    createMatrixClientMock.mockImplementation(async ({ accountId }: { accountId?: string }) => {
+      if (accountId === "ops") {
+        return poeClient;
+      }
+      return mainClient;
     });
-    await vi.advanceTimersByTimeAsync(2000);
-    await expect(firstResolve).resolves.toBe(client);
-    expect(startMock).toHaveBeenCalledTimes(1);
 
-    rejectFirstStart?.(new Error("late failure"));
-    await Promise.resolve();
+    await resolveSharedMatrixClient({ accountId: "main", startClient: false });
+    await resolveSharedMatrixClient({ accountId: "ops", startClient: false });
 
-    const secondResolve = resolveSharedMatrixClient({
-      auth: makeAuth("late-failure"),
+    stopSharedClientForAccount(mainAuth);
+
+    expect(mainClient.stop).toHaveBeenCalledTimes(1);
+    expect(poeClient.stop).toHaveBeenCalledTimes(0);
+
+    stopSharedClient();
+
+    expect(poeClient.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops stopped shared clients by instance so the next resolve recreates them", async () => {
+    const mainAuth = authFor("main");
+    const firstMainClient = createMockClient("main-first");
+    const secondMainClient = createMockClient("main-second");
+
+    resolveMatrixAuthMock.mockResolvedValue(mainAuth);
+    createMatrixClientMock
+      .mockResolvedValueOnce(firstMainClient)
+      .mockResolvedValueOnce(secondMainClient);
+
+    const first = await resolveSharedMatrixClient({ accountId: "main", startClient: false });
+    stopSharedClientInstance(first as unknown as import("../sdk.js").MatrixClient);
+    const second = await resolveSharedMatrixClient({ accountId: "main", startClient: false });
+
+    expect(first).toBe(firstMainClient);
+    expect(second).toBe(secondMainClient);
+    expect(firstMainClient.stop).toHaveBeenCalledTimes(1);
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses the effective implicit account instead of keying it as default", async () => {
+    const poeAuth = authFor("ops");
+    const poeClient = createMockClient("ops");
+
+    resolveMatrixAuthContextMock.mockReturnValue({
+      cfg: undefined,
+      env: undefined,
+      accountId: "ops",
+      resolved: {},
     });
-    await vi.advanceTimersByTimeAsync(2000);
-    await expect(secondResolve).resolves.toBe(client);
-    expect(startMock).toHaveBeenCalledTimes(2);
+    resolveMatrixAuthMock.mockResolvedValue(poeAuth);
+    createMatrixClientMock.mockResolvedValue(poeClient);
+
+    const first = await resolveSharedMatrixClient({ startClient: false });
+    const second = await resolveSharedMatrixClient({ startClient: false });
+
+    expect(first).toBe(poeClient);
+    expect(second).toBe(poeClient);
+    expect(resolveMatrixAuthMock).toHaveBeenCalledWith({
+      cfg: undefined,
+      env: undefined,
+      accountId: "ops",
+    });
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(1);
+    expect(createMatrixClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "ops",
+      }),
+    );
+  });
+
+  it("honors startClient false even when the caller acquires a shared lease", async () => {
+    const mainAuth = authFor("main");
+    const mainClient = createMockClient("main");
+
+    resolveMatrixAuthMock.mockResolvedValue(mainAuth);
+    createMatrixClientMock.mockResolvedValue(mainClient);
+
+    const client = await acquireSharedMatrixClient({ accountId: "main", startClient: false });
+
+    expect(client).toBe(mainClient);
+    expect(mainClient.start).not.toHaveBeenCalled();
+  });
+
+  it("keeps shared clients alive until the last one-off lease releases", async () => {
+    const mainAuth = authFor("main");
+    const mainClient = {
+      ...createMockClient("main"),
+      stopAndPersist: vi.fn(async () => undefined),
+    };
+
+    resolveMatrixAuthMock.mockResolvedValue(mainAuth);
+    createMatrixClientMock.mockResolvedValue(mainClient);
+
+    const first = await acquireSharedMatrixClient({ accountId: "main", startClient: false });
+    const second = await acquireSharedMatrixClient({ accountId: "main", startClient: false });
+
+    expect(first).toBe(mainClient);
+    expect(second).toBe(mainClient);
+
+    expect(
+      await releaseSharedClientInstance(mainClient as unknown as import("../sdk.js").MatrixClient),
+    ).toBe(false);
+    expect(mainClient.stop).not.toHaveBeenCalled();
+
+    expect(
+      await releaseSharedClientInstance(mainClient as unknown as import("../sdk.js").MatrixClient),
+    ).toBe(true);
+    expect(mainClient.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects mismatched explicit account ids when auth is already resolved", async () => {
+    await expect(
+      resolveSharedMatrixClient({
+        auth: authFor("ops"),
+        accountId: "main",
+        startClient: false,
+      }),
+    ).rejects.toThrow("Matrix shared client account mismatch");
   });
 });

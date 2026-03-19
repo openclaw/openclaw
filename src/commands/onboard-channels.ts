@@ -32,6 +32,7 @@ import type {
   ChannelSetupDmPolicy,
   ChannelSetupResult,
   ChannelSetupStatus,
+  ChannelOnboardingPostWriteHook,
   SetupChannelsOptions,
 } from "./channel-setup/types.js";
 import type { ChannelChoice } from "./onboard-types.js";
@@ -45,6 +46,37 @@ type ChannelStatusSummary = {
   statusByChannel: Map<ChannelChoice, ChannelSetupStatus>;
   statusLines: string[];
 };
+
+export function createChannelOnboardingPostWriteHookCollector() {
+  const hooks = new Map<string, ChannelOnboardingPostWriteHook>();
+  return {
+    collect(hook: ChannelOnboardingPostWriteHook) {
+      hooks.set(`${hook.channel}:${hook.accountId}`, hook);
+    },
+    drain(): ChannelOnboardingPostWriteHook[] {
+      const next = [...hooks.values()];
+      hooks.clear();
+      return next;
+    },
+  };
+}
+
+export async function runCollectedChannelOnboardingPostWriteHooks(params: {
+  hooks: ChannelOnboardingPostWriteHook[];
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+}): Promise<void> {
+  for (const hook of params.hooks) {
+    try {
+      await hook.run({ cfg: params.cfg, runtime: params.runtime });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      params.runtime.error(
+        `Channel ${hook.channel} post-setup warning for "${hook.accountId}": ${message}`,
+      );
+    }
+  }
+}
 
 function formatAccountLabel(accountId: string): string {
   return accountId === DEFAULT_ACCOUNT_ID ? "default (primary)" : accountId;
@@ -292,12 +324,17 @@ async function maybeConfigureDmPolicies(params: {
 
   let cfg = params.cfg;
   const selectPolicy = async (policy: ChannelSetupDmPolicy) => {
+    const accountId = accountIdsByChannel?.get(policy.channel);
+    const { policyKey, allowFromKey } = policy.resolveConfigKeys?.(cfg, accountId) ?? {
+      policyKey: policy.policyKey,
+      allowFromKey: policy.allowFromKey,
+    };
     await prompter.note(
       [
         "Default: pairing (unknown DMs get a pairing code).",
         `Approve: ${formatCliCommand(`openclaw pairing approve ${policy.channel} <code>`)}`,
-        `Allowlist DMs: ${policy.policyKey}="allowlist" + ${policy.allowFromKey} entries.`,
-        `Public DMs: ${policy.policyKey}="open" + ${policy.allowFromKey} includes "*".`,
+        `Allowlist DMs: ${policyKey}="allowlist" + ${allowFromKey} entries.`,
+        `Public DMs: ${policyKey}="open" + ${allowFromKey} includes "*".`,
         "Multi-user DMs: run: " +
           formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
           ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
@@ -305,28 +342,31 @@ async function maybeConfigureDmPolicies(params: {
       ].join("\n"),
       `${policy.label} DM access`,
     );
-    return (await prompter.select({
-      message: `${policy.label} DM policy`,
-      options: [
-        { value: "pairing", label: "Pairing (recommended)" },
-        { value: "allowlist", label: "Allowlist (specific users only)" },
-        { value: "open", label: "Open (public inbound DMs)" },
-        { value: "disabled", label: "Disabled (ignore DMs)" },
-      ],
-    })) as DmPolicy;
+    return {
+      accountId,
+      nextPolicy: (await prompter.select({
+        message: `${policy.label} DM policy`,
+        options: [
+          { value: "pairing", label: "Pairing (recommended)" },
+          { value: "allowlist", label: "Allowlist (specific users only)" },
+          { value: "open", label: "Open (public inbound DMs)" },
+          { value: "disabled", label: "Disabled (ignore DMs)" },
+        ],
+      })) as DmPolicy,
+    };
   };
 
   for (const policy of dmPolicies) {
-    const current = policy.getCurrent(cfg);
-    const nextPolicy = await selectPolicy(policy);
+    const { accountId, nextPolicy } = await selectPolicy(policy);
+    const current = policy.getCurrent(cfg, accountId);
     if (nextPolicy !== current) {
-      cfg = policy.setPolicy(cfg, nextPolicy);
+      cfg = policy.setPolicy(cfg, nextPolicy, accountId);
     }
     if (nextPolicy === "allowlist" && policy.promptAllowFrom) {
       cfg = await policy.promptAllowFrom({
         cfg,
         prompter,
-        accountId: accountIdsByChannel?.get(policy.channel),
+        accountId,
       });
     }
   }
@@ -600,9 +640,24 @@ export async function setupChannels(
   };
 
   const applySetupResult = async (channel: ChannelChoice, result: ChannelSetupResult) => {
+    const previousCfg = next;
     next = result.cfg;
+    const adapter = getVisibleSetupFlowAdapter(channel);
     if (result.accountId) {
       recordAccount(channel, result.accountId);
+      if (adapter?.afterConfigWritten) {
+        options?.onPostWriteHook?.({
+          channel,
+          accountId: result.accountId,
+          run: async ({ cfg, runtime }) =>
+            await adapter.afterConfigWritten?.({
+              previousCfg,
+              cfg,
+              accountId: result.accountId!,
+              runtime,
+            }),
+        });
+      }
     }
     addSelection(channel);
     await refreshStatus(channel);

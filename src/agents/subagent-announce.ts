@@ -10,6 +10,7 @@ import {
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
+import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
@@ -21,6 +22,7 @@ import {
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
+  resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -537,7 +539,11 @@ async function resolveSubagentCompletionOrigin(params: {
       ? String(requesterOrigin.threadId).trim()
       : undefined;
   const conversationId =
-    threadId || (to?.startsWith("channel:") ? to.slice("channel:".length) : "");
+    threadId ||
+    resolveConversationIdFromTargets({
+      targets: [to],
+    }) ||
+    "";
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
 
@@ -548,15 +554,21 @@ async function resolveSubagentCompletionOrigin(params: {
     failClosed: false,
   });
   if (route.mode === "bound" && route.binding) {
+    const boundTarget = resolveConversationDeliveryTarget({
+      channel: route.binding.conversation.channel,
+      conversationId: route.binding.conversation.conversationId,
+      parentConversationId: route.binding.conversation.parentConversationId,
+    });
     return mergeDeliveryContext(
       {
         channel: route.binding.conversation.channel,
         accountId: route.binding.conversation.accountId,
-        to: `channel:${route.binding.conversation.conversationId}`,
+        to: boundTarget.to,
         threadId:
-          requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
+          boundTarget.threadId ??
+          (requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
             ? String(requesterOrigin.threadId)
-            : undefined,
+            : undefined),
       },
       requesterOrigin,
     );

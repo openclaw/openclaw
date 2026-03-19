@@ -1,3 +1,5 @@
+import { parseBuffer, type IFileInfo } from "music-metadata";
+import { getMatrixRuntime } from "../../runtime.js";
 import type {
   DimensionalFileInfo,
   EncryptedFile,
@@ -5,8 +7,7 @@ import type {
   MatrixClient,
   TimedFileInfo,
   VideoFileInfo,
-} from "@vector-im/matrix-bot-sdk";
-import { getMatrixRuntime } from "../../runtime.js";
+} from "../sdk.js";
 import { applyMatrixFormatting } from "./formatting.js";
 import {
   type MatrixMediaContent,
@@ -17,7 +18,6 @@ import {
 } from "./types.js";
 
 const getCore = () => getMatrixRuntime();
-type IFileInfo = import("music-metadata").IFileInfo;
 
 export function buildMatrixMediaInfo(params: {
   size: number;
@@ -113,6 +113,7 @@ const THUMBNAIL_QUALITY = 80;
 export async function prepareImageInfo(params: {
   buffer: Buffer;
   client: MatrixClient;
+  encrypted?: boolean;
 }): Promise<DimensionalFileInfo | undefined> {
   const meta = await getCore()
     .media.getImageMetadata(params.buffer)
@@ -121,6 +122,10 @@ export async function prepareImageInfo(params: {
     return undefined;
   }
   const imageInfo: DimensionalFileInfo = { w: meta.width, h: meta.height };
+  if (params.encrypted) {
+    // For E2EE media, avoid uploading plaintext thumbnails.
+    return imageInfo;
+  }
   const maxDim = Math.max(meta.width, meta.height);
   if (maxDim > THUMBNAIL_MAX_SIDE) {
     try {
@@ -164,7 +169,6 @@ export async function resolveMediaDurationMs(params: {
     return undefined;
   }
   try {
-    const { parseBuffer } = await import("music-metadata");
     const fileInfo: IFileInfo | string | undefined =
       params.contentType || params.fileName
         ? {

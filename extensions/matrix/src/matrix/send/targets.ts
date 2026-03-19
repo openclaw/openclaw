@@ -1,5 +1,7 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import { EventType, type MatrixDirectAccountData } from "./types.js";
+import { inspectMatrixDirectRooms, persistMatrixDirectRoomMapping } from "../direct-management.js";
+import { isStrictDirectRoom } from "../direct-room.js";
+import type { MatrixClient } from "../sdk.js";
+import { isMatrixQualifiedUserId, normalizeMatrixResolvableTarget } from "../target-ids.js";
 
 function normalizeTarget(raw: string): string {
   const trimmed = raw.trim();
@@ -19,8 +21,20 @@ export function normalizeThreadId(raw?: string | number | null): string | null {
 
 // Size-capped to prevent unbounded growth (#4948)
 const MAX_DIRECT_ROOM_CACHE_SIZE = 1024;
-const directRoomCache = new Map<string, string>();
-function setDirectRoomCached(key: string, value: string): void {
+const directRoomCacheByClient = new WeakMap<MatrixClient, Map<string, string>>();
+
+function resolveDirectRoomCache(client: MatrixClient): Map<string, string> {
+  const existing = directRoomCacheByClient.get(client);
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, string>();
+  directRoomCacheByClient.set(client, created);
+  return created;
+}
+
+function setDirectRoomCached(client: MatrixClient, key: string, value: string): void {
+  const directRoomCache = resolveDirectRoomCache(client);
   directRoomCache.set(key, value);
   if (directRoomCache.size > MAX_DIRECT_ROOM_CACHE_SIZE) {
     const oldest = directRoomCache.keys().next().value;
@@ -30,113 +44,53 @@ function setDirectRoomCached(key: string, value: string): void {
   }
 }
 
-async function persistDirectRoom(
-  client: MatrixClient,
-  userId: string,
-  roomId: string,
-): Promise<void> {
-  let directContent: MatrixDirectAccountData | null = null;
-  try {
-    directContent = await client.getAccountData(EventType.Direct);
-  } catch {
-    // Ignore fetch errors and fall back to an empty map.
-  }
-  const existing = directContent && !Array.isArray(directContent) ? directContent : {};
-  const current = Array.isArray(existing[userId]) ? existing[userId] : [];
-  if (current[0] === roomId) {
-    return;
-  }
-  const next = [roomId, ...current.filter((id) => id !== roomId)];
-  try {
-    await client.setAccountData(EventType.Direct, {
-      ...existing,
-      [userId]: next,
-    });
-  } catch {
-    // Ignore persistence errors.
-  }
-}
-
 async function resolveDirectRoomId(client: MatrixClient, userId: string): Promise<string> {
   const trimmed = userId.trim();
-  if (!trimmed.startsWith("@")) {
+  if (!isMatrixQualifiedUserId(trimmed)) {
     throw new Error(`Matrix user IDs must be fully qualified (got "${trimmed}")`);
   }
+  const selfUserId = (await client.getUserId().catch(() => null))?.trim() || null;
 
+  const directRoomCache = resolveDirectRoomCache(client);
   const cached = directRoomCache.get(trimmed);
-  if (cached) {
+  if (
+    cached &&
+    (await isStrictDirectRoom({ client, roomId: cached, remoteUserId: trimmed, selfUserId }))
+  ) {
     return cached;
   }
-
-  // 1) Fast path: use account data (m.direct) for *this* logged-in user (the bot).
-  try {
-    const directContent = (await client.getAccountData(EventType.Direct)) as Record<
-      string,
-      string[] | undefined
-    >;
-    const list = Array.isArray(directContent?.[trimmed]) ? directContent[trimmed] : [];
-    if (list && list.length > 0) {
-      setDirectRoomCached(trimmed, list[0]);
-      return list[0];
-    }
-  } catch {
-    // Ignore and fall back.
+  if (cached) {
+    directRoomCache.delete(trimmed);
   }
 
-  // 2) Fallback: look for an existing joined room that looks like a 1:1 with the user.
-  // Many clients only maintain m.direct for *their own* account data, so relying on it is brittle.
-  let fallbackRoom: string | null = null;
-  try {
-    const rooms = await client.getJoinedRooms();
-    for (const roomId of rooms) {
-      let members: string[];
-      try {
-        members = await client.getJoinedRoomMembers(roomId);
-      } catch {
-        continue;
-      }
-      if (!members.includes(trimmed)) {
-        continue;
-      }
-      // Prefer classic 1:1 rooms, but allow larger rooms if requested.
-      if (members.length === 2) {
-        setDirectRoomCached(trimmed, roomId);
-        await persistDirectRoom(client, trimmed, roomId);
-        return roomId;
-      }
-      if (!fallbackRoom) {
-        fallbackRoom = roomId;
-      }
+  const inspection = await inspectMatrixDirectRooms({
+    client,
+    remoteUserId: trimmed,
+  });
+  if (inspection.activeRoomId) {
+    setDirectRoomCached(client, trimmed, inspection.activeRoomId);
+    if (inspection.mappedRoomIds[0] !== inspection.activeRoomId) {
+      await persistMatrixDirectRoomMapping({
+        client,
+        remoteUserId: trimmed,
+        roomId: inspection.activeRoomId,
+      }).catch(() => {
+        // Ignore persistence errors when send resolution has already found a usable room.
+      });
     }
-  } catch {
-    // Ignore and fall back.
-  }
-
-  if (fallbackRoom) {
-    setDirectRoomCached(trimmed, fallbackRoom);
-    await persistDirectRoom(client, trimmed, fallbackRoom);
-    return fallbackRoom;
+    return inspection.activeRoomId;
   }
 
   throw new Error(`No direct room found for ${trimmed} (m.direct missing)`);
 }
 
 export async function resolveMatrixRoomId(client: MatrixClient, raw: string): Promise<string> {
-  const target = normalizeTarget(raw);
+  const target = normalizeMatrixResolvableTarget(normalizeTarget(raw));
   const lowered = target.toLowerCase();
-  if (lowered.startsWith("matrix:")) {
-    return await resolveMatrixRoomId(client, target.slice("matrix:".length));
-  }
-  if (lowered.startsWith("room:")) {
-    return await resolveMatrixRoomId(client, target.slice("room:".length));
-  }
-  if (lowered.startsWith("channel:")) {
-    return await resolveMatrixRoomId(client, target.slice("channel:".length));
-  }
   if (lowered.startsWith("user:")) {
     return await resolveDirectRoomId(client, target.slice("user:".length));
   }
-  if (target.startsWith("@")) {
+  if (isMatrixQualifiedUserId(target)) {
     return await resolveDirectRoomId(client, target);
   }
   if (target.startsWith("#")) {
