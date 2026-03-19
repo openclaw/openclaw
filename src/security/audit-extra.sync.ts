@@ -1312,6 +1312,26 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
   const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
 
   if (riskyContexts.length > 0) {
+    const riskyAgentIdsWithFsExposure = riskyContexts
+      .map((context) => {
+        const match = context.match(/^agents\.list\.([^\s(]+)/);
+        return context.includes("fs.workspaceOnly=false") ? (match?.[1] ?? null) : null;
+      })
+      .filter((agentId): agentId is string => Boolean(agentId));
+
+    const remediationParts = [
+      'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs).',
+      "Set tools.fs.workspaceOnly=true globally.",
+    ];
+    if (riskyAgentIdsWithFsExposure.length > 0) {
+      remediationParts.push(
+        `For flagged agent ids (${riskyAgentIdsWithFsExposure
+          .map((agentId) => `id "${agentId}"`)
+          .join(", ")}), set that agent entry's tools.fs.workspaceOnly to true.`,
+      );
+    }
+    remediationParts.push('Use agents.defaults.sandbox.mode="all" for exposed agents.');
+
     findings.push({
       checkId: "security.exposure.open_groups_with_runtime_or_fs",
       severity: hasRuntimeRisk ? "critical" : "warn",
@@ -1320,8 +1340,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
         `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
         `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
         "Prompt injection in open groups can trigger command/file actions in these contexts.",
-      remediation:
-        'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true globally and on any agent-level overrides (agents.list[].tools.fs.workspaceOnly), and use agents.defaults.sandbox.mode="all" for exposed agents.',
+      remediation: remediationParts.join(" "),
     });
   }
 

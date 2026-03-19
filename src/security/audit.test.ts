@@ -3609,12 +3609,30 @@ description: test skill
         },
       },
       {
-        name: "includes workspaceOnly guidance for both global and agent-level overrides",
+        name: "includes flagged agent ids instead of an invalid [] path",
         cfg: {
           channels: { whatsapp: { groupPolicy: "open" } },
           tools: {
             elevated: { enabled: false },
-            profile: "coding",
+            profile: "messaging",
+            fs: { workspaceOnly: true },
+          },
+          agents: {
+            defaults: {
+              sandbox: { mode: "all" },
+            },
+            list: [
+              {
+                id: "unsafe-agent",
+                sandbox: {
+                  mode: "off",
+                },
+                tools: {
+                  profile: "coding",
+                  fs: { workspaceOnly: false },
+                },
+              },
+            ],
           },
         } satisfies OpenClawConfig,
         assert: (res: SecurityAuditReport) => {
@@ -3623,7 +3641,8 @@ description: test skill
           );
           expect(finding, "expected open_groups_with_runtime_or_fs finding to exist").toBeDefined();
           expect(finding?.remediation).toContain("tools.fs.workspaceOnly=true");
-          expect(finding?.remediation).toContain("agent-level overrides");
+          expect(finding?.remediation).toContain('id "unsafe-agent"');
+          expect(finding?.remediation).not.toContain("agents.list[].tools.fs.workspaceOnly");
         },
       },
       {
@@ -3701,8 +3720,8 @@ description: test skill
       (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
     );
     expect(finding, "expected open_groups_with_runtime_or_fs finding to exist").toBeDefined();
-    expect(finding?.remediation).toContain("agents.list[].tools.fs.workspaceOnly");
-    expect(finding?.remediation).not.toContain("openclaw config set tools.fs.workspaceOnly true");
+    expect(finding?.remediation).toContain('id "worker"');
+    expect(finding?.remediation).not.toContain("agents.list[].tools.fs.workspaceOnly");
   });
 
   describe("maybeProbeGateway auth selection", () => {
