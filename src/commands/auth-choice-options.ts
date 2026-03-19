@@ -11,6 +11,11 @@ import {
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
 function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
+  const sa = a.sortOrder ?? Number.MAX_SAFE_INTEGER;
+  const sb = b.sortOrder ?? Number.MAX_SAFE_INTEGER;
+  if (sa !== sb) {
+    return sa - sb;
+  }
   return a.label.localeCompare(b.label);
 }
 
@@ -27,6 +32,7 @@ function resolveManifestProviderChoiceOptions(params?: {
     value: choice.choiceId as AuthChoice,
     label: choice.choiceLabel,
     ...(choice.choiceHint ? { hint: choice.choiceHint } : {}),
+    ...(choice.sortOrder !== undefined ? { sortOrder: choice.sortOrder } : {}),
     ...(choice.groupId ? { groupId: choice.groupId as AuthChoiceGroupId } : {}),
     ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
     ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),

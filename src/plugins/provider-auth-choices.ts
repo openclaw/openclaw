@@ -12,6 +12,7 @@ export type ProviderAuthChoiceMetadata = {
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
+  sortOrder?: number;
   optionKey?: string;
   cliFlag?: string;
   cliOption?: string;
@@ -48,6 +49,7 @@ export function resolveManifestProviderAuthChoices(params?: {
       ...(choice.groupId ? { groupId: choice.groupId } : {}),
       ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
       ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+      ...(choice.sortOrder !== undefined ? { sortOrder: choice.sortOrder } : {}),
       ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
       ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
       ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),

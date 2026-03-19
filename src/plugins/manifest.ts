@@ -43,6 +43,8 @@ export type PluginManifestProviderAuthChoice = {
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
+  /** Optional sort order within a group (lower = earlier); defaults to label sort. */
+  sortOrder?: number;
   /** Optional CLI flag metadata for one-flag auth flows such as API keys. */
   optionKey?: string;
   cliFlag?: string;
@@ -102,6 +104,7 @@ function normalizeProviderAuthChoices(
     const groupId = typeof entry.groupId === "string" ? entry.groupId.trim() : "";
     const groupLabel = typeof entry.groupLabel === "string" ? entry.groupLabel.trim() : "";
     const groupHint = typeof entry.groupHint === "string" ? entry.groupHint.trim() : "";
+    const sortOrder = typeof entry.sortOrder === "number" ? entry.sortOrder : undefined;
     const optionKey = typeof entry.optionKey === "string" ? entry.optionKey.trim() : "";
     const cliFlag = typeof entry.cliFlag === "string" ? entry.cliFlag.trim() : "";
     const cliOption = typeof entry.cliOption === "string" ? entry.cliOption.trim() : "";
@@ -116,6 +119,7 @@ function normalizeProviderAuthChoices(
       ...(groupId ? { groupId } : {}),
       ...(groupLabel ? { groupLabel } : {}),
       ...(groupHint ? { groupHint } : {}),
+      ...(sortOrder !== undefined ? { sortOrder } : {}),
       ...(optionKey ? { optionKey } : {}),
       ...(cliFlag ? { cliFlag } : {}),
       ...(cliOption ? { cliOption } : {}),

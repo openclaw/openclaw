@@ -7,6 +7,7 @@ export type AuthChoiceOption = {
   value: AuthChoice;
   label: string;
   hint?: string;
+  sortOrder?: number;
   groupId?: AuthChoiceGroupId;
   groupLabel?: string;
   groupHint?: string;

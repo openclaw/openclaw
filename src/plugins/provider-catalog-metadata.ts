@@ -9,10 +9,18 @@ const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
+const MINIMAX_BUILTIN_PROVIDERS = new Set(["minimax", "minimax-portal", "minimax-cn"]);
 
 export function resolveBundledProviderBuiltInModelSuppression(
   context: ProviderBuiltInModelSuppressionContext,
 ) {
+  if (MINIMAX_BUILTIN_PROVIDERS.has(normalizeProviderId(context.provider))) {
+    if (!context.modelId.trim().toLowerCase().startsWith("minimax-m2.7")) {
+      return { suppress: true };
+    }
+    return undefined;
+  }
+
   if (
     !SUPPRESSED_SPARK_PROVIDERS.has(normalizeProviderId(context.provider)) ||
     context.modelId.toLowerCase() !== OPENAI_DIRECT_SPARK_MODEL_ID

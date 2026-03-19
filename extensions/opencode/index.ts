@@ -4,7 +4,7 @@ import { OPENCODE_ZEN_DEFAULT_MODEL } from "openclaw/plugin-sdk/provider-models"
 import { applyOpencodeZenConfig } from "./onboard.js";
 
 const PROVIDER_ID = "opencode";
-const MINIMAX_PREFIX = "minimax-m2.5";
+const MINIMAX_PREFIX = "minimax-m2.7";
 
 function isModernOpencodeModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();

@@ -12,6 +12,7 @@
       "choiceId": "minimax-global-oauth",
       "choiceLabel": "MiniMax OAuth (Global)",
       "choiceHint": "Global endpoint - api.minimax.io",
+      "sortOrder": 1,
       "groupId": "minimax",
       "groupLabel": "MiniMax",
       "groupHint": "M2.7 (recommended)"
@@ -22,6 +23,7 @@
       "choiceId": "minimax-global-api",
       "choiceLabel": "MiniMax API key (Global)",
       "choiceHint": "Global endpoint - api.minimax.io",
+      "sortOrder": 3,
       "groupId": "minimax",
       "groupLabel": "MiniMax",
       "groupHint": "M2.7 (recommended)",
@@ -36,6 +38,7 @@
       "choiceId": "minimax-cn-oauth",
       "choiceLabel": "MiniMax OAuth (CN)",
       "choiceHint": "CN endpoint - api.minimaxi.com",
+      "sortOrder": 2,
       "groupId": "minimax",
       "groupLabel": "MiniMax",
       "groupHint": "M2.7 (recommended)"
@@ -46,6 +49,7 @@
       "choiceId": "minimax-cn-api",
       "choiceLabel": "MiniMax API key (CN)",
       "choiceHint": "CN endpoint - api.minimaxi.com",
+      "sortOrder": 4,
       "groupId": "minimax",
       "groupLabel": "MiniMax",
       "groupHint": "M2.7 (recommended)",
