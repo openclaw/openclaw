@@ -536,8 +536,8 @@ importers:
   extensions/tlon:
     dependencies:
       '@tloncorp/api':
-        specifier: git+https://github.com/tloncorp/api-beta.git#7eede1c1a756977b09f96aa14a92e2b06318ae87
-        version: https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87
+        specifier: file:../../vendor/npm/tloncorp-api-0.0.2.tgz
+        version: file:vendor/npm/tloncorp-api-0.0.2.tgz
       '@tloncorp/tlon-skill':
         specifier: 0.2.2
         version: 0.2.2
@@ -2918,10 +2918,6 @@ packages:
     resolution: {integrity: sha512-D1pFuExo31854eAvg89KMn9Oab/wEeJR6Buy32B49A9Ogdtx5fwZPqBHUlDzaCDpycTFk2+fSQgX689Qsk7UGA==}
     engines: {node: '>=18.0.0'}
 
-  '@smithy/eventstream-serde-universal@4.2.11':
-    resolution: {integrity: sha512-MJ7HcI+jEkqoWT5vp+uoVaAjBrmxBtKhZTeynDRG/seEjJfqyg3SiqMMqyPnAMzmIfLaeJ/uiuSDP/l9AnMy/Q==}
-    engines: {node: '>=18.0.0'}
-
   '@smithy/eventstream-serde-universal@4.2.12':
     resolution: {integrity: sha512-+yNuTiyBACxOJUTvbsNsSOfH9G9oKbaJE1lNL3YHpGcuucl6rPZMi3nrpehpVOVR2E07YqFFmtwpImtpzlouHQ==}
     engines: {node: '>=18.0.0'}
@@ -3235,8 +3231,8 @@ packages:
     resolution: {integrity: sha512-5Kc5CM2Ysn3vTTArBs2vESUt0AQiWZA86yc1TI3B+lxXmtEq133C1nxXNOgnzhrivdPZIh3zLj5gDnZjoLL5GA==}
     engines: {node: '>=12.17.0'}
 
-  '@tloncorp/api@https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87':
-    resolution: {tarball: https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87}
+  '@tloncorp/api@file:vendor/npm/tloncorp-api-0.0.2.tgz':
+    resolution: {integrity: sha512-z7rB0mUKv96cm4LBJ2xbk0RSwj9jJIKzsmpUeuR6mdoFJefKALpBRS3FJ44HPvHjNDzNyKhTLILFLBvy0bQX7Q==, tarball: file:vendor/npm/tloncorp-api-0.0.2.tgz}
     version: 0.0.2
 
   '@tloncorp/tlon-skill-darwin-arm64@0.2.2':
@@ -9648,7 +9644,7 @@ snapshots:
 
   '@smithy/eventstream-serde-browser@4.2.11':
     dependencies:
-      '@smithy/eventstream-serde-universal': 4.2.11
+      '@smithy/eventstream-serde-universal': 4.2.12
       '@smithy/types': 4.13.1
       tslib: 2.8.1
 
@@ -9670,19 +9666,13 @@ snapshots:
 
   '@smithy/eventstream-serde-node@4.2.11':
     dependencies:
-      '@smithy/eventstream-serde-universal': 4.2.11
+      '@smithy/eventstream-serde-universal': 4.2.12
       '@smithy/types': 4.13.1
       tslib: 2.8.1
 
   '@smithy/eventstream-serde-node@4.2.12':
     dependencies:
       '@smithy/eventstream-serde-universal': 4.2.12
-      '@smithy/types': 4.13.1
-      tslib: 2.8.1
-
-  '@smithy/eventstream-serde-universal@4.2.11':
-    dependencies:
-      '@smithy/eventstream-codec': 4.2.11
       '@smithy/types': 4.13.1
       tslib: 2.8.1
 
@@ -10110,7 +10100,7 @@ snapshots:
 
   '@tinyhttp/content-disposition@2.2.4': {}
 
-  '@tloncorp/api@https://codeload.github.com/tloncorp/api-beta/tar.gz/7eede1c1a756977b09f96aa14a92e2b06318ae87':
+  '@tloncorp/api@file:vendor/npm/tloncorp-api-0.0.2.tgz':
     dependencies:
       '@aws-sdk/client-s3': 3.1000.0
       '@aws-sdk/s3-request-presigner': 3.1000.0

@@ -53,7 +53,11 @@ apps/ios/*.xcworkspace/
 apps/ios/.swiftpm/
 apps/ios/.derivedData/
 apps/ios/.local-signing.xcconfig
-vendor/
+vendor/*
+!vendor/a2ui/
+!vendor/npm/
+!vendor/npm/README.md
+!vendor/npm/*.tgz
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
 apps/macos/.build/**
