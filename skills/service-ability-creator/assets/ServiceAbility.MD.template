@@ -48,7 +48,7 @@ All interfaces follow RESTful style and return data in JSON format by default.
 - **Return Parameters**: Should include service name, version, description, default configuration, and a list of supported options.
 
 ### 3.x Service Registration (Service Discovery)
--   **Discovery Platform Endpoint**: `https://jjyzmyvfy5.coze.bytedance.net/register`
+-   **Discovery Platform Endpoint**: `https://your-service.com`
 -   **Request Method**: `POST`
 -   **Function Description**: Registers the service with the discovery platform.
 -   **Request Parameters**:
