@@ -544,6 +544,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
       profanityCheck: undefined,
       timeout: 120,
     };
+    const configuredScope = opts.scope?.trim();
 
     if (insecureTls) {
       clientConfig.httpsAgent = new https.Agent({ rejectUnauthorized: false });
@@ -553,10 +554,14 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
       const { user, password } = parseGigachatBasicCredentials(apiKey);
       clientConfig.user = user;
       clientConfig.password = password;
-      log.debug(`GigaChat auth: basic mode`);
+      if (configuredScope) {
+        clientConfig.scope = configuredScope;
+      }
+      log.debug(
+        `GigaChat auth: basic mode${clientConfig.scope ? ` scope=${clientConfig.scope}` : ""}`,
+      );
     } else {
       clientConfig.credentials = apiKey;
-      const configuredScope = opts.scope?.trim();
       if (configuredScope) {
         clientConfig.scope = configuredScope;
       }

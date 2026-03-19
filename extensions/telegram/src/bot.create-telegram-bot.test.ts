@@ -197,7 +197,31 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
   it("reloads callback model routing bindings without recreating the bot", async () => {
+    const buildModelsProviderDataMock =
+      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
     let boundAgentId = "agent-a";
+    buildModelsProviderDataMock.mockImplementation(
+      async (_cfg: OpenClawConfig, agentId?: string) => {
+        if (agentId === "agent-b") {
+          return {
+            byProvider: new Map([
+              ["anthropic", new Set(["claude-opus-4-5"])],
+              ["openai", new Set(["gpt-4.1"])],
+            ]),
+            providers: ["anthropic", "openai"],
+            resolvedDefault: { provider: "anthropic", model: "claude-opus-4-5" },
+          };
+        }
+        return {
+          byProvider: new Map([
+            ["gemini", new Set(["gemini-2.5-pro"])],
+            ["openai", new Set(["gpt-4.1"])],
+          ]),
+          providers: ["gemini", "openai"],
+          resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+        };
+      },
+    );
     loadConfig.mockImplementation(() => ({
       agents: {
         defaults: {
@@ -238,20 +262,32 @@ describe("createTelegramBot", () => {
       });
     };
 
+    buildModelsProviderDataMock.mockClear();
     editMessageTextSpy.mockClear();
     await sendModelCallback(1);
+    expect(buildModelsProviderDataMock).toHaveBeenCalled();
+    expect(buildModelsProviderDataMock.mock.calls.at(-1)?.[1]).toBe("agent-a");
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(editMessageTextSpy.mock.calls.at(-1)?.[3]).toEqual(
-      expect.objectContaining({
-        reply_markup: {
-          inline_keyboard: [[{ text: "openai (1)", callback_data: "mdl_list_openai_1" }]],
-        },
-      }),
+    expect(
+      editMessageTextSpy.mock.calls.at(-1)?.[3]?.reply_markup?.inline_keyboard?.flat(),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          text: "gemini (1)",
+          callback_data: "mdl_list_gemini_1",
+        }),
+        expect.objectContaining({
+          text: "openai (1)",
+          callback_data: "mdl_list_openai_1",
+        }),
+      ]),
     );
 
     boundAgentId = "agent-b";
+    buildModelsProviderDataMock.mockClear();
     editMessageTextSpy.mockClear();
     await sendModelCallback(2);
+    expect(buildModelsProviderDataMock.mock.calls.at(-1)?.[1]).toBe("agent-b");
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(
       editMessageTextSpy.mock.calls.at(-1)?.[3]?.reply_markup?.inline_keyboard?.flat(),

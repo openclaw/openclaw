@@ -1342,8 +1342,14 @@ export const registerTelegramHandlers = ({
           resolvedThreadId,
           senderId,
         });
-        const configuredModelData = buildConfiguredModelsProviderData(cfg, sessionState.agentId);
-        let modelData = configuredModelData;
+        const configuredModelData = buildConfiguredModelsProviderData(
+          runtimeCfg,
+          sessionState.agentId,
+        );
+        let modelData = await telegramDeps.buildModelsProviderData(
+          runtimeCfg,
+          sessionState.agentId,
+        );
         let { byProvider, providers } = modelData;
 
         const editMessageWithButtons = async (
@@ -1434,12 +1440,12 @@ export const registerTelegramHandlers = ({
         if (modelCallback.type === "select") {
           let selection = resolveModelSelection({
             callback: modelCallback,
-            providers,
-            byProvider,
+            providers: configuredModelData.providers,
+            byProvider: configuredModelData.byProvider,
           });
           let selectionAllowed =
             selection.kind === "resolved" &&
-            Boolean(byProvider.get(selection.provider)?.has(selection.model));
+            Boolean(configuredModelData.byProvider.get(selection.provider)?.has(selection.model));
 
           if (!selectionAllowed || selection.kind !== "resolved") {
             modelData = await telegramDeps.buildModelsProviderData(

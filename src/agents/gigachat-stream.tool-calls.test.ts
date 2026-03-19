@@ -653,6 +653,37 @@ describe("createGigachatStreamFn tool calling", () => {
     expect(clientConfigs[0]?.password).toBeUndefined();
   });
 
+  it("honors explicit basic auth scopes when metadata provides one", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.ift.sberdevices.ru/v1",
+      authMode: "basic",
+      scope: "GIGACHAT_API_B2B",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      { messages: [], tools: [] } as never,
+      { apiKey: "basic-user:basic-password" } as never,
+    );
+
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "done" }],
+    });
+
+    expect(clientConfigs).toHaveLength(1);
+    expect(clientConfigs[0]).toMatchObject({
+      user: "basic-user",
+      password: "basic-password",
+      scope: "GIGACHAT_API_B2B",
+    });
+    expect(clientConfigs[0]?.credentials).toBeUndefined();
+  });
+
   it("falls back to the SDK default oauth scope when no metadata scope is available", async () => {
     request.mockResolvedValueOnce({
       status: 200,
