@@ -1,0 +1,26 @@
+{
+  "id": "tavily",
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Tavily Search API Key",
+      "help": "Tavily Search API key (fallback: TAVILY_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "tvly-..."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          }
+        }
+      }
+    }
+  }
+}
