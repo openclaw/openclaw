@@ -2,6 +2,7 @@ import type { GatewayClient } from "./server-methods/types.js";
 
 const CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS = 3;
 const CONTROL_PLANE_RATE_LIMIT_WINDOW_MS = 60_000;
+const PRUNE_INTERVAL_MS = 60_000;
 
 type Bucket = {
   count: number;
@@ -9,6 +10,18 @@ type Bucket = {
 };
 
 const controlPlaneBuckets = new Map<string, Bucket>();
+
+// Periodic cleanup to avoid unbounded map growth from distinct client keys.
+const pruneTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [key, bucket] of controlPlaneBuckets) {
+    if (now - bucket.windowStartMs >= CONTROL_PLANE_RATE_LIMIT_WINDOW_MS) {
+      controlPlaneBuckets.delete(key);
+    }
+  }
+}, PRUNE_INTERVAL_MS);
+// Allow the Node.js process to exit even if the timer is still active.
+pruneTimer.unref();
 
 function normalizePart(value: unknown, fallback: string): string {
   if (typeof value !== "string") {
