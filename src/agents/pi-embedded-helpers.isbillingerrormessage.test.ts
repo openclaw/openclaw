@@ -819,6 +819,13 @@ describe("isFailoverErrorMessage", () => {
     expect(classifyFailoverReason(sample)).toBe("timeout");
     expect(isFailoverErrorMessage(sample)).toBe(true);
   });
+
+  it("does not treat plain status text with internal-server-error wording as timeout", () => {
+    const sample = "Proxy notice: Status: Internal Server Error";
+    expect(isTimeoutErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBe(null);
+    expect(isFailoverErrorMessage(sample)).toBe(false);
+  });
 });
 
 describe("parseImageSizeError", () => {
@@ -1250,5 +1257,9 @@ describe("classifyProviderRuntimeFailureKind", () => {
         'got status: INTERNAL. {"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}',
       ),
     ).toBe("timeout");
+  });
+
+  it("does not classify plain status text with internal server error wording as timeout", () => {
+    expect(classifyFailoverReason("Proxy notice: Status: Internal Server Error")).toBeNull();
   });
 });
