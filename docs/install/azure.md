@@ -19,12 +19,22 @@ This guide sets up an Azure Linux VM with the Azure CLI, applies Network Securit
 - Install OpenClaw with the installer script
 - Verify the Gateway
 
-## Before you start
+## Quick path (experienced operators)
 
-You'll need:
+1. Sign in to Azure CLI and register `Microsoft.Compute` + `Microsoft.Network` providers
+2. Create resource group, NSG (Bastion-only SSH rules), VNet (VM + Bastion subnets)
+3. Create VM (Ubuntu 24.04, no public IP, SSH key auth)
+4. Create Azure Bastion (Standard SKU, tunneling enabled)
+5. SSH through Bastion, run the OpenClaw installer, verify the Gateway
+
+## What you need
 
 - An Azure subscription with permission to create compute and network resources
 - Azure CLI installed (see [Azure CLI install steps](https://learn.microsoft.com/cli/azure/install-azure-cli) if needed)
+- An SSH key pair (the guide covers generating one if needed)
+- ~20-30 minutes
+
+## Configure deployment
 
 <Steps>
   <Step title="Sign in to Azure CLI">
@@ -113,7 +123,11 @@ You'll need:
     ```
 
   </Step>
+</Steps>
 
+## Deploy Azure resources
+
+<Steps>
   <Step title="Create the resource group">
     ```bash
     az group create -n "${RG}" -l "${LOCATION}"
@@ -228,7 +242,11 @@ You'll need:
     Bastion provisioning takes a few minutes.
 
   </Step>
+</Steps>
 
+## Install OpenClaw
+
+<Steps>
   <Step title="SSH into the VM through Azure Bastion">
     ```bash
     VM_ID="$(az vm show -g "${RG}" -n "${VM_NAME}" --query id -o tsv)"
