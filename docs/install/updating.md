@@ -93,17 +93,17 @@ Note: on npm installs, the gateway logs an update hint on startup (checks the cu
 
 Auto-updater is **off by default** and is a core Gateway feature (not a plugin).
 
-```json
+```json5
 {
-  "update": {
-    "channel": "stable",
-    "auto": {
-      "enabled": true,
-      "stableDelayHours": 6,
-      "stableJitterHours": 12,
-      "betaCheckIntervalHours": 1
-    }
-  }
+  update: {
+    channel: "stable",
+    auto: {
+      enabled: true,
+      stableDelayHours: 6,
+      stableJitterHours: 12,
+      betaCheckIntervalHours: 1,
+    },
+  },
 }
 ```
 

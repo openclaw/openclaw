@@ -249,3 +249,9 @@ For teams preferring infrastructure-as-code workflows, a community-maintained Te
 This approach complements the Docker setup above with reproducible deployments, version-controlled infrastructure, and automated disaster recovery.
 
 > **Note:** Community-maintained. For issues or contributions, see the repository links above.
+
+## Next steps
+
+- Set up messaging channels: [Channels](/channels)
+- Configure the Gateway: [Gateway configuration](/gateway/configuration)
+- Keep OpenClaw up to date: [Updating](/install/updating)

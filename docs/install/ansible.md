@@ -25,12 +25,12 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 
 ## What You Get
 
-- 🔒 **Firewall-first security**: UFW + Docker isolation (only SSH + Tailscale accessible)
-- 🔐 **Tailscale VPN**: Secure remote access without exposing services publicly
-- 🐳 **Docker**: Isolated sandbox containers, localhost-only bindings
-- 🛡️ **Defense in depth**: 4-layer security architecture
-- 🚀 **One-command setup**: Complete deployment in minutes
-- 🔧 **Systemd integration**: Auto-start on boot with hardening
+- **Firewall-first security**: UFW + Docker isolation (only SSH + Tailscale accessible)
+- **Tailscale VPN**: Secure remote access without exposing services publicly
+- **Docker**: Isolated sandbox containers, localhost-only bindings
+- **Defense in depth**: 4-layer security architecture
+- **One-command setup**: Complete deployment in minutes
+- **Systemd integration**: Auto-start on boot with hardening
 
 ## Requirements
 
@@ -166,7 +166,7 @@ sudo ls -la /opt/openclaw
 # Test manual start
 sudo -i -u openclaw
 cd ~/openclaw
-pnpm start
+openclaw gateway run
 ```
 
 ### Docker sandbox issues
