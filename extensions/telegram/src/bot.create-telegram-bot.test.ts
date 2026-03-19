@@ -276,11 +276,16 @@ describe("createTelegramBot", () => {
         name: "new unknown sender",
         messages: ["hello"],
         expectedSendCount: 1,
+        pairingUpsertResults: [{ code: "PAIRCODE", created: true }],
       },
       {
         name: "already pending request",
         messages: ["hello", "hello again"],
         expectedSendCount: 1,
+        pairingUpsertResults: [
+          { code: "PAIRCODE", created: true },
+          { code: "PAIRCODE", created: false },
+        ],
       },
     ] as const;
 
@@ -294,7 +299,15 @@ describe("createTelegramBot", () => {
         });
         readChannelAllowFromStore.mockResolvedValue([]);
         upsertChannelPairingRequest.mockClear();
-        upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRCODE", created: true });
+        let pairingUpsertCall = 0;
+        upsertChannelPairingRequest.mockImplementation(async () => {
+          const result =
+            testCase.pairingUpsertResults[
+              Math.min(pairingUpsertCall, testCase.pairingUpsertResults.length - 1)
+            ];
+          pairingUpsertCall += 1;
+          return result;
+        });
 
         createTelegramBot({ token: "tok" });
         const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;

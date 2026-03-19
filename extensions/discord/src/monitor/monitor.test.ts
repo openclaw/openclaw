@@ -104,6 +104,17 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   };
 });
 
+vi.mock("../../../../src/auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../../src/auto-reply/reply/provider-dispatcher.js")
+    >();
+  return {
+    ...actual,
+    dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
   return {
@@ -193,11 +204,7 @@ describe("agent components", () => {
     expect(code).toBeDefined();
     expect(pairingText).toContain(`openclaw pairing approve discord ${code}`);
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(readAllowFromStoreMock).toHaveBeenCalledWith({
-      provider: "discord",
-      accountId: "default",
-      dmPolicy: "pairing",
-    });
+    expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
   });
 
   it("blocks DM interactions in allowlist mode when sender is not in configured allowFrom", async () => {
@@ -231,11 +238,7 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓" });
     expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-    expect(readAllowFromStoreMock).toHaveBeenCalledWith({
-      provider: "discord",
-      accountId: "default",
-      dmPolicy: "pairing",
-    });
+    expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
   });
 
   it("allows DM component interactions in open mode without reading pairing store", async () => {
