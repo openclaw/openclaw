@@ -245,14 +245,21 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     fi
 
 # Install Blink CLI — required for blink-* skill scripts (image, video, speech, transcribe, connectors)
-# Version is pinned; update when publishing a new CLI version to npm.
-RUN npm install -g @blinkdotnew/cli@0.3.2
+# Uses @latest so every Docker image rebuild ships the newest CLI automatically.
+# No manual version bumps needed — publishing a new CLI version is sufficient.
+RUN npm install -g @blinkdotnew/cli@latest
 
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
 ENV NODE_ENV=production
+
+# Redirect npm global installs to the Fly.io persistent volume (/data).
+# This allows the non-root `node` user to run `npm install -g <pkg>` at runtime
+# without permission errors. Installed packages survive container restarts.
+ENV NPM_CONFIG_PREFIX=/data/npm-global
+ENV PATH="/data/npm-global/bin:${PATH}"
 
 # Security hardening: Run as non-root user
 # The node:24-bookworm image includes a 'node' user (uid 1000)
