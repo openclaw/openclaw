@@ -28,6 +28,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { wrapSessionManagerWithLocalTimestamps } from "../../sessions/local-session-timestamps.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
@@ -775,12 +776,15 @@ export async function compactEmbeddedPiSessionDirect(
         provider,
         modelId,
       });
-      const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
-        agentId: sessionAgentId,
-        sessionKey: params.sessionKey,
-        allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-        allowedToolNames,
-      });
+      const sessionManager = guardSessionManager(
+        wrapSessionManagerWithLocalTimestamps(SessionManager.open(params.sessionFile)),
+        {
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+          allowedToolNames,
+        },
+      );
       trackSessionManagerAccess(params.sessionFile);
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
         cwd: effectiveWorkspace,

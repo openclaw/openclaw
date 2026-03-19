@@ -23,6 +23,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { formatLocalSessionTimestamp } from "../../sessions/local-session-timestamps.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -219,7 +220,7 @@ function ensureSessionTranscriptFile(params: {
         type: "session",
         version: CURRENT_SESSION_VERSION,
         id: params.sessionId,
-        timestamp: new Date().toISOString(),
+        timestamp: formatLocalSessionTimestamp(),
         cwd: process.cwd(),
       };
       fs.writeFileSync(transcriptPath, `${JSON.stringify(header)}\n`, {

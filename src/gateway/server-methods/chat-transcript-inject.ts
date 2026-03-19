@@ -1,4 +1,5 @@
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { wrapSessionManagerWithLocalTimestamps } from "../../sessions/local-session-timestamps.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
@@ -67,7 +68,9 @@ export function appendInjectedAssistantMessageToTranscript(params: {
   try {
     // IMPORTANT: Use SessionManager so the entry is attached to the current leaf via parentId.
     // Raw jsonl appends break the parent chain and can hide compaction summaries from context.
-    const sessionManager = SessionManager.open(params.transcriptPath);
+    const sessionManager = wrapSessionManagerWithLocalTimestamps(
+      SessionManager.open(params.transcriptPath),
+    );
     const messageId = sessionManager.appendMessage(messageBody);
     emitSessionTranscriptUpdate({
       sessionFile: params.transcriptPath,

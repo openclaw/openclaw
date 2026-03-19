@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import * as jsonFiles from "../../infra/json-files.js";
+import { formatLocalSessionTimestamp } from "../../sessions/local-session-timestamps.js";
 import type { OpenClawConfig } from "../config.js";
 import {
   clearSessionStoreCacheForTest,
@@ -397,6 +398,15 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     );
   }
 
+  it("formats helper timestamps with a local offset while preserving the instant", () => {
+    const source = new Date("2026-03-19T04:34:13.123Z");
+    const formatted = formatLocalSessionTimestamp(source);
+
+    expect(formatted).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
+    expect(formatted.endsWith("Z")).toBe(false);
+    expect(Date.parse(formatted)).toBe(source.getTime());
+  });
+
   it("creates transcript file and appends message for valid session", async () => {
     writeTranscriptStore();
 
@@ -420,9 +430,17 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       const header = JSON.parse(lines[0]);
       expect(header.type).toBe("session");
       expect(header.id).toBe(sessionId);
+      expect(header.timestamp).toMatch(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/,
+      );
+      expect(header.timestamp.endsWith("Z")).toBe(false);
 
       const messageLine = JSON.parse(lines[1]);
       expect(messageLine.type).toBe("message");
+      expect(messageLine.timestamp).toMatch(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/,
+      );
+      expect(messageLine.timestamp.endsWith("Z")).toBe(false);
       expect(messageLine.message.role).toBe("assistant");
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");

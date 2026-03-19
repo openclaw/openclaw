@@ -13,6 +13,7 @@ import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
+import { formatLocalSessionTimestamp } from "../../sessions/local-session-timestamps.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -624,7 +625,7 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
       type: "session",
       version: CURRENT_SESSION_VERSION,
       id: params.sessionId,
-      timestamp: new Date().toISOString(),
+      timestamp: formatLocalSessionTimestamp(),
       cwd: process.cwd(),
     };
     fs.writeFileSync(params.transcriptPath, `${JSON.stringify(header)}\n`, {

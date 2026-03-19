@@ -323,6 +323,7 @@ describe("gateway chat transcript writes (guardrail)", () => {
     expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
     expect(helperSrc.includes("fs.appendFileSync(params.transcriptPath")).toBe(false);
+    expect(helperSrc).toContain("wrapSessionManagerWithLocalTimestamps(");
     expect(helperSrc).toContain("SessionManager.open(params.transcriptPath)");
     expect(helperSrc).toContain("appendMessage(messageBody)");
   });

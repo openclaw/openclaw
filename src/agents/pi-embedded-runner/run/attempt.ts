@@ -28,6 +28,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { wrapSessionManagerWithLocalTimestamps } from "../../../sessions/local-session-timestamps.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -1793,13 +1794,16 @@ export async function runEmbeddedAttempt(
       });
 
       await prewarmSessionFile(params.sessionFile);
-      sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
-        agentId: sessionAgentId,
-        sessionKey: params.sessionKey,
-        inputProvenance: params.inputProvenance,
-        allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-        allowedToolNames,
-      });
+      sessionManager = guardSessionManager(
+        wrapSessionManagerWithLocalTimestamps(SessionManager.open(params.sessionFile)),
+        {
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          inputProvenance: params.inputProvenance,
+          allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+          allowedToolNames,
+        },
+      );
       trackSessionManagerAccess(params.sessionFile);
 
       if (hadSessionFile && params.contextEngine?.bootstrap) {

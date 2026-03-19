@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  formatLocalSessionTimestamp,
+  wrapSessionManagerWithLocalTimestamps,
+} from "../../sessions/local-session-timestamps.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { parseSessionThreadInfo } from "./delivery-info.js";
 import {
@@ -76,7 +80,7 @@ async function ensureSessionHeader(params: {
     type: "session",
     version: CURRENT_SESSION_VERSION,
     id: params.sessionId,
-    timestamp: new Date().toISOString(),
+    timestamp: formatLocalSessionTimestamp(),
     cwd: process.cwd(),
   };
   await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
@@ -212,7 +216,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     timestamp: Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
-  const sessionManager = SessionManager.open(sessionFile);
+  const sessionManager = wrapSessionManagerWithLocalTimestamps(SessionManager.open(sessionFile));
   const messageId = sessionManager.appendMessage(message);
 
   emitSessionTranscriptUpdate({ sessionFile, sessionKey, message, messageId });

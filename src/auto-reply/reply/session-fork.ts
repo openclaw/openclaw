@@ -4,6 +4,10 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionFilePath, type SessionEntry } from "../../config/sessions.js";
+import {
+  formatLocalSessionTimestamp,
+  wrapSessionManagerWithLocalTimestamps,
+} from "../../sessions/local-session-timestamps.js";
 
 /**
  * Default max parent token count beyond which thread/session parent forking is skipped.
@@ -34,7 +38,7 @@ export function forkSessionFromParent(params: {
     return null;
   }
   try {
-    const manager = SessionManager.open(parentSessionFile);
+    const manager = wrapSessionManagerWithLocalTimestamps(SessionManager.open(parentSessionFile));
     const leafId = manager.getLeafId();
     if (leafId) {
       const sessionFile = manager.createBranchedSession(leafId) ?? manager.getSessionFile();
@@ -51,7 +55,7 @@ export function forkSessionFromParent(params: {
       type: "session",
       version: CURRENT_SESSION_VERSION,
       id: sessionId,
-      timestamp,
+      timestamp: formatLocalSessionTimestamp(),
       cwd: manager.getCwd(),
       parentSession: parentSessionFile,
     };

@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { wrapSessionManagerWithLocalTimestamps } from "../../sessions/local-session-timestamps.js";
 import { log } from "./logger.js";
 
 /**
@@ -213,7 +214,7 @@ export async function truncateOversizedToolResultsInSession(params: {
   const maxChars = calculateMaxToolResultChars(contextWindowTokens);
 
   try {
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = wrapSessionManagerWithLocalTimestamps(SessionManager.open(sessionFile));
     const branch = sessionManager.getBranch();
 
     if (branch.length === 0) {

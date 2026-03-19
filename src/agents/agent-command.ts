@@ -5,6 +5,7 @@ import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../ac
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
 import { resolveAcpSessionCwd } from "../acp/runtime/session-identifiers.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { wrapSessionManagerWithLocalTimestamps } from "../sessions/local-session-timestamps.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
@@ -315,7 +316,7 @@ async function persistAcpTurnTranscript(params: {
     .access(sessionFile)
     .then(() => true)
     .catch(() => false);
-  const sessionManager = SessionManager.open(sessionFile);
+  const sessionManager = wrapSessionManagerWithLocalTimestamps(SessionManager.open(sessionFile));
   await prepareSessionManagerForRun({
     sessionManager,
     sessionFile,
