@@ -1,0 +1,74 @@
+---
+name: [Service Name]
+version: [1.0.0]
+description: [Briefly describe the core problem solved and main functions of the service]
+developer: [Developer Name/Team]
+last-updated: [YYYY-MM-DD]
+tags:
+  - ai-service
+  - rest-api
+---
+
+## 1. Functionality
+[Detailed description of the functions provided by the service, and in what scenarios an AI Agent should call this service.]
+
+## 2. Interface Specification
+All interfaces follow RESTful style and return data in JSON format by default.
+
+### 2.1 Basic Information Interface (Capability Discovery)
+- **Interface Path**: `/` (Implicit Discovery) and `/ServiceAbility.MD` (Explicit Discovery)
+- **Request Method**: `GET`
+- **Function Description**: Returns this documentation file for AI Agents to automatically parse service capabilities. AI Agents should prioritize attempting the `/` path, and if it fails, try `/ServiceAbility.MD` to ensure service capability discovery.
+
+### 2.2 [Function Interface Name]
+- **Interface Path**: `[e.g., /api/v1/process]`
+- **Request Method**: `[POST/GET/PUT/DELETE]`
+- **Function Description**: [Describe the specific purpose of this interface]
+- **Request Parameters**:
+| Parameter | Type | Required | Description | Example |
+| :--- | :--- | :--- | :--- | :--- |
+| [param1] | [string] | Yes | [Description] | [example] |
+- **Return Parameters**:
+| Parameter | Type | Description | Example |
+| :--- | :--- | :--- | :--- |
+| [result] | [object] | [Description] | [example] |
+- **Error Code Description**:
+| Error Code | Description | Suggested Handling |
+| :--- | :--- | :--- |
+| 400 | Parameter error | Check request body format |
+
+## 3. Data and Program Separation Specification (Data & Logic Separation)
+- **Configuration Management**: All configuration items (e.g., port, database connection, external API Key) should be stored in `.env` or `config/` directory.
+- **Data Storage**: Business data should be stored in the `data/` directory or an external database, strictly prohibiting hardcoding within the program logic.
+
+### 3.x Self-Describing Information Interface (Service Information)
+- **Interface Path**: `/info`
+- **Request Method**: `GET`
+- **Function Description**: Returns real-time metadata and configuration information of the service, supplementing the static `ServiceAbility.MD` document.
+- **Return Parameters**: Should include service name, version, description, default configuration, and a list of supported options.
+
+### 3.x Service Registration (Service Discovery)
+-   **Discovery Platform Endpoint**: `https://jjyzmyvfy5.coze.bytedance.net/register`
+-   **Request Method**: `POST`
+-   **Function Description**: Registers the service with the discovery platform.
+-   **Request Parameters**:
+    | Parameter Name | Type   | Required | Description                                       | Example                   |
+    | :------------- | :----- | :------- | :------------------------------------------------ | :------------------------ |
+    | `service_name` | String | Yes      | The unique name of the service (from Meta Information) | `[Service Name]`          |
+    | `service_url`  | String | Yes      | The base URL where the service is accessible (e.g., `https://your-service.com`) | `https://your-service.com` |
+    | `service_ability_md_url` | String | Yes      | The full URL to retrieve the `ServiceAbility.MD` file | `https://your-service.com/ServiceAbility.MD` |
+    | `metadata`     | JSON   | No       | Additional service metadata (e.g., developer, description) | `{"developer": "[Developer Name/Team]", "description": "[Service Description]"}` |
+-   **Return Parameters**:
+    | Parameter Name | Type   | Description               | Example           |
+    | :------------- | :----- | :------------------------ | :---------------- |
+    | `status`       | String | Status of registration    | `success`         |
+    | `message`      | String | Confirmation message      | `Service registered successfully` |
+    | `service_id`   | String | Unique ID assigned by the discovery platform | `svc_12345`       |
+
+## 4. Feedback and Support
+- **Feedback Interface**: `[e.g., /api/v1/feedback]`
+- **Feedback Method**: [Describe how to submit bugs or feature suggestions]
+- **Contact Information**: [Optional, e.g., Email or Webhook URL]
+
+---
+*Note: This file is designed specifically for AI Agents. Structured Markdown is recommended for improved parsing accuracy.*
