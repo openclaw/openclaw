@@ -13,7 +13,16 @@ describe("usage-metrics.formatCost", () => {
   });
 
   it("rounds normally for typical costs", () => {
-    expect(formatCost(0.03)).toBe("$0.03");
+    // Matches ui/src/ui/format.ts: < 1 keeps 3 decimals (0.03 -> $0.030)
+    expect(formatCost(0.03)).toBe("$0.030");
     expect(formatCost(1.2345)).toBe("$1.23");
+  });
+
+  it("falls back for non-finite numbers", () => {
+    expect(formatCost(Number.NaN)).toBe("$0.00");
+    expect(formatCost(Number.POSITIVE_INFINITY)).toBe("$0.00");
+    expect(formatCost(Number.NEGATIVE_INFINITY)).toBe("$0.00");
+    // Also ensure the explicit-decimals branch does not surface `$NaN`.
+    expect(formatCost(Number.NaN, 4)).toBe("$0.00");
   });
 });

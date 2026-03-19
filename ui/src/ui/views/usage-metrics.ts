@@ -4,6 +4,7 @@ import {
   mergeUsageDailyLatency,
   mergeUsageLatency,
 } from "../../../../src/shared/usage-aggregates.js";
+import { formatCost as formatUsdCost } from "../format.ts";
 import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -259,15 +260,11 @@ function renderUsageMosaic(
 }
 
 function formatCost(n: number, decimals?: number): string {
-  // Cost is in USD. For very small values, rounding to 2 decimals can hide non-zero costs
-  // (e.g. 0.004 -> $0.00). Keep extra precision for small totals.
+  // Explicit decimals override fixed precision, but only for finite numbers.
   if (decimals !== undefined) {
-    return `$${n.toFixed(decimals)}`;
+    return Number.isFinite(n) ? `$${n.toFixed(decimals)}` : formatUsdCost(n);
   }
-  if (n === 0) {
-    return "$0.00";
-  }
-  return `$${n < 0.01 ? n.toFixed(4) : n.toFixed(2)}`;
+  return formatUsdCost(n);
 }
 
 function formatIsoDate(date: Date): string {
