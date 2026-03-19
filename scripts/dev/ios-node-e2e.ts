@@ -261,8 +261,6 @@ async function main() {
     }));
     const width = Math.min(64, Math.max(12, ...rows.map((r) => r.cmd.length)));
     // eslint-disable-next-line no-console
-    console.log(`node: ${node.displayName ?? node.nodeId} (${node.platform ?? "unknown"})`);
-    // eslint-disable-next-line no-console
     console.log(`dangerous: ${dangerous ? "on" : "off"}`);
     // eslint-disable-next-line no-console
     console.log("");
