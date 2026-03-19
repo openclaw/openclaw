@@ -88,7 +88,16 @@ export async function runLearnForSession(params: {
   // Resolve session file, falling back to archived .reset.* file if needed
   const resolvedSessionFile = await resolveSessionFileWithResetFallback(params.sessionFile);
 
+  // Build memory write path for learning output
+  const memoryDir = path.join(params.workspaceDir, "memory");
+  const now = new Date();
+  const dateStr = now.toISOString().split("T")[0];
+  const memoryFlushWritePath = path.join(memoryDir, `${dateStr}.md`);
+
   try {
+    // Ensure memory directory exists
+    await fs.mkdir(memoryDir, { recursive: true });
+
     await runEmbeddedPiAgent({
       runId: crypto.randomUUID(),
       sessionId: params.sessionId,
@@ -100,6 +109,7 @@ export async function runLearnForSession(params: {
       groupSpace: params.groupSpace,
       spawnedBy: params.spawnedBy,
       workspaceDir: params.workspaceDir,
+      memoryFlushWritePath,
       agentDir: params.agentDir,
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
