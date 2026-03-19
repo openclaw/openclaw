@@ -33,6 +33,27 @@ is_truthy_value() {
   esac
 }
 
+default_extension_dependency_list() {
+  local ext_dir=""
+  local package_json=""
+  local -a extensions=()
+
+  for ext_dir in "$ROOT_DIR"/extensions/*; do
+    package_json="$ext_dir/package.json"
+    [[ -f "$package_json" ]] || continue
+    if grep -Eq '"dependencies"[[:space:]]*:' "$package_json"; then
+      extensions+=("$(basename "$ext_dir")")
+    fi
+  done
+
+  if [[ ${#extensions[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  mapfile -t extensions < <(printf '%s\n' "${extensions[@]}" | LC_ALL=C sort)
+  printf '%s' "${extensions[*]}"
+}
+
 read_config_gateway_token() {
   local config_path="$OPENCLAW_CONFIG_DIR/openclaw.json"
   if [[ ! -f "$config_path" ]]; then
@@ -193,12 +214,14 @@ fi
 OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 
-# Use curated list of stable core extensions if OPENCLAW_EXTENSIONS is not set.
-# This avoids including experimental extensions with known build issues.
-# Users can override with: OPENCLAW_EXTENSIONS="ext1 ext2" ./docker-setup.sh
+# By default, preinstall local dependencies only for bundled extensions that
+# actually declare package dependencies. Users can override with:
+# OPENCLAW_EXTENSIONS="ext1 ext2" ./docker-setup.sh
 if [[ -z "${OPENCLAW_EXTENSIONS:-}" ]]; then
-  OPENCLAW_EXTENSIONS="anthropic google openai slack telegram whatsapp"
-  echo "Using default core extensions: $OPENCLAW_EXTENSIONS"
+  OPENCLAW_EXTENSIONS="$(default_extension_dependency_list)"
+  if [[ -n "$OPENCLAW_EXTENSIONS" ]]; then
+    echo "Using default dependency-bearing extensions: $OPENCLAW_EXTENSIONS"
+  fi
 fi
 
 validate_mount_path_value "OPENCLAW_CONFIG_DIR" "$OPENCLAW_CONFIG_DIR"
