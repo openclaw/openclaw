@@ -470,6 +470,66 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       },
     ]);
   });
+  it("strips inbound metadata from LLM echo before delivery (issue #39847)", () => {
+    const echoPayload: ReplyPayload = {
+      text: [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        '{"session":"abc"}',
+        "```",
+        "",
+        "Here is my actual response.",
+      ].join("\n"),
+    };
+    const result = normalizeReplyPayloadsForDelivery([echoPayload]);
+    expect(result).toHaveLength(1);
+    expect(result[0].text).not.toContain("untrusted metadata");
+    expect(result[0].text).toContain("Here is my actual response");
+  });
+
+  it("parses directives after stripping leading inbound metadata echoes", () => {
+    const result = normalizeReplyPayloadsForDelivery([
+      {
+        text: [
+          "Conversation info (untrusted metadata):",
+          "```json",
+          '{"session":"abc"}',
+          "```",
+          "",
+          "[[reply_to: msg-123]] Here is my actual response.",
+        ].join("\n"),
+      },
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      replyToId: "msg-123",
+      text: "Here is my actual response.",
+    });
+  });
+
+  it("preserves timestamp-prefixed replies without echoed metadata", () => {
+    const text = "[Wed 2026-03-11 23:51 PDT] hello";
+
+    expect(normalizeReplyPayloadsForDelivery([{ text }])[0]?.text).toBe(text);
+  });
+
+  it("preserves metadata-looking examples after normal text", () => {
+    const text = [
+      "Here is the example format:",
+      "",
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"session":"abc"}',
+      "```",
+    ].join("\n");
+
+    const result = normalizeReplyPayloadsForDelivery([{ text }]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toContain("Here is the example format:");
+    expect(result[0].text).toContain("Conversation info (untrusted metadata):");
+  });
 });
 
 describe("normalizeOutboundPayloadsForJson", () => {
