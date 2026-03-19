@@ -525,6 +525,7 @@ describe("gateway server sessions", () => {
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
     await sessionsHandlers["sessions.patch"]({
+      req: {} as never,
       params: {
         key: "main",
         label: "Renamed",
