@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/azure-foundry",
+  "version": "2026.3.14",
+  "private": true,
+  "description": "OpenClaw Azure AI Foundry provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
