@@ -882,7 +882,7 @@ export async function processMessage(
     replyToShortId = getShortIdForUuid(replyToId);
   }
 
-  if (isTapbackMessage && tapbackParsed?.action !== "removed" && replyToBody) {
+  if (isTapbackMessage && tapbackParsed && tapbackParsed.action !== "removed" && replyToBody) {
     const tapbackEmoji = tapbackParsed.emoji;
     const approvalId =
       replyToBody.match(/Full id:\s*`?([^\s`]+)`?/i)?.[1]?.trim() ||
