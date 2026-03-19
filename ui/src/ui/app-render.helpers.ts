@@ -136,7 +136,7 @@ function renderCronFilterIcon(hiddenCount: number) {
 export function renderChatSessionSelect(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
   const modelSelect = renderChatModelSelect(state);
-  const activeRow = state.sessionsResult?.sessions?.find((s) => s.key === state.sessionKey);
+  const activeRow = resolveActiveSessionRow(state);
   const explicitLabel = activeRow?.label?.trim() || "";
   const explicitDisplayName = activeRow?.displayName?.trim() || "";
   const hasExplicitName =
