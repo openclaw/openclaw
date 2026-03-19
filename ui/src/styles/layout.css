@@ -74,6 +74,11 @@
   margin-top: 0;
 }
 
+/* Hide chat content-header in focus mode */
+.shell--chat-focus .content-header--chat {
+  display: none;
+}
+
 /* ===========================================
    Topbar
    =========================================== */
