@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+import type {
+  AfterToolCallContext,
+  AfterToolCallResult,
+  AgentMessage,
+  StreamFn,
+} from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
@@ -72,6 +77,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
+import { rewriteToolResultUnknownToolError } from "../../pi-embedded-helpers/errors.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
@@ -1919,6 +1925,47 @@ export async function runEmbeddedAttempt(
           ),
         ),
       });
+
+      // ── afterToolCall: rewrite unknown-tool errors with skill hints ──
+      // Compose with the existing handler installed by AgentSession (extension
+      // tool_result dispatch) so we don't silently drop it.
+      type AfterToolCallFn = (
+        ctx: AfterToolCallContext,
+        signal?: AbortSignal,
+      ) => Promise<AfterToolCallResult | undefined>;
+      // Read the private `_afterToolCall` field — no public getter exists.
+      const prevAfterToolCall = (
+        activeSession.agent as unknown as { _afterToolCall?: AfterToolCallFn }
+      )._afterToolCall;
+      activeSession.agent.setAfterToolCall(async (ctx, signal) => {
+        const prev = prevAfterToolCall ? await prevAfterToolCall(ctx, signal) : undefined;
+        if (!ctx.isError) {
+          return prev;
+        }
+        const content = prev?.content ?? ctx.result?.content;
+        if (!Array.isArray(content)) {
+          return prev;
+        }
+        const firstText = content.find((c) => c.type === "text" && "text" in c);
+        if (!firstText || firstText.type !== "text" || !("text" in firstText)) {
+          return prev;
+        }
+        const errorText = (firstText as { type: "text"; text: string }).text;
+        const rewritten = rewriteToolResultUnknownToolError({
+          errorText,
+          skillsSnapshot: params.skillsSnapshot,
+        });
+        if (!rewritten) {
+          return prev;
+        }
+        return {
+          ...prev,
+          content: content.map((c) =>
+            c === firstText ? { type: "text" as const, text: rewritten } : c,
+          ),
+        };
+      });
+
       const cacheTrace = createCacheTrace({
         cfg: params.config,
         env: process.env,
