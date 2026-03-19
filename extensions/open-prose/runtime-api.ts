@@ -1,1 +1,1 @@
-export * from "../../src/plugin-sdk/open-prose.js";
+export * from "openclaw/plugin-sdk/open-prose";
