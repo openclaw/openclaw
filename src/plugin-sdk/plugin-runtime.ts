@@ -6,3 +6,4 @@ export * from "../plugins/http-path.js";
 export * from "../plugins/http-registry.js";
 export * from "../plugins/interactive.js";
 export * from "../plugins/types.js";
+export type { RuntimeLogger } from "../plugins/runtime/types.js";
