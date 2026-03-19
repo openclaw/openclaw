@@ -1259,7 +1259,19 @@ export function resolveRouteMessageProvider(params: {
   messageProvider?: string;
   messageChannel?: string;
 }): string | undefined {
-  return params.messageProvider ?? params.messageChannel;
+  const messageProvider = params.messageProvider?.trim().toLowerCase();
+  const messageChannel = params.messageChannel?.trim().toLowerCase();
+  if (!messageProvider) {
+    return messageChannel;
+  }
+  if (
+    messageProvider === "heartbeat" ||
+    messageProvider === "cron-event" ||
+    messageProvider === "exec-event"
+  ) {
+    return messageChannel ?? messageProvider;
+  }
+  return messageProvider;
 }
 
 export function resolveAttemptFsWorkspaceOnly(params: {

@@ -223,13 +223,22 @@ describe("resolvePromptModeForSession", () => {
 });
 
 describe("resolveRouteMessageProvider", () => {
-  it("prefers canonical messageProvider when both provider and channel are present", () => {
+  it("prefers canonical messageProvider when provider is not synthetic", () => {
     expect(
       resolveRouteMessageProvider({
         messageProvider: "bluebubbles",
         messageChannel: "imessage",
       }),
     ).toBe("bluebubbles");
+  });
+
+  it("prefers messageChannel when provider is synthetic", () => {
+    expect(
+      resolveRouteMessageProvider({
+        messageProvider: "heartbeat",
+        messageChannel: "telegram",
+      }),
+    ).toBe("telegram");
   });
 
   it("falls back to messageChannel when canonical provider is absent", () => {

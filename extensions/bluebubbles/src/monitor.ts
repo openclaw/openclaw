@@ -89,6 +89,37 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function hasConcreteChatIdentity(record: Record<string, unknown> | null): boolean {
+  if (!record) {
+    return false;
+  }
+  const chat = asRecord(record.chat) ?? asRecord(record.conversation) ?? null;
+  const chatFromList =
+    Array.isArray(record.chats) && record.chats.length > 0 ? asRecord(record.chats[0]) : null;
+  const sources = [record, chat, chatFromList];
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    const hasChatGuid =
+      typeof source.chatGuid === "string" ||
+      typeof source.chat_guid === "string" ||
+      typeof source.guid === "string";
+    const hasChatIdentifier =
+      typeof source.chatIdentifier === "string" ||
+      typeof source.chat_identifier === "string" ||
+      typeof source.identifier === "string";
+    const hasChatId =
+      typeof source.chatId === "number" ||
+      typeof source.chat_id === "number" ||
+      typeof source.id === "number";
+    if (hasChatGuid || hasChatIdentifier || hasChatId) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function shouldDropUnresolvedDirectMirrorMetadata(payload: Record<string, unknown>): boolean {
   const data = asRecord(payload.data) ?? payload;
   const message = asRecord((asRecord(data)?.message as unknown) ?? data);
@@ -109,7 +140,12 @@ function shouldDropUnresolvedDirectMirrorMetadata(payload: Record<string, unknow
   const groupHintRaw = message.isGroupChat ?? message.is_group_chat;
   const unknownGroupHint =
     typeof groupHintRaw === "string" && groupHintRaw.trim().toLowerCase() === "unknown";
-  return unknownConversationLabel && hasMessageIdFull && unknownGroupHint;
+  return (
+    unknownConversationLabel &&
+    hasMessageIdFull &&
+    unknownGroupHint &&
+    !hasConcreteChatIdentity(message)
+  );
 }
 
 function maskSecret(value: string): string {

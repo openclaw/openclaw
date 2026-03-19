@@ -637,6 +637,47 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
     });
 
+    it("keeps unresolved direct mirror metadata payloads when chat identity is present", async () => {
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "metadata plus chat identity",
+          handle: { address: "+15551234567" },
+          isFromMe: false,
+          is_group_chat: "unknown",
+          message_id_full: "A1B2C3D4-E5F6-4789-ABCD-0123456789AB",
+          conversation_label: "Group id:unknown",
+          chatGuid: "iMessage;+;chat123",
+          guid: "msg-identity-present",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe("ok");
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    });
+
     it("keeps direct payloads with explicit chat context even when was_mentioned=true", async () => {
       const account = createMockAccount();
       const config: OpenClawConfig = {};
