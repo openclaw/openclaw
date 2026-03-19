@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getDefaultLocalRoots } from "../../plugin-sdk/web-media.js";
@@ -52,17 +54,34 @@ function applyAgentDefaultModelConfig(
   };
 }
 
+function normalizeMediaAllowedRoot(root: string): string {
+  const trimmed = root.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (trimmed === "~") {
+    return os.homedir();
+  }
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return path.join(os.homedir(), trimmed.slice(2));
+  }
+  return path.resolve(trimmed);
+}
+
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: { workspaceOnly?: boolean; allowedRoots?: string[] },
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
-  const allowedRoots = options?.allowedRoots ?? [];
+  const allowedRoots =
+    options?.workspaceOnly === true
+      ? (options?.allowedRoots ?? []).map(normalizeMediaAllowedRoot).filter(Boolean)
+      : [];
   if (options?.workspaceOnly) {
     return Array.from(new Set([...(workspaceDir ? [workspaceDir] : []), ...allowedRoots]));
   }
   const roots = getDefaultLocalRoots();
-  return Array.from(new Set([...roots, ...(workspaceDir ? [workspaceDir] : []), ...allowedRoots]));
+  return Array.from(new Set([...roots, ...(workspaceDir ? [workspaceDir] : [])]));
 }
 
 export function resolvePromptAndModelOverride(
