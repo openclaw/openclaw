@@ -6,7 +6,7 @@ import { danger } from "../globals.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { renderTable } from "../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatHelpExamples } from "./help-format.js";
 
@@ -48,7 +48,7 @@ function printDirectoryList(params: {
     return;
   }
 
-  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+  const tableWidth = getTerminalTableWidth();
   defaultRuntime.log(`${theme.heading(params.title)} ${theme.muted(`(${params.entries.length})`)}`);
   defaultRuntime.log(
     renderTable({
@@ -166,7 +166,7 @@ export function registerDirectoryCli(program: Command) {
           defaultRuntime.log(theme.muted("Not available."));
           return;
         }
-        const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+        const tableWidth = getTerminalTableWidth();
         defaultRuntime.log(theme.heading("Self"));
         defaultRuntime.log(
           renderTable({

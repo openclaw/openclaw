@@ -1,7 +1,16 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveMainSessionKey,
+} from "../../config/sessions/main-session.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAgentId,
+  normalizeMainKey,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
+import type { AcpSessionResolution } from "./manager.types.js";
 
 export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "main"): string {
   const parsed = parseAgentSessionKey(sessionKey);
@@ -15,8 +24,57 @@ export function resolveMissingMetaError(sessionKey: string): AcpRuntimeError {
   );
 }
 
+export function resolveAcpSessionResolutionError(
+  resolution: AcpSessionResolution,
+): AcpRuntimeError | null {
+  if (resolution.kind === "ready") {
+    return null;
+  }
+  if (resolution.kind === "stale") {
+    return resolution.error;
+  }
+  return new AcpRuntimeError(
+    "ACP_SESSION_INIT_FAILED",
+    `Session is not ACP-enabled: ${resolution.sessionKey}`,
+  );
+}
+
+export function requireReadySessionMeta(resolution: AcpSessionResolution): SessionAcpMeta {
+  if (resolution.kind === "ready") {
+    return resolution.meta;
+  }
+  throw resolveAcpSessionResolutionError(resolution);
+}
+
 export function normalizeSessionKey(sessionKey: string): string {
   return sessionKey.trim();
+}
+
+export function canonicalizeAcpSessionKey(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+}): string {
+  const normalized = normalizeSessionKey(params.sessionKey);
+  if (!normalized) {
+    return "";
+  }
+  const lowered = normalized.toLowerCase();
+  if (lowered === "global" || lowered === "unknown") {
+    return lowered;
+  }
+  const parsed = parseAgentSessionKey(lowered);
+  if (parsed) {
+    return canonicalizeMainSessionAlias({
+      cfg: params.cfg,
+      agentId: parsed.agentId,
+      sessionKey: lowered,
+    });
+  }
+  const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  if (lowered === "main" || lowered === mainKey) {
+    return resolveMainSessionKey(params.cfg);
+  }
+  return lowered;
 }
 
 export function normalizeActorKey(sessionKey: string): string {

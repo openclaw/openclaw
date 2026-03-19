@@ -1,14 +1,6 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/line";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+import type { PluginRuntime } from "../api.js";
 
-let runtime: PluginRuntime | null = null;
-
-export function setLineRuntime(r: PluginRuntime): void {
-  runtime = r;
-}
-
-export function getLineRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("LINE runtime not initialized - plugin not registered");
-  }
-  return runtime;
-}
+const { setRuntime: setLineRuntime, getRuntime: getLineRuntime } =
+  createPluginRuntimeStore<PluginRuntime>("LINE runtime not initialized - plugin not registered");
+export { getLineRuntime, setLineRuntime };

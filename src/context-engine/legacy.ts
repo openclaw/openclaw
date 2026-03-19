@@ -1,10 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { registerContextEngine } from "./registry.js";
+import { delegateCompactionToRuntime } from "./delegate.js";
+import { registerContextEngineForOwner } from "./registry.js";
 import type {
   ContextEngine,
   ContextEngineInfo,
   AssembleResult,
   CompactResult,
+  ContextEngineRuntimeContext,
   IngestResult,
 } from "./types.js";
 
@@ -25,6 +27,7 @@ export class LegacyContextEngine implements ContextEngine {
 
   async ingest(_params: {
     sessionId: string;
+    sessionKey?: string;
     message: AgentMessage;
     isHeartbeat?: boolean;
   }): Promise<IngestResult> {
@@ -34,6 +37,7 @@ export class LegacyContextEngine implements ContextEngine {
 
   async assemble(params: {
     sessionId: string;
+    sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
   }): Promise<AssembleResult> {
@@ -48,61 +52,30 @@ export class LegacyContextEngine implements ContextEngine {
 
   async afterTurn(_params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     messages: AgentMessage[];
     prePromptMessageCount: number;
     autoCompactionSummary?: string;
     isHeartbeat?: boolean;
     tokenBudget?: number;
-    legacyCompactionParams?: Record<string, unknown>;
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<void> {
     // No-op: legacy flow persists context directly in SessionManager.
   }
 
   async compact(params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     tokenBudget?: number;
     force?: boolean;
     currentTokenCount?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
-    legacyParams?: Record<string, unknown>;
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<CompactResult> {
-    // Import through a dedicated runtime boundary so the lazy edge remains effective.
-    const { compactEmbeddedPiSessionDirect } =
-      await import("../agents/pi-embedded-runner/compact.runtime.js");
-
-    // legacyParams carries the full CompactEmbeddedPiSessionParams fields
-    // set by the caller in run.ts. We spread them and override the fields
-    // that come from the ContextEngine compact() signature directly.
-    const lp = params.legacyParams ?? {};
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- legacy bridge: legacyParams is an opaque bag matching CompactEmbeddedPiSessionParams
-    const result = await compactEmbeddedPiSessionDirect({
-      ...lp,
-      sessionId: params.sessionId,
-      sessionFile: params.sessionFile,
-      tokenBudget: params.tokenBudget,
-      force: params.force,
-      customInstructions: params.customInstructions,
-      workspaceDir: (lp.workspaceDir as string) ?? process.cwd(),
-    } as Parameters<typeof compactEmbeddedPiSessionDirect>[0]);
-
-    return {
-      ok: result.ok,
-      compacted: result.compacted,
-      reason: result.reason,
-      result: result.result
-        ? {
-            summary: result.result.summary,
-            firstKeptEntryId: result.result.firstKeptEntryId,
-            tokensBefore: result.result.tokensBefore,
-            tokensAfter: result.result.tokensAfter,
-            details: result.result.details,
-          }
-        : undefined,
-    };
+    return await delegateCompactionToRuntime(params);
   }
 
   async dispose(): Promise<void> {
@@ -111,5 +84,7 @@ export class LegacyContextEngine implements ContextEngine {
 }
 
 export function registerLegacyContextEngine(): void {
-  registerContextEngine("legacy", () => new LegacyContextEngine());
+  registerContextEngineForOwner("legacy", () => new LegacyContextEngine(), "core", {
+    allowSameOwnerRefresh: true,
+  });
 }

@@ -4,22 +4,19 @@ import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
-import { registerApnsToken } from "../infra/push-apns.js";
+import { registerApnsRegistration } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
-import {
-  loadSessionEntry,
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
-} from "./session-utils.js";
+import { loadSessionEntry, migrateAndPruneGatewaySessionStoreKey } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -151,20 +148,16 @@ async function touchSessionStore(params: {
     return;
   }
   await updateSessionStore(storePath, (store) => {
-    const target = resolveGatewaySessionStoreTarget({
+    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
       cfg: params.cfg,
       key: params.sessionKey,
       store,
     });
-    pruneLegacyStoreKeys({
-      store,
-      canonicalKey: target.canonicalKey,
-      candidates: target.storeKeys,
-    });
-    store[params.canonicalKey] = {
+    store[primaryKey] = {
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
+      fastMode: params.entry?.fastMode,
       verboseLevel: params.entry?.verboseLevel,
       reasoningLevel: params.entry?.reasoningLevel,
       systemSent: params.entry?.systemSent,
@@ -317,6 +310,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
             sourceTool: "gateway.voice.transcript",
           },
           senderIsOwner: false,
+          allowModelOverride: false,
         },
         defaultRuntime,
         ctx.deps,
@@ -448,6 +442,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
             typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
           messageChannel: "node",
           senderIsOwner: false,
+          allowModelOverride: false,
         },
         defaultRuntime,
         ctx.deps,
@@ -538,6 +533,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!notifyOnExit) {
         return;
       }
+      if (obj.suppressNotifyOnExit === true) {
+        return;
+      }
 
       const runId = typeof obj.runId === "string" ? obj.runId.trim() : "";
       const command = typeof obj.command === "string" ? obj.command.trim() : "";
@@ -585,16 +583,41 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const token = typeof obj.token === "string" ? obj.token : "";
+      const transport =
+        typeof obj.transport === "string" ? obj.transport.trim().toLowerCase() : "direct";
       const topic = typeof obj.topic === "string" ? obj.topic : "";
       const environment = obj.environment;
       try {
-        await registerApnsToken({
-          nodeId,
-          token,
-          topic,
-          environment,
-        });
+        if (transport === "relay") {
+          const gatewayDeviceId =
+            typeof obj.gatewayDeviceId === "string" ? obj.gatewayDeviceId.trim() : "";
+          const currentGatewayDeviceId = loadOrCreateDeviceIdentity().deviceId;
+          if (!gatewayDeviceId || gatewayDeviceId !== currentGatewayDeviceId) {
+            ctx.logGateway.warn(
+              `push relay register rejected node=${nodeId}: gateway identity mismatch`,
+            );
+            return;
+          }
+          await registerApnsRegistration({
+            nodeId,
+            transport: "relay",
+            relayHandle: typeof obj.relayHandle === "string" ? obj.relayHandle : "",
+            sendGrant: typeof obj.sendGrant === "string" ? obj.sendGrant : "",
+            installationId: typeof obj.installationId === "string" ? obj.installationId : "",
+            topic,
+            environment,
+            distribution: obj.distribution,
+            tokenDebugSuffix: obj.tokenDebugSuffix,
+          });
+        } else {
+          await registerApnsRegistration({
+            nodeId,
+            transport: "direct",
+            token: typeof obj.token === "string" ? obj.token : "",
+            topic,
+            environment,
+          });
+        }
       } catch (err) {
         ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
       }
