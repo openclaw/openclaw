@@ -118,6 +118,9 @@ describe("healthCommand", () => {
 
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalled();
+    expect(stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"))).toContain(
+      "Gateway probe duration: 5ms",
+    );
   });
 
   it("formats per-account probe timings", () => {
