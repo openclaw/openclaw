@@ -464,8 +464,13 @@ function findEntriesByName(name) {
     return sortContactEntries(exactMatches);
   }
 
-  const partialMatches = contactEntries.filter((entry) => entry.name.toLowerCase().includes(query));
-  return sortContactEntries(uniqueEntries(partialMatches));
+  const startsWithMatches = contactEntries.filter((entry) => entry.name.toLowerCase().startsWith(query));
+  if (startsWithMatches.length > 0) {
+    return sortContactEntries(uniqueEntries(startsWithMatches));
+  }
+
+  const containsMatches = contactEntries.filter((entry) => entry.name.toLowerCase().includes(query));
+  return sortContactEntries(uniqueEntries(containsMatches));
 }
 
 function resolveContact(contact) {
