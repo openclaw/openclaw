@@ -619,16 +619,38 @@ private struct ChatAssistantTextBody: View {
     let includesThinking: Bool
 
     var body: some View {
-        let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(segments) { segment in
-                let font = segment.kind == .thinking ? Font.system(size: 14).italic() : Font.system(size: 14)
-                ChatMarkdownRenderer(
-                    text: segment.text,
-                    context: .assistant,
-                    variant: self.markdownVariant,
-                    font: font,
-                    textColor: OpenClawChatTheme.assistantText)
+        // Check for adaptive card markers before standard markdown rendering
+        if let parsed = AdaptiveCardParser.parseAdaptiveCardMarkers(from: self.text) {
+            VStack(alignment: .leading, spacing: 10) {
+                if !parsed.fallbackText.isEmpty {
+                    let segments = AssistantTextParser.segments(
+                        from: parsed.fallbackText, includeThinking: self.includesThinking)
+                    ForEach(segments) { segment in
+                        let font = segment.kind == .thinking
+                            ? Font.system(size: 14).italic() : Font.system(size: 14)
+                        ChatMarkdownRenderer(
+                            text: segment.text,
+                            context: .assistant,
+                            variant: self.markdownVariant,
+                            font: font,
+                            textColor: OpenClawChatTheme.assistantText)
+                    }
+                }
+                AdaptiveCardView(card: parsed.card)
+            }
+        } else {
+            let segments = AssistantTextParser.segments(from: self.text, includeThinking: self.includesThinking)
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(segments) { segment in
+                    let font = segment.kind == .thinking
+                        ? Font.system(size: 14).italic() : Font.system(size: 14)
+                    ChatMarkdownRenderer(
+                        text: segment.text,
+                        context: .assistant,
+                        variant: self.markdownVariant,
+                        font: font,
+                        textColor: OpenClawChatTheme.assistantText)
+                }
             }
         }
     }
