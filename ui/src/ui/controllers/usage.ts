@@ -36,6 +36,7 @@ type UsageDateInterpretationParams = {
 };
 
 const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY = "openclaw.control.usage.date-params.v1";
+const LEGACY_USAGE_TIME_ZONE_STORAGE_KEY = "openclaw.control.usage.time-zone.v1";
 const LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY = "__default__";
 const LEGACY_USAGE_DATE_PARAMS_MODE_RE = /unexpected property ['"]mode['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_OFFSET_RE = /unexpected property ['"]utcoffset['"]/i;
@@ -45,27 +46,29 @@ const LEGACY_USAGE_DATE_PARAMS_UNSUPPORTED_MESSAGE =
   "This gateway is too old to support Usage time zone filters. Upgrade the gateway to use the Local/UTC toggle.";
 
 let legacyUsageDateParamsCache: Set<string> | null = null;
+let legacyUsageTimeZoneCache: Set<string> | null = null;
 
 function getLocalStorage(): Storage | null {
   return getSafeLocalStorage();
 }
 
-function loadLegacyUsageDateParamsCache(): Set<string> {
+function loadGatewayCompatibilityCache(storageKey: string, entryKey: string): Set<string> {
   const storage = getLocalStorage();
   if (!storage) {
     return new Set<string>();
   }
   try {
-    const raw = storage.getItem(LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY);
+    const raw = storage.getItem(storageKey);
     if (!raw) {
       return new Set<string>();
     }
-    const parsed = JSON.parse(raw) as { unsupportedGatewayKeys?: unknown } | null;
-    if (!parsed || !Array.isArray(parsed.unsupportedGatewayKeys)) {
+    const parsed = JSON.parse(raw) as Record<string, unknown> | null;
+    const values = parsed?.[entryKey];
+    if (!Array.isArray(values)) {
       return new Set<string>();
     }
     return new Set(
-      parsed.unsupportedGatewayKeys
+      values
         .filter((entry): entry is string => typeof entry === "string")
         .map((entry) => entry.trim())
         .filter(Boolean),
@@ -75,19 +78,50 @@ function loadLegacyUsageDateParamsCache(): Set<string> {
   }
 }
 
-function persistLegacyUsageDateParamsCache(cache: Set<string>) {
+function loadLegacyUsageDateParamsCache(): Set<string> {
+  return loadGatewayCompatibilityCache(
+    LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY,
+    "unsupportedGatewayKeys",
+  );
+}
+
+function loadLegacyUsageTimeZoneCache(): Set<string> {
+  return loadGatewayCompatibilityCache(
+    LEGACY_USAGE_TIME_ZONE_STORAGE_KEY,
+    "unsupportedTimeZoneGatewayKeys",
+  );
+}
+
+function persistGatewayCompatibilityCache(
+  storageKey: string,
+  entryKey: string,
+  cache: Set<string>,
+) {
   const storage = getLocalStorage();
   if (!storage) {
     return;
   }
   try {
-    storage.setItem(
-      LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY,
-      JSON.stringify({ unsupportedGatewayKeys: Array.from(cache) }),
-    );
+    storage.setItem(storageKey, JSON.stringify({ [entryKey]: Array.from(cache) }));
   } catch {
     // ignore quota/private-mode failures
   }
+}
+
+function persistLegacyUsageDateParamsCache(cache: Set<string>) {
+  persistGatewayCompatibilityCache(
+    LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY,
+    "unsupportedGatewayKeys",
+    cache,
+  );
+}
+
+function persistLegacyUsageTimeZoneCache(cache: Set<string>) {
+  persistGatewayCompatibilityCache(
+    LEGACY_USAGE_TIME_ZONE_STORAGE_KEY,
+    "unsupportedTimeZoneGatewayKeys",
+    cache,
+  );
 }
 
 function getLegacyUsageDateParamsCache(): Set<string> {
@@ -95,6 +129,13 @@ function getLegacyUsageDateParamsCache(): Set<string> {
     legacyUsageDateParamsCache = loadLegacyUsageDateParamsCache();
   }
   return legacyUsageDateParamsCache;
+}
+
+function getLegacyUsageTimeZoneCache(): Set<string> {
+  if (!legacyUsageTimeZoneCache) {
+    legacyUsageTimeZoneCache = loadLegacyUsageTimeZoneCache();
+  }
+  return legacyUsageTimeZoneCache;
 }
 
 function normalizeGatewayCompatibilityKey(gatewayUrl?: string): string {
@@ -125,6 +166,16 @@ function rememberLegacyDateInterpretation(state: UsageState) {
   persistLegacyUsageDateParamsCache(cache);
 }
 
+function shouldSendLegacyTimeZoneName(state: UsageState): boolean {
+  return !getLegacyUsageTimeZoneCache().has(resolveGatewayCompatibilityKey(state));
+}
+
+function rememberLegacyTimeZoneName(state: UsageState) {
+  const cache = getLegacyUsageTimeZoneCache();
+  cache.add(resolveGatewayCompatibilityKey(state));
+  persistLegacyUsageTimeZoneCache(cache);
+}
+
 function isLegacyDateInterpretationUnsupportedError(err: unknown): boolean {
   const message = toErrorMessage(err);
   return (
@@ -132,6 +183,16 @@ function isLegacyDateInterpretationUnsupportedError(err: unknown): boolean {
     (LEGACY_USAGE_DATE_PARAMS_MODE_RE.test(message) ||
       LEGACY_USAGE_DATE_PARAMS_OFFSET_RE.test(message) ||
       LEGACY_USAGE_DATE_PARAMS_TIME_ZONE_RE.test(message))
+  );
+}
+
+function isLegacyTimeZoneUnsupportedError(err: unknown): boolean {
+  const message = toErrorMessage(err);
+  return (
+    LEGACY_USAGE_DATE_PARAMS_INVALID_RE.test(message) &&
+    LEGACY_USAGE_DATE_PARAMS_TIME_ZONE_RE.test(message) &&
+    !LEGACY_USAGE_DATE_PARAMS_MODE_RE.test(message) &&
+    !LEGACY_USAGE_DATE_PARAMS_OFFSET_RE.test(message)
   );
 }
 
@@ -160,6 +221,7 @@ const formatUtcOffset = (timezoneOffsetMinutes: number): string => {
 const buildDateInterpretationParams = (
   timeZone: "local" | "utc",
   includeDateInterpretation: boolean,
+  includeTimeZoneName = true,
 ): UsageDateInterpretationParams | undefined => {
   if (!includeDateInterpretation) {
     return undefined;
@@ -167,16 +229,18 @@ const buildDateInterpretationParams = (
   if (timeZone === "utc") {
     return { mode: "utc" };
   }
+  const utcOffset = formatUtcOffset(new Date().getTimezoneOffset());
   const localTimeZoneName = resolveLocalTimeZoneName();
-  if (localTimeZoneName) {
+  if (includeTimeZoneName && localTimeZoneName) {
     return {
       mode: "specific",
       timeZone: localTimeZoneName,
+      utcOffset,
     };
   }
   return {
     mode: "specific",
-    utcOffset: formatUtcOffset(new Date().getTimezoneOffset()),
+    utcOffset,
   };
 };
 
@@ -223,15 +287,20 @@ export async function loadUsage(
   try {
     const startDate = overrides?.startDate ?? state.usageStartDate;
     const endDate = overrides?.endDate ?? state.usageEndDate;
+    const usageTimeZone = state.usageTimeZone;
     const includeDateInterpretation = shouldSendLegacyDateInterpretation(state);
-    if (!includeDateInterpretation) {
+    const includeTimeZoneName = shouldSendLegacyTimeZoneName(state);
+    if (!includeDateInterpretation && usageTimeZone !== "utc") {
       throw createLegacyUsageDateInterpretationUnsupportedError();
     }
-    const usageTimeZone = state.usageTimeZone;
-    const runUsageRequests = async (includeDateInterpretation: boolean) => {
+    const runUsageRequests = async (
+      includeDateInterpretation: boolean,
+      includeTimeZoneName: boolean,
+    ) => {
       const dateInterpretation = buildDateInterpretationParams(
         usageTimeZone,
         includeDateInterpretation,
+        includeTimeZoneName,
       );
       return await Promise.all([
         client.request("sessions.usage", {
@@ -262,20 +331,48 @@ export async function loadUsage(
     };
 
     try {
-      const [sessionsRes, costRes] = await runUsageRequests(includeDateInterpretation);
+      const [sessionsRes, costRes] = await runUsageRequests(
+        includeDateInterpretation,
+        includeTimeZoneName,
+      );
       applyUsageResults(sessionsRes, costRes);
     } catch (err) {
+      if (
+        usageTimeZone === "local" &&
+        includeDateInterpretation &&
+        includeTimeZoneName &&
+        isLegacyTimeZoneUnsupportedError(err)
+      ) {
+        rememberLegacyTimeZoneName(state);
+        try {
+          const [sessionsRes, costRes] = await runUsageRequests(true, false);
+          applyUsageResults(sessionsRes, costRes);
+        } catch (offsetErr) {
+          if (isLegacyDateInterpretationUnsupportedError(offsetErr)) {
+            rememberLegacyDateInterpretation(state);
+            throw createLegacyUsageDateInterpretationUnsupportedError();
+          }
+          throw offsetErr;
+        }
+        return;
+      }
       if (includeDateInterpretation && isLegacyDateInterpretationUnsupportedError(err)) {
         // Older gateways reject date-interpretation fields in `sessions.usage`.
-        // Remember this per gateway and fail loudly instead of silently changing semantics.
         rememberLegacyDateInterpretation(state);
-        throw createLegacyUsageDateInterpretationUnsupportedError();
+        if (usageTimeZone === "utc") {
+          const [sessionsRes, costRes] = await runUsageRequests(false, false);
+          applyUsageResults(sessionsRes, costRes);
+        } else {
+          throw createLegacyUsageDateInterpretationUnsupportedError();
+        }
       } else {
         throw err;
       }
     }
   } catch (err) {
     if (state.usageRequestVersion === requestVersion) {
+      state.usageResult = null;
+      state.usageCostSummary = null;
       state.usageError = toErrorMessage(err);
     }
   } finally {
@@ -291,11 +388,15 @@ export const __test = {
   buildDateInterpretationParams,
   toErrorMessage,
   isLegacyDateInterpretationUnsupportedError,
+  isLegacyTimeZoneUnsupportedError,
   normalizeGatewayCompatibilityKey,
   shouldSendLegacyDateInterpretation,
+  shouldSendLegacyTimeZoneName,
   rememberLegacyDateInterpretation,
+  rememberLegacyTimeZoneName,
   resetLegacyUsageDateParamsCache: () => {
     legacyUsageDateParamsCache = null;
+    legacyUsageTimeZoneCache = null;
   },
 };
 

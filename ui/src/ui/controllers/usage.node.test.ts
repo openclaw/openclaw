@@ -47,15 +47,17 @@ function createDeferred<T>() {
 }
 
 function expectSpecificTimezoneCalls(request: ReturnType<typeof vi.fn>, startCall: number): void {
+  const utcOffset = __test.formatUtcOffset(new Date().getTimezoneOffset());
   const localTimeZoneName = __test.resolveLocalTimeZoneName();
   const dateInterpretation = localTimeZoneName
     ? {
         mode: "specific" as const,
         timeZone: localTimeZoneName,
+        utcOffset,
       }
     : {
         mode: "specific" as const,
-        utcOffset: "UTC+5:30",
+        utcOffset,
       };
   expect(request).toHaveBeenNthCalledWith(startCall, "sessions.usage", {
     startDate: "2026-02-16",
@@ -68,6 +70,52 @@ function expectSpecificTimezoneCalls(request: ReturnType<typeof vi.fn>, startCal
     startDate: "2026-02-16",
     endDate: "2026-02-16",
     ...dateInterpretation,
+  });
+}
+
+function expectOffsetOnlyCalls(request: ReturnType<typeof vi.fn>, startCall: number): void {
+  const utcOffset = __test.formatUtcOffset(new Date().getTimezoneOffset());
+  expect(request).toHaveBeenNthCalledWith(startCall, "sessions.usage", {
+    startDate: "2026-02-16",
+    endDate: "2026-02-16",
+    mode: "specific",
+    utcOffset,
+    limit: 1000,
+    includeContextWeight: true,
+  });
+  expect(request).toHaveBeenNthCalledWith(startCall + 1, "usage.cost", {
+    startDate: "2026-02-16",
+    endDate: "2026-02-16",
+    mode: "specific",
+    utcOffset,
+  });
+}
+
+function expectUtcCalls(request: ReturnType<typeof vi.fn>, startCall: number): void {
+  expect(request).toHaveBeenNthCalledWith(startCall, "sessions.usage", {
+    startDate: "2026-02-16",
+    endDate: "2026-02-16",
+    mode: "utc",
+    limit: 1000,
+    includeContextWeight: true,
+  });
+  expect(request).toHaveBeenNthCalledWith(startCall + 1, "usage.cost", {
+    startDate: "2026-02-16",
+    endDate: "2026-02-16",
+    mode: "utc",
+  });
+}
+
+function expectLegacyUtcCalls(request: ReturnType<typeof vi.fn>, startCall: number): void {
+  expect(request).toHaveBeenNthCalledWith(startCall, "sessions.usage", {
+    startDate: "2026-02-16",
+    endDate: "2026-02-16",
+    limit: 1000,
+    includeContextWeight: true,
+  });
+  expect(request).toHaveBeenNthCalledWith(startCall + 1, "usage.cost", {
+    startDate: "2026-02-16",
+    endDate: "2026-02-16",
   });
 }
 
@@ -102,18 +150,7 @@ describe("usage controller date interpretation params", () => {
 
     await loadUsage(state);
 
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      mode: "utc",
-      limit: 1000,
-      includeContextWeight: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "usage.cost", {
-      startDate: "2026-02-16",
-      endDate: "2026-02-16",
-      mode: "utc",
-    });
+    expectUtcCalls(request, 1);
   });
 
   it("captures useful error strings in loadUsage", async () => {
@@ -131,7 +168,7 @@ describe("usage controller date interpretation params", () => {
     expect(__test.toErrorMessage({ reason: "nope" })).toBe('{"reason":"nope"}');
   });
 
-  it("fails loudly and remembers compatibility when sessions.usage rejects date interpretation params", async () => {
+  it("fails loudly and remembers compatibility when local mode hits a legacy gateway", async () => {
     const storage = createStorageMock();
     vi.stubGlobal("localStorage", storage as unknown as Storage);
     vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-330);
@@ -174,7 +211,99 @@ describe("usage controller date interpretation params", () => {
     vi.unstubAllGlobals();
   });
 
-  it("fails immediately when a gateway is already known to reject date interpretation params", async () => {
+  it("retries local mode with utcOffset when the gateway rejects only timeZone", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage as unknown as Storage);
+    vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-330);
+
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.usage") {
+        const record = (params ?? {}) as Record<string, unknown>;
+        if ("timeZone" in record) {
+          throw new Error("invalid sessions.usage params: at root: unexpected property 'timeZone'");
+        }
+        return { sessions: [{ key: "offset-only" }] };
+      }
+      return { daily: [], totals: { totalTokens: 3 } };
+    });
+
+    const state = createState(request, {
+      usageTimeZone: "local",
+      settings: { gatewayUrl: "ws://127.0.0.1:18789" },
+    });
+
+    await loadUsage(state);
+
+    expectSpecificTimezoneCalls(request, 1);
+    expectOffsetOnlyCalls(request, 3);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(state.usageError).toBeNull();
+    expect(state.usageResult).toEqual({ sessions: [{ key: "offset-only" }] });
+    expect(state.usageCostSummary).toEqual({ daily: [], totals: { totalTokens: 3 } });
+    expect(__test.shouldSendLegacyTimeZoneName(state)).toBe(false);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("retries once without date interpretation when utc mode hits a legacy gateway", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage as unknown as Storage);
+
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.usage") {
+        const record = (params ?? {}) as Record<string, unknown>;
+        if ("mode" in record || "timeZone" in record || "utcOffset" in record) {
+          throw new Error("invalid sessions.usage params: at root: unexpected property 'mode'");
+        }
+        return { sessions: [{ key: "legacy-ok" }] };
+      }
+      return { daily: [], totals: { totalTokens: 1 } };
+    });
+    const state = createState(request, {
+      usageTimeZone: "utc",
+      settings: { gatewayUrl: "ws://127.0.0.1:18789" },
+    });
+
+    await loadUsage(state);
+
+    expectUtcCalls(request, 1);
+    expectLegacyUtcCalls(request, 3);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(state.usageError).toBeNull();
+    expect(state.usageResult).toEqual({ sessions: [{ key: "legacy-ok" }] });
+    expect(state.usageCostSummary).toEqual({ daily: [], totals: { totalTokens: 1 } });
+    expect(__test.shouldSendLegacyDateInterpretation(state)).toBe(false);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("skips date interpretation params for utc mode when the gateway is already known to be legacy", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage as unknown as Storage);
+
+    const request = vi.fn(async (method: string) => {
+      return method === "sessions.usage"
+        ? { sessions: [{ key: "legacy-cached" }] }
+        : { daily: [], totals: { totalTokens: 2 } };
+    });
+    const state = createState(request, {
+      usageTimeZone: "utc",
+      settings: { gatewayUrl: "ws://127.0.0.1:18789" },
+    });
+    __test.rememberLegacyDateInterpretation(state);
+
+    await loadUsage(state);
+
+    expectLegacyUtcCalls(request, 1);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.usageError).toBeNull();
+    expect(state.usageResult).toEqual({ sessions: [{ key: "legacy-cached" }] });
+    expect(state.usageCostSummary).toEqual({ daily: [], totals: { totalTokens: 2 } });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("fails immediately for local mode when a gateway is already known to reject date interpretation params", async () => {
     const storage = createStorageMock();
     vi.stubGlobal("localStorage", storage as unknown as Storage);
 
@@ -248,6 +377,25 @@ describe("usage loading", () => {
     expect(state.usageResult).toEqual(latestUsageResult);
     expect(state.usageCostSummary).toEqual(latestCostSummary);
     expect(state.usageLoading).toBe(false);
+  });
+
+  it("clears stale usage data when the active request fails", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("request failed");
+    });
+    const state = createState(request, {
+      usageResult: {
+        sessions: [{ key: "stale" }],
+        aggregates: { messages: { total: 9 } },
+      } as never,
+      usageCostSummary: { daily: [], totals: { totalTokens: 99 } } as never,
+    });
+
+    await loadUsage(state);
+
+    expect(state.usageResult).toBeNull();
+    expect(state.usageCostSummary).toBeNull();
+    expect(state.usageError).toBe("request failed");
   });
 });
 
@@ -323,10 +471,13 @@ describe("usage detail loading", () => {
   });
 
   it("reinitializes request versions when state-like objects start uninitialized", () => {
-    const state = createState(vi.fn(async () => ({})), {
-      usageTimeSeriesRequestVersion: Number.NaN,
-      usageSessionLogsRequestVersion: Number.NaN,
-    });
+    const state = createState(
+      vi.fn(async () => ({})),
+      {
+        usageTimeSeriesRequestVersion: Number.NaN,
+        usageSessionLogsRequestVersion: Number.NaN,
+      },
+    );
 
     resetSessionUsageDetails(state);
 
