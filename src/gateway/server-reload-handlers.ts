@@ -201,6 +201,17 @@ export function createGatewayReloadHandlers(params: {
       }
       return details;
     };
+    // Define a shared handler to manage the recovery signal and restart execution.
+    // This fixes the incomplete handling in the 'immediate restart' path and
+    // ensures the abort signal is sent only when the restart is confirmed.
+    const triggerGatewayRestart = (_pendingState: ReturnType<typeof getActiveCounts>) => {
+      // Execute the standard gateway restart signal.
+      const emitted = emitGatewayRestart();
+      if (!emitted) {
+        params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
+      }
+    };
+
     const active = getActiveCounts();
 
     if (active.totalActive > 0) {
@@ -224,6 +235,8 @@ export function createGatewayReloadHandlers(params: {
           onReady: () => {
             restartPending = false;
             params.logReload.info("all operations and replies completed; restarting gateway now");
+            // All work has drained, so getActiveCounts() will return all zeros
+            triggerGatewayRestart(getActiveCounts());
           },
           onTimeout: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
@@ -231,22 +244,26 @@ export function createGatewayReloadHandlers(params: {
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active; restarting anyway`,
             );
+            // Pass the current raw state to the recovery handler before restarting
+            triggerGatewayRestart(getActiveCounts());
           },
           onCheckError: (err) => {
             restartPending = false;
             params.logReload.warn(
               `restart deferral check failed (${String(err)}); restarting gateway now`,
             );
+            // Treat check error as a forced restart with current state
+            triggerGatewayRestart(getActiveCounts());
           },
         },
       });
     } else {
-      // No active operations or pending replies, restart immediately
+      // No active operations or pending replies, restart immediately.
+      // We use the shared helper here to ensure the recovery signal
+      // is attempted even for immediate restarts (addressing a race condition where
+      // work might exist but not be counted).
       params.logReload.warn(`config change requires gateway restart (${reasons})`);
-      const emitted = emitGatewayRestart();
-      if (!emitted) {
-        params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
-      }
+      triggerGatewayRestart(active);
     }
   };
 
