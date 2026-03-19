@@ -94,6 +94,13 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
               `Headless mode is not supported with extension-based profile "${profileCtx.profile.name}". Use an openclaw-managed profile instead.`,
             );
           }
+          if (profileCtx.profile.attachOnly) {
+            return jsonError(
+              res,
+              400,
+              `Headless mode is not supported with attach-only profile "${profileCtx.profile.name}". Use an openclaw-managed profile instead.`,
+            );
+          }
         }
 
         // Scope headless override to this start operation only — don't permanently
