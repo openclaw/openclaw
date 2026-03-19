@@ -1,5 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../shared/deferred.js";
 import { DEFAULT_SEND_GAP_MS, enqueueSend } from "./send-queue.js";
 
 describe("enqueueSend", () => {
