@@ -264,6 +264,54 @@ describe("sessions tools", () => {
     expect(withToolsDetails.messages).toHaveLength(2);
   });
 
+  it("sessions_history strips reasoning blocks from assistant messages", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "thinking",
+                  thinking: "private chain of thought",
+                  thinkingSignature: "sig",
+                },
+                { type: "redacted_thinking", data: "sealed" },
+                { type: "text", text: "public answer" },
+              ],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-thinking-strip", {
+      sessionKey: "main",
+      includeTools: true,
+    });
+    const details = result.details as {
+      messages?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+      truncated?: boolean;
+    };
+    expect(details.truncated).toBe(true);
+    expect(details.messages).toHaveLength(1);
+    expect(details.messages?.[0]?.content).toEqual([{ type: "text", text: "public answer" }]);
+
+    const serialized = JSON.stringify(details);
+    expect(serialized).not.toContain("private chain of thought");
+    expect(serialized).not.toContain("redacted_thinking");
+    expect(serialized).not.toContain("thinkingSignature");
+  });
+
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {
     const oversized = Array.from({ length: 80 }, (_, idx) => ({
       role: "assistant",
@@ -338,7 +386,7 @@ describe("sessions tools", () => {
     expect(typeof textBlock?.text).toBe("string");
     expect((textBlock?.text ?? "").length <= 4015).toBe(true);
     const thinkingBlock = first?.content?.find((block) => block.type === "thinking");
-    expect(thinkingBlock?.thinkingSignature).toBeUndefined();
+    expect(thinkingBlock).toBeUndefined();
   });
 
   it("sessions_history enforces a hard byte cap even when a single message is huge", async () => {

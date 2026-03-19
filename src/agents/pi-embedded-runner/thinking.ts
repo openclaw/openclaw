@@ -12,8 +12,16 @@ export function isAssistantMessageWithContent(message: AgentMessage): message is
   );
 }
 
+function isReasoningContentBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "thinking" || type === "redacted_thinking";
+}
+
 /**
- * Strip all `type: "thinking"` content blocks from assistant messages.
+ * Strip all reasoning content blocks from assistant messages.
  *
  * If an assistant message becomes empty after stripping, it is replaced with
  * a synthetic `{ type: "text", text: "" }` block to preserve turn structure
@@ -33,7 +41,7 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
     const nextContent: AssistantContentBlock[] = [];
     let changed = false;
     for (const block of msg.content) {
-      if (block && typeof block === "object" && (block as { type?: unknown }).type === "thinking") {
+      if (isReasoningContentBlock(block)) {
         touched = true;
         changed = true;
         continue;
