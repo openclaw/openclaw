@@ -32,14 +32,14 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     From the repo root, run the setup script:
 
     ```bash
-    ./docker-setup.sh
+    ./scripts/docker/setup.sh
     ```
 
     This builds the gateway image locally. To use a pre-built image instead:
 
     ```bash
     export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
-    ./docker-setup.sh
+    ./scripts/docker/setup.sh
     ```
 
     Pre-built images are published at the
@@ -139,7 +139,7 @@ docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLA
 
 ### LAN vs loopback
 
-`docker-setup.sh` defaults `OPENCLAW_GATEWAY_BIND=lan` so host access to
+`scripts/docker/setup.sh` defaults `OPENCLAW_GATEWAY_BIND=lan` so host access to
 `http://127.0.0.1:18789` works with Docker port publishing.
 
 - `lan` (default): host browser and host CLI can reach the published gateway port.
@@ -180,7 +180,7 @@ See the [`ClawDock` Helper README](https://github.com/openclaw/openclaw/blob/mai
   <Accordion title="Enable agent sandbox for Docker gateway">
     ```bash
     export OPENCLAW_SANDBOX=1
-    ./docker-setup.sh
+    ./scripts/docker/setup.sh
     ```
 
     Custom socket path (e.g. rootless Docker):
@@ -188,7 +188,7 @@ See the [`ClawDock` Helper README](https://github.com/openclaw/openclaw/blob/mai
     ```bash
     export OPENCLAW_SANDBOX=1
     export OPENCLAW_DOCKER_SOCKET=/run/user/1000/docker.sock
-    ./docker-setup.sh
+    ./scripts/docker/setup.sh
     ```
 
     The script mounts `docker.sock` only after sandbox prerequisites pass. If
