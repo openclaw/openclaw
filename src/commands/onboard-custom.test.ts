@@ -220,7 +220,7 @@ describe("promptCustomApiConfig", () => {
     expect(parsedBody).toEqual({
       model: "gpt-4.1",
       input: "Hi",
-      max_output_tokens: 1,
+      max_output_tokens: 16,
       stream: false,
     });
   });
