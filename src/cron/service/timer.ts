@@ -1019,7 +1019,14 @@ export async function executeJobCore(
   job: CronJob,
   abortSignal?: AbortSignal,
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+  CronRunOutcome &
+    CronRunTelemetry & {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      resolvedDeliveryChannel?: string;
+      resolvedDeliveryTo?: string;
+      resolvedDeliveryAccountId?: string;
+    }
 > {
   const resolveAbortError = () => ({
     status: "error" as const,
