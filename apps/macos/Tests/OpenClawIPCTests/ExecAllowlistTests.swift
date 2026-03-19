@@ -264,6 +264,31 @@ struct ExecAllowlistTests {
         #expect(resolutions[0].executableName == "env")
     }
 
+    @Test func `approval evaluator resolves shell payload from canonical wrapper text`() async {
+        let command = ["/bin/sh", "-lc", "/usr/bin/printf ok"]
+        let rawCommand = "/bin/sh -lc \"/usr/bin/printf ok\""
+        let evaluation = await ExecApprovalEvaluator.evaluate(
+            command: command,
+            rawCommand: rawCommand,
+            cwd: nil,
+            envOverrides: ["PATH": "/usr/bin:/bin"],
+            agentId: nil)
+
+        #expect(evaluation.displayCommand == rawCommand)
+        #expect(evaluation.allowlistResolutions.count == 1)
+        #expect(evaluation.allowlistResolutions[0].resolvedPath == "/usr/bin/printf")
+        #expect(evaluation.allowlistResolutions[0].executableName == "printf")
+    }
+
+    @Test func `allow always patterns unwrap env wrapper modifiers to the inner executable`() {
+        let patterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
+            command: ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"],
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+
+        #expect(patterns == ["/usr/bin/printf"])
+    }
+
     @Test func `match all requires every segment to match`() {
         let first = ExecCommandResolution(
             rawExecutable: "echo",

@@ -23,7 +23,6 @@ struct ExecApprovalsStoreRefactorTests {
             let url = ExecApprovalsStore.fileURL()
             let firstIdentity = try Self.fileIdentity(at: url)
 
-            try await Task.sleep(nanoseconds: 1_100_000_000)
             _ = ExecApprovalsStore.ensureFile()
             let secondIdentity = try Self.fileIdentity(at: url)
 
