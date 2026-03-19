@@ -50,6 +50,7 @@
   "slack",
   "slack-core",
   "imessage",
+  "imessage-core",
   "open-prose",
   "phone-control",
   "qwen-portal-auth",
