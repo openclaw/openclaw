@@ -68,8 +68,8 @@ const readLatestAssistantReplyMock = vi.fn(
 const embeddedRunMock = {
   isEmbeddedPiRunActive: vi.fn(() => false),
   isEmbeddedPiRunStreaming: vi.fn(() => false),
-  queueEmbeddedPiMessage: vi.fn(() => false),
-  waitForEmbeddedPiRunEnd: vi.fn(async () => true),
+  queueEmbeddedPiMessage: vi.fn((_sessionId: string, _text: string) => false),
+  waitForEmbeddedPiRunEnd: vi.fn(async (_sessionId: string, _timeoutMs?: number) => true),
 };
 const { subagentRegistryMock } = vi.hoisted(() => ({
   subagentRegistryMock: {
