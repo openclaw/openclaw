@@ -7,7 +7,7 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
-import { buildPluginLoaderJitiOptions, shouldPreferNativeJiti } from "../plugins/sdk-alias.js";
+import { shouldPreferNativeJiti } from "../plugins/sdk-alias.js";
 import { openBoundaryFileSync } from "./boundary-file-read.js";
 
 const MATRIX_PLUGIN_ID = "matrix";
@@ -96,22 +96,20 @@ export function isMatrixLegacyCryptoInspectorAvailable(params: {
   return resolveMatrixLegacyCryptoInspectorPath(params).status === "ok";
 }
 
-const jitiLoaders = new Map<boolean, ReturnType<typeof createJiti>>();
+let jitiLoader: ReturnType<typeof createJiti> | null = null;
 const inspectorCache = new Map<string, Promise<MatrixLegacyCryptoInspector>>();
 
-function getJiti(modulePath: string) {
-  const tryNative = shouldPreferNativeJiti(modulePath);
-  const cached = jitiLoaders.get(tryNative);
-  if (cached) {
-    return cached;
+function getJiti() {
+  if (jitiLoader) {
+    return jitiLoader;
   }
 
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions({}),
-    tryNative,
+  jitiLoader = createJiti(import.meta.url, {
+    interopDefault: false,
+    tryNative: false,
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
-  jitiLoaders.set(tryNative, loader);
-  return loader;
+  return jitiLoader;
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -163,7 +161,7 @@ export async function loadMatrixLegacyCryptoInspector(params: {
   const pending = (async () => {
     const loaded: unknown = shouldPreferNativeJiti(helperPath)
       ? await import(pathToFileURL(helperPath).href)
-      : getJiti(helperPath)(helperPath);
+      : getJiti()(helperPath);
     const inspectLegacyMatrixCryptoStore = resolveInspectorExport(loaded);
     if (!inspectLegacyMatrixCryptoStore) {
       throw new Error(
