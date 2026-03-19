@@ -82,15 +82,12 @@ function toWatchGlobRoot(raw: string): string {
 }
 
 function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): string[] {
-  // Skills are defined by SKILL.md; watch only those files to avoid traversing
-  // or watching unrelated large trees (e.g. datasets) that can exhaust FDs.
+  // Watch skill directories instead of glob patterns (chokidar v5 removed glob support)
+  // SKILL.md filtering is done in the event handler to avoid FD exhaustion
   const targets = new Set<string>();
   for (const root of resolveWatchPaths(workspaceDir, config)) {
     const globRoot = toWatchGlobRoot(root);
-    // Some configs point directly at a skill folder.
-    targets.add(`${globRoot}/SKILL.md`);
-    // Standard layout: <skillsRoot>/<skillName>/SKILL.md
-    targets.add(`${globRoot}/*/SKILL.md`);
+    targets.add(globRoot);
   }
   return Array.from(targets).toSorted();
 }
@@ -180,6 +177,10 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   const state: SkillsWatchState = { watcher, pathsKey, debounceMs };
 
   const schedule = (changedPath?: string) => {
+    // Only trigger on SKILL.md files (chokidar v5 removed glob support)
+    if (changedPath && path.basename(changedPath) !== "SKILL.md") {
+      return;
+    }
     state.pendingPath = changedPath ?? state.pendingPath;
     if (state.timer) {
       clearTimeout(state.timer);
