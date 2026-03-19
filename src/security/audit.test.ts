@@ -3609,7 +3609,7 @@ description: test skill
         },
       },
       {
-        name: "includes the exact workspaceOnly config command in open-group remediation",
+        name: "includes workspaceOnly guidance for both global and agent-level overrides",
         cfg: {
           channels: { whatsapp: { groupPolicy: "open" } },
           tools: {
@@ -3622,7 +3622,8 @@ description: test skill
             (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
           );
           expect(finding, "expected open_groups_with_runtime_or_fs finding to exist").toBeDefined();
-          expect(finding?.remediation).toContain("openclaw config set tools.fs.workspaceOnly true");
+          expect(finding?.remediation).toContain("tools.fs.workspaceOnly=true");
+          expect(finding?.remediation).toContain("agent-level overrides");
         },
       },
       {
@@ -3678,23 +3679,30 @@ description: test skill
     );
   });
 
-  it("preserves the active profile in the workspaceOnly remediation command", async () => {
-    await withEnvAsync({ OPENCLAW_PROFILE: "danger" }, async () => {
-      const res = await audit({
-        channels: { whatsapp: { groupPolicy: "open" } },
-        tools: {
-          elevated: { enabled: false },
-          profile: "coding",
-        },
-      });
-      const finding = res.findings.find(
-        (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
-      );
-      expect(finding, "expected open_groups_with_runtime_or_fs finding to exist").toBeDefined();
-      expect(finding?.remediation).toContain(
-        "openclaw --profile danger config set tools.fs.workspaceOnly true",
-      );
+  it("does not imply the global workspaceOnly setting alone fixes agent overrides", async () => {
+    const res = await audit({
+      channels: { whatsapp: { groupPolicy: "open" } },
+      tools: {
+        elevated: { enabled: false },
+        profile: "coding",
+      },
+      agents: {
+        list: [
+          {
+            id: "worker",
+            tools: {
+              fs: { workspaceOnly: false },
+            },
+          },
+        ],
+      },
     });
+    const finding = res.findings.find(
+      (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+    );
+    expect(finding, "expected open_groups_with_runtime_or_fs finding to exist").toBeDefined();
+    expect(finding?.remediation).toContain("agents.list[].tools.fs.workspaceOnly");
+    expect(finding?.remediation).not.toContain("openclaw config set tools.fs.workspaceOnly true");
   });
 
   describe("maybeProbeGateway auth selection", () => {
