@@ -183,6 +183,7 @@ public struct OpenClawChatView: View {
             // Defer past the current layout pass to avoid "onChange tried to update
             // multiple times per frame" warnings during rapid streaming token delivery.
             Task { @MainActor in
+                guard self.hasPerformedInitialScroll, self.isPinnedToBottom else { return }
                 withAnimation(.snappy(duration: 0.22)) {
                     self.scrollPosition = self.scrollerBottomID
                 }
