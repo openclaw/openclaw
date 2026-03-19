@@ -13,6 +13,21 @@ import {
 
 describe("config doc baseline", () => {
   const tempRoots: string[] = [];
+  let sharedBaselinePromise: Promise<Awaited<ReturnType<typeof buildConfigDocBaseline>>> | null =
+    null;
+  let sharedRenderedPromise: Promise<
+    Awaited<ReturnType<typeof renderConfigDocBaselineStatefile>>
+  > | null = null;
+
+  function getSharedBaseline() {
+    sharedBaselinePromise ??= buildConfigDocBaseline();
+    return sharedBaselinePromise;
+  }
+
+  function getSharedRendered() {
+    sharedRenderedPromise ??= renderConfigDocBaselineStatefile(getSharedBaseline());
+    return sharedRenderedPromise;
+  }
 
   afterEach(async () => {
     await Promise.all(
@@ -31,7 +46,7 @@ describe("config doc baseline", () => {
   });
 
   it("normalizes array and record paths to wildcard form", async () => {
-    const baseline = await buildConfigDocBaseline();
+    const baseline = await getSharedBaseline();
     const paths = new Set(baseline.entries.map((entry) => entry.path));
 
     expect(paths.has("session.sendPolicy.rules.*.match.keyPrefix")).toBe(true);
@@ -40,7 +55,7 @@ describe("config doc baseline", () => {
   });
 
   it("includes core, channel, and plugin config metadata", async () => {
-    const baseline = await buildConfigDocBaseline();
+    const baseline = await getSharedBaseline();
     const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
 
     expect(byPath.get("gateway.auth.token")).toMatchObject({
@@ -58,7 +73,7 @@ describe("config doc baseline", () => {
   });
 
   it("preserves help text and tags from merged schema hints", async () => {
-    const baseline = await buildConfigDocBaseline();
+    const baseline = await getSharedBaseline();
     const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
     const tokenEntry = byPath.get("gateway.auth.token");
 
@@ -68,7 +83,7 @@ describe("config doc baseline", () => {
   });
 
   it("matches array help hints that still use [] notation", async () => {
-    const baseline = await buildConfigDocBaseline();
+    const baseline = await getSharedBaseline();
     const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
 
     expect(byPath.get("session.sendPolicy.rules.*.match.keyPrefix")).toMatchObject({
@@ -78,7 +93,7 @@ describe("config doc baseline", () => {
   });
 
   it("walks union branches for nested config keys", async () => {
-    const baseline = await buildConfigDocBaseline();
+    const baseline = await getSharedBaseline();
     const byPath = new Map(baseline.entries.map((entry) => [entry.path, entry]));
 
     expect(byPath.get("bindings.*")).toMatchObject({
@@ -121,11 +136,13 @@ describe("config doc baseline", () => {
   it("supports check mode for stale generated artifacts", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-doc-baseline-"));
     tempRoots.push(tempRoot);
+    const rendered = getSharedRendered();
 
     const initial = await writeConfigDocBaselineStatefile({
       repoRoot: tempRoot,
       jsonPath: "docs/.generated/config-baseline.json",
       statefilePath: "docs/.generated/config-baseline.jsonl",
+      rendered,
     });
     expect(initial.wrote).toBe(true);
 
@@ -134,6 +151,7 @@ describe("config doc baseline", () => {
       jsonPath: "docs/.generated/config-baseline.json",
       statefilePath: "docs/.generated/config-baseline.jsonl",
       check: true,
+      rendered,
     });
     expect(current.changed).toBe(false);
 
@@ -153,6 +171,7 @@ describe("config doc baseline", () => {
       jsonPath: "docs/.generated/config-baseline.json",
       statefilePath: "docs/.generated/config-baseline.jsonl",
       check: true,
+      rendered,
     });
     expect(stale.changed).toBe(true);
     expect(stale.wrote).toBe(false);
