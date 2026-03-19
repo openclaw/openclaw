@@ -124,6 +124,38 @@ function loadResolver(routeResult, hookRunner = null) {
     mode: "bound",
     binding: {
       conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "123456789",
+      },
+    },
+  });
+  const result = await resolver({
+    childSessionKey: "agent:coding:subagent:child",
+    requesterSessionKey: "agent:main:telegram:direct:123456789",
+    requesterOrigin: {
+      channel: "telegram",
+      accountId: "default",
+      to: "channel:123456789",
+      threadId: "123456789",
+    },
+    childRunId: "run-dm",
+    spawnMode: "run",
+    expectsCompletionMessage: true,
+  });
+  assert.equal(sandbox.capturedInput.requester.conversationId, "123456789");
+  assert.equal(sandbox.capturedInput.requester.parentConversationId, "123456789");
+  assert.equal(result.channel, "telegram");
+  assert.equal(result.accountId, "default");
+  assert.equal(result.to, "channel:123456789");
+  assert.equal(result.threadId, undefined);
+}
+
+{
+  const { resolver, sandbox } = loadResolver({
+    mode: "bound",
+    binding: {
+      conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "123-thread",

@@ -543,7 +543,10 @@ async function resolveSubagentCompletionOrigin(params: {
       return undefined;
     }
     if (channel === "telegram") {
-      const parsedTopic = threadId
+      const canDecodeRequesterTopic =
+        Boolean(threadId) &&
+        (!parentConversationId || String(threadId).trim() !== parentConversationId);
+      const parsedTopic = canDecodeRequesterTopic
         ? parseTelegramTopicConversation({
             conversationId: threadId,
             parentConversationId,
@@ -582,10 +585,15 @@ async function resolveSubagentCompletionOrigin(params: {
   if (route.mode === "bound" && route.binding) {
     const bindingConversationId = String(route.binding.conversation.conversationId).trim();
     if (route.binding.conversation.channel === "telegram") {
-      const parsedTopic = parseTelegramTopicConversation({
-        conversationId: bindingConversationId,
-        parentConversationId,
-      });
+      const canDecodeBindingTopic =
+        Boolean(bindingConversationId) &&
+        (!parentConversationId || bindingConversationId !== parentConversationId);
+      const parsedTopic = canDecodeBindingTopic
+        ? parseTelegramTopicConversation({
+            conversationId: bindingConversationId,
+            parentConversationId,
+          })
+        : null;
       if (parsedTopic) {
         return mergeDeliveryContext(
           {
@@ -603,7 +611,7 @@ async function resolveSubagentCompletionOrigin(params: {
         channel: route.binding.conversation.channel,
         accountId: route.binding.conversation.accountId,
         to: `channel:${bindingConversationId}`,
-        threadId,
+        threadId: route.binding.conversation.channel === "telegram" ? undefined : threadId,
       },
       requesterOrigin,
     );
