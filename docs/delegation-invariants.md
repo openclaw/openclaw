@@ -17,6 +17,7 @@ As interaction shifts from **Human-App-Cloud** to **Human-Agent-Cloud**, several
 - **Receipts** must anchor accountability before irreversible commits.
 
 Without a thin waist, ecosystems drift to:
+
 1) **Fragmentation / lock-in** (each runtime defines its own semantics)
 2) **Core creep / bloat** (policies/adapters accumulate until the runtime becomes the next platform/OS)
 
@@ -44,6 +45,7 @@ This draft defines only **three primitives** and their **minimal required fields
 **Goal:** encode bounded, revocable authority with explicit scope.
 
 Required fields (minimal):
+
 - `confirm_id`
 - `timestamp` (ISO-8601)
 - `scope` (what is authorized)
@@ -53,6 +55,7 @@ Required fields (minimal):
 - `risk_level` (e.g., `"low" | "medium" | "high"`)
 
 Scope (minimal structure):
+
 - `workflow_id`
 - `step_ids` (optional; if omitted, applies to a workflow scope)
 - `targets` (optional; resource identifiers)
@@ -86,12 +89,14 @@ Scope (minimal structure):
 **Goal:** make "Stop" deterministic and auditably scoped in a multi-step delegated workflow.
 
 Required fields (minimal):
+
 - `request_id`
 - `timestamp` (ISO-8601)
 - `workflow_id`
 - `stop_scope` (`"step" | "chain"`)
 
 Optional fields (recommended):
+
 - `step_id` (required if `stop_scope="step"`)
 - `takeover_mode` (`"human" | "pause" | "delegate_to_other_agent"`)
 - `reason`
@@ -115,6 +120,7 @@ Optional fields (recommended):
 **Goal:** create an auditable record before irreversible commits.
 
 Required fields (minimal):
+
 - `receipt_id`
 - `timestamp` (ISO-8601)
 - `actor` (runtime/gateway/agent identity)
@@ -157,6 +163,7 @@ Optional fields (recommended):
 **Goal:** allow governance/policy/auditing to be pluggable or externalizable (service/cloud-side) rather than accumulating inside core.
 
 Suggested hooks (names are illustrative):
+
 - `before_confirm(confirm_request)`
 - `after_confirm(confirm_record)`
 - `before_execute(action_request)`
@@ -166,6 +173,7 @@ Suggested hooks (names are illustrative):
 - `emit_receipt(receipt_record)`
 
 Notes:
+
 - This is **not** attempting to define a universal tool protocol.
 - Tool routing protocols (e.g., MCP/A2A/tool routers) help integration but do not guarantee these invariants.
 - UI fallback can remain a universal path for closed/legacy systems, while structured execution can use faster paths where available.
