@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { messageCommand } from "../../../commands/message.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
-import { callGateway, buildGatewayConnectionDetails } from "../../../gateway/call.js";
+import { callGateway, randomIdempotencyKey } from "../../../gateway/call.js";
 import { runGlobalGatewayStopSafely } from "../../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
@@ -34,33 +34,59 @@ async function runPluginStopHooks(): Promise<void> {
 }
 
 /**
+ * Classify an error thrown by callGateway:
+ *   - "unreachable": connection-level failure; gateway is not running or not reachable
+ *   - "server": the gateway was reached but returned an error (invalid params, auth, etc.)
+ */
+function classifyGatewayError(err: unknown): "unreachable" | "server" {
+  if (!(err instanceof Error)) return "unreachable";
+  const msg = err.message.toLowerCase();
+  // Connection-level errors: ECONNREFUSED, WebSocket failures, timeout before connect, etc.
+  if (
+    msg.includes("econnrefused") ||
+    msg.includes("connect failed") ||
+    msg.includes("gateway connect failed") ||
+    msg.includes("connect timed out") ||
+    msg.includes("websocket error")
+  ) {
+    return "unreachable";
+  }
+  // GatewayClientRequestError means the gateway was reachable and returned an error response
+  if (err.constructor?.name === "GatewayClientRequestError") return "server";
+  return "unreachable";
+}
+
+/**
  * Try to send a message via the gateway RPC "send" method.
- * Returns true on success, false if the gateway is unreachable or returns an error.
+ *
+ * Returns:
+ *   - { ok: true, result } on success
+ *   - { ok: false, reason: "unreachable" } if the gateway is not reachable (fall through to local)
+ *   - { ok: false, reason: "server", error } if the gateway returned an error (surface to user)
  *
  * This avoids the "No active WhatsApp Web listener" error that occurs when the
  * CLI tries to use the WhatsApp plugin directly (in its own process, where no
  * listener exists). The gateway process always has the active listener.
  */
-async function trySendViaGateway(opts: Record<string, unknown>): Promise<boolean> {
+async function trySendViaGateway(opts: Record<string, unknown>): Promise<
+  | { ok: true; result: unknown }
+  | { ok: false; reason: "unreachable" }
+  | { ok: false; reason: "server"; error: Error }
+> {
   const target = typeof opts.target === "string" ? opts.target.trim() : "";
   const message = typeof opts.message === "string" ? opts.message : "";
   const channel = typeof opts.channel === "string" ? opts.channel : undefined;
   const accountId = typeof opts.accountId === "string" ? opts.accountId : undefined;
   const mediaUrl = typeof opts.media === "string" ? opts.media : undefined;
+  const threadId = typeof opts.threadId === "string" ? opts.threadId : undefined;
+  const gifPlayback = typeof opts.gifPlayback === "boolean" ? opts.gifPlayback : undefined;
 
-  if (!target || (!message && !mediaUrl)) return false;
+  if (!target || (!message && !mediaUrl)) return { ok: false, reason: "unreachable" };
 
   try {
-    const connDetails = buildGatewayConnectionDetails({
+    const result = await callGateway({
       url: typeof opts.url === "string" ? opts.url : undefined,
-    });
-    const url = connDetails.url;
-    const token = typeof opts.token === "string" ? opts.token : undefined;
-    const idempotencyKey = `cli-send-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-    await callGateway({
-      url,
-      token,
+      token: typeof opts.token === "string" ? opts.token : undefined,
       method: "send",
       params: {
         to: target,
@@ -68,7 +94,9 @@ async function trySendViaGateway(opts: Record<string, unknown>): Promise<boolean
         channel,
         accountId,
         mediaUrl,
-        idempotencyKey,
+        threadId,
+        gifPlayback,
+        idempotencyKey: randomIdempotencyKey(),
       },
       expectFinal: false,
       timeoutMs: 15_000,
@@ -76,10 +104,13 @@ async function trySendViaGateway(opts: Record<string, unknown>): Promise<boolean
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
 
-    return true;
-  } catch {
-    // Gateway unreachable or error — fall through to local plugin path
-    return false;
+    return { ok: true, result };
+  } catch (err) {
+    const reason = classifyGatewayError(err);
+    if (reason === "server") {
+      return { ok: false, reason: "server", error: err instanceof Error ? err : new Error(String(err)) };
+    }
+    return { ok: false, reason: "unreachable" };
   }
 }
 
@@ -109,12 +140,25 @@ export function createMessageCliHelpers(
     // listener" errors even when the gateway is connected and healthy.
     if (action === "send" && !opts.dryRun) {
       const normalized = normalizeMessageOptions(opts);
-      const sentViaGateway = await trySendViaGateway(normalized);
-      if (sentViaGateway) {
+      const gatewayResult = await trySendViaGateway(normalized);
+
+      if (gatewayResult.ok) {
+        // Gateway delivered successfully — emit output respecting --json flag
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify({ ok: true, result: gatewayResult.result }));
+        }
         defaultRuntime.exit(0);
         return;
       }
-      // Gateway path failed — fall through to local plugin path below
+
+      if (gatewayResult.reason === "server") {
+        // Gateway was reachable but returned an error — surface it, don't fall through
+        defaultRuntime.error(danger(gatewayResult.error.message));
+        defaultRuntime.exit(1);
+        return;
+      }
+
+      // reason === "unreachable": gateway not running — fall through to local plugin path
     }
 
     ensurePluginRegistryLoaded();
