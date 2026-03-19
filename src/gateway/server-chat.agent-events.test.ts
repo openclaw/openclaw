@@ -75,7 +75,6 @@ describe("agent event handler", () => {
       toolEventRecipients,
       thinkingEventRecipients,
       sessionEventSubscribers,
-      getConnCaps: () => undefined,
     });
 
     return {

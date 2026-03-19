@@ -5,7 +5,6 @@ import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
-import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "./protocol/client-info.js";
 import {
   deriveGatewaySessionLifecycleSnapshot,
   persistGatewaySessionLifecycleEvent,
@@ -454,8 +453,6 @@ export type AgentEventHandlerOptions = {
   thinkingEventRecipients: EventRecipientRegistry;
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
-  /** Return the caps array for the given connId, or undefined if not found. */
-  getConnCaps: (connId: string) => string[] | undefined;
 };
 
 export function createAgentEventHandler({
@@ -469,7 +466,6 @@ export function createAgentEventHandler({
   toolEventRecipients,
   thinkingEventRecipients,
   sessionEventSubscribers,
-  getConnCaps,
 }: AgentEventHandlerOptions) {
   const buildSessionEventSnapshot = (sessionKey: string, evt?: AgentEventPayload) => {
     const row = loadGatewaySessionRow(sessionKey);
@@ -761,32 +757,11 @@ export function createAgentEventHandler({
       }
     } else if (isThinkingEvent) {
       // Only send thinking events to clients that registered for thinking-events capability.
+      // dropIfSlow prevents token-by-token reasoning frames from closing the connection
+      // of a UI on a slow link or backgrounded tab.
       const recipients = thinkingEventRecipients.get(evt.runId);
       if (recipients && recipients.size > 0) {
-        broadcastToConnIds("agent", agentPayload, recipients);
-      }
-      // Mirror thinking events onto a session-scoped event so operator UIs or
-      // clients that (re-)attach mid-run can receive the in-flight reasoning
-      // stream without knowing the runId in advance. This mirrors the same
-      // pattern used for tool events above. Only subscribers that have declared
-      // the thinking-events capability receive this event; others are filtered
-      // out here to keep THINKING_EVENTS cap enforcement effective for late-join
-      // clients.
-      if (sessionKey) {
-        const allSessionSubscribers = sessionEventSubscribers.getAll();
-        if (allSessionSubscribers.size > 0) {
-          const thinkingSubscribers = new Set<string>();
-          for (const connId of allSessionSubscribers) {
-            if (hasGatewayClientCap(getConnCaps(connId), GATEWAY_CLIENT_CAPS.THINKING_EVENTS)) {
-              thinkingSubscribers.add(connId);
-            }
-          }
-          if (thinkingSubscribers.size > 0) {
-            broadcastToConnIds("session.thinking", agentPayload, thinkingSubscribers, {
-              dropIfSlow: true,
-            });
-          }
-        }
+        broadcastToConnIds("agent", agentPayload, recipients, { dropIfSlow: true });
       }
     } else {
       broadcast("agent", agentPayload);

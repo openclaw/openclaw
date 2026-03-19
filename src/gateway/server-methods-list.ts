@@ -123,7 +123,6 @@ export const GATEWAY_EVENTS = [
   "chat",
   "session.message",
   "session.tool",
-  "session.thinking",
   "sessions.changed",
   "presence",
   "tick",
