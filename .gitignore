@@ -87,6 +87,8 @@ IDENTITY.md
 USER.md
 .tgz
 .idea
+openclaw-image.tar
+docker-build-and-save-image.sh
 
 # local tooling
 .serena/
