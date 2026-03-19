@@ -1,1 +1,1 @@
-export * from "../../src/plugin-sdk/msteams.js";
+export * from "openclaw/plugin-sdk/msteams";
