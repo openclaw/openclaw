@@ -21,7 +21,7 @@ import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime, type CreatePluginRuntimeOptions } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
@@ -440,7 +440,17 @@ function warnAboutUntrackedLoadedPlugins(params: {
 }
 
 function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
-  setActivePluginRegistry(registry, cacheKey);
+  const current = getActivePluginRegistry();
+  // Guard: only overwrite the global registry when no registry has been
+  // established yet (empty/default) or when re-activating the same instance.
+  // This prevents a second `loadOpenClawPlugins` call (e.g. from
+  // `resolvePluginTools`) from replacing the gateway's live registry, which
+  // would cause HTTP routes registered in the original registry to become
+  // unreachable (404).  See #47625.
+  const isEmptyDefault = current != null && current.plugins.length === 0 && current.diagnostics.length === 0;
+  if (current == null || current === registry || isEmptyDefault) {
+    setActivePluginRegistry(registry, cacheKey);
+  }
   initializeGlobalHookRunner(registry);
 }
 
