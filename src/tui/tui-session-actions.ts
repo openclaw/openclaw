@@ -8,7 +8,12 @@ import {
 import type { ChatLog } from "./components/chat-log.js";
 import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
 import { collectUserPromptPivots } from "./prompt-ids.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  isCommandMessage,
+  isPluginRegistrationOutput,
+} from "./tui-formatters.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionBtwPresenter = {
@@ -313,14 +318,20 @@ export function createSessionActions(context: SessionActionContext) {
         promptIdByUserIndex.set(pivot.userMessageIndex, pivot.promptId);
       }
       let userMessageIndex = 0;
-      for (const entry of record.messages ?? []) {
+      const messages = record.messages ?? [];
+      const yieldEvery = 30;
+      for (let i = 0; i < messages.length; i++) {
+        if (i > 0 && i % yieldEvery === 0) {
+          await new Promise<void>((r) => setImmediate(r));
+        }
+        const entry = messages[i];
         if (!entry || typeof entry !== "object") {
           continue;
         }
         const message = entry as Record<string, unknown>;
         if (isCommandMessage(message)) {
           const text = extractTextFromMessage(message);
-          if (text) {
+          if (text && !isPluginRegistrationOutput(text)) {
             chatLog.addSystem(text);
           }
           continue;

@@ -1,5 +1,10 @@
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  isCommandMessage,
+  isPluginRegistrationOutput,
+} from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
@@ -241,7 +246,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (isCommandMessage(evt.message)) {
         maybeRefreshHistoryForRun(evt.runId);
         const text = extractTextFromMessage(evt.message);
-        if (text) {
+        if (text && !isPluginRegistrationOutput(text)) {
           chatLog.addSystem(text);
         }
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });

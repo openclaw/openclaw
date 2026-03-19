@@ -22,15 +22,6 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
     lines.push(`${linkLabel}: ${linked ? "linked" : "not linked"}${authAge}`);
   }
 
-  const providerSummary = Array.isArray(summary.providerSummary) ? summary.providerSummary : [];
-  if (providerSummary.length > 0) {
-    lines.push("");
-    lines.push("System:");
-    for (const line of providerSummary) {
-      lines.push(`  ${line}`);
-    }
-  }
-
   const heartbeatAgents = summary.heartbeat?.agents ?? [];
   if (heartbeatAgents.length > 0) {
     const heartbeatParts = heartbeatAgents.map((agent) => {
@@ -79,12 +70,6 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
         `- ${entry.key}${entry.kind ? ` [${entry.kind}]` : ""} | ${ageLabel} | model ${model} | ${usage}${flags}`,
       );
     }
-  }
-
-  const queued = Array.isArray(summary.queuedSystemEvents) ? summary.queuedSystemEvents : [];
-  if (queued.length > 0) {
-    const preview = queued.slice(0, 3).join(" | ");
-    lines.push(`Queued system events (${queued.length}): ${preview}`);
   }
 
   return lines;

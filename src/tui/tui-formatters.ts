@@ -345,6 +345,23 @@ export function isCommandMessage(message: unknown): boolean {
   return (message as Record<string, unknown>).command === true;
 }
 
+/** True if text looks like plugin registration diagnostics (omit from TUI for runtime-only display). */
+export function isPluginRegistrationOutput(text: string): boolean {
+  if (!text || typeof text !== "string") {
+    return false;
+  }
+  const t = text.trim();
+  if (!t.includes("[plugins]")) {
+    return false;
+  }
+  return (
+    t.includes("registered") ||
+    (t.includes("Endpoint:") && t.includes("Model:")) ||
+    t.includes("Commands:") ||
+    /NemoClaw|registered\s*\n/i.test(t)
+  );
+}
+
 export function formatTokens(total?: number | null, context?: number | null) {
   if (total == null && context == null) {
     return "tokens ?";

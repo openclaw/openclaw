@@ -993,18 +993,22 @@ export async function runTui(opts: TuiOptions) {
     const reconnected = wasDisconnected;
     wasDisconnected = false;
     setConnectionStatus("connected");
+    tui.requestRender();
     void (async () => {
-      await refreshAgents();
-      updateHeader();
-      await loadHistory();
-      setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);
-      tui.requestRender();
-      if (!autoMessageSent && autoMessage) {
-        autoMessageSent = true;
-        await sendMessage(autoMessage);
+      try {
+        await refreshAgents();
+        updateHeader();
+        tui.requestRender();
+        await loadHistory();
+        setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);
+        if (!autoMessageSent && autoMessage) {
+          autoMessageSent = true;
+          await sendMessage(autoMessage);
+        }
+      } finally {
+        updateFooter();
+        tui.requestRender();
       }
-      updateFooter();
-      tui.requestRender();
     })();
   };
 
