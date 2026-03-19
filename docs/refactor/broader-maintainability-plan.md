@@ -105,3 +105,4 @@ No user-facing CLI flag removals in stages 1 to 3.
 ## Verification note
 
 This branch keeps runtime-worktree isolation and does not touch protected Telegram runtime files.
+`src/wizard/setup.finalize.test.ts` still has pre-existing sticky runner shutdown behavior in this environment, so that test-runner investigation is explicitly deferred as a separate follow-up instead of keeping this maintainability pass open.

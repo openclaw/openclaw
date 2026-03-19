@@ -123,6 +123,7 @@ Do not edit these files under this plan:
 ## Notes
 
 - This maintainability pass ends at Stage 3B. Stages 4 and 5 are intentionally deferred into a separate follow-on initiative.
+- `src/wizard/setup.finalize.test.ts` still shows pre-existing sticky runner shutdown behavior in this environment. Track that as a separate follow-up, and fix it before the next substantial change to `src/wizard/setup.finalize.ts`.
 - Keep runtime-worktree isolation strict.
 - If unrelated changes appear, work around them. Do not revert other contributors.
 - Do not touch `docs/zh-CN/**` unless explicitly requested.
