@@ -38,6 +38,29 @@ export async function handleSubagentsUnfocusAction(
     return undefined;
   })();
 
+  // Feishu sender-scoped fallback: bindings in group_topic_sender scope are
+  // keyed with :sender:<openId>. Try sender-scoped lookup when topic-only misses.
+  const resolveFeishuBinding = () => {
+    if (channel !== "feishu" || !conversationId) {
+      return null;
+    }
+    const base = bindingService.resolveByConversation({ channel, accountId, conversationId });
+    if (base) {
+      return base;
+    }
+    if (conversationId.includes(":topic:")) {
+      const senderId = (params.command.senderId ?? "").trim();
+      if (senderId) {
+        return bindingService.resolveByConversation({
+          channel,
+          accountId,
+          conversationId: `${conversationId}:sender:${senderId}`,
+        });
+      }
+    }
+    return null;
+  };
+
   if (!conversationId) {
     if (channel === "discord") {
       return stopWithText("⚠️ /unfocus must be run inside a Discord thread.");
@@ -52,11 +75,10 @@ export async function handleSubagentsUnfocusAction(
     );
   }
 
-  const binding = bindingService.resolveByConversation({
-    channel,
-    accountId,
-    conversationId,
-  });
+  const binding =
+    channel === "feishu"
+      ? resolveFeishuBinding()
+      : bindingService.resolveByConversation({ channel, accountId, conversationId });
   if (!binding) {
     return stopWithText(
       channel === "discord"
