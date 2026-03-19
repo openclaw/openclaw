@@ -118,6 +118,7 @@ Docs: https://docs.openclaw.ai
 - Slack/startup: harden `@slack/bolt` import interop across current bundled runtime shapes so Slack monitors no longer crash with `App is not a constructor` after plugin-sdk bundling changes. (#45953) Thanks @merc1305.
 - Windows/gateway status: accept `schtasks` `Last Result` output as an alias for `Last Run Result`, so running scheduled-task installs no longer show `Runtime: unknown`. (#47844) Thanks @MoerAI.
 - ACP/acpx: resolve the bundled plugin root from the actual plugin directory so plugin-local installs stay under `dist/extensions/acpx` instead of escaping to `dist/extensions` and failing runtime setup. (#47601) Thanks @ngutman.
+- Gateway/WS handshake: raise the default pre-auth handshake timeout to 10 seconds and add `OPENCLAW_HANDSHAKE_TIMEOUT_MS` as a runtime override so busy local gateways stop dropping healthy CLI connections at 3 seconds. (#49262) Thanks @fuller-stack-dev.
 - Gateway/websocket pairing bypass for disabled auth: skip device-pairing enforcement for Control UI operator sessions when `gateway.auth.mode=none`, so reverse-proxied dashboards no longer get stuck on `pairing required` despite auth being explicitly disabled. (#47148) Thanks @ademczuk.
 - Control UI/model switching: preserve the selected provider prefix when switching models from the chat dropdown, so multi-provider setups no longer send `anthropic/gpt-5.2`-style mismatches when the user picked `openai/gpt-5.2`. (#47581) Thanks @chrishham.
 - Control UI/storage: scope persisted settings keys by gateway base path, with migration from the legacy shared key, so multiple gateways under one domain stop overwriting each other's dashboard preferences. (#47932) Thanks @bobBot-claw.
@@ -164,6 +165,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/active-listener: pin the active listener registry to a `globalThis` singleton so split WhatsApp bundle chunks share one listener map and outbound sends stop missing the registered session. (#47433) Thanks @clawdia67.
 - Plugins/WhatsApp: share split-load singleton state for plugin command registration and active WhatsApp listeners so duplicate module graphs no longer lose native plugin commands or outbound listener state. (#50418) Thanks @huntharo.
 - Onboarding/custom providers: keep Azure AI Foundry `*.services.ai.azure.com` custom endpoints on the selected compatibility path instead of forcing Responses, so chat-completions Foundry models still work after setup. Fixes #50528. (#50535) Thanks @obviyus.
+- Plugins/update: let `openclaw plugins update <npm-spec>` target tracked npm installs by dist-tag or exact version, and preserve the recorded npm spec for later id-based updates. (#49998) Thanks @huntharo.
 
 ### Breaking
 

@@ -14,6 +14,10 @@
         "reason": "Mutates process.cwd() and core loader seams."
       },
       {
+        "file": "src/config/doc-baseline.test.ts",
+        "reason": "Rebuilds bundled config baselines through many channel schema subprocesses; keep out of the shared lane."
+      },
+      {
         "file": "extensions/imessage/src/monitor.shutdown.unhandled-rejection.test.ts",
         "reason": "Touches process-level unhandledRejection listeners."
       }
@@ -22,6 +26,90 @@
       {
         "file": "src/cli/command-secret-gateway.test.ts",
         "reason": "Clean in isolation, but can hang after sharing the broad lane."
+      },
+      {
+        "file": "src/config/doc-baseline.test.ts",
+        "reason": "Builds the full bundled config schema graph and is safer outside the shared unit-fast heap."
+      },
+      {
+        "file": "src/secrets/runtime.test.ts",
+        "reason": "Secrets runtime coverage retained the largest unit-fast heap spike in CI and is safer outside the shared lane."
+      },
+      {
+        "file": "src/secrets/runtime.integration.test.ts",
+        "reason": "Secrets runtime activation/write-through integration coverage is CPU-heavy and safer outside the shared unit-fast lane."
+      },
+      {
+        "file": "src/memory/index.test.ts",
+        "reason": "Memory index coverage retained nearly 1 GiB in unit-fast on Linux CI and is safer in its own fork."
+      },
+      {
+        "file": "src/plugins/http-registry.test.ts",
+        "reason": "Plugin HTTP registry coverage retained a broad plugin graph in unit-fast and is safer outside the shared lane."
+      },
+      {
+        "file": "src/infra/channel-summary.test.ts",
+        "reason": "Channel summary coverage retained a large channel/plugin graph in unit-fast on Linux CI."
+      },
+      {
+        "file": "src/config/redact-snapshot.test.ts",
+        "reason": "Snapshot redaction coverage produced a large retained heap jump in unit-fast on Linux CI."
+      },
+      {
+        "file": "src/config/redact-snapshot.restore.test.ts",
+        "reason": "Snapshot restore coverage retains a broad schema/redaction graph and is safer outside the shared lane."
+      },
+      {
+        "file": "src/config/redact-snapshot.schema.test.ts",
+        "reason": "Schema-backed redaction round-trip coverage loads the full config schema graph and is safer outside the shared lane."
+      },
+      {
+        "file": "src/infra/outbound/message-action-runner.media.test.ts",
+        "reason": "Outbound media action coverage retained a large media/plugin graph in unit-fast."
+      },
+      {
+        "file": "src/media-understanding/apply.echo-transcript.test.ts",
+        "reason": "Media understanding echo transcript coverage retained a large processing graph in unit-fast."
+      },
+      {
+        "file": "src/plugin-sdk/index.test.ts",
+        "reason": "Plugin SDK index coverage retained a broad export graph in unit-fast and is safer outside the shared lane."
+      },
+      {
+        "file": "src/plugin-sdk/index.bundle.test.ts",
+        "reason": "Plugin SDK bundle validation builds and imports the full bundled export graph and is safer outside the shared lane."
+      },
+      {
+        "file": "src/config/sessions.cache.test.ts",
+        "reason": "Session cache coverage retained a large config/session graph in unit-fast on Linux CI."
+      },
+      {
+        "file": "src/secrets/runtime.coverage.test.ts",
+        "reason": "Secrets runtime coverage tests retained substantial heap in unit-fast and are safer isolated."
+      },
+      {
+        "file": "src/channels/plugins/contracts/registry.contract.test.ts",
+        "reason": "Plugin contract registry coverage retained a large cross-plugin graph in both failing unit-fast shards."
+      },
+      {
+        "file": "src/memory/manager.get-concurrency.test.ts",
+        "reason": "Memory manager cache concurrency coverage can spike shared unit-fast heap on Linux Node 24."
+      },
+      {
+        "file": "src/memory/manager.vector-dedupe.test.ts",
+        "reason": "Vector dedupe coverage exercises the memory manager/sqlite stack and is safer outside shared unit-fast forks."
+      },
+      {
+        "file": "src/memory/manager.watcher-config.test.ts",
+        "reason": "Watcher config coverage reuses memory manager caches and is safer outside shared unit-fast forks."
+      },
+      {
+        "file": "src/memory/manager.embedding-batches.test.ts",
+        "reason": "Embedding batch coverage inflates memory manager state and is safer outside shared unit-fast forks."
+      },
+      {
+        "file": "src/memory/manager.readonly-recovery.test.ts",
+        "reason": "Readonly recovery coverage exercises sqlite reopen flows and is safer outside shared unit-fast forks."
       }
     ],
     "threadSingleton": [
