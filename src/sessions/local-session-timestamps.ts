@@ -17,10 +17,12 @@ type MutableSessionManager = SessionManager & {
 
 const SESSION_MANAGER_WRAPPED = Symbol("openclaw.session-manager-local-timestamps");
 const NORMALIZE_ON_REWRITE = Symbol("openclaw.session-manager-normalize-on-rewrite");
+const HEADER_NORMALIZED = Symbol("openclaw.session-manager-header-normalized");
 
 type MutableSessionManagerWithFlags = MutableSessionManager & {
   [SESSION_MANAGER_WRAPPED]?: boolean;
   [NORMALIZE_ON_REWRITE]?: boolean;
+  [HEADER_NORMALIZED]?: boolean;
 };
 
 function toDate(value: SessionTimestampInput): Date {
@@ -62,11 +64,12 @@ function normalizeEntryTimestamp(entry: SessionEntryLike | undefined): void {
 }
 
 function normalizePendingHeader(sessionManager: MutableSessionManagerWithFlags): void {
-  if (sessionManager.flushed) {
+  if (sessionManager.flushed || sessionManager[HEADER_NORMALIZED]) {
     return;
   }
   const header = sessionManager.fileEntries?.find((entry) => entry?.type === "session");
   normalizeEntryTimestamp(header);
+  sessionManager[HEADER_NORMALIZED] = true;
 }
 
 function normalizeAllEntries(sessionManager: MutableSessionManagerWithFlags): void {
@@ -82,6 +85,9 @@ export function wrapSessionManagerWithLocalTimestamps(
   }
   mutableSessionManager[SESSION_MANAGER_WRAPPED] = true;
 
+  // Normalize any header already written during SessionManager.open() recovery
+  normalizePendingHeader(mutableSessionManager);
+
   const originalAppendEntry = mutableSessionManager._appendEntry?.bind(mutableSessionManager);
   if (originalAppendEntry) {
     mutableSessionManager._appendEntry = ((entry: SessionEntryLike) => {
@@ -89,6 +95,10 @@ export function wrapSessionManagerWithLocalTimestamps(
       normalizeEntryTimestamp(entry);
       return originalAppendEntry(entry);
     }) as typeof mutableSessionManager._appendEntry;
+  } else {
+    console.warn(
+      "[openclaw] wrapSessionManagerWithLocalTimestamps: _appendEntry not found — local timestamp normalisation is a no-op",
+    );
   }
 
   const originalRewriteFile = mutableSessionManager._rewriteFile?.bind(mutableSessionManager);
@@ -99,6 +109,10 @@ export function wrapSessionManagerWithLocalTimestamps(
       }
       return originalRewriteFile();
     }) as typeof mutableSessionManager._rewriteFile;
+  } else {
+    console.warn(
+      "[openclaw] wrapSessionManagerWithLocalTimestamps: _rewriteFile not found — rewrite-time normalisation is a no-op",
+    );
   }
 
   const originalCreateBranchedSession =
@@ -106,6 +120,8 @@ export function wrapSessionManagerWithLocalTimestamps(
   if (originalCreateBranchedSession) {
     mutableSessionManager.createBranchedSession = ((leafId?: string | null) => {
       mutableSessionManager[NORMALIZE_ON_REWRITE] = true;
+      normalizeAllEntries(mutableSessionManager);
+      mutableSessionManager[HEADER_NORMALIZED] = false;
       try {
         return originalCreateBranchedSession(leafId);
       } finally {
