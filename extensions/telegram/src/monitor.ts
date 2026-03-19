@@ -162,6 +162,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         return;
       }
       lastUpdateId = normalizedUpdateId;
+      opts.statusSink?.({ lastInboundAt: Date.now() });
       try {
         await writeTelegramUpdateOffset({
           accountId: account.accountId,
@@ -211,7 +212,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       persistUpdateId,
       log,
       telegramTransport,
-      statusSink: opts.statusSink,
     });
     await pollingSession.runUntilAbort();
   } catch (err) {

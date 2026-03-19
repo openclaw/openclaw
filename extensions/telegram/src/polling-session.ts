@@ -48,7 +48,6 @@ type TelegramPollingSessionOpts = {
   getLastUpdateId: () => number | null;
   persistUpdateId: (updateId: number) => Promise<void>;
   log: (line: string) => void;
-  statusSink?: (patch: { lastInboundAt?: number | null }) => void;
   /** Pre-resolved Telegram transport to reuse across bot instances */
   telegramTransport?: TelegramTransport;
 };
