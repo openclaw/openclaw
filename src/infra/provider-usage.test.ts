@@ -219,7 +219,7 @@ describe("provider usage loading", () => {
           },
         ],
       },
-      expected: { usedPercent: 25 },
+      expected: { usedPercent: 75 },
     },
     {
       name: "keeps payload-level MiniMax plan metadata when the usage candidate is nested",

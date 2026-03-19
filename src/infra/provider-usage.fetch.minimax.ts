@@ -67,8 +67,6 @@ const USED_KEYS = [
   "usedPrompt",
   "prompts_used",
   "promptsUsed",
-  "current_interval_usage_count",
-  "currentIntervalUsageCount",
   "consumed",
 ] as const;
 
@@ -132,6 +130,10 @@ const REMAINING_KEYS = [
   "promptLeft",
   "prompts_left",
   "promptsLeft",
+  "current_interval_usage_count",
+  "currentIntervalUsageCount",
+  "current_interval_remaining_count",
+  "currentIntervalRemainingCount",
   "left",
 ] as const;
 
