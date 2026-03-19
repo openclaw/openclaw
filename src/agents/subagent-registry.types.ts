@@ -60,4 +60,8 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  /** Channel plugin id to send an external completion notification to (e.g. 'discord', 'telegram'). */
+  notifyChannel?: string;
+  /** Target channel/chat id for the external completion notification. */
+  notifyTarget?: string;
 };

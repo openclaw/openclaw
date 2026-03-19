@@ -630,13 +630,66 @@ async function completeSubagentRun(params: {
   startSubagentAnnounceCleanupFlow(params.runId, entry);
 }
 
+/**
+ * Send an external completion notification to a configured channel when
+ * `notifyChannel` and `notifyTarget` are set on the run record.
+ * This is fire-and-forget; failures are logged but do not block cleanup.
+ */
+async function sendExternalCompletionNotification(entry: SubagentRunRecord): Promise<void> {
+  const channel = entry.notifyChannel?.trim();
+  const target = entry.notifyTarget?.trim();
+  if (!channel || !target) {
+    return;
+  }
+  const normalizedRequesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
+  const normalizedNotifyChannel = normalizeDeliveryContext({ channel })?.channel ?? channel;
+  const accountId =
+    normalizedRequesterOrigin?.channel === normalizedNotifyChannel
+      ? normalizedRequesterOrigin.accountId
+      : undefined;
+
+  const taskLabel = entry.label || entry.task || "task";
+  const outcome = entry.outcome;
+  const statusEmoji =
+    outcome?.status === "error" ? "❌" : outcome?.status === "timeout" ? "⏱️" : "✅";
+  const statusText =
+    outcome?.status === "error"
+      ? "failed"
+      : outcome?.status === "timeout"
+        ? "timed out"
+        : "completed";
+
+  const message = `${statusEmoji} Subagent "${taskLabel}" ${statusText}`;
+
+  try {
+    await callGateway({
+      method: "send",
+      params: {
+        channel,
+        to: target,
+        message,
+        accountId,
+        idempotencyKey: `subagent-complete-${entry.runId}`,
+      },
+      timeoutMs: 15_000,
+    });
+  } catch (err) {
+    defaultRuntime.log(
+      `[warn] External completion notification failed for run ${entry.runId} → ${channel}:${target}: ${String(err)}`,
+    );
+  }
+}
+
 function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecord): boolean {
   if (!beginSubagentCleanup(runId)) {
     return false;
   }
   const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
   const finalizeAnnounceCleanup = (didAnnounce: boolean) => {
-    void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce).catch((err) => {
+    void finalizeSubagentCleanup(runId, entry.cleanup, {
+      didAnnounce,
+      wokeContinuation,
+    }).catch((err) => {
       defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
       const current = subagentRuns.get(runId);
       if (!current || current.cleanupCompletedAt) {
@@ -646,7 +699,7 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
       persistSubagentRuns();
     });
   };
-
+  let wokeContinuation = false;
   void runSubagentAnnounceFlow({
     childSessionKey: entry.childSessionKey,
     childRunId: entry.runId,
@@ -666,6 +719,9 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     spawnMode: entry.spawnMode,
     expectsCompletionMessage: entry.expectsCompletionMessage,
     wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
+    onWakeContinuationStarted: () => {
+      wokeContinuation = true;
+    },
   })
     .then((didAnnounce) => {
       finalizeAnnounceCleanup(didAnnounce);
@@ -980,13 +1036,13 @@ async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void>
 async function finalizeSubagentCleanup(
   runId: string,
   cleanup: "delete" | "keep",
-  didAnnounce: boolean,
+  announceResult: { didAnnounce: boolean; wokeContinuation: boolean },
 ) {
   const entry = subagentRuns.get(runId);
   if (!entry) {
     return;
   }
-  if (didAnnounce) {
+  if (announceResult.didAnnounce) {
     entry.wakeOnDescendantSettle = undefined;
     entry.fallbackFrozenResultText = undefined;
     entry.fallbackFrozenResultCapturedAt = undefined;
@@ -1007,6 +1063,10 @@ async function finalizeSubagentCleanup(
       cleanup,
       completedAt: Date.now(),
     });
+    // Wake continuations hand completion delivery off to the replacement run.
+    if (!announceResult.wokeContinuation) {
+      void sendExternalCompletionNotification(entry);
+    }
     return;
   }
 
@@ -1057,6 +1117,7 @@ async function finalizeSubagentCleanup(
       cleanup: "keep",
       completedAt: now,
     });
+    void sendExternalCompletionNotification(entry);
     return;
   }
 
@@ -1352,6 +1413,8 @@ export function registerSubagentRun(params: {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  notifyChannel?: string;
+  notifyTarget?: string;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -1391,6 +1454,8 @@ export function registerSubagentRun(params: {
     attachmentsDir: params.attachmentsDir,
     attachmentsRootDir: params.attachmentsRootDir,
     retainAttachmentsOnKeep: params.retainAttachmentsOnKeep,
+    notifyChannel: params.notifyChannel,
+    notifyTarget: params.notifyTarget,
   });
   ensureListener();
   persistSubagentRuns();

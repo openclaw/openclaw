@@ -93,11 +93,11 @@ export const AgentDefaultsSchema = z
         reserveTokensFloor: z.number().int().nonnegative().optional(),
         maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
         customInstructions: z.string().optional(),
+        recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
         identifierPolicy: z
           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
           .optional(),
         identifierInstructions: z.string().optional(),
-        recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
         qualityGuard: z
           .object({
             enabled: z.boolean().optional(),
