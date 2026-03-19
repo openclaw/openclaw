@@ -60,6 +60,7 @@ describe("buildStatusAllReportLines", () => {
         },
         tailscaleHttpsUrl: null,
         skillStatus: null,
+        pluginCompatibility: [],
         channelsStatus: null,
         channelIssues: [],
         gatewayReachable: false,

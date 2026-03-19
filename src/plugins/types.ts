@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { TopLevelComponents } from "@buape/carbon";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
@@ -16,12 +15,17 @@ import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import type {
+  ChannelId,
+  ChannelPlugin,
+  ChannelStructuredComponents,
+} from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -244,6 +248,18 @@ export type ProviderCatalogContext = {
   resolveProviderApiKey: (providerId?: string) => {
     apiKey: string | undefined;
     discoveryApiKey?: string;
+  };
+  resolveProviderAuth: (
+    providerId?: string,
+    options?: {
+      oauthMarker?: string;
+    },
+  ) => {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+    mode: "api_key" | "oauth" | "token" | "none";
+    source: "env" | "profile" | "none";
+    profileId?: string;
   };
 };
 
@@ -853,6 +869,19 @@ export type WebSearchProviderContext = {
   runtimeMetadata?: RuntimeWebSearchMetadata;
 };
 
+export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+
+export type WebSearchRuntimeMetadataContext = {
+  config?: OpenClawConfig;
+  searchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebSearchMetadata;
+  resolvedCredential?: {
+    value?: string;
+    source: WebSearchCredentialResolutionSource;
+    fallbackEnvVar?: string;
+  };
+};
+
 export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
@@ -862,8 +891,16 @@ export type WebSearchProviderPlugin = {
   signupUrl: string;
   docsUrl?: string;
   autoDetectOrder?: number;
+  credentialPath: string;
+  inactiveSecretPaths?: string[];
   getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
   setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  resolveRuntimeMetadata?: (
+    ctx: WebSearchRuntimeMetadataContext,
+  ) => Partial<RuntimeWebSearchMetadata> | Promise<Partial<RuntimeWebSearchMetadata>>;
   createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
 };
 
@@ -890,6 +927,7 @@ export type PluginSpeechProviderEntry = SpeechProviderPlugin & {
 };
 
 export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;
+export type ImageGenerationProviderPlugin = ImageGenerationProvider;
 
 export type OpenClawPluginGatewayMethod = {
   method: string;
@@ -938,6 +976,8 @@ export type PluginConversationBindingRequestParams = {
   detachHint?: string;
 };
 
+export type PluginConversationBindingResolutionDecision = "allow-once" | "allow-always" | "deny";
+
 export type PluginConversationBinding = {
   bindingId: string;
   pluginId: string;
@@ -967,6 +1007,24 @@ export type PluginConversationBindingRequestResult =
       status: "error";
       message: string;
     };
+
+export type PluginConversationBindingResolvedEvent = {
+  status: "approved" | "denied";
+  binding?: PluginConversationBinding;
+  decision: PluginConversationBindingResolutionDecision;
+  request: {
+    summary?: string;
+    detachHint?: string;
+    requestedBySenderId?: string;
+    conversation: {
+      channel: string;
+      accountId: string;
+      conversationId: string;
+      parentConversationId?: string;
+      threadId?: string | number;
+    };
+  };
+};
 
 /**
  * Result returned by a plugin command handler.
@@ -1077,7 +1135,10 @@ export type PluginInteractiveDiscordHandlerContext = {
     acknowledge: () => Promise<void>;
     reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
     followUp: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
-    editMessage: (params: { text?: string; components?: TopLevelComponents[] }) => Promise<void>;
+    editMessage: (params: {
+      text?: string;
+      components?: ChannelStructuredComponents;
+    }) => Promise<void>;
     clearComponents: (params?: { text?: string }) => Promise<void>;
   };
   requestConversationBinding: (
@@ -1232,6 +1293,12 @@ export type OpenClawPluginApi = {
   registrationMode: PluginRegistrationMode;
   config: OpenClawConfig;
   pluginConfig?: Record<string, unknown>;
+  /**
+   * In-process runtime helpers for trusted native plugins.
+   *
+   * This surface is broader than hooks. Prefer hooks for third-party
+   * automation/integration unless you need native registry integration.
+   */
   runtime: PluginRuntime;
   logger: PluginLogger;
   registerTool: (
@@ -1244,15 +1311,25 @@ export type OpenClawPluginApi = {
     opts?: OpenClawPluginHookOptions,
   ) => void;
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
+  /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
+  /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
+  /** Register a speech synthesis provider (speech capability). */
   registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
+  /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
+  /** Register an image generation provider (image generation capability). */
+  registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
+  /** Register a web search provider (web search capability). */
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
+  onConversationBindingResolved: (
+    handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>,
+  ) => void;
   /**
    * Register a custom command that bypasses the LLM agent.
    * Plugin commands are processed before built-in commands and before agent invocation.

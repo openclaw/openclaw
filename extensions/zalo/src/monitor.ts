@@ -1,25 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type {
-  MarkdownTableMode,
-  OpenClawConfig,
-  OutboundReplyPayload,
-} from "openclaw/plugin-sdk/zalo";
-import {
-  createTypingCallbacks,
-  createScopedPairingAccess,
-  createReplyPrefixOptions,
-  issuePairingChallenge,
-  logTypingFailure,
-  resolveDirectDmAuthorizationOutcome,
-  resolveSenderCommandAuthorizationWithRuntime,
-  resolveOutboundMediaUrls,
-  resolveDefaultGroupPolicy,
-  resolveInboundRouteEnvelopeBuilderWithRuntime,
-  sendMediaWithLeadingCaption,
-  resolveWebhookPath,
-  waitForAbortSignal,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/zalo";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
   ZaloApiError,
@@ -48,6 +28,20 @@ import {
   type ZaloWebhookTarget,
 } from "./monitor.webhook.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
+import type { MarkdownTableMode, OpenClawConfig, OutboundReplyPayload } from "./runtime-api.js";
+import {
+  createChannelPairingController,
+  createChannelReplyPipeline,
+  deliverTextOrMediaReply,
+  resolveWebhookPath,
+  logTypingFailure,
+  resolveDefaultGroupPolicy,
+  resolveDirectDmAuthorizationOutcome,
+  resolveInboundRouteEnvelopeBuilderWithRuntime,
+  resolveSenderCommandAuthorizationWithRuntime,
+  waitForAbortSignal,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "./runtime-api.js";
 import { getZaloRuntime } from "./runtime.js";
 
 export type ZaloRuntimeEnv = {
@@ -334,7 +328,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     statusSink,
     fetcher,
   } = params;
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: "zalo",
     accountId: account.accountId,
@@ -410,12 +404,10 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   }
   if (directDmOutcome === "unauthorized") {
     if (dmPolicy === "pairing") {
-      await issuePairingChallenge({
-        channel: "zalo",
+      await pairing.issueChallenge({
         senderId,
         senderIdLine: `Your Zalo user id: ${senderId}`,
         meta: { name: senderName ?? undefined },
-        upsertPairingRequest: pairing.upsertPairingRequest,
         onCreated: () => {
           logVerbose(core, runtime, `zalo pairing request sender=${senderId}`);
         },
@@ -511,32 +503,32 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     channel: "zalo",
     accountId: account.accountId,
   });
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: config,
     agentId: route.agentId,
     channel: "zalo",
     accountId: account.accountId,
-  });
-  const typingCallbacks = createTypingCallbacks({
-    start: async () => {
-      await sendChatAction(
-        token,
-        {
-          chat_id: chatId,
-          action: "typing",
-        },
-        fetcher,
-        ZALO_TYPING_TIMEOUT_MS,
-      );
-    },
-    onStartError: (err) => {
-      logTypingFailure({
-        log: (message) => logVerbose(core, runtime, message),
-        channel: "zalo",
-        action: "start",
-        target: chatId,
-        error: err,
-      });
+    typing: {
+      start: async () => {
+        await sendChatAction(
+          token,
+          {
+            chat_id: chatId,
+            action: "typing",
+          },
+          fetcher,
+          ZALO_TYPING_TIMEOUT_MS,
+        );
+      },
+      onStartError: (err) => {
+        logTypingFailure({
+          log: (message) => logVerbose(core, runtime, message),
+          channel: "zalo",
+          action: "start",
+          target: chatId,
+          error: err,
+        });
+      },
     },
   });
 
@@ -544,8 +536,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     ctx: ctxPayload,
     cfg: config,
     dispatcherOptions: {
-      ...prefixOptions,
-      typingCallbacks,
+      ...replyPipeline,
       deliver: async (payload) => {
         await deliverZaloReply({
           payload,
@@ -584,34 +575,31 @@ async function deliverZaloReply(params: {
 }): Promise<void> {
   const { payload, token, chatId, runtime, core, config, accountId, statusSink, fetcher } = params;
   const tableMode = params.tableMode ?? "code";
-  const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
-  const sentMedia = await sendMediaWithLeadingCaption({
-    mediaUrls: resolveOutboundMediaUrls(payload),
-    caption: text,
-    send: async ({ mediaUrl, caption }) => {
-      await sendPhoto(token, { chat_id: chatId, photo: mediaUrl, caption }, fetcher);
-      statusSink?.({ lastOutboundAt: Date.now() });
-    },
-    onError: (error) => {
-      runtime.error?.(`Zalo photo send failed: ${String(error)}`);
-    },
+  const reply = resolveSendableOutboundReplyParts(payload, {
+    text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
   });
-  if (sentMedia) {
-    return;
-  }
-
-  if (text) {
-    const chunkMode = core.channel.text.resolveChunkMode(config, "zalo", accountId);
-    const chunks = core.channel.text.chunkMarkdownTextWithMode(text, ZALO_TEXT_LIMIT, chunkMode);
-    for (const chunk of chunks) {
+  const chunkMode = core.channel.text.resolveChunkMode(config, "zalo", accountId);
+  await deliverTextOrMediaReply({
+    payload,
+    text: reply.text,
+    chunkText: (value) =>
+      core.channel.text.chunkMarkdownTextWithMode(value, ZALO_TEXT_LIMIT, chunkMode),
+    sendText: async (chunk) => {
       try {
         await sendMessage(token, { chat_id: chatId, text: chunk }, fetcher);
         statusSink?.({ lastOutboundAt: Date.now() });
       } catch (err) {
         runtime.error?.(`Zalo message send failed: ${String(err)}`);
       }
-    }
-  }
+    },
+    sendMedia: async ({ mediaUrl, caption }) => {
+      await sendPhoto(token, { chat_id: chatId, photo: mediaUrl, caption }, fetcher);
+      statusSink?.({ lastOutboundAt: Date.now() });
+    },
+    onMediaError: (error) => {
+      runtime.error?.(`Zalo photo send failed: ${String(error)}`);
+    },
+  });
 }
 
 export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<void> {

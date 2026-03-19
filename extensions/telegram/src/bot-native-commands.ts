@@ -18,7 +18,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
-import { ensureConfiguredAcpRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
+import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   executePluginCommand,
@@ -37,8 +37,6 @@ import {
   resolveCommandArgMenu,
 } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
-import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -46,6 +44,7 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
+import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import {
   buildCappedTelegramMenuCommands,
@@ -63,7 +62,10 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import { resolveTelegramConversationRoute } from "./conversation-route.js";
+import {
+  resolveTelegramConversationBaseSessionKey,
+  resolveTelegramConversationRoute,
+} from "./conversation-route.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import type { TelegramTransport } from "./fetch.js";
 import {
@@ -98,6 +100,7 @@ export type RegisterTelegramHandlerParams = {
   telegramTransport?: TelegramTransport;
   runtime: RuntimeEnv;
   telegramCfg: TelegramAccountConfig;
+  telegramDeps?: TelegramBotDeps;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
@@ -119,7 +122,7 @@ export type RegisterTelegramHandlerParams = {
   logger: ReturnType<typeof getChildLogger>;
 };
 
-type RegisterTelegramNativeCommandsParams = {
+export type RegisterTelegramNativeCommandsParams = {
   bot: Bot;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -139,6 +142,7 @@ type RegisterTelegramNativeCommandsParams = {
     messageThreadId?: number,
   ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
+  telegramDeps?: TelegramBotDeps;
   opts: { token: string };
 };
 
@@ -361,6 +365,7 @@ export const registerTelegramNativeCommands = ({
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
   shouldSkipUpdate,
+  telegramDeps = defaultTelegramBotDeps,
   opts,
 }: RegisterTelegramNativeCommandsParams) => {
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
@@ -375,7 +380,10 @@ export const registerTelegramNativeCommands = ({
   }
   const skillCommands =
     nativeEnabled && nativeSkillsEnabled && boundRoute
-      ? listSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
+      ? telegramDeps.listSkillCommandsForAgents({
+          cfg,
+          agentIds: [boundRoute.agentId],
+        })
       : [];
   const nativeCommands = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, {
@@ -487,13 +495,13 @@ export const registerTelegramNativeCommands = ({
       topicAgentId,
     });
     if (configuredBinding) {
-      const ensured = await ensureConfiguredAcpRouteReady({
+      const ensured = await ensureConfiguredBindingRouteReady({
         cfg,
-        configuredBinding,
+        bindingResolution: configuredBinding,
       });
       if (!ensured.ok) {
         logVerbose(
-          `telegram native command: configured ACP binding unavailable for topic ${configuredBinding.spec.conversationId}: ${ensured.error}`,
+          `telegram native command: configured ACP binding unavailable for topic ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
         );
         await withTelegramApiErrorLogging({
           operation: "sendMessage",
@@ -650,7 +658,13 @@ export const registerTelegramNativeCommands = ({
             });
             return;
           }
-          const baseSessionKey = route.sessionKey;
+          const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+            cfg,
+            route,
+            chatId,
+            isGroup,
+            senderId,
+          });
           // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
           const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
           const threadKeys =
@@ -747,7 +761,7 @@ export const registerTelegramNativeCommands = ({
             accountId: route.accountId,
           });
 
-          await dispatchReplyWithBufferedBlockDispatcher({
+          await telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
             ctx: ctxPayload,
             cfg,
             dispatcherOptions: {

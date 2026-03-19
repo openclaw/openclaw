@@ -1,6 +1,8 @@
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { expect, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import type { SkillCommandSpec } from "../../../src/agents/skills.js";
+import type { OpenClawConfig } from "../runtime-api.js";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createNativeCommandTestParams as createBaseNativeCommandTestParams,
   createTelegramPrivateCommandContext,
@@ -12,8 +14,17 @@ type RegisteredCommand = {
   description: string;
 };
 
+type CreateCommandBotResult = {
+  bot: RegisterTelegramNativeCommandsParams["bot"];
+  commandHandlers: Map<string, (ctx: unknown) => Promise<void>>;
+  sendMessage: ReturnType<typeof vi.fn>;
+  setMyCommands: ReturnType<typeof vi.fn>;
+};
+
 const skillCommandMocks = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn(() => []),
+  listSkillCommandsForAgents: vi.fn<
+    (params: { cfg: OpenClawConfig; agentIds?: string[] }) => SkillCommandSpec[]
+  >(() => []),
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
@@ -51,7 +62,7 @@ export function resetNativeCommandMenuMocks() {
   deliverReplies.mockResolvedValue({ delivered: true });
 }
 
-export function createCommandBot() {
+export function createCommandBot(): CreateCommandBotResult {
   const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
   const setMyCommands = vi.fn().mockResolvedValue(undefined);
@@ -71,10 +82,32 @@ export function createNativeCommandTestParams(
   cfg: OpenClawConfig,
   params: Partial<RegisterTelegramNativeCommandsParams> = {},
 ): RegisterTelegramNativeCommandsParams {
+  const dispatchResult: Awaited<
+    ReturnType<TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]>
+  > = {
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  };
+  const telegramDeps: TelegramBotDeps = {
+    loadConfig: vi.fn(() => ({}) as OpenClawConfig) as TelegramBotDeps["loadConfig"],
+    resolveStorePath: vi.fn(
+      (storePath?: string) => storePath ?? "/tmp/sessions.json",
+    ) as TelegramBotDeps["resolveStorePath"],
+    readChannelAllowFromStore: vi.fn(
+      async () => [],
+    ) as TelegramBotDeps["readChannelAllowFromStore"],
+    enqueueSystemEvent: vi.fn() as TelegramBotDeps["enqueueSystemEvent"],
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(
+      async () => dispatchResult,
+    ) as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    listSkillCommandsForAgents,
+    wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
+  };
   return createBaseNativeCommandTestParams({
     cfg,
     runtime: params.runtime ?? ({} as RuntimeEnv),
     nativeSkillsEnabled: true,
+    telegramDeps,
     ...params,
   });
 }

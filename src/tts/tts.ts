@@ -9,6 +9,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -572,6 +573,29 @@ function buildTtsFailureResult(errors: string[]): { success: false; error: strin
   };
 }
 
+function resolveReadySpeechProvider(params: {
+  provider: TtsProvider;
+  cfg: OpenClawConfig;
+  config: ResolvedTtsConfig;
+  errors: string[];
+  requireTelephony?: boolean;
+}): NonNullable<ReturnType<typeof getSpeechProvider>> | null {
+  const resolvedProvider = getSpeechProvider(params.provider, params.cfg);
+  if (!resolvedProvider) {
+    params.errors.push(`${params.provider}: no provider registered`);
+    return null;
+  }
+  if (!resolvedProvider.isConfigured({ cfg: params.cfg, config: params.config })) {
+    params.errors.push(`${params.provider}: not configured`);
+    return null;
+  }
+  if (params.requireTelephony && !resolvedProvider.synthesizeTelephony) {
+    params.errors.push(`${params.provider}: unsupported for telephony`);
+    return null;
+  }
+  return resolvedProvider;
+}
+
 function resolveTtsRequestSetup(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -627,13 +651,13 @@ export async function textToSpeech(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
-      const resolvedProvider = getSpeechProvider(provider, params.cfg);
+      const resolvedProvider = resolveReadySpeechProvider({
+        provider,
+        cfg: params.cfg,
+        config,
+        errors,
+      });
       if (!resolvedProvider) {
-        errors.push(`${provider}: no provider registered`);
-        continue;
-      }
-      if (!resolvedProvider.isConfigured({ cfg: params.cfg, config })) {
-        errors.push(`${provider}: not configured`);
         continue;
       }
       const synthesis = await resolvedProvider.synthesize({
@@ -689,17 +713,14 @@ export async function textToSpeechTelephony(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
-      const resolvedProvider = getSpeechProvider(provider, params.cfg);
-      if (!resolvedProvider) {
-        errors.push(`${provider}: no provider registered`);
-        continue;
-      }
-      if (!resolvedProvider.isConfigured({ cfg: params.cfg, config })) {
-        errors.push(`${provider}: not configured`);
-        continue;
-      }
-      if (!resolvedProvider.synthesizeTelephony) {
-        errors.push(`${provider}: unsupported for telephony`);
+      const resolvedProvider = resolveReadySpeechProvider({
+        provider,
+        cfg: params.cfg,
+        config,
+        errors,
+        requireTelephony: true,
+      });
+      if (!resolvedProvider?.synthesizeTelephony) {
         continue;
       }
       const synthesis = await resolvedProvider.synthesizeTelephony({
@@ -773,7 +794,8 @@ export async function maybeApplyTtsToPayload(params: {
     return params.payload;
   }
 
-  const text = params.payload.text ?? "";
+  const reply = resolveSendableOutboundReplyParts(params.payload);
+  const text = reply.text;
   const directives = parseTtsDirectives(text, config.modelOverrides, config.openai.baseUrl);
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
@@ -807,7 +829,7 @@ export async function maybeApplyTtsToPayload(params: {
   if (!ttsText.trim()) {
     return nextPayload;
   }
-  if (params.payload.mediaUrl || (params.payload.mediaUrls?.length ?? 0) > 0) {
+  if (reply.hasMedia) {
     return nextPayload;
   }
   if (text.includes("MEDIA:")) {

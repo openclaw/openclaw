@@ -7,9 +7,8 @@ import {
   baseRuntime,
   getFirstDiscordMessageHandlerParams,
   getProviderMonitorTestMocks,
-  mockResolvedDiscordAccountConfig,
   resetDiscordProviderMonitorMocks,
-} from "./provider.test-support.js";
+} from "../../../../test/helpers/extensions/discord-provider.test-support.js";
 
 const {
   clientConstructorOptionsMock,
@@ -37,9 +36,30 @@ const {
   voiceRuntimeModuleLoadedMock,
 } = getProviderMonitorTestMocks();
 
-vi.mock("../../../../src/plugins/commands.js", () => ({
-  getPluginCommandSpecs: getPluginCommandSpecsMock,
-}));
+function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {}): OpenClawConfig {
+  return {
+    channels: {
+      discord: {
+        accounts: {
+          default: {
+            token: "MTIz.abc.def",
+            ...overrides,
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+    "openclaw/plugin-sdk/plugin-runtime",
+  );
+  return {
+    ...actual,
+    getPluginCommandSpecs: getPluginCommandSpecsMock,
+  };
+});
 
 vi.mock("../voice/manager.runtime.js", () => {
   voiceRuntimeModuleLoadedMock();
@@ -84,7 +104,18 @@ describe("monitorDiscordProvider", () => {
   };
 
   beforeEach(() => {
+    vi.resetModules();
     resetDiscordProviderMonitorMocks();
+    vi.doMock("../accounts.js", () => ({
+      resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
+        resolveDiscordAccountMock(...args),
+    }));
+    vi.doMock("../probe.js", () => ({
+      fetchDiscordApplicationId: async () => "app-1",
+    }));
+    vi.doMock("../token.js", () => ({
+      normalizeDiscordToken: (value?: string) => value,
+    }));
   });
 
   it("stops thread bindings when startup fails before lifecycle begins", async () => {
@@ -133,7 +164,7 @@ describe("monitorDiscordProvider", () => {
   it("loads the Discord voice runtime only when voice is enabled", async () => {
     resolveDiscordAccountMock.mockReturnValue({
       accountId: "default",
-      token: "cfg-token",
+      token: "MTIz.abc.def",
       config: {
         commands: { native: true, nativeSkills: false },
         voice: { enabled: true },
@@ -350,11 +381,18 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("forwards custom eventQueue config from discord config to Carbon Client", async () => {
-    const { monitorDiscordProvider } = await import("./provider.js");
-
-    mockResolvedDiscordAccountConfig({
-      eventQueue: { listenerTimeout: 300_000 },
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "MTIz.abc.def",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: false },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+        eventQueue: { listenerTimeout: 300_000 },
+      },
     });
+    const { monitorDiscordProvider } = await import("./provider.js");
 
     await monitorDiscordProvider({
       config: baseConfig(),
@@ -368,12 +406,10 @@ describe("monitorDiscordProvider", () => {
   it("does not reuse eventQueue.listenerTimeout as the queued inbound worker timeout", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 
-    mockResolvedDiscordAccountConfig({
-      eventQueue: { listenerTimeout: 50_000 },
-    });
-
     await monitorDiscordProvider({
-      config: baseConfig(),
+      config: createConfigWithDiscordAccount({
+        eventQueue: { listenerTimeout: 50_000 },
+      }),
       runtime: baseRuntime(),
     });
 
@@ -386,11 +422,18 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("forwards inbound worker timeout config to the Discord message handler", async () => {
-    const { monitorDiscordProvider } = await import("./provider.js");
-
-    mockResolvedDiscordAccountConfig({
-      inboundWorker: { runTimeoutMs: 300_000 },
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "MTIz.abc.def",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: false },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+        inboundWorker: { runTimeoutMs: 300_000 },
+      },
     });
+    const { monitorDiscordProvider } = await import("./provider.js");
 
     await monitorDiscordProvider({
       config: baseConfig(),

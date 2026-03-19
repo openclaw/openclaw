@@ -1,15 +1,30 @@
 // Public model/catalog helpers for provider plugins.
 
-export type {
-  ModelApi,
-  ModelDefinitionConfig,
-  ModelProviderConfig,
-} from "../config/types.models.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import {
+  KILOCODE_DEFAULT_CONTEXT_WINDOW,
+  KILOCODE_DEFAULT_COST,
+  KILOCODE_DEFAULT_MAX_TOKENS,
+  KILOCODE_DEFAULT_MODEL_ID,
+  KILOCODE_DEFAULT_MODEL_NAME,
+} from "../providers/kilocode-shared.js";
+
+export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
+export type { ModelDefinitionConfig } from "../config/types.models.js";
 export type { ProviderPlugin } from "../plugins/types.js";
 
 export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-export { normalizeModelCompat } from "../agents/model-compat.js";
+export {
+  applyXaiModelCompat,
+  hasNativeWebSearchTool,
+  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
+  normalizeModelCompat,
+  resolveToolCallArgumentsEncoding,
+  usesXaiToolSchemaProfile,
+  XAI_TOOL_SCHEMA_PROFILE,
+} from "../agents/model-compat.js";
 export { normalizeProviderId } from "../agents/provider-id.js";
+export { cloneFirstTemplateModel } from "../plugins/provider-model-helpers.js";
 
 export {
   applyGoogleGeminiModelDefault,
@@ -19,8 +34,6 @@ export { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "../plugins/provider-mod
 export { OPENCODE_GO_DEFAULT_MODEL_REF } from "../plugins/provider-model-defaults.js";
 export { OPENCODE_ZEN_DEFAULT_MODEL } from "../plugins/provider-model-defaults.js";
 export { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
-
-export * from "../plugins/provider-model-definitions.js";
 
 export {
   buildCloudflareAiGatewayModelDefinition,
@@ -34,6 +47,14 @@ export {
   buildHuggingfaceModelDefinition,
 } from "../agents/huggingface-models.js";
 export { discoverKilocodeModels } from "../agents/kilocode-models.js";
+export {
+  buildChutesModelDefinition,
+  CHUTES_BASE_URL,
+  CHUTES_DEFAULT_MODEL_ID,
+  CHUTES_DEFAULT_MODEL_REF,
+  CHUTES_MODEL_CATALOG,
+  discoverChutesModels,
+} from "../agents/chutes-models.js";
 export { resolveOllamaApiBase } from "../agents/ollama-models.js";
 export {
   buildSyntheticModelDefinition,
@@ -84,3 +105,15 @@ export {
   discoverVercelAiGatewayModels,
   VERCEL_AI_GATEWAY_BASE_URL,
 } from "../agents/vercel-ai-gateway.js";
+
+export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: KILOCODE_DEFAULT_MODEL_ID,
+    name: KILOCODE_DEFAULT_MODEL_NAME,
+    reasoning: true,
+    input: ["text", "image"],
+    cost: KILOCODE_DEFAULT_COST,
+    contextWindow: KILOCODE_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: KILOCODE_DEFAULT_MAX_TOKENS,
+  };
+}

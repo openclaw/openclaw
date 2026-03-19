@@ -38,6 +38,16 @@ export function augmentBundledProviderCatalog(
     providerId: OPENAI_PROVIDER_ID,
     templateIds: ["gpt-5.2-pro", "gpt-5.2"],
   });
+  const openAiGpt54MiniTemplate = findCatalogTemplate({
+    entries: context.entries,
+    providerId: OPENAI_PROVIDER_ID,
+    templateIds: ["gpt-5-mini"],
+  });
+  const openAiGpt54NanoTemplate = findCatalogTemplate({
+    entries: context.entries,
+    providerId: OPENAI_PROVIDER_ID,
+    templateIds: ["gpt-5-nano", "gpt-5-mini"],
+  });
   const openAiCodexGpt54Template = findCatalogTemplate({
     entries: context.entries,
     providerId: OPENAI_CODEX_PROVIDER_ID,
@@ -62,6 +72,20 @@ export function augmentBundledProviderCatalog(
           ...openAiGpt54ProTemplate,
           id: "gpt-5.4-pro",
           name: "gpt-5.4-pro",
+        }
+      : undefined,
+    openAiGpt54MiniTemplate
+      ? {
+          ...openAiGpt54MiniTemplate,
+          id: "gpt-5.4-mini",
+          name: "gpt-5.4-mini",
+        }
+      : undefined,
+    openAiGpt54NanoTemplate
+      ? {
+          ...openAiGpt54NanoTemplate,
+          id: "gpt-5.4-nano",
+          name: "gpt-5.4-nano",
         }
       : undefined,
     openAiCodexGpt54Template
