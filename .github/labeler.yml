@@ -318,3 +318,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+"extensions: tavily":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tavily/**"

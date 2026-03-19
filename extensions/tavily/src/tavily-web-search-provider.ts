@@ -5,7 +5,6 @@ import {
   MAX_SEARCH_COUNT,
   formatCliCommand,
   normalizeFreshness,
-  normalizeToIsoDate,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readNumberParam,
@@ -283,6 +282,8 @@ function createTavilyToolDefinition(
     },
   };
 }
+
+export const __testing = { mapTavilyFreshness, resolveTavilySearchDepth } as const;
 
 export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
   return {
