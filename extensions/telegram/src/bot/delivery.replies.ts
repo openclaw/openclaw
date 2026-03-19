@@ -141,7 +141,13 @@ async function deliverTextReply(params: {
           replyMarkup,
         },
       );
-      if (firstDeliveredMessageId == null && messageId != null) {
+      // sendTelegramText returns undefined when the send was silently skipped
+      // (empty text after fallback). Signal to sendChunkedTelegramReplyText
+      // that delivered state should not be marked for this chunk.
+      if (messageId == null) {
+        return false;
+      }
+      if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = messageId;
       }
     },
@@ -173,15 +179,25 @@ async function sendPendingFollowUpText(params: {
     markDelivered,
     shouldSkipChunk: (chunk) => !chunk.html?.trim() && !chunk.text?.trim(),
     sendChunk: async ({ chunk, replyToMessageId, replyMarkup }) => {
-      await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
-        replyToMessageId,
-        thread: params.thread,
-        textMode: "html",
-        plainText: chunk.text,
-        linkPreview: params.linkPreview,
-        silent: params.silent,
-        replyMarkup,
-      });
+      const messageId = await sendTelegramText(
+        params.bot,
+        params.chatId,
+        chunk.html,
+        params.runtime,
+        {
+          replyToMessageId,
+          thread: params.thread,
+          textMode: "html",
+          plainText: chunk.text,
+          linkPreview: params.linkPreview,
+          silent: params.silent,
+          replyMarkup,
+        },
+      );
+      // Return false when silently skipped to suppress delivered marking.
+      if (messageId == null) {
+        return false;
+      }
     },
   });
 }
@@ -238,10 +254,14 @@ async function sendTelegramVoiceFallbackText(opts: {
       silent: opts.silent,
       replyMarkup: !sentAnyChunk ? opts.replyMarkup : undefined,
     });
-    if (firstDeliveredMessageId == null && messageId != null) {
-      firstDeliveredMessageId = messageId;
+    // sendTelegramText returns undefined when silently skipped — only count
+    // the chunk as sent when a real messageId was returned.
+    if (messageId != null) {
+      if (firstDeliveredMessageId == null) {
+        firstDeliveredMessageId = messageId;
+      }
+      sentAnyChunk = true;
     }
-    sentAnyChunk = true;
   }
   return firstDeliveredMessageId;
 }
