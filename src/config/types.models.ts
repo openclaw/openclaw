@@ -63,6 +63,26 @@ export type ModelDefinitionConfig = {
   compat?: ModelCompatConfig;
 };
 
+/**
+ * Script to run before resolving provider apiKey/baseUrl.
+ * Script stdout must be a JSON object. Output keys are merged into the
+ * environment so that `${VAR}` placeholders in provider config (apiKey,
+ * baseUrl, headers) can reference script-provided values.
+ *
+ * Use cases:
+ *  - SSO/OAuth token refresh for enterprise API gateways
+ *  - Rotating credentials from a vault or CLI tool
+ *  - Dynamic endpoint selection across provider backends
+ */
+export type PreScriptConfig =
+  | string
+  | {
+      command: string;
+      args?: string[];
+      cwd?: string;
+      timeoutMs?: number;
+    };
+
 export type ModelProviderConfig = {
   baseUrl: string;
   apiKey?: SecretInput;
@@ -72,6 +92,10 @@ export type ModelProviderConfig = {
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
+  /** Run a script before auth resolution to dynamically provide apiKey/baseUrl
+   *  via environment variable injection. Script stdout must be a JSON object
+   *  whose keys are merged into the environment for `${VAR}` substitution. */
+  preScript?: PreScriptConfig;
 };
 
 export type BedrockDiscoveryConfig = {

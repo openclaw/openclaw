@@ -247,6 +247,18 @@ export const ModelDefinitionSchema = z
   })
   .strict();
 
+const PreScriptConfigSchema = z.union([
+  z.string().min(1),
+  z
+    .object({
+      command: z.string().min(1),
+      args: z.array(z.string()).optional(),
+      cwd: z.string().optional(),
+      timeoutMs: z.number().int().positive().max(120000).optional(),
+    })
+    .strict(),
+]);
+
 export const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
@@ -259,6 +271,7 @@ export const ModelProviderSchema = z
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
+    preScript: PreScriptConfigSchema.optional(),
   })
   .strict();
 
