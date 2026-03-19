@@ -188,7 +188,9 @@ describe("createBundleMcpToolRuntime", () => {
         await runtime.dispose();
       }
     } finally {
-      httpServer.close();
+      await new Promise<void>((resolve, reject) =>
+        httpServer.close((err) => (err ? reject(err) : resolve())),
+      );
     }
   });
 });
