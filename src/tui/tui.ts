@@ -600,6 +600,13 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const busyStates = new Set(["sending", "waiting", "streaming", "running"]);
+  /** Treat status as busy if it exactly matches or starts with a busy state (e.g. "running (think auto→minimal)"). */
+  const isBusyStatus = (text: string) =>
+    busyStates.has(text) ||
+    [...busyStates].some((s) => text.startsWith(`${s} `) || text.startsWith(`${s}(`));
+  /** If we stay in a busy state this long without an end/error event, revert to idle so the UI does not hang. */
+  const ACTIVITY_STALE_MS = 60_000;
+  let activityStaleTimeout: ReturnType<typeof setTimeout> | null = null;
   let statusText: Text | null = null;
   let statusLoader: Loader | null = null;
 
@@ -671,7 +678,7 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
     statusTimer = setInterval(() => {
-      if (!busyStates.has(activityStatus)) {
+      if (!isBusyStatus(activityStatus)) {
         return;
       }
       updateBusyStatusMessage();
@@ -717,7 +724,7 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const renderStatus = () => {
-    const isBusy = busyStates.has(activityStatus);
+    const isBusy = isBusyStatus(activityStatus);
     if (isBusy) {
       if (!statusStartedAt || lastActivityStatus !== activityStatus) {
         statusStartedAt = Date.now();
@@ -759,7 +766,19 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const setActivityStatus = (text: string) => {
+    if (activityStaleTimeout) {
+      clearTimeout(activityStaleTimeout);
+      activityStaleTimeout = null;
+    }
     activityStatus = text;
+    if (isBusyStatus(text)) {
+      activityStaleTimeout = setTimeout(() => {
+        activityStaleTimeout = null;
+        activityStatus = "idle";
+        setConnectionStatus("run timed out", 4000);
+        renderStatus();
+      }, ACTIVITY_STALE_MS);
+    }
     renderStatus();
   };
 
