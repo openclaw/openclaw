@@ -1,5 +1,7 @@
+import { createConfigIO, resolveConfigPath, resolveStateDir } from "../../config/config.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
+import { resolveGatewayProbeAuthSafe } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
   classifyPortListener,
@@ -60,11 +62,37 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
 }
 
 async function confirmGatewayReachable(port: number): Promise<boolean> {
-  const token = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
-  const password = process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
+  const env = process.env;
+  const envToken = env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  const envPassword = env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
+  let auth =
+    envToken || envPassword
+      ? {
+          token: envToken,
+          password: envPassword,
+        }
+      : undefined;
+  try {
+    const configPath = resolveConfigPath(env, resolveStateDir(env));
+    const cfg = createConfigIO({ env, configPath }).loadConfig();
+    const resolved = resolveGatewayProbeAuthSafe({
+      cfg,
+      mode: "local",
+      env,
+    }).auth;
+    auth =
+      resolved.token || resolved.password
+        ? {
+            token: resolved.token,
+            password: resolved.password,
+          }
+        : auth;
+  } catch {
+    // Fall back to env-only probing if config-backed auth resolution fails here.
+  }
   const probe = await probeGateway({
     url: `ws://127.0.0.1:${port}`,
-    auth: token || password ? { token, password } : undefined,
+    auth,
     timeoutMs: 3_000,
     includeDetails: false,
   });

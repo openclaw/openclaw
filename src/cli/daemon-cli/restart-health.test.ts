@@ -7,6 +7,8 @@ const classifyPortListener = vi.hoisted(() =>
   vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(() => "gateway"),
 );
 const probeGateway = vi.hoisted(() => vi.fn());
+const createConfigIO = vi.hoisted(() => vi.fn());
+const resolveGatewayProbeAuthSafe = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/ports.js", () => ({
   classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
@@ -16,6 +18,16 @@ vi.mock("../../infra/ports.js", () => ({
 
 vi.mock("../../gateway/probe.js", () => ({
   probeGateway: (opts: unknown) => probeGateway(opts),
+}));
+
+vi.mock("../../config/config.js", () => ({
+  createConfigIO: (opts: unknown) => createConfigIO(opts),
+  resolveConfigPath: vi.fn(() => "C:\\mock\\openclaw.json"),
+  resolveStateDir: vi.fn(() => "C:\\mock"),
+}));
+
+vi.mock("../../gateway/probe-auth.js", () => ({
+  resolveGatewayProbeAuthSafe: (params: unknown) => resolveGatewayProbeAuthSafe(params),
 }));
 
 const originalPlatform = process.platform;
@@ -94,6 +106,14 @@ describe("inspectGatewayRestart", () => {
     probeGateway.mockResolvedValue({
       ok: false,
       close: null,
+    });
+    createConfigIO.mockReset();
+    createConfigIO.mockReturnValue({
+      loadConfig: vi.fn(() => ({ gateway: { auth: { mode: "token", token: "cfg-token" } } })),
+    });
+    resolveGatewayProbeAuthSafe.mockReset();
+    resolveGatewayProbeAuthSafe.mockReturnValue({
+      auth: { token: "cfg-token" },
     });
   });
 
@@ -217,6 +237,25 @@ describe("inspectGatewayRestart", () => {
     });
 
     expect(snapshot.healthy).toBe(true);
+  });
+
+  it("resolves config-backed gateway auth before probing reachability", async () => {
+    await inspectAmbiguousOwnershipWithProbe({
+      ok: false,
+      close: { code: 1008, reason: "auth required" },
+    });
+
+    expect(resolveGatewayProbeAuthSafe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: { gateway: { auth: { mode: "token", token: "cfg-token" } } },
+        mode: "local",
+      }),
+    );
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: { token: "cfg-token" },
+      }),
+    );
   });
 
   it("treats busy ports with unavailable listener details as healthy when runtime is running", async () => {

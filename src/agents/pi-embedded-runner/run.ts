@@ -157,6 +157,25 @@ function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
   return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
 }
 
+export function shouldRotateAuthProfileOnPromptFailover(params: {
+  promptFailoverFailure: boolean;
+  promptFailoverReason: FailoverReason | null;
+  fallbackConfigured: boolean;
+}): boolean {
+  return (
+    params.promptFailoverFailure &&
+    params.promptFailoverReason !== "timeout" &&
+    (params.promptFailoverReason !== "rate_limit" || !params.fallbackConfigured)
+  );
+}
+
+export function shouldRotateAuthProfileOnAssistantFailover(params: {
+  assistantFailoverReason: FailoverReason | null;
+  fallbackConfigured: boolean;
+}): boolean {
+  return params.assistantFailoverReason !== "rate_limit" || !params.fallbackConfigured;
+}
+
 const hasUsageValues = (
   usage: ReturnType<typeof normalizeUsage>,
 ): usage is NonNullable<ReturnType<typeof normalizeUsage>> =>
@@ -1400,8 +1419,11 @@ export async function runEmbeddedPiAgent(
               aborted,
             });
             if (
-              promptFailoverFailure &&
-              promptFailoverReason !== "timeout" &&
+              shouldRotateAuthProfileOnPromptFailover({
+                promptFailoverFailure,
+                promptFailoverReason,
+                fallbackConfigured,
+              }) &&
               (await advanceAuthProfile())
             ) {
               logPromptFailoverDecision("rotate_profile");
@@ -1534,7 +1556,11 @@ export async function runEmbeddedPiAgent(
               }
             }
 
-            const rotated = await advanceAuthProfile();
+            const rotated =
+              shouldRotateAuthProfileOnAssistantFailover({
+                assistantFailoverReason,
+                fallbackConfigured,
+              }) && (await advanceAuthProfile());
             if (rotated) {
               logAssistantFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
