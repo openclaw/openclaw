@@ -49,6 +49,8 @@ type MockSubagentRun = {
     error?: string;
   };
 };
+type SessionEntryFixture = Omit<SessionEntry, "updatedAt"> & { updatedAt?: number };
+type SessionStoreFixture = Record<string, SessionEntryFixture | undefined>;
 
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
 const sendSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
@@ -119,8 +121,7 @@ const hookRunnerMock = {
 const chatHistoryMock = vi.fn(async (_sessionKey?: string) => ({
   messages: [] as Array<unknown>,
 }));
-type TestSessionStore = Record<string, Partial<SessionEntry>>;
-let sessionStore: TestSessionStore = {};
+let sessionStore: SessionStoreFixture = {};
 let configOverride: OpenClawConfig = {
   session: {
     mainKey: "main",
@@ -163,21 +164,21 @@ function toSessionEntry(
 }
 
 function loadSessionStoreFixture(): Record<string, SessionEntry> {
-  return new Proxy({} as Record<string, SessionEntry>, {
-    get(_target, key: string | symbol) {
+  return new Proxy(sessionStore, {
+    get(target, key: string | symbol) {
       if (typeof key !== "string") {
         return undefined;
       }
-      if (!(key in sessionStore) && key.includes(":subagent:")) {
+      if (!(key in target) && key.includes(":subagent:")) {
         return toSessionEntry(key, {
           inputTokens: 1,
           outputTokens: 1,
           totalTokens: 2,
         });
       }
-      return toSessionEntry(key, sessionStore[key]);
+      return toSessionEntry(key, target[key]);
     },
-  });
+  }) as unknown as Record<string, SessionEntry>;
 }
 
 vi.mock("./subagent-registry.js", () => subagentRegistryMock);
@@ -2387,7 +2388,7 @@ describe("subagent announce formatting", () => {
       requesterOrigin: { channel: "whatsapp", to: "+1555", accountId: "acct-main" },
     });
     sessionStore = {
-      "agent:main:subagent:orchestrator": undefined as unknown as Record<string, unknown>,
+      "agent:main:subagent:orchestrator": undefined,
     };
 
     const didAnnounce = await runSubagentAnnounceFlow({
@@ -2411,7 +2412,7 @@ describe("subagent announce formatting", () => {
     subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
     subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue(null);
     sessionStore = {
-      "agent:main:subagent:orchestrator": undefined as unknown as Record<string, unknown>,
+      "agent:main:subagent:orchestrator": undefined,
     };
 
     const didAnnounce = await runSubagentAnnounceFlow({
@@ -2574,7 +2575,7 @@ describe("subagent announce formatting", () => {
       embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
       embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
       subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
-      sessionStore = testCase.sessionStoreFixture as Record<string, Record<string, unknown>>;
+      sessionStore = testCase.sessionStoreFixture as SessionStoreFixture;
       subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
         requesterSessionKey: "agent:main:main",
         requesterOrigin: { channel: "discord", accountId: "jaris-account" },
