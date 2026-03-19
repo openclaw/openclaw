@@ -33,15 +33,17 @@ export async function statusJsonCommand(
   runtime: RuntimeEnv,
 ) {
   const scan = await scanStatusJsonFast({ timeoutMs: opts.timeoutMs, all: opts.all }, runtime);
-  const securityAudit = await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
-    runSecurityAudit({
-      config: scan.cfg,
-      sourceConfig: scan.sourceConfig,
-      deep: false,
-      includeFilesystem: true,
-      includeChannelSecurity: true,
-    }),
-  );
+  const securityAudit = opts.all
+    ? await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
+        runSecurityAudit({
+          config: scan.cfg,
+          sourceConfig: scan.sourceConfig,
+          deep: false,
+          includeFilesystem: true,
+          includeChannelSecurity: true,
+        }),
+      )
+    : undefined;
 
   const usage = opts.usage
     ? await loadProviderUsage().then(({ loadProviderUsageSummary }) =>
@@ -105,8 +107,8 @@ export async function statusJsonCommand(
         gatewayService: daemon,
         nodeService: nodeDaemon,
         agents: scan.agentStatus,
-        securityAudit,
         secretDiagnostics: scan.secretDiagnostics,
+        ...(securityAudit ? { securityAudit } : {}),
         ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
       },
       null,
