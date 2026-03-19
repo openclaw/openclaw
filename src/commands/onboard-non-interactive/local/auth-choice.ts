@@ -1,3 +1,4 @@
+import { resolveAgentDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
@@ -38,6 +39,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     env: process.env,
   });
   let nextConfig = params.nextConfig;
+  const agentDir = resolveAgentDir(nextConfig, resolveDefaultAgentId(nextConfig));
   const requestedSecretInputMode = normalizeSecretInputModeInput(opts.secretInputMode);
   if (opts.secretInputMode && !requestedSecretInputMode) {
     runtime.error('Invalid --secret-input-mode. Use "plaintext" or "ref".');
@@ -76,6 +78,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   const resolveApiKey = (input: Parameters<typeof resolveNonInteractiveApiKey>[0]) =>
     resolveNonInteractiveApiKey({
       ...input,
+      agentDir,
       secretInputMode: requestedSecretInputMode,
     });
   const toApiKeyCredential = (params: {
@@ -179,6 +182,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     baseConfig,
     opts,
     runtime,
+    agentDir,
     apiKeyStorageOptions,
     resolveApiKey,
     maybeSetResolvedApiKey,

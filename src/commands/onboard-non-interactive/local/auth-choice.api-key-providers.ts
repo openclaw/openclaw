@@ -19,8 +19,8 @@ type ResolvedNonInteractiveApiKey = {
   source: "profile" | "env" | "flag";
 };
 
-function hadStoredGigachatBasicProfile(): boolean {
-  const profile = loadAuthProfileStoreForSecretsRuntime().profiles["gigachat:default"];
+function hadStoredGigachatBasicProfile(agentDir?: string): boolean {
+  const profile = loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["gigachat:default"];
   return (
     profile?.type === "api_key" &&
     profile.provider === "gigachat" &&
@@ -33,6 +33,7 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
   baseConfig: OpenClawConfig;
   opts: OnboardOptions;
   runtime: RuntimeEnv;
+  agentDir?: string;
   apiKeyStorageOptions?: ApiKeyStorageOptions;
   resolveApiKey: (input: {
     provider: string;
@@ -41,6 +42,7 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
     flagName: `--${string}`;
     envVar: string;
     runtime: RuntimeEnv;
+    agentDir?: string;
     allowProfile?: boolean;
   }) => Promise<ResolvedNonInteractiveApiKey | null>;
   maybeSetResolvedApiKey: (
@@ -48,7 +50,7 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
     setter: (value: SecretInput) => Promise<void> | void,
   ) => Promise<boolean>;
 }): Promise<OpenClawConfig | null> {
-  const resetGigachatBaseUrl = hadStoredGigachatBasicProfile();
+  const resetGigachatBaseUrl = hadStoredGigachatBasicProfile(params.agentDir);
   const resolved = await params.resolveApiKey({
     provider: "gigachat",
     cfg: params.baseConfig,
@@ -56,6 +58,7 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
     flagName: "--gigachat-api-key",
     envVar: "GIGACHAT_CREDENTIALS",
     runtime: params.runtime,
+    agentDir: params.agentDir,
     // Personal OAuth onboarding must not silently reuse an existing Basic
     // username:password profile and then rewrite the provider to OAuth config.
     allowProfile: false,
@@ -76,7 +79,7 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
   }
   if (
     !(await params.maybeSetResolvedApiKey(resolved, (value) =>
-      setGigachatApiKey(value, undefined, params.apiKeyStorageOptions, {
+      setGigachatApiKey(value, params.agentDir, params.apiKeyStorageOptions, {
         authMode: "oauth",
         insecureTls: "false",
         scope: "GIGACHAT_API_PERS",
@@ -101,6 +104,7 @@ export async function applySimpleNonInteractiveApiKeyChoice(params: {
   baseConfig: OpenClawConfig;
   opts: OnboardOptions;
   runtime: RuntimeEnv;
+  agentDir?: string;
   apiKeyStorageOptions?: ApiKeyStorageOptions;
   resolveApiKey: (input: {
     provider: string;
@@ -109,6 +113,7 @@ export async function applySimpleNonInteractiveApiKeyChoice(params: {
     flagName: `--${string}`;
     envVar: string;
     runtime: RuntimeEnv;
+    agentDir?: string;
     allowProfile?: boolean;
   }) => Promise<ResolvedNonInteractiveApiKey | null>;
   maybeSetResolvedApiKey: (
@@ -131,13 +136,14 @@ export async function applySimpleNonInteractiveApiKeyChoice(params: {
     flagName: "--litellm-api-key",
     envVar: "LITELLM_API_KEY",
     runtime: params.runtime,
+    agentDir: params.agentDir,
   });
   if (!resolved) {
     return null;
   }
   if (
     !(await params.maybeSetResolvedApiKey(resolved, (value) =>
-      setLitellmApiKey(value, undefined, params.apiKeyStorageOptions),
+      setLitellmApiKey(value, params.agentDir, params.apiKeyStorageOptions),
     ))
   ) {
     return null;
