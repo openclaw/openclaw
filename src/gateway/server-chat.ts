@@ -1,6 +1,6 @@
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
@@ -145,6 +145,7 @@ export type ChatRunState = {
   buffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
   abortedRuns: Map<string, number>;
+  noReplyPrefixAccumulator: Map<string, string>;
   clear: () => void;
 };
 
@@ -153,12 +154,14 @@ export function createChatRunState(): ChatRunState {
   const buffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+  const noReplyPrefixAccumulator = new Map<string, string>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
     deltaSentAt.clear();
     abortedRuns.clear();
+    noReplyPrefixAccumulator.clear();
   };
 
   return {
@@ -166,6 +169,7 @@ export function createChatRunState(): ChatRunState {
     buffers,
     deltaSentAt,
     abortedRuns,
+    noReplyPrefixAccumulator,
     clear,
   };
 }
@@ -288,10 +292,22 @@ export function createAgentEventHandler({
     if (!cleaned) {
       return;
     }
+    // Check for exact NO_REPLY token
     if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
       return;
     }
-    chatRunState.buffers.set(clientRunId, cleaned);
+    // Check if this is or starts a NO_REPLY prefix - buffer it without emitting
+    if (isSilentReplyPrefixText(cleaned, SILENT_REPLY_TOKEN)) {
+      // Accumulate the prefix without emitting to UI
+      const existing = chatRunState.noReplyPrefixAccumulator.get(clientRunId) ?? "";
+      chatRunState.noReplyPrefixAccumulator.set(clientRunId, existing + cleaned);
+      return;
+    }
+    // If we have accumulated NO_REPLY prefix, prepend it to the cleaned text and emit
+    const pendingNoReply = chatRunState.noReplyPrefixAccumulator.get(clientRunId);
+    const finalText = pendingNoReply ? pendingNoReply + cleaned : cleaned;
+    chatRunState.noReplyPrefixAccumulator.delete(clientRunId);
+    chatRunState.buffers.set(clientRunId, finalText);
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
@@ -308,7 +324,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text: cleaned }],
+        content: [{ type: "text", text: finalText }],
         timestamp: now,
       },
     };
@@ -337,6 +353,7 @@ export function createAgentEventHandler({
       normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+    chatRunState.noReplyPrefixAccumulator.delete(clientRunId);
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,
@@ -485,6 +502,7 @@ export function createAgentEventHandler({
         chatRunState.abortedRuns.delete(evt.runId);
         chatRunState.buffers.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
+        chatRunState.noReplyPrefixAccumulator.delete(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
         }
