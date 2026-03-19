@@ -8,7 +8,8 @@ import type { RuntimeEnv } from "../../../src/runtime.js";
 import {
   pluginCommandMocks,
   resetPluginCommandMocks,
-} from "./bot-native-commands.plugin-command-test-support.js";
+} from "../../../test/helpers/extensions/telegram-plugin-command.js";
+import type { TelegramBotDeps } from "./bot-deps.js";
 const skillCommandMocks = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
 }));
@@ -31,10 +32,50 @@ vi.mock("./bot/delivery.js", () => ({
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createCommandBot,
-  createNativeCommandTestParams,
+  createNativeCommandTestParams as createNativeCommandTestParamsBase,
   createPrivateCommandContext,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
+
+function createNativeCommandTestParams(
+  cfg: OpenClawConfig,
+  params: Partial<Parameters<typeof registerTelegramNativeCommands>[0]> = {},
+) {
+  const dispatchResult: Awaited<
+    ReturnType<TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]>
+  > = {
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  };
+  const telegramDeps: TelegramBotDeps = {
+    loadConfig: vi.fn(() => cfg) as TelegramBotDeps["loadConfig"],
+    resolveStorePath: vi.fn(
+      (storePath?: string) => storePath ?? "/tmp/sessions.json",
+    ) as TelegramBotDeps["resolveStorePath"],
+    readChannelAllowFromStore: vi.fn(
+      async () => [],
+    ) as TelegramBotDeps["readChannelAllowFromStore"],
+    upsertChannelPairingRequest: vi.fn(async () => ({
+      code: "PAIRCODE",
+      created: true,
+    })) as TelegramBotDeps["upsertChannelPairingRequest"],
+    enqueueSystemEvent: vi.fn() as TelegramBotDeps["enqueueSystemEvent"],
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(
+      async () => dispatchResult,
+    ) as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    buildModelsProviderData: vi.fn(async () => ({
+      byProvider: new Map<string, Set<string>>(),
+      providers: [],
+      resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+    })) as TelegramBotDeps["buildModelsProviderData"],
+    listSkillCommandsForAgents: skillCommandMocks.listSkillCommandsForAgents,
+    wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
+  };
+  return createNativeCommandTestParamsBase(cfg, {
+    telegramDeps,
+    ...params,
+  });
+}
 
 describe("registerTelegramNativeCommands", () => {
   beforeEach(() => {
@@ -232,6 +273,13 @@ describe("registerTelegramNativeCommands", () => {
 
   it("sends plugin command error replies silently when silentErrorReplies is enabled", async () => {
     const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          silentErrorReplies: true,
+        },
+      },
+    };
 
     pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
       {
@@ -249,20 +297,17 @@ describe("registerTelegramNativeCommands", () => {
     } as never);
 
     registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(
-        {},
-        {
-          bot: {
-            api: {
-              setMyCommands: vi.fn().mockResolvedValue(undefined),
-              sendMessage: vi.fn().mockResolvedValue(undefined),
-            },
-            command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
-              commandHandlers.set(name, cb);
-            }),
-          } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-        },
-      ),
+      ...createNativeCommandTestParams(cfg, {
+        bot: {
+          api: {
+            setMyCommands: vi.fn().mockResolvedValue(undefined),
+            sendMessage: vi.fn().mockResolvedValue(undefined),
+          },
+          command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+            commandHandlers.set(name, cb);
+          }),
+        } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      }),
       telegramCfg: { silentErrorReplies: true } as TelegramAccountConfig,
     });
 

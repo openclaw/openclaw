@@ -270,4 +270,9 @@ describe("resolveEnableState", () => {
     const state = resolveEnableState("google", "bundled", normalizePluginsConfig({}));
     expect(state).toEqual({ enabled: true });
   });
+
+  it("allows bundled plugins to opt into default enablement from manifest metadata", () => {
+    const state = resolveEnableState("profile-aware", "bundled", normalizePluginsConfig({}), true);
+    expect(state).toEqual({ enabled: true });
+  });
 });

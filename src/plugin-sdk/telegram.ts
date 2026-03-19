@@ -12,18 +12,22 @@ export type {
   TelegramActionConfig,
   TelegramNetworkConfig,
 } from "../config/types.js";
-export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
-export type { ResolvedTelegramAccount } from "../../extensions/telegram/src/accounts.js";
-export type { TelegramProbe } from "../../extensions/telegram/src/probe.js";
 export type {
-  TelegramButtonStyle,
-  TelegramInlineButtons,
-} from "../../extensions/telegram/src/button-types.js";
-export type { StickerMetadata } from "../../extensions/telegram/src/bot/types.js";
+  ChannelConfiguredBindingProvider,
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
+} from "../channels/plugins/types.adapters.js";
+export type { InspectedTelegramAccount } from "../../extensions/telegram/api.js";
+export type { ResolvedTelegramAccount } from "../../extensions/telegram/api.js";
+export type { TelegramProbe } from "../../extensions/telegram/runtime-api.js";
+export type { TelegramButtonStyle, TelegramInlineButtons } from "../../extensions/telegram/api.js";
+export type { StickerMetadata } from "../../extensions/telegram/api.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { parseTelegramTopicConversation } from "../acp/conversation-id.js";
+export { clearAccountEntryFields } from "../channels/plugins/config-helpers.js";
+export { resolveTelegramPollVisibility } from "../poll-params.js";
 
 export {
   PAIRING_APPROVED_MESSAGE,
@@ -36,26 +40,22 @@ export {
   setAccountEnabledInConfigSection,
 } from "./channel-plugin-common.js";
 
-export { clearAccountEntryFields } from "../channels/plugins/config-helpers.js";
-export { resolveTelegramPollVisibility } from "../poll-params.js";
-
 export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
 } from "../channels/account-snapshot-fields.js";
 export {
-  listTelegramDirectoryGroupsFromConfig,
-  listTelegramDirectoryPeersFromConfig,
-} from "../channels/plugins/directory-config.js";
-
-export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
 export {
+  listTelegramDirectoryGroupsFromConfig,
+  listTelegramDirectoryPeersFromConfig,
+} from "../../extensions/telegram/api.js";
+export {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
-} from "../channels/plugins/group-mentions.js";
+} from "../../extensions/telegram/api.js";
 export { TelegramConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { buildTokenChannelStatusSummary } from "./status-helpers.js";
@@ -65,41 +65,54 @@ export {
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
   resolveTelegramPollActionGateState,
-} from "../../extensions/telegram/src/accounts.js";
-export { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
+} from "../../extensions/telegram/api.js";
+export { inspectTelegramAccount } from "../../extensions/telegram/api.js";
 export {
   looksLikeTelegramTargetId,
   normalizeTelegramMessagingTarget,
-} from "../../extensions/telegram/src/normalize.js";
+} from "../../extensions/telegram/api.js";
 export {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
-} from "../../extensions/telegram/src/outbound-params.js";
+} from "../../extensions/telegram/api.js";
 export {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
-} from "../../extensions/telegram/src/allow-from.js";
-export { fetchTelegramChatId } from "../../extensions/telegram/src/api-fetch.js";
+} from "../../extensions/telegram/api.js";
+export { fetchTelegramChatId } from "../../extensions/telegram/api.js";
 export {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
-} from "../../extensions/telegram/src/inline-buttons.js";
-export { resolveTelegramReactionLevel } from "../../extensions/telegram/src/reaction-level.js";
+} from "../../extensions/telegram/api.js";
+export { resolveTelegramReactionLevel } from "../../extensions/telegram/api.js";
 export {
+  auditTelegramGroupMembership,
+  collectTelegramUnmentionedGroupIds,
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
+  monitorTelegramProvider,
+  pinMessageTelegram,
   reactMessageTelegram,
+  renameForumTopicTelegram,
+  probeTelegram,
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
-} from "../../extensions/telegram/src/send.js";
-export { getCacheStats, searchStickers } from "../../extensions/telegram/src/sticker-cache.js";
-export { resolveTelegramToken } from "../../extensions/telegram/src/token.js";
-export { telegramMessageActions } from "../../extensions/telegram/src/channel-actions.js";
-export { collectTelegramStatusIssues } from "../../extensions/telegram/src/status-issues.js";
-export { sendTelegramPayloadMessages } from "../../extensions/telegram/src/outbound-adapter.js";
+  sendTypingTelegram,
+  unpinMessageTelegram,
+} from "../../extensions/telegram/runtime-api.js";
+export { getCacheStats, searchStickers } from "../../extensions/telegram/api.js";
+export { resolveTelegramToken } from "../../extensions/telegram/runtime-api.js";
+export { telegramMessageActions } from "../../extensions/telegram/runtime-api.js";
+export {
+  setTelegramThreadBindingIdleTimeoutBySessionKey,
+  setTelegramThreadBindingMaxAgeBySessionKey,
+} from "../../extensions/telegram/runtime-api.js";
+export { collectTelegramStatusIssues } from "../../extensions/telegram/api.js";
+export { sendTelegramPayloadMessages } from "../../extensions/telegram/api.js";
 export {
   buildBrowseProvidersButton,
   buildModelsKeyboard,
@@ -107,8 +120,8 @@ export {
   calculateTotalPages,
   getModelsPageSize,
   type ProviderInfo,
-} from "../../extensions/telegram/src/model-buttons.js";
+} from "../../extensions/telegram/api.js";
 export {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
-} from "../../extensions/telegram/src/exec-approvals.js";
+} from "../../extensions/telegram/api.js";

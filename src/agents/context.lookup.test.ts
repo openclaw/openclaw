@@ -50,9 +50,13 @@ function createContextOverrideConfig(provider: string, model: string, contextWin
   };
 }
 
+async function flushAsyncWarmup() {
+  await new Promise((r) => setTimeout(r, 0));
+}
+
 async function importResolveContextTokensForModel() {
   const { resolveContextTokensForModel } = await import("./context.js");
-  await new Promise((r) => setTimeout(r, 0));
+  await flushAsyncWarmup();
   return resolveContextTokensForModel;
 }
 
@@ -76,57 +80,34 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
   });
 
-  it("does not skip eager warmup when --profile is followed by -- terminator", async () => {
-    const loadConfigMock = vi.fn(() => ({ models: {} }));
-    mockContextModuleDeps(loadConfigMock);
-
+  it("only warms eagerly for startup commands that need model metadata", async () => {
     const argvSnapshot = process.argv;
-    process.argv = ["node", "openclaw", "--profile", "--", "config", "validate"];
     try {
-      await import("./context.js");
-      expect(loadConfigMock).toHaveBeenCalledTimes(1);
-    } finally {
-      process.argv = argvSnapshot;
-    }
-  });
-
-  it("skips eager warmup for logs commands that do not need model metadata at startup", async () => {
-    const loadConfigMock = vi.fn(() => ({ models: {} }));
-    mockContextModuleDeps(loadConfigMock);
-
-    const argvSnapshot = process.argv;
-    process.argv = ["node", "openclaw", "logs", "--limit", "5"];
-    try {
-      await import("./context.js");
-      expect(loadConfigMock).not.toHaveBeenCalled();
-    } finally {
-      process.argv = argvSnapshot;
-    }
-  });
-
-  it("skips eager warmup for status commands that only read model metadata opportunistically", async () => {
-    const loadConfigMock = vi.fn(() => ({ models: {} }));
-    mockContextModuleDeps(loadConfigMock);
-
-    const argvSnapshot = process.argv;
-    process.argv = ["node", "openclaw", "status", "--json"];
-    try {
-      await import("./context.js");
-      expect(loadConfigMock).not.toHaveBeenCalled();
-    } finally {
-      process.argv = argvSnapshot;
-    }
-  });
-
-  it("skips eager warmup for gateway commands that do not need model metadata at startup", async () => {
-    const loadConfigMock = vi.fn(() => ({ models: {} }));
-    mockContextModuleDeps(loadConfigMock);
-
-    const argvSnapshot = process.argv;
-    process.argv = ["node", "openclaw", "gateway", "status", "--json"];
-    try {
-      await import("./context.js");
-      expect(loadConfigMock).not.toHaveBeenCalled();
+      for (const scenario of [
+        {
+          argv: ["node", "openclaw", "--profile", "--", "config", "validate"],
+          expectedCalls: 1,
+        },
+        {
+          argv: ["node", "openclaw", "logs", "--limit", "5"],
+          expectedCalls: 0,
+        },
+        {
+          argv: ["node", "openclaw", "status", "--json"],
+          expectedCalls: 0,
+        },
+        {
+          argv: ["node", "openclaw", "gateway", "status", "--json"],
+          expectedCalls: 0,
+        },
+      ]) {
+        vi.resetModules();
+        const loadConfigMock = vi.fn(() => ({ models: {} }));
+        mockContextModuleDeps(loadConfigMock);
+        process.argv = scenario.argv;
+        await import("./context.js");
+        expect(loadConfigMock).toHaveBeenCalledTimes(scenario.expectedCalls);
+      }
     } finally {
       process.argv = argvSnapshot;
     }
@@ -176,7 +157,7 @@ describe("lookupContextTokens", () => {
 
     const { lookupContextTokens } = await import("./context.js");
     // Trigger async cache population.
-    await new Promise((r) => setTimeout(r, 0));
+    await flushAsyncWarmup();
     // Conservative minimum: bare-id cache feeds runtime flush/compaction paths.
     expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000);
   });
@@ -191,7 +172,7 @@ describe("lookupContextTokens", () => {
     ]);
 
     const { resolveContextTokensForModel } = await import("./context.js");
-    await new Promise((r) => setTimeout(r, 0));
+    await flushAsyncWarmup();
 
     // With provider specified and no config override, bare lookup finds the
     // provider-qualified discovery entry.
@@ -277,7 +258,7 @@ describe("lookupContextTokens", () => {
     };
 
     const { resolveContextTokensForModel } = await import("./context.js");
-    await new Promise((r) => setTimeout(r, 0));
+    await flushAsyncWarmup();
 
     // Exact key "qwen" wins over the alias-normalized match "qwen-portal".
     const qwenResult = resolveContextTokensForModel({

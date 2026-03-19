@@ -7,7 +7,7 @@ import {
   registerPluginInteractiveHandler,
 } from "../../../src/plugins/interactive.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import {
+const {
   answerCallbackQuerySpy,
   commandSpy,
   editMessageReplyMarkupSpy,
@@ -22,8 +22,10 @@ import {
   replySpy,
   sendMessageSpy,
   setMyCommandsSpy,
+  telegramBotDepsForTest,
+  telegramBotRuntimeForTest,
   wasSentByBot,
-} from "./bot.create-telegram-bot.test-harness.js";
+} = await import("./bot.create-telegram-bot.test-harness.js");
 
 // Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
 const { listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
@@ -31,7 +33,16 @@ const { listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
 const { loadSessionStore } = await import("../../../src/config/sessions.js");
 const { normalizeTelegramCommandName } =
   await import("../../../src/config/telegram-custom-commands.js");
-const { createTelegramBot } = await import("./bot.js");
+const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+  await import("./bot.js");
+setTelegramBotRuntimeForTest(
+  telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
+);
+const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
+  createTelegramBotBase({
+    ...opts,
+    telegramDeps: telegramBotDepsForTest,
+  });
 
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
@@ -544,27 +555,29 @@ describe("createTelegramBot", () => {
 
     const modelId = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
     const storePath = `/tmp/openclaw-telegram-model-compact-${process.pid}-${Date.now()}.json`;
+    const config = {
+      agents: {
+        defaults: {
+          model: `bedrock/${modelId}`,
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+      session: {
+        store: storePath,
+      },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 
     await rm(storePath, { force: true });
     try {
+      loadConfig.mockReturnValue(config);
       createTelegramBot({
         token: "tok",
-        config: {
-          agents: {
-            defaults: {
-              model: `bedrock/${modelId}`,
-            },
-          },
-          channels: {
-            telegram: {
-              dmPolicy: "open",
-              allowFrom: ["*"],
-            },
-          },
-          session: {
-            store: storePath,
-          },
-        },
+        config,
       });
       const callbackHandler = onSpy.mock.calls.find(
         (call) => call[0] === "callback_query",
@@ -1056,8 +1069,11 @@ describe("createTelegramBot", () => {
         expect(replySpy).toHaveBeenCalledTimes(2);
       });
       const threadIds = replySpy.mock.calls
-        .map((call) => (call[0] as { MessageThreadId?: number }).MessageThreadId)
-        .toSorted((a, b) => (a ?? 0) - (b ?? 0));
+        .map(
+          (call: [unknown, ...unknown[]]) =>
+            (call[0] as { MessageThreadId?: number }).MessageThreadId,
+        )
+        .toSorted((a: number | undefined, b: number | undefined) => (a ?? 0) - (b ?? 0));
       expect(threadIds).toEqual([100, 200]);
     } finally {
       setTimeoutSpy.mockRestore();

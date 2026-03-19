@@ -1,19 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const clientCtorMock = vi.hoisted(() => vi.fn());
-const mockBaseHttpInstance = vi.hoisted(() => ({
-  request: vi.fn().mockResolvedValue({}),
-  get: vi.fn().mockResolvedValue({}),
-  post: vi.fn().mockResolvedValue({}),
-  put: vi.fn().mockResolvedValue({}),
-  patch: vi.fn().mockResolvedValue({}),
-  delete: vi.fn().mockResolvedValue({}),
-  head: vi.fn().mockResolvedValue({}),
-  options: vi.fn().mockResolvedValue({}),
+const createFeishuClientMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./client.js", () => ({
+  createFeishuClient: createFeishuClientMock,
 }));
 
-import { clearClientCache, setFeishuClientRuntimeForTest } from "./client.js";
-import { FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu, clearProbeCache } from "./probe.js";
+async function importProbeModule(scope: string) {
+  void scope;
+  vi.resetModules();
+  return await import("./probe.js");
+}
+
+let FEISHU_PROBE_REQUEST_TIMEOUT_MS: typeof import("./probe.js").FEISHU_PROBE_REQUEST_TIMEOUT_MS;
+let probeFeishu: typeof import("./probe.js").probeFeishu;
+let clearProbeCache: typeof import("./probe.js").clearProbeCache;
 
 const DEFAULT_CREDS = { appId: "cli_123", appSecret: "secret" } as const; // pragma: allowlist secret
 const DEFAULT_SUCCESS_RESPONSE = {
@@ -35,15 +36,9 @@ function makeRequestFn(response: Record<string, unknown>) {
   return vi.fn().mockResolvedValue(response);
 }
 
-function installClientCtor(requestFn: unknown) {
-  clientCtorMock.mockImplementation(function MockFeishuClient(this: { request: unknown }) {
-    this.request = requestFn;
-  } as never);
-}
-
 function setupClient(response: Record<string, unknown>) {
   const requestFn = makeRequestFn(response);
-  installClientCtor(requestFn);
+  createFeishuClientMock.mockReturnValue({ request: requestFn });
   return requestFn;
 }
 
@@ -53,7 +48,12 @@ function setupSuccessClient() {
 
 async function expectDefaultSuccessResult(
   creds = DEFAULT_CREDS,
-  expected: Awaited<ReturnType<typeof probeFeishu>> = DEFAULT_SUCCESS_RESULT,
+  expected: {
+    ok: true;
+    appId: string;
+    botName: string;
+    botOpenId: string;
+  } = DEFAULT_SUCCESS_RESULT,
 ) {
   const result = await probeFeishu(creds);
   expect(result).toEqual(expected);
@@ -73,7 +73,7 @@ async function expectErrorResultCached(params: {
   expectedError: string;
   ttlMs: number;
 }) {
-  installClientCtor(params.requestFn);
+  createFeishuClientMock.mockReturnValue({ request: params.requestFn });
 
   const first = await probeFeishu(DEFAULT_CREDS);
   const second = await probeFeishu(DEFAULT_CREDS);
@@ -106,27 +106,16 @@ async function readSequentialDefaultProbePair() {
 }
 
 describe("probeFeishu", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    ({ FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu, clearProbeCache } = await importProbeModule(
+      `probe-${Date.now()}-${Math.random()}`,
+    ));
     clearProbeCache();
-    clearClientCache();
-    vi.clearAllMocks();
-    setFeishuClientRuntimeForTest({
-      sdk: {
-        AppType: { SelfBuild: "self" } as never,
-        Domain: {
-          Feishu: "https://open.feishu.cn",
-          Lark: "https://open.larksuite.com",
-        } as never,
-        Client: clientCtorMock as never,
-        defaultHttpInstance: mockBaseHttpInstance as never,
-      },
-    });
+    vi.restoreAllMocks();
   });
 
   afterEach(() => {
     clearProbeCache();
-    clearClientCache();
-    setFeishuClientRuntimeForTest();
   });
 
   it("returns error when credentials are missing", async () => {
@@ -168,7 +157,7 @@ describe("probeFeishu", () => {
   it("returns timeout error when request exceeds timeout", async () => {
     await withFakeTimers(async () => {
       const requestFn = vi.fn().mockImplementation(() => new Promise(() => {}));
-      installClientCtor(requestFn);
+      createFeishuClientMock.mockReturnValue({ request: requestFn });
 
       const promise = probeFeishu(DEFAULT_CREDS, { timeoutMs: 1_000 });
       await vi.advanceTimersByTimeAsync(1_000);
@@ -179,6 +168,7 @@ describe("probeFeishu", () => {
   });
 
   it("returns aborted when abort signal is already aborted", async () => {
+    createFeishuClientMock.mockClear();
     const abortController = new AbortController();
     abortController.abort();
 
@@ -188,7 +178,7 @@ describe("probeFeishu", () => {
     );
 
     expect(result).toMatchObject({ ok: false, error: "probe aborted" });
-    expect(clientCtorMock).not.toHaveBeenCalled();
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
   it("returns cached result on subsequent calls within TTL", async () => {
     const requestFn = setupSuccessClient();

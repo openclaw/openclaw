@@ -4,15 +4,15 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { readDiscordParentIdParam } from "openclaw/plugin-sdk/agent-runtime";
-import { handleDiscordAction } from "openclaw/plugin-sdk/agent-runtime";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-runtime";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-runtime";
-import { normalizeInteractiveReply } from "openclaw/plugin-sdk/channel-runtime";
+import { normalizeInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import { buildDiscordInteractiveComponents } from "../shared-interactive.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
+import { handleDiscordAction } from "./runtime.js";
+import { readDiscordParentIdParam } from "./runtime.shared.js";
 
 const providerId = "discord";
 

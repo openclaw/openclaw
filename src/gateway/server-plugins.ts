@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
+import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -154,7 +155,10 @@ function authorizeFallbackModelOverride(params: {
   if (!policy?.allowModelOverride) {
     return {
       allowed: false,
-      reason: `plugin "${pluginId}" is not trusted for fallback provider/model override requests.`,
+      reason:
+        `plugin "${pluginId}" is not trusted for fallback provider/model override requests. ` +
+        "See https://docs.openclaw.ai/tools/plugin#runtime-helpers and search for: " +
+        "plugins.entries.<id>.subagent.allowModelOverride",
     };
   }
   if (policy.allowAnyModel) {
@@ -416,6 +420,7 @@ export function loadGatewayPlugins(params: {
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
   });
+  primeConfiguredBindingRegistry({ cfg: params.cfg });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
   if ((params.logDiagnostics ?? true) && pluginRegistry.diagnostics.length > 0) {

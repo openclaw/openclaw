@@ -120,6 +120,12 @@ describe("runProviderCatalog", () => {
       config: {},
       env: {},
       resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({
+        apiKey: undefined,
+        discoveryApiKey: undefined,
+        mode: "none",
+        source: "none",
+      }),
     });
 
     expect(result).toEqual({
