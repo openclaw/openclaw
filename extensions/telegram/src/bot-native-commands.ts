@@ -1,7 +1,7 @@
 import type { Bot, Context } from "grammy";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/channel-runtime";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
 import { recordInboundSessionMetaSafe } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
@@ -754,7 +754,7 @@ export const registerTelegramNativeCommands = ({
             skippedNonSilent: 0,
           };
 
-          const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+          const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
             cfg,
             agentId: route.agentId,
             channel: "telegram",
@@ -765,7 +765,7 @@ export const registerTelegramNativeCommands = ({
             ctx: ctxPayload,
             cfg,
             dispatcherOptions: {
-              ...prefixOptions,
+              ...replyPipeline,
               deliver: async (payload, _info) => {
                 if (
                   shouldSuppressLocalTelegramExecApprovalPrompt({
