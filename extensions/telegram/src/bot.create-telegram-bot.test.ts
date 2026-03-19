@@ -838,6 +838,60 @@ describe("createTelegramBot", () => {
     expect(payload.SessionKey).toBe("agent:opie:main");
   });
 
+  it("reloads DM routing bindings between messages without recreating the bot", async () => {
+    let boundAgentId = "agent-a";
+    const configForAgent = (agentId: string) => ({
+      channels: {
+        telegram: {
+          accounts: {
+            opie: {
+              botToken: "tok-opie",
+              dmPolicy: "open",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "agent-a" }, { id: "agent-b" }],
+      },
+      bindings: [
+        {
+          agentId,
+          match: { channel: "telegram", accountId: "opie" },
+        },
+      ],
+    });
+    loadConfig.mockImplementation(() => configForAgent(boundAgentId));
+
+    createTelegramBot({ token: "tok", accountId: "opie" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    const sendDm = async (messageId: number, text: string) => {
+      await handler({
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 999, username: "testuser" },
+          text,
+          date: 1736380800 + messageId,
+          message_id: messageId,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+    };
+
+    await sendDm(42, "hello one");
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls[0]?.[0].AccountId).toBe("opie");
+    expect(replySpy.mock.calls[0]?.[0].SessionKey).toContain("agent:agent-a:");
+
+    boundAgentId = "agent-b";
+    await sendDm(43, "hello two");
+    expect(replySpy).toHaveBeenCalledTimes(2);
+    expect(replySpy.mock.calls[1]?.[0].AccountId).toBe("opie");
+    expect(replySpy.mock.calls[1]?.[0].SessionKey).toContain("agent:agent-b:");
+  });
+
   it("routes non-default account DMs to the per-account fallback session without explicit bindings", async () => {
     loadConfig.mockReturnValue({
       channels: {

@@ -200,11 +200,18 @@ function mockRunOnceWithStalledPollingRunner(): {
   return { stop };
 }
 
-function expectRecoverableRetryState(expectedRunCalls: number) {
+function expectRecoverableRetryState(
+  expectedRunCalls: number,
+  options?: { assertBackoffHelpers?: boolean },
+) {
   // monitorTelegramProvider now delegates retry pacing to TelegramPollingSession +
   // grammY runner retry settings, so these plugin-sdk helpers are not exercised
   // on the outer loop anymore. Keep asserting exact cycle count to guard
   // against busy-loop regressions in recoverable paths.
+  if (options?.assertBackoffHelpers) {
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(sleepWithAbort).toHaveBeenCalled();
+  }
   expect(runSpy).toHaveBeenCalledTimes(expectedRunCalls);
 }
 
@@ -443,7 +450,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
     expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
-    expectRecoverableRetryState(1);
+    expectRecoverableRetryState(1, { assertBackoffHelpers: true });
   });
 
   it("retries setup-time recoverable errors before starting polling", async () => {
