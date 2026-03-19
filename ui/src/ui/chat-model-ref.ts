@@ -11,16 +11,23 @@ export type ChatModelOverride =
     };
 
 export function buildQualifiedChatModelValue(model: string, provider?: string | null): string {
-  const trimmedModel = model.trim();
+  const trimmedModel = model?.trim() ?? "";
   if (!trimmedModel) {
     return "";
   }
-  // If the model ID is already provider-qualified (e.g. "llamacpp/qwen3-14b.gguf"),
-  // return it as-is to avoid double-prefixing (e.g. "openrouter/llamacpp/qwen3-14b.gguf").
-  if (trimmedModel.includes("/")) {
+  const trimmedProvider = provider?.trim();
+  // If the model is already prefixed with this exact provider, return as-is to avoid
+  // double-prefixing (e.g. stored value "openrouter/llamacpp/qwen3-14b.gguf" with
+  // provider "openrouter" must not become "openrouter/openrouter/llamacpp/qwen3-14b.gguf").
+  // NOTE: a slash-containing id that does NOT start with "{provider}/" is a catalog entry
+  // that still needs the provider prefix (e.g. "nvidia/llama-3.1:free" + "openrouter"
+  // → "openrouter/nvidia/llama-3.1:free").
+  if (
+    trimmedProvider &&
+    trimmedModel.toLowerCase().startsWith(`${trimmedProvider.toLowerCase()}/`)
+  ) {
     return trimmedModel;
   }
-  const trimmedProvider = provider?.trim();
   return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
 }
 
