@@ -9,9 +9,10 @@
     port: 18789,
     bind: "lan",
     auth: {
-      // ALB handles TLS termination; no gateway-level auth needed.
+      // ALB handles TLS termination; gateway token secures the LAN binding.
       // WAF rate-limiting + ALB security group restrict access.
-      mode: "none",
+      // Token is injected via OPENCLAW_GATEWAY_TOKEN env var in ECS task def.
+      mode: "token",
     },
     // ALB is a trusted reverse proxy — trust x-forwarded-for for client IP.
     trustedProxies: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
@@ -30,7 +31,7 @@
 
   // Logging — structured JSON for CloudWatch ingestion.
   logging: {
-    format: "json",
+    consoleStyle: "json",
   },
 
   // Disable features not needed in headless server mode.
