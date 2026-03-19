@@ -135,6 +135,7 @@ Docs: https://docs.openclaw.ai
 - Tests/OpenAI Codex auth: align login expectations with the default `gpt-5.4` model so CI coverage stays consistent with the current OpenAI Codex default. (#44367) Thanks @jrrcdev.
 - Discord: enforce strict DM component allowlist auth (#49997) Thanks @joshavant.
 - Stabilize plugin loader and Docker extension smoke (#50058) Thanks @joshavant.
+- Telegram: stabilize pairing/session/forum routing and reply formatting tests (#50155) Thanks @joshavant.
 
 ### Fixes
 
@@ -219,6 +220,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/webhook auth: validate the Telegram webhook secret before reading or parsing request bodies, so unauthenticated requests are rejected immediately instead of consuming up to 1 MB first. Thanks @space08.
 - Security/device pairing: make bootstrap setup codes single-use so pending device pairing requests cannot be silently replayed and widened to admin before approval. Thanks @tdjackey.
 - Security/external content: strip zero-width and soft-hyphen marker-splitting characters during boundary sanitization so spoofed `EXTERNAL_UNTRUSTED_CONTENT` markers fall back to the existing hardening path instead of bypassing marker normalization.
+- CLI/startup: stop `openclaw devices list` and similar loopback gateway commands from failing during startup by isolating heavy import-time side effects from the normal CLI path. (#50212) Thanks @obviyus.
 - Security/exec approvals: unwrap more `pnpm` runtime forms during approval binding, including `pnpm --reporter ... exec` and direct `pnpm node` file runs, with matching regression coverage and docs updates.
 - Security/exec approvals: fail closed for Perl `-M` and `-I` approval flows so preload and load-path module resolution stays outside approval-backed runtime execution unless the operator uses a broader explicit trust path.
 - Security/exec approvals: recognize PowerShell `-File` and `-f` wrapper forms during inline-command extraction so approval and command-analysis paths treat file-based PowerShell launches like the existing `-Command` variants.

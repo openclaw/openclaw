@@ -1,6 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { TSchema } from "@sinclair/typebox";
-import { stringEnum } from "../../agents/schema/typebox.js";
+import { stringEnum } from "openclaw/plugin-sdk/core";
 
 const discordComponentEmojiSchema = Type.Object({
   name: Type.String(),
@@ -89,32 +88,7 @@ const discordComponentModalSchema = Type.Object({
   fields: Type.Array(discordComponentModalFieldSchema),
 });
 
-export function createMessageToolButtonsSchema(): TSchema {
-  return Type.Array(
-    Type.Array(
-      Type.Object({
-        text: Type.String(),
-        callback_data: Type.String(),
-        style: Type.Optional(stringEnum(["danger", "success", "primary"])),
-      }),
-    ),
-    {
-      description: "Button rows for channels that support button-style actions.",
-    },
-  );
-}
-
-export function createMessageToolCardSchema(): TSchema {
-  return Type.Object(
-    {},
-    {
-      additionalProperties: true,
-      description: "Structured card payload for channels that support card-style messages.",
-    },
-  );
-}
-
-export function createDiscordMessageToolComponentsSchema(): TSchema {
+export function createDiscordMessageToolComponentsSchema() {
   return Type.Object(
     {
       text: Type.Optional(Type.String()),
@@ -137,24 +111,4 @@ export function createDiscordMessageToolComponentsSchema(): TSchema {
         "Discord components v2 payload. Set reusable=true to keep buttons, selects, and forms active until expiry.",
     },
   );
-}
-
-export function createSlackMessageToolBlocksSchema(): TSchema {
-  return Type.Array(
-    Type.Object(
-      {},
-      {
-        additionalProperties: true,
-        description: "Slack Block Kit payload blocks (Slack only).",
-      },
-    ),
-  );
-}
-
-export function createTelegramPollExtraToolSchemas(): Record<string, TSchema> {
-  return {
-    pollDurationSeconds: Type.Optional(Type.Number()),
-    pollAnonymous: Type.Optional(Type.Boolean()),
-    pollPublic: Type.Optional(Type.Boolean()),
-  };
 }
