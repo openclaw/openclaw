@@ -1,6 +1,7 @@
 // Lazy-load pi-coding-agent model metadata so we can infer context windows when
 // the agent reports a model id. This includes custom models.json entries.
 
+import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
@@ -84,6 +85,19 @@ let configuredConfig: OpenClawConfig | undefined;
 let configLoadFailures = 0;
 let nextConfigLoadAttemptAtMs = 0;
 
+function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {
+  const entryBasename = path
+    .basename(argv[1] ?? "")
+    .trim()
+    .toLowerCase();
+  return (
+    entryBasename === "openclaw" ||
+    entryBasename === "openclaw.mjs" ||
+    entryBasename === "entry.js" ||
+    entryBasename === "entry.mjs"
+  );
+}
+
 function getCommandPathFromArgv(argv: string[]): string[] {
   const args = argv.slice(2);
   const tokens: string[] = [];
@@ -125,9 +139,12 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "webhooks",
 ]);
 
-function shouldSkipEagerContextWindowWarmup(argv: string[] = process.argv): boolean {
+function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boolean {
+  if (!isLikelyOpenClawCliProcess(argv)) {
+    return false;
+  }
   const [primary] = getCommandPathFromArgv(argv);
-  return primary ? SKIP_EAGER_WARMUP_PRIMARY_COMMANDS.has(primary) : false;
+  return Boolean(primary) && !SKIP_EAGER_WARMUP_PRIMARY_COMMANDS.has(primary);
 }
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
@@ -205,14 +222,14 @@ export function lookupContextTokens(modelId?: string): number | undefined {
   if (!modelId) {
     return undefined;
   }
-  // Best-effort: kick off loading, but don't block.
+  // Best-effort: kick off loading on demand, but don't block lookups.
   void ensureContextWindowCacheLoaded();
   return MODEL_CACHE.get(modelId);
 }
 
-if (!shouldSkipEagerContextWindowWarmup()) {
-  // Keep prior behavior where model limits begin loading during startup.
-  // This avoids a cold-start miss on the first context token lookup.
+if (shouldEagerWarmContextWindowCache()) {
+  // Keep startup warmth for the real CLI, but avoid import-time side effects
+  // when this module is pulled in through library/plugin-sdk surfaces.
   void ensureContextWindowCacheLoaded();
 }
 
