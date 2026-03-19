@@ -146,6 +146,11 @@ export function readSessionMessages(
             lineCount >= MIN_TAIL_LINES_TARGET ||
             tailBytes >= MAX_TAIL_BYTES_CAP
           ) {
+            if (tailBytes >= MAX_TAIL_BYTES_CAP && start > 0 && lineCount < MIN_TAIL_LINES_TARGET) {
+              console.warn(
+                `[session-utils] transcript tail cap hit for session ${sessionId}: read ${tailBytes} bytes (cap ${MAX_TAIL_BYTES_CAP}) but only recovered ~${lineCount} lines; history may be truncated`,
+              );
+            }
             break;
           }
 
@@ -173,7 +178,10 @@ export function readSessionMessages(
         `[session-utils] oversized transcript line in session ${sessionId}: ${trimmed.length} chars (max ${MAX_LINE_CHARS}); emitting placeholder`,
       );
       // Best-effort: preserve original role/timestamp without JSON.parse (which would stall).
-      const roleMatch = trimmed.match(/"role"\s*:\s*"([^"]+)"/);
+      // Regex scans are limited to a prefix so we don't do O(n) work over tens/hundreds of MB.
+      const scan = trimmed.slice(0, 1_000_000);
+
+      const roleMatch = scan.match(/"role"\s*:\s*"([^"]+)"/);
       const roleCandidate = roleMatch?.[1];
       const role =
         roleCandidate === "user" ||
@@ -184,28 +192,58 @@ export function readSessionMessages(
           : "assistant";
 
       let timestamp = Date.now();
-      const tsNum = trimmed.match(/"timestamp"\s*:\s*(\d{10,13})/);
+      const tsNum = scan.match(/"timestamp"\s*:\s*(\d{10,13})/);
       if (tsNum?.[1]) {
         const n = Number(tsNum[1]);
         if (Number.isFinite(n)) {
           timestamp = n;
         }
       } else {
-        const tsIso = trimmed.match(/"timestamp"\s*:\s*"([^"]+)"/);
+        const tsIso = scan.match(/"timestamp"\s*:\s*"([^"]+)"/);
         const d = tsIso?.[1] ? Date.parse(tsIso[1]) : Number.NaN;
         if (Number.isFinite(d)) {
           timestamp = d;
         }
       }
 
+      // If the record is oversized mainly due to inline media (e.g. image blocks with `data:`),
+      // downstream sanitization would normally strip that payload. Preserve some semantics here
+      // without parsing the full JSON.
+      const looksLikeInlineMedia = /"type"\s*:\s*"image"/.test(scan) || /"data"\s*:\s*"data:/.test(scan);
+
+      let placeholderText = "[chat.history omitted: message too large]";
+      const textSnips: string[] = [];
+      if (looksLikeInlineMedia) {
+        placeholderText = "[chat.history omitted: inline media too large]";
+
+        // Best-effort: pull out a few text snippets so the user still sees *something* meaningful
+        // even if the record is oversized due to inline media payload.
+        const re = /"text"\s*:\s*"((?:\\.|[^"\\]){0,3000})"/g;
+        let match: RegExpExecArray | null;
+        while (textSnips.length < 4 && (match = re.exec(scan))) {
+          const raw = match[1];
+          const unescaped = raw.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+          const flat = unescaped.replace(/\s+/g, " ").trim();
+          if (flat) {
+            textSnips.push(flat);
+          }
+        }
+      }
+
+      const blocks: Array<{ type: string; text: string }> = [{ type: "text", text: placeholderText }];
+      if (textSnips.length) {
+        blocks.push({ type: "text", text: `Context (best-effort): ${textSnips.join(" | ")}` });
+      }
+
       messages.push({
         role,
-        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        content: blocks,
         timestamp,
         __openclaw: {
           kind: "oversized_transcript_line",
           sizeChars: trimmed.length,
           guessed: true,
+          looksLikeInlineMedia,
         },
       });
       continue;
