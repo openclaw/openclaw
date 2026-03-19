@@ -7,6 +7,7 @@ import { updateSessionStore, type SessionEntry } from "../../config/sessions.js"
 import { typedCases } from "../../test-utils/typed-cases.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
+import type { HandleCommandsParams } from "./commands-types.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
@@ -145,17 +146,15 @@ const resetAcpSessionInPlaceMock = vi.hoisted(() =>
     }),
   ),
 );
-vi.mock("../../acp/persistent-bindings.js", async () => {
-  const actual = await vi.importActual<typeof import("../../acp/persistent-bindings.js")>(
-    "../../acp/persistent-bindings.js",
+vi.mock("../../acp/persistent-bindings.lifecycle.js", async () => {
+  const actual = await vi.importActual<typeof import("../../acp/persistent-bindings.lifecycle.js")>(
+    "../../acp/persistent-bindings.lifecycle.js",
   );
   return {
     ...actual,
     resetAcpSessionInPlace: (params: unknown) => resetAcpSessionInPlaceMock(params),
   };
 });
-
-import type { HandleCommandsParams } from "./commands-types.js";
 
 // Avoid expensive workspace scans during /context tests.
 vi.mock("./commands-context-report.js", () => ({
@@ -1027,33 +1026,66 @@ describe("/cortex command", () => {
     expect(result.reply?.text).toContain("Platforms: claude-code, cursor, copilot");
   });
 
-  it("sets Cortex mode for the active session", async () => {
+  it("sets Cortex mode for the active conversation", async () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
-    const params = buildParams("/cortex mode set professional", cfg);
+    const params = buildParams("/cortex mode set professional", cfg, {
+      Surface: "slack",
+      Provider: "slack",
+      NativeChannelId: "C123",
+    });
 
     const result = await handleCommands(params);
 
     expect(result.shouldContinue).toBe(false);
     expect(setCortexModeOverrideMock).toHaveBeenCalledWith({
       agentId: "main",
-      scope: "session",
-      targetId: "session-1",
+      scope: "channel",
+      targetId: "C123",
       mode: "professional",
     });
-    expect(result.reply?.text).toContain("Set Cortex mode for this session to professional.");
+    expect(result.reply?.text).toContain("Set Cortex mode for this channel to professional.");
     expect(result.reply?.text).toContain("Use /status or /cortex preview to verify.");
   });
 
-  it("resets Cortex mode for the active channel when requested", async () => {
+  it("shows Cortex mode for the active conversation when no scope is specified", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    getCortexModeOverrideMock.mockResolvedValueOnce({
+      agentId: "main",
+      scope: "channel",
+      targetId: "C123",
+      mode: "minimal",
+      updatedAt: new Date().toISOString(),
+    });
+    const params = buildParams("/cortex mode show", cfg, {
+      Surface: "slack",
+      Provider: "slack",
+      NativeChannelId: "C123",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(getCortexModeOverrideMock).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionId: undefined,
+      channelId: "C123",
+    });
+    expect(result.reply?.text).toContain("Cortex mode for this channel: minimal");
+  });
+
+  it("resets Cortex mode for the active conversation when requested", async () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
     clearCortexModeOverrideMock.mockResolvedValueOnce(true);
-    const params = buildParams("/cortex mode reset channel", cfg, {
+    const params = buildParams("/cortex mode reset", cfg, {
       Surface: "slack",
       Provider: "slack",
       NativeChannelId: "C123",

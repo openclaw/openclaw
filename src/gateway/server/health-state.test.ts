@@ -10,7 +10,7 @@ const normalizeMainKeyMock = vi.hoisted(() => vi.fn());
 const listSystemPresenceMock = vi.hoisted(() => vi.fn());
 const resolveGatewayAuthMock = vi.hoisted(() => vi.fn());
 const getUpdateAvailableMock = vi.hoisted(() => vi.fn());
-const resolveAgentCortexConfigMock = vi.hoisted(() => vi.fn());
+const resolveAgentCortexModeStatusMock = vi.hoisted(() => vi.fn());
 const resolveCortexChannelTargetMock = vi.hoisted(() => vi.fn());
 const getCachedLatestCortexCaptureHistoryEntryMock = vi.hoisted(() => vi.fn());
 
@@ -52,7 +52,7 @@ vi.mock("../../infra/update-startup.js", () => ({
 }));
 
 vi.mock("../../agents/cortex.js", () => ({
-  resolveAgentCortexConfig: resolveAgentCortexConfigMock,
+  resolveAgentCortexModeStatus: resolveAgentCortexModeStatusMock,
   resolveCortexChannelTarget: resolveCortexChannelTargetMock,
 }));
 
@@ -67,7 +67,7 @@ describe("buildGatewaySnapshot", () => {
     vi.clearAllMocks();
   });
 
-  it("includes Cortex snapshot details when the prompt bridge is enabled", () => {
+  it("includes Cortex snapshot details when the prompt bridge is enabled", async () => {
     loadConfigMock.mockReturnValue({
       session: { mainKey: "main", scope: "per-sender" },
     });
@@ -91,9 +91,10 @@ describe("buildGatewaySnapshot", () => {
     listSystemPresenceMock.mockReturnValue([]);
     resolveGatewayAuthMock.mockReturnValue({ mode: "token" });
     getUpdateAvailableMock.mockReturnValue(undefined);
-    resolveAgentCortexConfigMock.mockReturnValue({
+    resolveAgentCortexModeStatusMock.mockResolvedValue({
       enabled: true,
-      mode: "technical",
+      mode: "minimal",
+      source: "session-override",
       maxChars: 1500,
       graphPath: ".cortex/context.json",
     });
@@ -109,8 +110,14 @@ describe("buildGatewaySnapshot", () => {
       timestamp: 1234,
     });
 
-    const snapshot = buildGatewaySnapshot();
+    const snapshot = await buildGatewaySnapshot();
 
+    expect(resolveAgentCortexModeStatusMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      agentId: "main",
+      sessionId: "session-1",
+      channelId: "telegram:user-123",
+    });
     expect(resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "main" });
     expect(loadSessionStoreMock).toHaveBeenCalledWith(
       "/tmp/openclaw-state/sessions/main/sessions.json",
@@ -130,7 +137,7 @@ describe("buildGatewaySnapshot", () => {
 
     expect(snapshot.cortex).toEqual({
       enabled: true,
-      mode: "technical",
+      mode: "minimal",
       graphPath: ".cortex/context.json",
       lastCaptureAtMs: 1234,
       lastCaptureReason: "high-signal memory candidate",

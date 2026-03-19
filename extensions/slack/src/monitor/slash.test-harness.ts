@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchReplyWithDispatcher: (...args: unknown[]) => mocks.dispatchMock(...args),
+  finalizeInboundContext: (...args: unknown[]) => mocks.finalizeInboundContextMock(...args),
 }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
@@ -25,15 +26,8 @@ vi.mock("openclaw/plugin-sdk/routing", () => ({
   resolveAgentRoute: (...args: unknown[]) => mocks.resolveAgentRouteMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  finalizeInboundContext: (...args: unknown[]) => mocks.finalizeInboundContextMock(...args),
-}));
-
 vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
   resolveConversationLabel: (...args: unknown[]) => mocks.resolveConversationLabelMock(...args),
-}));
-
-vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
   createReplyPrefixOptions: (...args: unknown[]) => mocks.createReplyPrefixOptionsMock(...args),
 }));
 

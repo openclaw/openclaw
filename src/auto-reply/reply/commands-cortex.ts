@@ -73,24 +73,18 @@ function resolveScopeTarget(
   rawScope?: string,
 ): { scope: CortexModeScope; targetId: string } | { error: string } {
   const requested = rawScope?.trim().toLowerCase();
-  if (!requested || requested === "here" || requested === "session") {
-    const sessionId = resolveActiveSessionId(params);
-    if (sessionId) {
-      return { scope: "session", targetId: sessionId };
-    }
-    if (!requested || requested === "here") {
-      return {
-        scope: "channel",
-        targetId: resolveActiveChannelId(params),
-      };
-    }
-    return { error: "No active session id is available for this conversation." };
-  }
-  if (requested === "channel") {
+  if (!requested || requested === "here" || requested === "channel") {
     return {
       scope: "channel",
       targetId: resolveActiveChannelId(params),
     };
+  }
+  if (requested === "session") {
+    const sessionId = resolveActiveSessionId(params);
+    if (sessionId) {
+      return { scope: "session", targetId: sessionId };
+    }
+    return { error: "No active session id is available for this conversation." };
   }
   return { error: "Use `/cortex mode set <mode> [here|session|channel]`." };
 }
@@ -114,6 +108,9 @@ async function buildCortexHelpReply(): Promise<ReplyPayload> {
       "- /cortex mode set minimal",
       "- /cortex mode set professional channel",
       "- /cortex mode reset",
+      "",
+      "Tip: omitting the scope uses the current conversation.",
+      "Use `session` only when you want one mode shared across the full session.",
       "",
       "Tip: after changing mode, run /status or /cortex preview to verify what will be used.",
     ].join("\n"),

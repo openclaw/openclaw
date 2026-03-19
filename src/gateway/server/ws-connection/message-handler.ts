@@ -940,7 +940,7 @@ export function attachGatewayWsMessageHandler(params: {
           incrementPresenceVersion();
         }
 
-        const snapshot = buildGatewaySnapshot();
+        const snapshot = await buildGatewaySnapshot();
         const cachedHealth = getHealthCache();
         if (cachedHealth) {
           snapshot.health = cachedHealth;
