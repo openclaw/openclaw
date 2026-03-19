@@ -78,9 +78,7 @@ export function normalizeMessageActionInput(params: {
   return normalizedArgs;
 }
 
-export function consumeTargetInferredFromToolContext(
-  args: Record<string, unknown>,
-): boolean {
+export function consumeTargetInferredFromToolContext(args: Record<string, unknown>): boolean {
   const inferred = args[TARGET_INFERRED_FROM_TOOL_CONTEXT] === true;
   delete args[TARGET_INFERRED_FROM_TOOL_CONTEXT];
   return inferred;
