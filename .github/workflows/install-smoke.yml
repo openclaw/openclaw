@@ -62,24 +62,57 @@ jobs:
         run: |
           docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
 
-      # This smoke only validates that the build-arg path preinstalls selected
-      # extension deps without breaking image build or basic CLI startup. It
-      # does not exercise runtime loading/registration of diagnostics-otel.
+      # This smoke validates that the build-arg path preinstalls selected
+      # extension deps and that matrix plugin discovery stays healthy in the
+      # final runtime image.
       - name: Build extension Dockerfile smoke image
         uses: useblacksmith/build-push-action@v2
         with:
           context: .
           file: ./Dockerfile
           build-args: |
-            OPENCLAW_EXTENSIONS=diagnostics-otel
+            OPENCLAW_EXTENSIONS=matrix
           tags: openclaw-ext-smoke:local
           load: true
           push: false
           provenance: false
 
-      - name: Smoke test Dockerfile with extension build arg
+      - name: Smoke test Dockerfile with matrix extension build arg
         run: |
-          docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc 'which openclaw && openclaw --version'
+          docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc '
+            which openclaw &&
+            openclaw --version &&
+            node -e "
+              const Module = require(\"node:module\");
+              const requireFromMatrix = Module.createRequire(\"/app/extensions/matrix/package.json\");
+              requireFromMatrix.resolve(\"@vector-im/matrix-bot-sdk/package.json\");
+              requireFromMatrix.resolve(\"@matrix-org/matrix-sdk-crypto-nodejs/package.json\");
+              const { spawnSync } = require(\"node:child_process\");
+              const run = spawnSync(\"openclaw\", [\"plugins\", \"list\", \"--json\"], { encoding: \"utf8\" });
+              if (run.status !== 0) {
+                process.stderr.write(run.stderr || run.stdout || \"plugins list failed\\n\");
+                process.exit(run.status ?? 1);
+              }
+              const parsed = JSON.parse(run.stdout);
+              const matrix = (parsed.plugins || []).find((entry) => entry.id === \"matrix\");
+              if (!matrix) {
+                throw new Error(\"matrix plugin missing from bundled plugin list\");
+              }
+              const matrixDiag = (parsed.diagnostics || []).filter(
+                (diag) =>
+                  typeof diag.source === \"string\" &&
+                  diag.source.includes(\"/extensions/matrix\") &&
+                  typeof diag.message === \"string\" &&
+                  diag.message.includes(\"extension entry escapes package directory\"),
+              );
+              if (matrixDiag.length > 0) {
+                throw new Error(
+                  \"unexpected matrix diagnostics: \" +
+                    matrixDiag.map((diag) => diag.message).join(\"; \"),
+                );
+              }
+            "
+          '
 
       - name: Build installer smoke image
         uses: useblacksmith/build-push-action@v2
