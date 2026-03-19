@@ -431,6 +431,19 @@ export function isMessageTranscribedEvent(
   );
 }
 
+export function isMessageSendingEvent(
+  event: InternalHookEvent,
+): event is MessageSendingHookEvent {
+  if (!isHookEventTypeAndAction(event, "message", "sending")) {
+    return false;
+  }
+  const context = getHookContext<MessageSendingHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return hasStringContextField(context, "content") && hasStringContextField(context, "channelId");
+}
+
 export function isMessagePreprocessedEvent(
   event: InternalHookEvent,
 ): event is MessagePreprocessedHookEvent {
