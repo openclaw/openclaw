@@ -301,7 +301,7 @@ extension OnboardingView {
     private var shouldShowRemoteConnectionSection: Bool {
         let consumerGate = !AppFlavor.current.isConsumer || self.showAdvancedConnection
         guard consumerGate || self.state.connectionMode == .remote else { return false }
-        self.state.connectionMode == .remote ||
+        return self.state.connectionMode == .remote ||
             self.showAdvancedConnection ||
             self.remoteProbeState != .idle ||
             self.remoteAuthIssue != nil ||

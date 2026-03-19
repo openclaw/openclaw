@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-18
+Last updated: 2026-03-19
 Owner: consumer execution team
 Status: Active
 
@@ -66,15 +66,25 @@ Use these documents in this order when there is any ambiguity:
 
 Gate to exit Worktree A:
 
-- [ ] Consumer app can coexist with founder app on the same Mac without sharing runtime state unintentionally
+- [x] Consumer app can coexist with founder app on the same Mac without sharing runtime state unintentionally
 - [x] Consumer default UX is materially simpler while advanced controls remain accessible
 - [x] Docs match the implemented consumer behavior
 
-Worktree A validation notes (2026-03-18):
+Worktree A validation notes (2026-03-19):
 
-- Changed macOS sources parse cleanly with `swiftc -frontend -parse`.
-- Consumer-targeted smoke coverage was added for gateway-port isolation and settings-tab visibility.
-- Full `swift test --package-path apps/macos --filter SettingsViewSmokeTests` remains blocked by an external macro/plugin failure in `swiftui-math` (`SwiftUIMacros` / `PreviewsMacros` missing in this environment).
+- `swift build -c debug --product OpenClaw --build-path .build --arch arm64 -Xlinker -rpath -Xlinker @executable_path/../Frameworks` passed after fixing a missing `return` in `OnboardingView+Pages.swift`.
+- `swift test --package-path apps/macos --filter GatewayEnvironmentTests` passed.
+- `swift test --package-path apps/macos --filter SettingsViewSmokeTests` passed.
+- A consumer bundle was packaged manually at `dist/OpenClaw Consumer.app` with:
+  - bundle identifier `ai.openclaw.consumer.mac.debug`
+  - URL scheme `openclaw-consumer`
+  - app variant `consumer`
+- Same-Mac isolation smoke passed with the founder gateway still active on `18789`:
+  - consumer app process launched from `dist/OpenClaw Consumer.app`
+  - consumer defaults plist written to `~/Library/Preferences/ai.openclaw.consumer.mac.debug.plist`
+  - consumer runtime socket created at `~/.openclaw-consumer/exec-approvals.sock`
+  - consumer app held no TCP listener and did not take over the founder gateway launch label
+- Gateway auto-bootstrap on consumer port `19001` was not exercised in Worktree A; that remains Worktree B scope.
 
 ### Phase A: Branch convergence (blocking)
 
