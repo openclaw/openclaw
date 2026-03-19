@@ -34,6 +34,7 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import type { PowerShellWindowStyle } from "./shell-utils.js";
 
 // Sanitize inherited host env before merge so dangerous variables from process.env
 // are not propagated into non-sandboxed executions.
@@ -304,6 +305,7 @@ export async function runExecProcess(opts: {
   scopeKey?: string;
   sessionKey?: string;
   timeoutSec: number | null;
+  windowStyle?: PowerShellWindowStyle;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
@@ -426,7 +428,9 @@ export async function runExecProcess(opts: {
           (opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const)),
       };
     }
-    const { shell, args: shellArgs } = getShellConfig();
+    const { shell, args: shellArgs } = getShellConfig({
+      windowsPowerShellWindowStyle: opts.windowStyle,
+    });
     const childArgv = [shell, ...shellArgs, execCommand];
     if (opts.usePty) {
       return {

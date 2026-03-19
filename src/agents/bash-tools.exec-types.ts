@@ -1,12 +1,14 @@
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import type { PowerShellWindowStyle } from "./shell-utils.js";
 
 export type ExecToolDefaults = {
   host?: ExecHost;
   security?: ExecSecurity;
   ask?: ExecAsk;
   node?: string;
+  windowStyle?: PowerShellWindowStyle;
   pathPrepend?: string[];
   safeBins?: string[];
   safeBinTrustedDirs?: string[];

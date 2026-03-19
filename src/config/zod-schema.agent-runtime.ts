@@ -426,6 +426,7 @@ const ToolExecBaseShape = {
   security: z.enum(["deny", "allowlist", "full"]).optional(),
   ask: z.enum(["off", "on-miss", "always"]).optional(),
   node: z.string().optional(),
+  windowStyle: z.enum(["normal", "hidden", "minimized", "maximized"]).optional(),
   pathPrepend: z.array(z.string()).optional(),
   safeBins: z.array(z.string()).optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),

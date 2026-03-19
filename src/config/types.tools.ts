@@ -234,6 +234,8 @@ export type ExecToolConfig = {
   ask?: "off" | "on-miss" | "always";
   /** Default node binding for exec.host=node (node id/name). */
   node?: string;
+  /** Default PowerShell window style for exec on Windows hosts. */
+  windowStyle?: "normal" | "hidden" | "minimized" | "maximized";
   /** Directories to prepend to PATH when running exec (gateway/sandbox). */
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */

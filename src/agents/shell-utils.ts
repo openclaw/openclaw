@@ -39,16 +39,55 @@ export function resolvePowerShellPath(): string {
   return "powershell.exe";
 }
 
-export function getShellConfig(): { shell: string; args: string[] } {
+export type PowerShellWindowStyle = "normal" | "hidden" | "minimized" | "maximized";
+
+function normalizePowerShellWindowStyle(value?: string): PowerShellWindowStyle {
+  const lowered = value?.trim().toLowerCase();
+  if (
+    lowered === "hidden" ||
+    lowered === "minimized" ||
+    lowered === "maximized" ||
+    lowered === "normal"
+  ) {
+    return lowered;
+  }
+  return "normal";
+}
+
+function toPowerShellWindowStyleArg(
+  style: PowerShellWindowStyle,
+): "Normal" | "Hidden" | "Minimized" | "Maximized" {
+  if (style === "hidden") {
+    return "Hidden";
+  }
+  if (style === "minimized") {
+    return "Minimized";
+  }
+  if (style === "maximized") {
+    return "Maximized";
+  }
+  return "Normal";
+}
+
+export function getShellConfig(options?: {
+  windowsPowerShellWindowStyle?: PowerShellWindowStyle;
+}): { shell: string; args: string[] } {
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
     // Problem: Many Windows system utilities (ipconfig, systeminfo, etc.) write
     // directly to the console via WriteConsole API, bypassing stdout pipes.
     // When Node.js spawns cmd.exe with piped stdio, these utilities produce no output.
     // PowerShell properly captures and redirects their output to stdout.
+    const windowStyle = normalizePowerShellWindowStyle(options?.windowsPowerShellWindowStyle);
     return {
       shell: resolvePowerShellPath(),
-      args: ["-NoProfile", "-NonInteractive", "-Command"],
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        toPowerShellWindowStyleArg(windowStyle),
+        "-Command",
+      ],
     };
   }
 
