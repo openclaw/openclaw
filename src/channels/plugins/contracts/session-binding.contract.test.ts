@@ -1,7 +1,7 @@
 import { beforeEach, describe, vi } from "vitest";
 import { __testing as discordThreadBindingTesting } from "../../../../extensions/discord/src/monitor/thread-bindings.manager.js";
 import { __testing as feishuThreadBindingTesting } from "../../../../extensions/feishu/src/thread-bindings.js";
-import { resetMatrixThreadBindingsForTests } from "../../../../extensions/matrix/runtime-api.js";
+import { resetMatrixThreadBindingsForTests } from "../../../../extensions/matrix/api.js";
 import { __testing as telegramThreadBindingTesting } from "../../../../extensions/telegram/src/thread-bindings.js";
 import { __testing as sessionBindingTesting } from "../../../infra/outbound/session-binding-service.js";
 import { sessionBindingContractRegistry } from "./registry.js";
