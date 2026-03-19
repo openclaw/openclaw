@@ -128,6 +128,21 @@ export function evaluateChannelHealth(
       return { healthy: false, reason: "stale-socket" };
     }
   }
+  // Catch zombie state: channel reports connected but never provided any events.
+  // If lastEventAt is missing and enough time has passed since startup, the
+  // connection is likely silently dead.
+  if (
+    policy.channelId !== "telegram" &&
+    snapshot.mode !== "webhook" &&
+    snapshot.connected === true &&
+    snapshot.lastEventAt == null &&
+    lastStartAt != null
+  ) {
+    const lifecycleAge = Math.max(0, policy.now - lastStartAt);
+    if (lifecycleAge > policy.staleEventThresholdMs) {
+      return { healthy: false, reason: "stale-socket" };
+    }
+  }
   return { healthy: true, reason: "healthy" };
 }
 

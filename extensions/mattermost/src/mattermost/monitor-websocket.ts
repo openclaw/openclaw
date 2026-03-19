@@ -143,6 +143,10 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("message", async (data) => {
+          // Track last event time so the channel health monitor can detect
+          // stale sockets that silently stop delivering events.
+          opts.statusSink?.({ lastEventAt: Date.now() });
+
           const raw = rawDataToString(data);
           let payload: MattermostEventPayload;
           try {
