@@ -44,6 +44,34 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     expect(resolved.coalescing.idleMs).toBe(0);
   });
 
+  it("honors newline chunkMode for plugin channels even before the plugin registry is loaded", () => {
+    const cfg = {
+      channels: {
+        bluebubbles: {
+          chunkMode: "newline",
+        },
+      },
+      agents: {
+        defaults: {
+          blockStreamingChunk: {
+            minChars: 1,
+            maxChars: 4000,
+            breakPreference: "paragraph",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveEffectiveBlockStreamingConfig({
+      cfg,
+      provider: "bluebubbles",
+    });
+
+    expect(resolved.chunking.flushOnParagraph).toBe(true);
+    expect(resolved.coalescing.flushOnEnqueue).toBe(true);
+    expect(resolved.coalescing.joiner).toBe("\n\n");
+  });
+
   it("allows ACP maxChunkChars overrides above base defaults up to provider text limits", () => {
     const cfg = {
       channels: {
