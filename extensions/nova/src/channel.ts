@@ -1,11 +1,11 @@
 import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
-import type { NovaConfig } from "./types.js";
 import { resolveNovaCredentials } from "./credentials.js";
 import { novaOnboardingAdapter } from "./onboarding.js";
 import { novaOutbound } from "./outbound.js";
 import { probeNova } from "./probe.js";
 import { sendNovaMessage } from "./send.js";
+import type { NovaConfig } from "./types.js";
 
 type ResolvedNovaAccount = {
   accountId: string;

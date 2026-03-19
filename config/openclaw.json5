@@ -9,10 +9,12 @@
     port: 18789,
     bind: "lan",
     auth: {
-      // ALB handles TLS termination; gateway token secures the LAN binding.
-      // WAF rate-limiting + ALB security group restrict access.
-      // Token is injected via OPENCLAW_GATEWAY_TOKEN env var in ECS task def.
-      mode: "token",
+      // ALB is the trusted reverse proxy; user identity arrives in Amz-Mons-Idp-Subject
+      // header set by the IDP via CloudFront/ALB. WAF + ALB SG restrict network access.
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "Amz-Mons-Idp-Subject",
+      },
     },
     // ALB is a trusted reverse proxy — trust x-forwarded-for for client IP.
     trustedProxies: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],

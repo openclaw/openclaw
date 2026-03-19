@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { NovaConfig } from "./types.js";
 import { probeNova } from "./probe.js";
+import type { NovaConfig } from "./types.js";
 
 describe("probeNova", () => {
   it("returns ok for valid config with default baseUrl", () => {

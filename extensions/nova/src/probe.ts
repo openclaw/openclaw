@@ -1,5 +1,5 @@
-import type { NovaConfig } from "./types.js";
 import { resolveNovaCredentials } from "./credentials.js";
+import type { NovaConfig } from "./types.js";
 
 export type ProbeNovaResult = {
   ok: boolean;

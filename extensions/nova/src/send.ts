@@ -1,7 +1,7 @@
 import WebSocket from "ws";
-import type { NovaConfig } from "./types.js";
 import { getActiveNovaConnection } from "./connection.js";
 import { resolveNovaCredentials } from "./credentials.js";
+import type { NovaConfig } from "./types.js";
 
 export type SendNovaMessageOpts = {
   cfg: { channels?: { nova?: NovaConfig } };
