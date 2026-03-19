@@ -24,6 +24,7 @@ export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 export { createAccountStatusSink } from "./channel-lifecycle.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
 export { KeyedAsyncQueue } from "./keyed-async-queue.js";
+export { formatAllowFromLowercase, formatNormalizedAllowFromEntries } from "./allow-from.js";
 
 export {
   createHybridChannelConfigAdapter,
@@ -36,7 +37,7 @@ export {
   createTopLevelChannelConfigBase,
   mapAllowFromEntries,
 } from "./channel-config-helpers.js";
-export { formatAllowFromLowercase, formatNormalizedAllowFromEntries } from "./allow-from.js";
+
 export * from "./channel-config-schema.js";
 export * from "./channel-policy.js";
 export * from "./reply-history.js";
