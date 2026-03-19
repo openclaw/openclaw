@@ -53,8 +53,8 @@ describe("Nix integration (U3, U5, U9)", () => {
   });
 
   describe("U5: CONFIG_PATH and STATE_DIR env var overrides", () => {
-    it("STATE_DIR defaults to ~/.openfinclaw when env not set", () => {
-      expect(resolveStateDir(envWith({ OPENCLAW_STATE_DIR: undefined }))).toMatch(/\.openfinclaw$/);
+    it("STATE_DIR defaults to ~/.openclaw when env not set", () => {
+      expect(resolveStateDir(envWith({ OPENCLAW_STATE_DIR: undefined }))).toMatch(/\.openclaw$/);
     });
 
     it("STATE_DIR respects OPENCLAW_STATE_DIR override", () => {
@@ -67,10 +67,10 @@ describe("Nix integration (U3, U5, U9)", () => {
       const customHome = path.join(path.sep, "custom", "home");
       expect(
         resolveStateDir(envWith({ OPENCLAW_HOME: customHome, OPENCLAW_STATE_DIR: undefined })),
-      ).toBe(path.join(path.resolve(customHome), ".openfinclaw"));
+      ).toBe(path.join(path.resolve(customHome), ".openclaw"));
     });
 
-    it("CONFIG_PATH defaults to OPENCLAW_HOME/.openfinclaw/openfinclaw.json", () => {
+    it("CONFIG_PATH defaults to OPENCLAW_HOME/.openclaw/openclaw.json", () => {
       const customHome = path.join(path.sep, "custom", "home");
       expect(
         resolveConfigPathCandidate(
@@ -80,15 +80,15 @@ describe("Nix integration (U3, U5, U9)", () => {
             OPENCLAW_STATE_DIR: undefined,
           }),
         ),
-      ).toBe(path.join(path.resolve(customHome), ".openfinclaw", "openfinclaw.json"));
+      ).toBe(path.join(path.resolve(customHome), ".openclaw", "openclaw.json"));
     });
 
-    it("CONFIG_PATH defaults to ~/.openfinclaw/openfinclaw.json when env not set", () => {
+    it("CONFIG_PATH defaults to ~/.openclaw/openclaw.json when env not set", () => {
       expect(
         resolveConfigPathCandidate(
           envWith({ OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined }),
         ),
-      ).toMatch(/\.openfinclaw[\\/]openfinclaw\.json$/);
+      ).toMatch(/\.openclaw[\\/]openclaw\.json$/);
     });
 
     it("CONFIG_PATH respects OPENCLAW_CONFIG_PATH override", () => {
@@ -111,9 +111,12 @@ describe("Nix integration (U3, U5, U9)", () => {
     });
 
     it("CONFIG_PATH uses STATE_DIR when only state dir is overridden", () => {
-      expect(resolveConfigPathCandidate(envWith({ OPENCLAW_STATE_DIR: "/custom/state" }))).toBe(
-        path.join(path.resolve("/custom/state"), "openfinclaw.json"),
-      );
+      expect(
+        resolveConfigPathCandidate(
+          envWith({ OPENCLAW_STATE_DIR: "/custom/state", OPENCLAW_TEST_FAST: "1" }),
+          () => path.join(path.sep, "tmp", "openclaw-config-home"),
+        ),
+      ).toBe(path.join(path.resolve("/custom/state"), "openclaw.json"));
     });
   });
 

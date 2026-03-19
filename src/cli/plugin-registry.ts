@@ -1,25 +1,46 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
+import {
+  resolveChannelPluginIds,
+  resolveConfiguredChannelPluginIds,
+} from "../plugins/channel-plugin-ids.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginLogger } from "../plugins/types.js";
 
 const log = createSubsystemLogger("plugins");
-let pluginRegistryLoaded = false;
+let pluginRegistryLoaded: "none" | "configured-channels" | "channels" | "all" = "none";
 
-export function ensurePluginRegistryLoaded(): void {
-  if (pluginRegistryLoaded) {
+export type PluginRegistryScope = "configured-channels" | "channels" | "all";
+
+function scopeRank(scope: typeof pluginRegistryLoaded): number {
+  switch (scope) {
+    case "none":
+      return 0;
+    case "configured-channels":
+      return 1;
+    case "channels":
+      return 2;
+    case "all":
+      return 3;
+  }
+}
+
+export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistryScope }): void {
+  const scope = options?.scope ?? "all";
+  if (scopeRank(pluginRegistryLoaded) >= scopeRank(scope)) {
     return;
   }
   const active = getActivePluginRegistry();
   // Tests (and callers) can pre-seed a registry (e.g. `test/setup.ts`); avoid
   // doing an expensive load when we already have plugins/channels/tools.
   if (
+    pluginRegistryLoaded === "none" &&
     active &&
     (active.plugins.length > 0 || active.channels.length > 0 || active.tools.length > 0)
   ) {
-    pluginRegistryLoaded = true;
+    pluginRegistryLoaded = "all";
     return;
   }
   const config = loadConfig();
@@ -34,6 +55,23 @@ export function ensurePluginRegistryLoaded(): void {
     config,
     workspaceDir,
     logger,
+    ...(scope === "configured-channels"
+      ? {
+          onlyPluginIds: resolveConfiguredChannelPluginIds({
+            config,
+            workspaceDir,
+            env: process.env,
+          }),
+        }
+      : scope === "channels"
+        ? {
+            onlyPluginIds: resolveChannelPluginIds({
+              config,
+              workspaceDir,
+              env: process.env,
+            }),
+          }
+        : {}),
   });
-  pluginRegistryLoaded = true;
+  pluginRegistryLoaded = scope;
 }

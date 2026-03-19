@@ -17,7 +17,7 @@ import {
 import { parseScreenRecordPayload, screenRecordTempPath } from "./nodes-screen.js";
 
 async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
-  return await withTempDir("openfinclaw-test-", run);
+  return await withTempDir("openclaw-test-", run);
 }
 
 describe("nodes camera helpers", () => {
@@ -68,7 +68,7 @@ describe("nodes camera helpers", () => {
       tmpDir: "/tmp",
       id: "id1",
     });
-    expect(p).toBe(path.join("/tmp", "openfinclaw-camera-snap-front-id1.jpg"));
+    expect(p).toBe(path.join("/tmp", "openclaw-camera-snap-front-id1.jpg"));
   });
 
   it("writes camera clip payload to temp path", async () => {

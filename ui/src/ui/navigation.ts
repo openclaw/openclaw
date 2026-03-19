@@ -7,12 +7,20 @@ export const TAB_GROUPS = [
     label: "control",
     tabs: ["overview", "channels", "instances", "sessions", "usage", "cron"],
   },
-  {
-    label: "finance",
-    tabs: ["finOverview", "finTrading", "finStrategyLab", "finFlow", "finSetting"],
-  },
   { label: "agent", tabs: ["agents", "skills", "nodes"] },
-  { label: "settings", tabs: ["config", "debug", "logs"] },
+  {
+    label: "settings",
+    tabs: [
+      "config",
+      "communications",
+      "appearance",
+      "automation",
+      "infrastructure",
+      "aiAgents",
+      "debug",
+      "logs",
+    ],
+  },
 ] as const;
 
 export type Tab =
@@ -23,15 +31,15 @@ export type Tab =
   | "sessions"
   | "usage"
   | "cron"
-  | "finOverview"
-  | "finTrading"
-  | "finStrategyLab"
-  | "finFlow"
-  | "finSetting"
   | "skills"
   | "nodes"
   | "chat"
   | "config"
+  | "communications"
+  | "appearance"
+  | "automation"
+  | "infrastructure"
+  | "aiAgents"
   | "debug"
   | "logs";
 
@@ -43,15 +51,15 @@ const TAB_PATHS: Record<Tab, string> = {
   sessions: "/sessions",
   usage: "/usage",
   cron: "/cron",
-  finOverview: "/fin-overview",
-  finTrading: "/fin-trading",
-  finStrategyLab: "/fin-strategy-lab",
-  finFlow: "/fin-flow",
-  finSetting: "/fin-setting",
   skills: "/skills",
   nodes: "/nodes",
   chat: "/chat",
   config: "/config",
+  communications: "/communications",
+  appearance: "/appearance",
+  automation: "/automation",
+  infrastructure: "/infrastructure",
+  aiAgents: "/ai-agents",
   debug: "/debug",
   logs: "/logs",
 };
@@ -159,18 +167,18 @@ export function iconForTab(tab: Tab): IconName {
       return "zap";
     case "nodes":
       return "monitor";
-    case "finOverview":
-      return "barChart";
-    case "finTrading":
-      return "candlestick";
-    case "finStrategyLab":
-      return "zap";
-    case "finFlow":
-      return "loader";
-    case "finSetting":
-      return "settings";
     case "config":
       return "settings";
+    case "communications":
+      return "send";
+    case "appearance":
+      return "spark";
+    case "automation":
+      return "terminal";
+    case "infrastructure":
+      return "globe";
+    case "aiAgents":
+      return "brain";
     case "debug":
       return "bug";
     case "logs":

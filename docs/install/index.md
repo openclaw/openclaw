@@ -13,7 +13,7 @@ Already followed [Getting Started](/start/getting-started)? You're all set — t
 
 ## System requirements
 
-- **[Node 22+](/install/node)** (the [installer script](#install-methods) will install it if missing)
+- **[Node 24 (recommended)](/install/node)** (Node 22 LTS, currently `22.16+`, is still supported for compatibility; the [installer script](#install-methods) will install Node 24 if missing)
 - macOS, Linux, or Windows
 - `pnpm` only if you build from source
 
@@ -33,7 +33,7 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
 
 <AccordionGroup>
   <Accordion title="Installer script" icon="rocket" defaultOpen>
-    Downloads the CLI, installs it globally via npm, and launches the onboarding wizard.
+    Downloads the CLI, installs it globally via npm, and launches onboarding.
 
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
@@ -70,7 +70,7 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
-    If you already have Node 22+ and prefer to manage the install yourself:
+    If you already manage Node yourself, we recommend Node 24. OpenClaw still supports Node 22 LTS, currently `22.16+`, for compatibility:
 
     <Tabs>
       <Tab title="npm">
@@ -101,6 +101,16 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
         </Note>
       </Tab>
     </Tabs>
+
+    Want the current GitHub `main` head with a package-manager install?
+
+    ```bash
+    npm install -g github:openclaw/openclaw#main
+    ```
+
+    ```bash
+    pnpm add -g github:openclaw/openclaw#main
+    ```
 
   </Accordion>
 

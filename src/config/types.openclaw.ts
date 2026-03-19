@@ -7,7 +7,6 @@ import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CliConfig } from "./types.cli.js";
 import type { CronConfig } from "./types.cron.js";
-import type { FinancialConfig } from "./types.financial.js";
 import type {
   CanvasHostConfig,
   DiscoveryConfig,
@@ -15,6 +14,7 @@ import type {
   TalkConfig,
 } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
+import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type {
   AudioConfig,
@@ -121,7 +121,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
-  financial?: FinancialConfig;
+  mcp?: McpConfig;
 };
 
 export type ConfigValidationIssue = {

@@ -49,6 +49,16 @@ const withClearedEnv = <T>(
   }
 };
 
+async function writeEnvSkill(workspaceDir: string) {
+  const skillDir = path.join(workspaceDir, "skills", "env-skill");
+  await writeSkill({
+    dir: skillDir,
+    name: "env-skill",
+    description: "Needs env",
+    metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
+  });
+}
+
 beforeAll(async () => {
   await fixtureSuite.setup();
   tempHome = await createTempHomeEnv("openclaw-skills-home-");
@@ -58,7 +68,6 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   if (tempHome) {
     await tempHome.restore();
     tempHome = null;
@@ -241,13 +250,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
 describe("applySkillEnvOverrides", () => {
   it("sets and restores env vars", async () => {
     const workspaceDir = await makeWorkspace();
-    const skillDir = path.join(workspaceDir, "skills", "env-skill");
-    await writeSkill({
-      dir: skillDir,
-      name: "env-skill",
-      description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
-    });
+    await writeEnvSkill(workspaceDir);
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
@@ -270,13 +273,7 @@ describe("applySkillEnvOverrides", () => {
 
   it("keeps env keys tracked until all overlapping overrides restore", async () => {
     const workspaceDir = await makeWorkspace();
-    const skillDir = path.join(workspaceDir, "skills", "env-skill");
-    await writeSkill({
-      dir: skillDir,
-      name: "env-skill",
-      description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
-    });
+    await writeEnvSkill(workspaceDir);
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
@@ -302,13 +299,7 @@ describe("applySkillEnvOverrides", () => {
 
   it("applies env overrides from snapshots", async () => {
     const workspaceDir = await makeWorkspace();
-    const skillDir = path.join(workspaceDir, "skills", "env-skill");
-    await writeSkill({
-      dir: skillDir,
-      name: "env-skill",
-      description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
-    });
+    await writeEnvSkill(workspaceDir);
 
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
       ...resolveTestSkillDirs(workspaceDir),

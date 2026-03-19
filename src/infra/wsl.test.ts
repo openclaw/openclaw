@@ -14,7 +14,11 @@ vi.mock("node:fs/promises", () => ({
   },
 }));
 
-const { isWSLEnv, isWSLSync, isWSL2Sync, isWSL, resetWSLStateForTests } = await import("./wsl.js");
+let isWSLEnv: typeof import("./wsl.js").isWSLEnv;
+let isWSLSync: typeof import("./wsl.js").isWSLSync;
+let isWSL2Sync: typeof import("./wsl.js").isWSL2Sync;
+let isWSL: typeof import("./wsl.js").isWSL;
+let resetWSLStateForTests: typeof import("./wsl.js").resetWSLStateForTests;
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -29,11 +33,16 @@ describe("wsl detection", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
+    vi.resetModules();
     envSnapshot = captureEnv(["WSL_INTEROP", "WSL_DISTRO_NAME", "WSLENV"]);
     readFileSyncMock.mockReset();
     readFileMock.mockReset();
-    resetWSLStateForTests();
     setPlatform("linux");
+  });
+
+  beforeEach(async () => {
+    ({ isWSLEnv, isWSLSync, isWSL2Sync, isWSL, resetWSLStateForTests } = await import("./wsl.js"));
+    resetWSLStateForTests();
   });
 
   afterEach(() => {
@@ -59,6 +68,13 @@ describe("wsl detection", () => {
     expect(readFileSyncMock).toHaveBeenCalledWith("/proc/version", "utf8");
   });
 
+  it("returns false when sync detection cannot read /proc/version", () => {
+    readFileSyncMock.mockImplementationOnce(() => {
+      throw new Error("ENOENT");
+    });
+    expect(isWSLSync()).toBe(false);
+  });
+
   it.each(["Linux version 6.6.0-1-microsoft-standard-WSL2", "Linux version 6.6.0-1-wsl2"])(
     "detects WSL2 sync from kernel version: %s",
     (kernelVersion) => {
@@ -67,6 +83,12 @@ describe("wsl detection", () => {
       expect(isWSL2Sync()).toBe(true);
     },
   );
+
+  it("returns false for WSL2 sync when WSL is detected but no WSL2 markers exist", () => {
+    readFileSyncMock.mockReturnValueOnce("Linux version 4.4.0-19041-Microsoft");
+    readFileSyncMock.mockReturnValueOnce("Linux version 4.4.0-19041-Microsoft");
+    expect(isWSL2Sync()).toBe(false);
+  });
 
   it("returns false for sync detection on non-linux platforms", () => {
     setPlatform("darwin");
@@ -86,6 +108,13 @@ describe("wsl detection", () => {
     resetWSLStateForTests();
     await expect(isWSL()).resolves.toBe(true);
     expect(readFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("short-circuits async detection from WSL env vars without reading osrelease", async () => {
+    process.env.WSL_DISTRO_NAME = "Ubuntu";
+
+    await expect(isWSL()).resolves.toBe(true);
+    expect(readFileMock).not.toHaveBeenCalled();
   });
 
   it("returns false when async WSL detection cannot read osrelease", async () => {

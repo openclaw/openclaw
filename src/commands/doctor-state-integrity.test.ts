@@ -85,10 +85,10 @@ describe("doctor state integrity oauth dir checks", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv();
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openfinclaw-doctor-state-integrity-"));
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-integrity-"));
     process.env.HOME = tempHome;
     process.env.OPENCLAW_HOME = tempHome;
-    process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openfinclaw");
+    process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
     delete process.env.OPENCLAW_OAUTH_DIR;
     fs.mkdirSync(process.env.OPENCLAW_STATE_DIR, { recursive: true, mode: 0o700 });
     vi.mocked(note).mockClear();
@@ -145,13 +145,16 @@ describe("doctor state integrity oauth dir checks", () => {
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
     fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
     const confirmSkipInNonInteractive = vi.fn(async (params: { message: string }) =>
-      params.message.includes("orphan transcript file"),
+      params.message.includes("This only renames them to *.deleted.<timestamp>."),
     );
     await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
-    expect(stateIntegrityText()).toContain("orphan transcript file");
+    expect(stateIntegrityText()).toContain(
+      "These .jsonl files are no longer referenced by sessions.json",
+    );
+    expect(stateIntegrityText()).toContain("Examples: orphan-session.jsonl");
     expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: expect.stringContaining("orphan transcript file"),
+        message: expect.stringContaining("This only renames them to *.deleted.<timestamp>."),
       }),
     );
     const files = fs.readdirSync(sessionsDir);
@@ -168,10 +171,10 @@ describe("doctor state integrity oauth dir checks", () => {
     });
     const text = await runStateIntegrityText(cfg);
     expect(text).toContain("recent sessions are missing transcripts");
-    expect(text).toMatch(/openfinclaw sessions --store ".*sessions\.json"/);
-    expect(text).toMatch(/openfinclaw sessions cleanup --store ".*sessions\.json" --dry-run/);
+    expect(text).toMatch(/openclaw sessions --store ".*sessions\.json"/);
+    expect(text).toMatch(/openclaw sessions cleanup --store ".*sessions\.json" --dry-run/);
     expect(text).toMatch(
-      /openfinclaw sessions cleanup --store ".*sessions\.json" --enforce --fix-missing/,
+      /openclaw sessions cleanup --store ".*sessions\.json" --enforce --fix-missing/,
     );
     expect(text).not.toContain("--active");
     expect(text).not.toContain(" ls ");

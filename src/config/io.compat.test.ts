@@ -43,10 +43,10 @@ describe("config io paths", () => {
     });
   });
 
-  it("defaults to ~/.openfinclaw/openfinclaw.json when config is missing", async () => {
+  it("defaults to ~/.openclaw/openclaw.json when config is missing", async () => {
     await withTempHome(async (home) => {
       const io = createIoForHome(home);
-      expect(io.configPath).toBe(path.join(home, ".openfinclaw", "openfinclaw.json"));
+      expect(io.configPath).toBe(path.join(home, ".openclaw", "openclaw.json"));
     });
   });
 
@@ -56,7 +56,7 @@ describe("config io paths", () => {
         env: { OPENCLAW_HOME: path.join(home, "svc-home") } as NodeJS.ProcessEnv,
         homedir: () => path.join(home, "ignored-home"),
       });
-      expect(io.configPath).toBe(path.join(home, "svc-home", ".openfinclaw", "openfinclaw.json"));
+      expect(io.configPath).toBe(path.join(home, "svc-home", ".openclaw", "openclaw.json"));
     });
   });
 

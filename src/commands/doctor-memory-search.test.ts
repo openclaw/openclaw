@@ -245,8 +245,8 @@ describe("noteMemorySearchHealth", () => {
 
     const message = note.mock.calls[0]?.[0] as string;
     expect(message).toContain("Gateway memory probe for default agent is not ready");
-    expect(message).toContain("openfinclaw configure --section model");
-    expect(message).not.toContain("openfinclaw auth add --provider");
+    expect(message).toContain("openclaw configure --section model");
+    expect(message).not.toContain("openclaw auth add --provider");
   });
 
   it("warns in auto mode when no local modelPath and no API keys are configured", async () => {

@@ -10,11 +10,10 @@ import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
-import { resolveOnboardingSecretInputString } from "../wizard/onboarding.secret-input.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
+import { resolveSetupSecretInputString } from "../wizard/setup.secret-input.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
-import { promptFinancialConfig } from "./configure.financial.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
 import { promptGatewayConfig } from "./configure.gateway.js";
 import type {
@@ -55,7 +54,7 @@ async function resolveGatewaySecretInputForWizard(params: {
   path: string;
 }): Promise<string | undefined> {
   try {
-    return await resolveOnboardingSecretInputString({
+    return await resolveSetupSecretInputString({
       config: params.cfg,
       value: params.value,
       path: params.path,
@@ -175,23 +174,26 @@ async function promptWebToolsConfig(
     hasKeyInEnv,
   } = await import("./onboard-search.js");
   type SP = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
+  const defaultProvider = SEARCH_PROVIDER_OPTIONS[0]?.value;
+  if (!defaultProvider) {
+    throw new Error("No web search providers are registered.");
+  }
 
   const hasKeyForProvider = (provider: string): boolean => {
     const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === provider);
     if (!entry) {
       return false;
     }
-    return hasExistingKey(nextConfig, provider as SP) || hasKeyInEnv(entry);
+    return hasExistingKey(nextConfig, provider) || hasKeyInEnv(entry);
   };
 
-  const existingProvider: string = (() => {
+  const existingProvider: SP = (() => {
     const stored = existingSearch?.provider;
     if (stored && SEARCH_PROVIDER_OPTIONS.some((e) => e.value === stored)) {
       return stored;
     }
     return (
-      SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ??
-      SEARCH_PROVIDER_OPTIONS[0].value
+      SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ?? defaultProvider
     );
   })();
 
@@ -240,8 +242,8 @@ async function promptWebToolsConfig(
     nextSearch = { ...nextSearch, provider: providerChoice };
 
     const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === providerChoice)!;
-    const existingKey = resolveExistingKey(nextConfig, providerChoice as SP);
-    const keyConfigured = hasExistingKey(nextConfig, providerChoice as SP);
+    const existingKey = resolveExistingKey(nextConfig, providerChoice);
+    const keyConfigured = hasExistingKey(nextConfig, providerChoice);
     const envAvailable = entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
     const envVarNames = entry.envKeys.join(" / ");
 
@@ -261,7 +263,7 @@ async function promptWebToolsConfig(
     const key = String(keyInput ?? "").trim();
 
     if (key || existingKey) {
-      const applied = applySearchKey(nextConfig, providerChoice as SP, (key || existingKey)!);
+      const applied = applySearchKey(nextConfig, providerChoice, (key || existingKey)!);
       nextSearch = { ...applied.tools?.web?.search };
     } else if (keyConfigured || envAvailable) {
       nextSearch = { ...nextSearch };
@@ -546,10 +548,6 @@ export async function runConfigureWizard(
         nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
       }
 
-      if (selected.includes("financial")) {
-        nextConfig = await promptFinancialConfig(nextConfig, runtime);
-      }
-
       await persistConfig();
 
       if (selected.includes("daemon")) {
@@ -605,11 +603,6 @@ export async function runConfigureWizard(
         if (choice === "skills") {
           const wsDir = resolveUserPath(workspaceDir);
           nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
-          await persistConfig();
-        }
-
-        if (choice === "financial") {
-          nextConfig = await promptFinancialConfig(nextConfig, runtime);
           await persistConfig();
         }
 
