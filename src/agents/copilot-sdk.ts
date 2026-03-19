@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import type {
   CopilotClient,
   CopilotClientOptions,
@@ -11,16 +10,14 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 const log = createSubsystemLogger("agents/copilot-sdk");
 
 /**
- * Check whether the `copilot` CLI binary is available on PATH.
+ * Check whether the `@github/copilot-sdk` package is resolvable.
+ * The SDK bundles its own `@github/copilot` native binary, so a global
+ * `copilot` on PATH is not required.
  */
-export function isCopilotCliInstalled(options?: { execFileSync?: typeof execFileSync }): boolean {
-  const exec = options?.execFileSync ?? execFileSync;
+export function isCopilotCliInstalled(options?: { resolveFn?: (id: string) => string }): boolean {
+  const resolve = options?.resolveFn ?? ((id: string) => import.meta.resolve(id));
   try {
-    exec("copilot", ["--version"], {
-      encoding: "utf8",
-      timeout: 5000,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    resolve("@github/copilot-sdk");
     return true;
   } catch {
     return false;
@@ -40,20 +37,20 @@ let cachedAvailability: CopilotAvailability | undefined;
  * Auth is validated later via the SDK's `getAuthStatus()` during client startup.
  */
 export function checkCopilotAvailable(options?: {
-  execFileSync?: typeof execFileSync;
+  resolveFn?: (id: string) => string;
 }): CopilotAvailability {
   if (options) {
-    // Custom execFileSync — skip cache (used in tests)
+    // Custom resolveFn — skip cache (used in tests)
     return isCopilotCliInstalled(options)
       ? { available: true }
-      : { available: false, reason: "copilot CLI not found on PATH" };
+      : { available: false, reason: "@github/copilot-sdk is not installed" };
   }
   if (cachedAvailability) {
     return cachedAvailability;
   }
   cachedAvailability = isCopilotCliInstalled()
     ? { available: true }
-    : { available: false, reason: "copilot CLI not found on PATH" };
+    : { available: false, reason: "@github/copilot-sdk is not installed" };
   return cachedAvailability;
 }
 
@@ -155,9 +152,11 @@ export async function runCopilotAgent(
       };
     }
 
-    // Auto-approve all permission requests so the agent can work autonomously.
+    // Deny tool-use permission requests by default (security: callers must
+    // opt-in to specific capabilities through session configuration).
     sessionConfig.onPermissionRequest = async () => ({
-      kind: "approved",
+      kind: "denied",
+      reason: "Tool use is not permitted in this session.",
     });
 
     if (options.sessionId) {

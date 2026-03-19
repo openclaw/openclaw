@@ -15,7 +15,6 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
   buildXiaomiProvider,
 } from "../plugin-sdk/provider-catalog.js";
-import { isCopilotSdkAvailable, getCopilotSdkAuthStatus } from "../providers/github-copilot-sdk.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
@@ -993,19 +992,7 @@ export async function resolveImplicitCopilotProvider(params: {
   const envToken = env.COPILOT_GITHUB_TOKEN ?? env.GH_TOKEN ?? env.GITHUB_TOKEN;
   const githubToken = (envToken ?? "").trim();
 
-  // SDK-based auth detection: if no explicit profile/env token, check if the
-  // Copilot SDK can authenticate (e.g. via `gh` CLI auth).
   if (!hasProfile && !githubToken) {
-    const sdkAvailable = await isCopilotSdkAvailable();
-    if (sdkAvailable) {
-      const status = await getCopilotSdkAuthStatus();
-      if (status.authenticated) {
-        return {
-          baseUrl: DEFAULT_COPILOT_API_BASE_URL,
-          models: [],
-        } satisfies ProviderConfig;
-      }
-    }
     return null;
   }
 
@@ -1025,12 +1012,9 @@ export async function resolveImplicitCopilotProvider(params: {
     }
   }
 
-  // SDK-managed tokens don't need token exchange for provider detection
+  // SDK-managed tokens cannot be used for REST token exchange.
   if (selectedGithubToken === SDK_MANAGED_TOKEN) {
-    return {
-      baseUrl: DEFAULT_COPILOT_API_BASE_URL,
-      models: [],
-    } satisfies ProviderConfig;
+    return null;
   }
 
   let baseUrl = DEFAULT_COPILOT_API_BASE_URL;

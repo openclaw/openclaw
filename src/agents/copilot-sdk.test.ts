@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const execFileSyncMock = vi.fn();
-
 // Mock CopilotClient and CopilotSession for runCopilotAgent tests
 const mockSession = {
   sendAndWait: vi.fn(),
@@ -31,7 +29,6 @@ vi.mock("@github/copilot-sdk", () => {
 
 describe("copilot-sdk", () => {
   afterEach(() => {
-    execFileSyncMock.mockReset();
     mockSession.sendAndWait.mockReset();
     mockSession.destroy.mockReset().mockResolvedValue(undefined);
     mockClient.stop.mockReset().mockResolvedValue(undefined);
@@ -44,39 +41,39 @@ describe("copilot-sdk", () => {
   });
 
   describe("isCopilotCliInstalled", () => {
-    it("returns true when copilot --version succeeds", async () => {
-      execFileSyncMock.mockReturnValue("0.1.22\n");
+    it("returns true when @github/copilot-sdk is resolvable", async () => {
+      const resolveFn = vi.fn().mockReturnValue("file:///node_modules/@github/copilot-sdk/index.js");
       const { isCopilotCliInstalled } = await import("./copilot-sdk.js");
-      expect(isCopilotCliInstalled({ execFileSync: execFileSyncMock })).toBe(true);
-      expect(execFileSyncMock).toHaveBeenCalledWith("copilot", ["--version"], expect.any(Object));
+      expect(isCopilotCliInstalled({ resolveFn })).toBe(true);
+      expect(resolveFn).toHaveBeenCalledWith("@github/copilot-sdk");
     });
 
-    it("returns false when copilot is not on PATH", async () => {
-      execFileSyncMock.mockImplementation(() => {
-        throw new Error("ENOENT");
+    it("returns false when @github/copilot-sdk is not installed", async () => {
+      const resolveFn = vi.fn().mockImplementation(() => {
+        throw new Error("ERR_MODULE_NOT_FOUND");
       });
       const { isCopilotCliInstalled } = await import("./copilot-sdk.js");
-      expect(isCopilotCliInstalled({ execFileSync: execFileSyncMock })).toBe(false);
+      expect(isCopilotCliInstalled({ resolveFn })).toBe(false);
     });
   });
 
   describe("checkCopilotAvailable", () => {
-    it("returns unavailable when CLI is not installed", async () => {
-      execFileSyncMock.mockImplementation(() => {
-        throw new Error("ENOENT");
+    it("returns unavailable when SDK is not installed", async () => {
+      const resolveFn = vi.fn().mockImplementation(() => {
+        throw new Error("ERR_MODULE_NOT_FOUND");
       });
 
       const { checkCopilotAvailable } = await import("./copilot-sdk.js");
-      const result = checkCopilotAvailable({ execFileSync: execFileSyncMock });
+      const result = checkCopilotAvailable({ resolveFn });
       expect(result.available).toBe(false);
-      expect(result.reason).toContain("not found");
+      expect(result.reason).toContain("not installed");
     });
 
-    it("returns available when CLI is installed", async () => {
-      execFileSyncMock.mockReturnValue("0.1.22\n");
+    it("returns available when SDK is installed", async () => {
+      const resolveFn = vi.fn().mockReturnValue("file:///node_modules/@github/copilot-sdk/index.js");
 
       const { checkCopilotAvailable } = await import("./copilot-sdk.js");
-      const result = checkCopilotAvailable({ execFileSync: execFileSyncMock });
+      const result = checkCopilotAvailable({ resolveFn });
       expect(result.available).toBe(true);
     });
   });
