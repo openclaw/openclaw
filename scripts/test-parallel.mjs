@@ -151,11 +151,65 @@ const parsePassthroughArgs = (args) => {
 
   return { fileFilters, optionArgs };
 };
+const resolveOptionValue = (args, flag) => {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === flag) {
+      return args[index + 1] ?? null;
+    }
+    if (arg.startsWith(`${flag}=`)) {
+      return arg.slice(flag.length + 1);
+    }
+  }
+  return null;
+};
+const unitConfigExcludedPrefixes = [
+  "extensions/",
+  "src/gateway/",
+  "src/browser/",
+  "src/line/",
+  "src/agents/",
+  "src/auto-reply/",
+  "src/commands/",
+];
+const matchesUnitConfigFile = (fileFilter) => {
+  const normalizedFilter = normalizeRepoPath(fileFilter);
+  if (normalizedFilter.endsWith(".live.test.ts") || normalizedFilter.endsWith(".e2e.test.ts")) {
+    return false;
+  }
+  return !unitConfigExcludedPrefixes.some((prefix) => normalizedFilter.startsWith(prefix));
+};
+const matchesEntryConfigFile = (fileFilter, entryArgs) => {
+  const normalizedFilter = normalizeRepoPath(fileFilter);
+  const configPath = normalizeRepoPath(resolveOptionValue(entryArgs, "--config") ?? "");
+  if (configPath === "vitest.unit.config.ts") {
+    return matchesUnitConfigFile(normalizedFilter);
+  }
+  if (configPath === "vitest.extensions.config.ts") {
+    return inferOwner(normalizedFilter) === "extensions";
+  }
+  if (configPath === "vitest.gateway.config.ts") {
+    return inferOwner(normalizedFilter) === "gateway";
+  }
+  if (configPath === "vitest.channels.config.ts") {
+    return inferOwner(normalizedFilter) === "channels";
+  }
+  if (configPath === "vitest.live.config.ts") {
+    return normalizedFilter.endsWith(".live.test.ts");
+  }
+  if (configPath === "vitest.e2e.config.ts") {
+    return normalizedFilter.endsWith(".e2e.test.ts");
+  }
+  return true;
+};
 const { fileFilters: passthroughFileFilters, optionArgs: passthroughOptionArgs } =
   parsePassthroughArgs(passthroughArgs);
 const countExplicitEntryFilters = (entryArgs) => {
   const { fileFilters } = parsePassthroughArgs(entryArgs.slice(2));
-  return fileFilters.length > 0 ? fileFilters.length : null;
+  if (fileFilters.length === 0) {
+    return null;
+  }
+  return fileFilters.filter((file) => matchesEntryConfigFile(file, entryArgs)).length;
 };
 const passthroughRequiresSingleRun = passthroughOptionArgs.some((arg) => {
   if (!arg.startsWith("-")) {
@@ -398,8 +452,8 @@ const baseRuns = [
 ];
 runs = baseRuns;
 const formatEntrySummary = (entry) => {
-  const explicitFilters = countExplicitEntryFilters(entry.args) ?? 0;
-  return `${entry.name} filters=${String(explicitFilters || "all")} maxWorkers=${String(
+  const explicitFilters = countExplicitEntryFilters(entry.args);
+  return `${entry.name} filters=${String(explicitFilters ?? "all")} maxWorkers=${String(
     maxWorkersForRun(entry.name) ?? "default",
   )}`;
 };
@@ -748,6 +802,9 @@ const runOnce = (entry, extraArgs = []) =>
 
 const run = async (entry, extraArgs = []) => {
   const explicitFilterCount = countExplicitEntryFilters(entry.args);
+  if (explicitFilterCount === 0) {
+    return 0;
+  }
   // Wrapper-generated singleton/small-file lanes should not ask Vitest to shard
   // into more buckets than there are explicit test filters.
   const effectiveShardCount =
