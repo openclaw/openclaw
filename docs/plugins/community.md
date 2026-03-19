@@ -45,7 +45,7 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **Adaptive Cards** — Registers an `adaptive_card` tool that lets the agent respond with native Adaptive Cards (v1.5) across iOS, Android, Teams, and web, with automatic plain-text fallback for unsupported channels.
+- **Adaptive Cards** — Registers an `adaptive_card` tool that lets the agent respond with native Adaptive Cards (v1.6) across iOS, Android, Teams, and web, with schema validation, host compatibility checking, and automatic plain-text fallback for unsupported channels.
   npm: `@vikrantsingh01/openclaw-adaptive-cards`
   repo: `https://github.com/VikrantSingh01/openclaw-adaptive-cards`
   install: `openclaw plugins install @vikrantsingh01/openclaw-adaptive-cards`
