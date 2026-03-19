@@ -304,9 +304,11 @@ async function executeUsage(
     const output = session.outputTokens ?? 0;
     const total = session.totalTokens ?? input + output;
     const ctx = session.contextTokens ?? 0;
-    // Use totalTokens (context snapshot) for context-window percentage,
-    // not accumulated billing inputTokens.
-    const pct = ctx > 0 ? Math.round((total / ctx) * 100) : null;
+    // Use totalTokens (context snapshot) for context-window percentage.
+    // Fallback to inputTokens only (not input+output) — output tokens
+    // are completions, not context-window occupants.
+    const contextUsed = session.totalTokens ?? input;
+    const pct = ctx > 0 ? Math.round((contextUsed / ctx) * 100) : null;
 
     const lines = [
       "**Session Usage**",
