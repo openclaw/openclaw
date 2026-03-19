@@ -74,6 +74,13 @@ export type ChannelSetupAdapter = {
     accountId: string;
     input: ChannelSetupInput;
   }) => OpenClawConfig;
+  afterAccountConfigWritten?: (params: {
+    previousCfg: OpenClawConfig;
+    cfg: OpenClawConfig;
+    accountId: string;
+    input: ChannelSetupInput;
+    runtime: RuntimeEnv;
+  }) => Promise<void> | void;
   validateInput?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
@@ -170,10 +177,6 @@ export type ChannelOutboundAdapter = {
   ) => Promise<OutboundDeliveryResult>;
   sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
-  /**
-   * Shared outbound poll adapter for channels that fit the common poll model.
-   * Channels with extra poll semantics should prefer `actions.handleAction("poll")`.
-   */
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;
 };
 
@@ -334,6 +337,7 @@ export type ChannelPairingAdapter = {
   notifyApproval?: (params: {
     cfg: OpenClawConfig;
     id: string;
+    accountId?: string;
     runtime?: RuntimeEnv;
   }) => Promise<void>;
 };
