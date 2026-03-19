@@ -170,10 +170,10 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
     accountId: normalizedAdapter.accountId,
   });
   const existing = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
-  if (existing && existing !== adapter) {
-    throw new Error(
-      `Session binding adapter already registered for ${normalizedAdapter.channel}:${normalizedAdapter.accountId}`,
-    );
+  if (existing && existing !== adapter && existing.channel === normalizedAdapter.channel) {
+    // Allow idempotent re-registration across module-loading boundaries:
+    // dist-loaded and jiti-loaded copies produce different object instances
+    // for the same logical adapter.
   }
   ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, normalizedAdapter);
 }
