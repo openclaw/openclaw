@@ -43,7 +43,7 @@ export {
 export {
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
-} from "../../extensions/slack/src/group-policy.js";
+} from "../../extensions/slack/api.js";
 export { SlackConfigSchema } from "../config/zod-schema.providers-core.js";
 export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 
@@ -60,7 +60,16 @@ export { extractSlackToolSend, listSlackMessageActions } from "../../extensions/
 export { buildSlackThreadingToolContext } from "../../extensions/slack/api.js";
 export { parseSlackBlocksInput } from "../../extensions/slack/api.js";
 export { handleSlackHttpRequest } from "../../extensions/slack/api.js";
-export { sendMessageSlack } from "../../extensions/slack/runtime-api.js";
+export {
+  handleSlackAction,
+  listSlackDirectoryGroupsLive,
+  listSlackDirectoryPeersLive,
+  monitorSlackProvider,
+  probeSlack,
+  resolveSlackChannelAllowlist,
+  resolveSlackUserAllowlist,
+  sendMessageSlack,
+} from "../../extensions/slack/runtime-api.js";
 export {
   deleteSlackMessage,
   downloadSlackFile,

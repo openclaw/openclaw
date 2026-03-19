@@ -136,3 +136,6 @@ ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
 docs/superpowers
 openclaw-*.log
+
+# Deprecated changelog fragment workflow
+changelog/fragments/

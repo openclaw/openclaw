@@ -58,8 +58,21 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("pythonbreakpoint")).toBe(true);
     expect(isDangerousHostEnvVarName("DOTNET_STARTUP_HOOKS")).toBe(true);
     expect(isDangerousHostEnvVarName("dotnet_startup_hooks")).toBe(true);
+    expect(isDangerousHostEnvVarName("DOTNET_ADDITIONAL_DEPS")).toBe(true);
+    expect(isDangerousHostEnvVarName("dotnet_additional_deps")).toBe(true);
+    expect(isDangerousHostEnvVarName("GLIBC_TUNABLES")).toBe(true);
+    expect(isDangerousHostEnvVarName("glibc_tunables")).toBe(true);
+    expect(isDangerousHostEnvVarName("MAVEN_OPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("maven_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("SBT_OPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("sbt_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("GRADLE_OPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("gradle_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("ANT_OPTS")).toBe(true);
+    expect(isDangerousHostEnvVarName("ant_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
+    expect(isDangerousHostEnvVarName("GRADLE_USER_HOME")).toBe(false);
   });
 });
 
@@ -197,6 +210,8 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("editor")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("NPM_CONFIG_USERCONFIG")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("git_config_global")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GRADLE_USER_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("BASH_ENV")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("FOO")).toBe(false);
   });
