@@ -20,6 +20,7 @@ import {
 } from "../../plugins/official-external-plugin-repair-hints.js";
 import {
   appendBaseUrlBit,
+  appendDirectMessageRoutingBits,
   appendEnabledConfiguredLinkedBits,
   appendModeBit,
   appendTokenSourceBits,
@@ -60,6 +61,7 @@ export async function formatConfigChannelsStatusLines(
       const bits: string[] = [];
       appendEnabledConfiguredLinkedBits(bits, account);
       appendModeBit(bits, account);
+      appendDirectMessageRoutingBits(bits, account);
       appendTokenSourceBits(bits, account);
       appendBaseUrlBit(bits, account);
       return buildChannelAccountLine(plugin.id, account, bits, {

@@ -21,7 +21,7 @@ export async function listWhatsAppDirectoryPeersFromConfig(params: DirectoryConf
   return listResolvedDirectoryUserEntriesFromAllowFrom<WhatsAppDirectoryAccount>({
     ...params,
     resolveAccount: resolveWhatsAppDirectoryAccount,
-    resolveAllowFrom: (account) => account.allowFrom,
+    resolveAllowFrom: (account) => [...(account.allowFrom ?? []), ...(account.allowSendTo ?? [])],
     normalizeId: (entry) => {
       const normalized = normalizeWhatsAppTarget(entry);
       if (!normalized || isWhatsAppGroupJid(normalized)) {

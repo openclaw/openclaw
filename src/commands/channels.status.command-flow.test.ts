@@ -87,6 +87,19 @@ vi.mock("./channels/shared.js", () => ({
       bits.push(`mode:${account.mode}`);
     }
   },
+  appendDirectMessageRoutingBits: (bits: string[], account: Record<string, unknown>) => {
+    if (typeof account.dmPolicy === "string" && account.dmPolicy.length > 0) {
+      bits.push(`dm:${account.dmPolicy}`);
+    }
+    if (Array.isArray(account.allowFrom) && account.allowFrom.length > 0) {
+      bits.push(`allow:${account.allowFrom.slice(0, 2).join(",")}`);
+    }
+    if (Array.isArray(account.allowSendTo) && account.allowSendTo.length > 0) {
+      bits.push(`send:${account.allowSendTo.slice(0, 2).join(",")}`);
+    } else if (Array.isArray(account.allowSendTo)) {
+      bits.push("send:none");
+    }
+  },
   appendTokenSourceBits: (bits: string[], account: Record<string, unknown>) => {
     if (account.tokenSource === "config") {
       const unavailable = account.tokenStatus === "configured_unavailable" ? " (unavailable)" : "";

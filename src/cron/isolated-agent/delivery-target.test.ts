@@ -87,12 +87,17 @@ function createStubOutbound(label: string): ChannelOutboundAdapter {
 function createAllowlistAwareStubOutbound(label: string): ChannelOutboundAdapter {
   return {
     deliveryMode: "gateway",
-    resolveTarget: ({ to, allowFrom }) => {
+    resolveTarget: ({ to, allowFrom, allowSendTo }) => {
       const trimmed = typeof to === "string" ? to.trim() : "";
       if (!trimmed) {
         return { ok: false, error: new Error(`${label} requires target`) };
       }
-      if (allowFrom && allowFrom.length > 0 && !allowFrom.includes(trimmed)) {
+      const hasExplicitAllowSendTo = allowSendTo !== undefined;
+      const allowList = hasExplicitAllowSendTo ? allowSendTo : allowFrom;
+      const hasWildcard = allowList?.includes("*") === true;
+      const shouldEnforceAllowList =
+        hasExplicitAllowSendTo || (allowList !== undefined && allowList.length > 0);
+      if (shouldEnforceAllowList && allowList && !hasWildcard && !allowList.includes(trimmed)) {
         return { ok: false, error: new Error(`${label} target blocked`) };
       }
       return { ok: true, to: trimmed };
@@ -187,6 +192,8 @@ beforeEach(() => {
             resolveAccount: () => ({}),
             resolveAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
               (cfg.channels?.alpha as { allowFrom?: string[] } | undefined)?.allowFrom,
+            resolveAllowSendTo: ({ cfg }: { cfg: OpenClawConfig }) =>
+              (cfg.channels?.alpha as { allowSendTo?: string[] } | undefined)?.allowSendTo,
           },
         },
         source: "test",
@@ -301,6 +308,46 @@ describe("resolveDeliveryTarget", () => {
     });
 
     const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: ["room-allowed"] } } });
+    const result = await resolveLastTarget(cfg);
+
+    expect(result.channel).toBe("alpha");
+    expect(result.to).toBe("room-allowed");
+  });
+
+  it("reroutes implicit delivery to an authorized allowSendTo recipient", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-send-to",
+      lastChannel: "alpha",
+      lastTo: "room-denied",
+    });
+
+    const cfg = makeCfg({
+      bindings: [],
+      channels: {
+        alpha: {
+          allowFrom: ["room-owner"],
+          allowSendTo: ["room-allowed"],
+        },
+      },
+    });
+    const result = await resolveLastTarget(cfg);
+
+    expect(result.channel).toBe("alpha");
+    expect(result.to).toBe("room-allowed");
+  });
+
+  it("uses allowSendTo as implicit delivery fallback when no previous target exists", async () => {
+    setMainSessionEntry(undefined);
+
+    const cfg = makeCfg({
+      bindings: [],
+      channels: {
+        alpha: {
+          allowFrom: ["room-owner"],
+          allowSendTo: ["room-allowed"],
+        },
+      },
+    });
     const result = await resolveLastTarget(cfg);
 
     expect(result.channel).toBe("alpha");
@@ -1027,6 +1074,7 @@ describe("resolveDeliveryTarget", () => {
       mode: "explicit",
       allowFrom: undefined,
       allowBootstrap: true,
+      allowSendTo: undefined,
     });
   });
 

@@ -270,6 +270,7 @@ export async function resolveDeliveryTarget(
     : undefined;
 
   let effectiveAllowFrom: string[] | undefined;
+  let effectiveAllowSendTo: string[] | undefined;
   if (mode === "implicit") {
     const { getLoadedChannelPluginForRead, mapAllowFromEntries } = deliveryTargetRuntime;
     const channelPlugin = getLoadedChannelPluginForRead(channel);
@@ -284,8 +285,21 @@ export async function resolveDeliveryTarget(
     const allowFromOverride = uniqueStrings(configuredAllowFrom);
     effectiveAllowFrom = allowFromOverride;
 
-    if (toCandidate && allowFromOverride.length > 0) {
-      // Implicit delivery must stay within channel allow-from policy; if the
+    const configuredAllowSendToRaw = channelPlugin?.config.resolveAllowSendTo?.({
+      cfg,
+      accountId: resolvedAccountId,
+    });
+    if (configuredAllowSendToRaw != null) {
+      effectiveAllowSendTo = uniqueStrings(mapAllowFromEntries(configuredAllowSendToRaw));
+    }
+    const sendList = effectiveAllowSendTo ?? allowFromOverride;
+    const hasSendWildcard = sendList.some((entry) => entry.trim() === "*");
+    const fallbackSendList = sendList.filter((entry) => entry.trim() && entry.trim() !== "*");
+
+    if (!toCandidate && fallbackSendList.length > 0) {
+      toCandidate = fallbackSendList[0];
+    } else if (toCandidate && fallbackSendList.length > 0 && !hasSendWildcard) {
+      // Implicit delivery must stay within channel send policy; if the
       // remembered target is outside that set, fall back to the first allowed peer.
       const currentTargetResolution = await resolveOutboundTargetWithRuntime({
         channel,
@@ -294,9 +308,10 @@ export async function resolveDeliveryTarget(
         accountId,
         mode,
         allowFrom: effectiveAllowFrom,
+        allowSendTo: effectiveAllowSendTo,
       });
       if (!currentTargetResolution.ok) {
-        toCandidate = allowFromOverride[0];
+        toCandidate = fallbackSendList[0];
       }
     }
   }
@@ -348,6 +363,7 @@ export async function resolveDeliveryTarget(
     accountId,
     mode,
     allowFrom: effectiveAllowFrom,
+    allowSendTo: effectiveAllowSendTo,
   });
   if (!docked.ok) {
     if (!toCandidate || !isReservedTargetLiteralError(docked.error)) {

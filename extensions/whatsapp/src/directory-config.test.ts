@@ -20,6 +20,7 @@ describe("whatsapp directory", () => {
             "15551230002@s.whatsapp.net",
             "120363999999999999@g.us",
           ],
+          allowSendTo: ["+15551230003", "+15551230001"],
           groups: {
             "120363111111111111@g.us": {},
             "120363222222222222@g.us": {},
@@ -39,6 +40,7 @@ describe("whatsapp directory", () => {
     ).resolves.toEqual([
       { kind: "user", id: "+15551230001" },
       { kind: "user", id: "+15551230002" },
+      { kind: "user", id: "+15551230003" },
     ]);
 
     await expect(

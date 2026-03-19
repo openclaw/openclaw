@@ -56,6 +56,37 @@ beforeEach(() => {
   );
 });
 
+function createHeartbeatAllowlistTestPlugin() {
+  const plugin = createTestChannelPlugin({
+    id: "alpha",
+    label: "Alpha",
+    outbound: {
+      deliveryMode: "direct",
+      resolveTarget: ({ to, allowFrom, allowSendTo }) => {
+        const trimmed = to?.trim();
+        if (!trimmed) {
+          return { ok: false, error: new Error("Alpha target is required") };
+        }
+        const allowList = allowSendTo ?? allowFrom ?? [];
+        if (allowList.length === 0 || allowList.includes("*") || allowList.includes(trimmed)) {
+          return { ok: true, to: trimmed };
+        }
+        return { ok: false, error: new Error("Alpha target blocked") };
+      },
+    },
+  });
+  return {
+    ...plugin,
+    config: {
+      ...plugin.config,
+      resolveAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
+        (cfg.channels?.alpha as { allowFrom?: string[] } | undefined)?.allowFrom,
+      resolveAllowSendTo: ({ cfg }: { cfg: OpenClawConfig }) =>
+        (cfg.channels?.alpha as { allowSendTo?: string[] } | undefined)?.allowSendTo,
+    },
+  };
+}
+
 describe("resolveOutboundTarget defaultTo config fallback", () => {
   installResolveOutboundTargetPluginRegistryHooks();
   const alphaDefaultCfg: OpenClawConfig = {
@@ -730,6 +761,61 @@ describe("resolveSessionDeliveryTarget", () => {
 
     expect(resolved.channel).toBe("alpha");
     expect(resolved.to).toBe("channel:999");
+  });
+
+  it("falls back to allowSendTo when the last heartbeat target is blocked", () => {
+    setActivePluginRegistry(createTargetsTestRegistry([createHeartbeatAllowlistTestPlugin()]));
+    const cfg: OpenClawConfig = {
+      channels: {
+        alpha: {
+          allowFrom: ["user:owner"],
+          allowSendTo: ["user:recipient"],
+        },
+      },
+    };
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-allow-send-to-reroute",
+        updatedAt: 1,
+        lastChannel: "alpha",
+        lastTo: "user:owner",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("alpha");
+    expect(resolved.to).toBe("user:recipient");
+    expect(resolved.reason).toBe("allowSendTo-fallback");
+  });
+
+  it("uses allowSendTo when heartbeat target=last has no previous recipient", () => {
+    setActivePluginRegistry(createTargetsTestRegistry([createHeartbeatAllowlistTestPlugin()]));
+    const cfg: OpenClawConfig = {
+      channels: {
+        alpha: {
+          allowFrom: ["user:owner"],
+          allowSendTo: ["user:recipient"],
+        },
+      },
+    };
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-allow-send-to-no-last-to",
+        updatedAt: 1,
+        lastChannel: "alpha",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("alpha");
+    expect(resolved.to).toBe("user:recipient");
+    expect(resolved.reason).toBe("allowSendTo-fallback");
   });
 
   it("keeps explicit threadId in heartbeat mode", () => {

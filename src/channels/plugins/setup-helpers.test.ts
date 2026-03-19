@@ -354,6 +354,27 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
     expect(next.channels?.matrix?.userId).toBeUndefined();
     expect(next.channels?.matrix?.accessToken).toBeUndefined();
   });
+
+  it("moves WhatsApp allowSendTo into the promoted default account", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          whatsapp: {
+            allowFrom: ["+111"],
+            allowSendTo: ["+222"],
+            dmPolicy: "allowlist",
+          },
+        },
+      }),
+      channelKey: "whatsapp",
+    });
+
+    const channel = channelRecord(next, "whatsapp");
+    const defaultAccount = accountRecord(channel, "default");
+    expect(defaultAccount.allowFrom).toEqual(["+111"]);
+    expect(defaultAccount.allowSendTo).toEqual(["+222"]);
+    expect(channel.allowSendTo).toBeUndefined();
+  });
 });
 
 describe("createEnvPatchedAccountSetupAdapter", () => {
