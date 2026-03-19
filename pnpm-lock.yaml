@@ -351,6 +351,8 @@ importers:
 
   extensions/google: {}
 
+  extensions/google-gemini-cli-auth: {}
+
   extensions/googlechat:
     dependencies:
       google-auth-library:
@@ -442,6 +444,8 @@ importers:
   extensions/microsoft: {}
 
   extensions/minimax: {}
+
+  extensions/minimax-portal-auth: {}
 
   extensions/mistral: {}
 

@@ -1,0 +1,665 @@
+import type { SlackActionMiddlewareArgs } from "@slack/bolt";
+import type { Block, KnownBlock } from "@slack/web-api";
+import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { truncateSlackText } from "../../truncate.js";
+import { authorizeSlackSystemEventSender } from "../auth.js";
+import type { SlackMonitorContext } from "../context.js";
+import { escapeSlackMrkdwn } from "../mrkdwn.js";
+import {
+  registerModalLifecycleHandler,
+  type ModalInputSummary,
+  type RegisterSlackModalHandler,
+} from "./interactions.modal.js";
+
+// Prefix for OpenClaw-generated action IDs to scope our handler
+const OPENCLAW_ACTION_PREFIX = "openclaw:";
+const SLACK_INTERACTION_EVENT_PREFIX = "Slack interaction: ";
+const REDACTED_INTERACTION_VALUE = "[redacted]";
+const SLACK_INTERACTION_EVENT_MAX_CHARS = 2400;
+const SLACK_INTERACTION_STRING_MAX_CHARS = 160;
+const SLACK_INTERACTION_ARRAY_MAX_ITEMS = 64;
+const SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS = 3;
+const SLACK_INTERACTION_REDACTED_KEYS = new Set([
+  "triggerId",
+  "responseUrl",
+  "workflowTriggerUrl",
+  "privateMetadata",
+  "viewHash",
+]);
+
+type InteractionMessageBlock = {
+  type?: string;
+  block_id?: string;
+  elements?: Array<{ action_id?: string }>;
+};
+
+type SelectOption = {
+  value?: string;
+  text?: { text?: string };
+};
+
+type InteractionSelectionFields = Partial<ModalInputSummary>;
+
+type InteractionSummary = InteractionSelectionFields & {
+  interactionType?: "block_action" | "view_submission" | "view_closed";
+  actionId: string;
+  userId?: string;
+  teamId?: string;
+  triggerId?: string;
+  responseUrl?: string;
+  workflowTriggerUrl?: string;
+  workflowId?: string;
+  channelId?: string;
+  messageTs?: string;
+  threadTs?: string;
+};
+
+function sanitizeSlackInteractionPayloadValue(value: unknown, key?: string): unknown {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (key && SLACK_INTERACTION_REDACTED_KEYS.has(key)) {
+    if (typeof value !== "string" || value.trim().length === 0) {
+      return undefined;
+    }
+    return REDACTED_INTERACTION_VALUE;
+  }
+  if (typeof value === "string") {
+    return truncateSlackText(value, SLACK_INTERACTION_STRING_MAX_CHARS);
+  }
+  if (Array.isArray(value)) {
+    const sanitized = value
+      .slice(0, SLACK_INTERACTION_ARRAY_MAX_ITEMS)
+      .map((entry) => sanitizeSlackInteractionPayloadValue(entry))
+      .filter((entry) => entry !== undefined);
+    if (value.length > SLACK_INTERACTION_ARRAY_MAX_ITEMS) {
+      sanitized.push(`…+${value.length - SLACK_INTERACTION_ARRAY_MAX_ITEMS} more`);
+    }
+    return sanitized;
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const output: Record<string, unknown> = {};
+  for (const [entryKey, entryValue] of Object.entries(value as Record<string, unknown>)) {
+    const sanitized = sanitizeSlackInteractionPayloadValue(entryValue, entryKey);
+    if (sanitized === undefined) {
+      continue;
+    }
+    if (typeof sanitized === "string" && sanitized.length === 0) {
+      continue;
+    }
+    if (Array.isArray(sanitized) && sanitized.length === 0) {
+      continue;
+    }
+    output[entryKey] = sanitized;
+  }
+  return output;
+}
+
+function buildCompactSlackInteractionPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const rawInputs = Array.isArray(payload.inputs) ? payload.inputs : [];
+  const compactInputs = rawInputs
+    .slice(0, SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS)
+    .flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+      const typed = entry as Record<string, unknown>;
+      return [
+        {
+          actionId: typed.actionId,
+          blockId: typed.blockId,
+          actionType: typed.actionType,
+          inputKind: typed.inputKind,
+          selectedValues: typed.selectedValues,
+          selectedLabels: typed.selectedLabels,
+          inputValue: typed.inputValue,
+          inputNumber: typed.inputNumber,
+          selectedDate: typed.selectedDate,
+          selectedTime: typed.selectedTime,
+          selectedDateTime: typed.selectedDateTime,
+          richTextPreview: typed.richTextPreview,
+        },
+      ];
+    });
+
+  return {
+    interactionType: payload.interactionType,
+    actionId: payload.actionId,
+    callbackId: payload.callbackId,
+    actionType: payload.actionType,
+    userId: payload.userId,
+    teamId: payload.teamId,
+    channelId: payload.channelId ?? payload.routedChannelId,
+    messageTs: payload.messageTs,
+    threadTs: payload.threadTs,
+    viewId: payload.viewId,
+    isCleared: payload.isCleared,
+    selectedValues: payload.selectedValues,
+    selectedLabels: payload.selectedLabels,
+    selectedDate: payload.selectedDate,
+    selectedTime: payload.selectedTime,
+    selectedDateTime: payload.selectedDateTime,
+    workflowId: payload.workflowId,
+    routedChannelType: payload.routedChannelType,
+    inputs: compactInputs.length > 0 ? compactInputs : undefined,
+    inputsOmitted:
+      rawInputs.length > SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS
+        ? rawInputs.length - SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS
+        : undefined,
+    payloadTruncated: true,
+  };
+}
+
+function formatSlackInteractionSystemEvent(payload: Record<string, unknown>): string {
+  const toEventText = (value: Record<string, unknown>): string =>
+    `${SLACK_INTERACTION_EVENT_PREFIX}${JSON.stringify(value)}`;
+
+  const sanitizedPayload =
+    (sanitizeSlackInteractionPayloadValue(payload) as Record<string, unknown> | undefined) ?? {};
+  let eventText = toEventText(sanitizedPayload);
+  if (eventText.length <= SLACK_INTERACTION_EVENT_MAX_CHARS) {
+    return eventText;
+  }
+
+  const compactPayload = sanitizeSlackInteractionPayloadValue(
+    buildCompactSlackInteractionPayload(sanitizedPayload),
+  ) as Record<string, unknown>;
+  eventText = toEventText(compactPayload);
+  if (eventText.length <= SLACK_INTERACTION_EVENT_MAX_CHARS) {
+    return eventText;
+  }
+
+  return toEventText({
+    interactionType: sanitizedPayload.interactionType,
+    actionId: sanitizedPayload.actionId ?? "unknown",
+    userId: sanitizedPayload.userId,
+    channelId: sanitizedPayload.channelId ?? sanitizedPayload.routedChannelId,
+    payloadTruncated: true,
+  });
+}
+
+function readOptionValues(options: unknown): string[] | undefined {
+  if (!Array.isArray(options)) {
+    return undefined;
+  }
+  const values = options
+    .map((option) => (option && typeof option === "object" ? (option as SelectOption).value : null))
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return values.length > 0 ? values : undefined;
+}
+
+function readOptionLabels(options: unknown): string[] | undefined {
+  if (!Array.isArray(options)) {
+    return undefined;
+  }
+  const labels = options
+    .map((option) =>
+      option && typeof option === "object" ? ((option as SelectOption).text?.text ?? null) : null,
+    )
+    .filter((label): label is string => typeof label === "string" && label.trim().length > 0);
+  return labels.length > 0 ? labels : undefined;
+}
+
+function uniqueNonEmptyStrings(values: string[]): string[] {
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of values) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    unique.push(trimmed);
+  }
+  return unique;
+}
+
+function collectRichTextFragments(value: unknown, out: string[]): void {
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  const typed = value as { text?: unknown; elements?: unknown };
+  if (typeof typed.text === "string" && typed.text.trim().length > 0) {
+    out.push(typed.text.trim());
+  }
+  if (Array.isArray(typed.elements)) {
+    for (const child of typed.elements) {
+      collectRichTextFragments(child, out);
+    }
+  }
+}
+
+function summarizeRichTextPreview(value: unknown): string | undefined {
+  const fragments: string[] = [];
+  collectRichTextFragments(value, fragments);
+  if (fragments.length === 0) {
+    return undefined;
+  }
+  const joined = fragments.join(" ").replace(/\s+/g, " ").trim();
+  if (!joined) {
+    return undefined;
+  }
+  const max = 120;
+  return joined.length <= max ? joined : `${joined.slice(0, max - 1)}…`;
+}
+
+function readInteractionAction(raw: unknown) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  return raw as Record<string, unknown>;
+}
+
+function summarizeAction(
+  action: Record<string, unknown>,
+): Omit<InteractionSummary, "actionId" | "blockId"> {
+  const typed = action as {
+    type?: string;
+    selected_option?: SelectOption;
+    selected_options?: SelectOption[];
+    selected_user?: string;
+    selected_users?: string[];
+    selected_channel?: string;
+    selected_channels?: string[];
+    selected_conversation?: string;
+    selected_conversations?: string[];
+    selected_date?: string;
+    selected_time?: string;
+    selected_date_time?: number;
+    value?: string;
+    rich_text_value?: unknown;
+    workflow?: {
+      trigger_url?: string;
+      workflow_id?: string;
+    };
+  };
+  const actionType = typed.type;
+  const selectedUsers = uniqueNonEmptyStrings([
+    ...(typed.selected_user ? [typed.selected_user] : []),
+    ...(Array.isArray(typed.selected_users) ? typed.selected_users : []),
+  ]);
+  const selectedChannels = uniqueNonEmptyStrings([
+    ...(typed.selected_channel ? [typed.selected_channel] : []),
+    ...(Array.isArray(typed.selected_channels) ? typed.selected_channels : []),
+  ]);
+  const selectedConversations = uniqueNonEmptyStrings([
+    ...(typed.selected_conversation ? [typed.selected_conversation] : []),
+    ...(Array.isArray(typed.selected_conversations) ? typed.selected_conversations : []),
+  ]);
+  const selectedValues = uniqueNonEmptyStrings([
+    ...(typed.selected_option?.value ? [typed.selected_option.value] : []),
+    ...(readOptionValues(typed.selected_options) ?? []),
+    ...selectedUsers,
+    ...selectedChannels,
+    ...selectedConversations,
+  ]);
+  const selectedLabels = uniqueNonEmptyStrings([
+    ...(typed.selected_option?.text?.text ? [typed.selected_option.text.text] : []),
+    ...(readOptionLabels(typed.selected_options) ?? []),
+  ]);
+  const inputValue = typeof typed.value === "string" ? typed.value : undefined;
+  const inputNumber =
+    actionType === "number_input" && inputValue != null ? Number.parseFloat(inputValue) : undefined;
+  const parsedNumber = Number.isFinite(inputNumber) ? inputNumber : undefined;
+  const inputEmail =
+    actionType === "email_text_input" && inputValue?.includes("@") ? inputValue : undefined;
+  let inputUrl: string | undefined;
+  if (actionType === "url_text_input" && inputValue) {
+    try {
+      // Normalize to a canonical URL string so downstream handlers do not need to reparse.
+      inputUrl = new URL(inputValue).toString();
+    } catch {
+      inputUrl = undefined;
+    }
+  }
+  const richTextValue = actionType === "rich_text_input" ? typed.rich_text_value : undefined;
+  const richTextPreview = summarizeRichTextPreview(richTextValue);
+  const inputKind =
+    actionType === "number_input"
+      ? "number"
+      : actionType === "email_text_input"
+        ? "email"
+        : actionType === "url_text_input"
+          ? "url"
+          : actionType === "rich_text_input"
+            ? "rich_text"
+            : inputValue != null
+              ? "text"
+              : undefined;
+
+  return {
+    actionType,
+    inputKind,
+    value: typed.value,
+    selectedValues: selectedValues.length > 0 ? selectedValues : undefined,
+    selectedUsers: selectedUsers.length > 0 ? selectedUsers : undefined,
+    selectedChannels: selectedChannels.length > 0 ? selectedChannels : undefined,
+    selectedConversations: selectedConversations.length > 0 ? selectedConversations : undefined,
+    selectedLabels: selectedLabels.length > 0 ? selectedLabels : undefined,
+    selectedDate: typed.selected_date,
+    selectedTime: typed.selected_time,
+    selectedDateTime:
+      typeof typed.selected_date_time === "number" ? typed.selected_date_time : undefined,
+    inputValue,
+    inputNumber: parsedNumber,
+    inputEmail,
+    inputUrl,
+    richTextValue,
+    richTextPreview,
+    workflowTriggerUrl: typed.workflow?.trigger_url,
+    workflowId: typed.workflow?.workflow_id,
+  };
+}
+
+function isBulkActionsBlock(block: InteractionMessageBlock): boolean {
+  return (
+    block.type === "actions" &&
+    Array.isArray(block.elements) &&
+    block.elements.length > 0 &&
+    block.elements.every((el) => typeof el.action_id === "string" && el.action_id.includes("_all_"))
+  );
+}
+
+function formatInteractionSelectionLabel(params: {
+  actionId: string;
+  summary: Omit<InteractionSummary, "actionId" | "blockId">;
+  buttonText?: string;
+}): string {
+  if (params.summary.actionType === "button" && params.buttonText?.trim()) {
+    return params.buttonText.trim();
+  }
+  if (params.summary.selectedLabels?.length) {
+    if (params.summary.selectedLabels.length <= 3) {
+      return params.summary.selectedLabels.join(", ");
+    }
+    return `${params.summary.selectedLabels.slice(0, 3).join(", ")} +${
+      params.summary.selectedLabels.length - 3
+    }`;
+  }
+  if (params.summary.selectedValues?.length) {
+    if (params.summary.selectedValues.length <= 3) {
+      return params.summary.selectedValues.join(", ");
+    }
+    return `${params.summary.selectedValues.slice(0, 3).join(", ")} +${
+      params.summary.selectedValues.length - 3
+    }`;
+  }
+  if (params.summary.selectedDate) {
+    return params.summary.selectedDate;
+  }
+  if (params.summary.selectedTime) {
+    return params.summary.selectedTime;
+  }
+  if (typeof params.summary.selectedDateTime === "number") {
+    return new Date(params.summary.selectedDateTime * 1000).toISOString();
+  }
+  if (params.summary.richTextPreview) {
+    return params.summary.richTextPreview;
+  }
+  if (params.summary.value?.trim()) {
+    return params.summary.value.trim();
+  }
+  return params.actionId;
+}
+
+function formatInteractionConfirmationText(params: {
+  selectedLabel: string;
+  userId?: string;
+}): string {
+  const actor = params.userId?.trim() ? ` by <@${params.userId.trim()}>` : "";
+  return `:white_check_mark: *${escapeSlackMrkdwn(params.selectedLabel)}* selected${actor}`;
+}
+
+function summarizeViewState(values: unknown): ModalInputSummary[] {
+  if (!values || typeof values !== "object") {
+    return [];
+  }
+  const entries: ModalInputSummary[] = [];
+  for (const [blockId, blockValue] of Object.entries(values as Record<string, unknown>)) {
+    if (!blockValue || typeof blockValue !== "object") {
+      continue;
+    }
+    for (const [actionId, rawAction] of Object.entries(blockValue as Record<string, unknown>)) {
+      if (!rawAction || typeof rawAction !== "object") {
+        continue;
+      }
+      const actionSummary = summarizeAction(rawAction as Record<string, unknown>);
+      entries.push({
+        blockId,
+        actionId,
+        ...actionSummary,
+      });
+    }
+  }
+  return entries;
+}
+
+export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContext }) {
+  const { ctx } = params;
+  if (typeof ctx.app.action !== "function") {
+    return;
+  }
+
+  // Handle Block Kit button clicks from OpenClaw-generated messages
+  // Only matches action_ids that start with our prefix to avoid interfering
+  // with other Slack integrations or future features
+  ctx.app.action(
+    new RegExp(`^${OPENCLAW_ACTION_PREFIX}`),
+    async (args: SlackActionMiddlewareArgs) => {
+      const { ack, body, action, respond } = args;
+      const typedBody = body as unknown as {
+        user?: { id?: string };
+        team?: { id?: string };
+        trigger_id?: string;
+        response_url?: string;
+        channel?: { id?: string };
+        container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
+        message?: { ts?: string; text?: string; blocks?: unknown[] };
+      };
+
+      // Acknowledge the action immediately to prevent the warning icon
+      await ack();
+      if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
+        ctx.runtime.log?.("slack:interaction drop block action payload (mismatched app/team)");
+        return;
+      }
+
+      // Extract action details using proper Bolt types
+      const typedAction = readInteractionAction(action);
+      if (!typedAction) {
+        ctx.runtime.log?.(
+          `slack:interaction malformed action payload channel=${typedBody.channel?.id ?? typedBody.container?.channel_id ?? "unknown"} user=${
+            typedBody.user?.id ?? "unknown"
+          }`,
+        );
+        return;
+      }
+      const typedActionWithText = typedAction as {
+        action_id?: string;
+        block_id?: string;
+        type?: string;
+        text?: { text?: string };
+      };
+      const actionId =
+        typeof typedActionWithText.action_id === "string"
+          ? typedActionWithText.action_id
+          : "unknown";
+      const blockId = typedActionWithText.block_id;
+      const userId = typedBody.user?.id ?? "unknown";
+      const channelId = typedBody.channel?.id ?? typedBody.container?.channel_id;
+      const messageTs = typedBody.message?.ts ?? typedBody.container?.message_ts;
+      const threadTs = typedBody.container?.thread_ts;
+      const auth = await authorizeSlackSystemEventSender({
+        ctx,
+        senderId: userId,
+        channelId,
+      });
+      if (!auth.allowed) {
+        ctx.runtime.log?.(
+          `slack:interaction drop action=${actionId} user=${userId} channel=${channelId ?? "unknown"} reason=${auth.reason ?? "unauthorized"}`,
+        );
+        if (respond) {
+          try {
+            await respond({
+              text: "You are not authorized to use this control.",
+              response_type: "ephemeral",
+            });
+          } catch {
+            // Best-effort feedback only.
+          }
+        }
+        return;
+      }
+      const actionSummary = summarizeAction(typedAction);
+      const eventPayload: InteractionSummary = {
+        interactionType: "block_action",
+        actionId,
+        blockId,
+        ...actionSummary,
+        userId,
+        teamId: typedBody.team?.id,
+        triggerId: typedBody.trigger_id,
+        responseUrl: typedBody.response_url,
+        channelId,
+        messageTs,
+        threadTs,
+      };
+
+      // Log the interaction for debugging
+      ctx.runtime.log?.(
+        `slack:interaction action=${actionId} type=${actionSummary.actionType ?? "unknown"} user=${userId} channel=${channelId}`,
+      );
+
+      // Send a system event to notify the agent about the button click
+      // Pass undefined (not "unknown") to allow proper main session fallback
+      const sessionKey = ctx.resolveSlackSystemEventSessionKey({
+        channelId: channelId,
+        channelType: auth.channelType,
+        senderId: userId,
+      });
+
+      // Build context key - only include defined values to avoid "unknown" noise
+      const contextParts = ["slack:interaction", channelId, messageTs, actionId].filter(Boolean);
+      const contextKey = contextParts.join(":");
+
+      enqueueSystemEvent(formatSlackInteractionSystemEvent(eventPayload), {
+        sessionKey,
+        contextKey,
+      });
+
+      const originalBlocks = typedBody.message?.blocks;
+      if (!Array.isArray(originalBlocks) || !channelId || !messageTs) {
+        return;
+      }
+
+      if (!blockId) {
+        return;
+      }
+
+      const selectedLabel = formatInteractionSelectionLabel({
+        actionId,
+        summary: actionSummary,
+        buttonText: typedActionWithText.text?.text,
+      });
+      let updatedBlocks = originalBlocks.map((block) => {
+        const typedBlock = block as InteractionMessageBlock;
+        if (typedBlock.type === "actions" && typedBlock.block_id === blockId) {
+          return {
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: formatInteractionConfirmationText({ selectedLabel, userId }),
+              },
+            ],
+          };
+        }
+        return block;
+      });
+
+      const hasRemainingIndividualActionRows = updatedBlocks.some((block) => {
+        const typedBlock = block as InteractionMessageBlock;
+        return typedBlock.type === "actions" && !isBulkActionsBlock(typedBlock);
+      });
+
+      if (!hasRemainingIndividualActionRows) {
+        updatedBlocks = updatedBlocks.filter((block, index) => {
+          const typedBlock = block as InteractionMessageBlock;
+          if (isBulkActionsBlock(typedBlock)) {
+            return false;
+          }
+          if (typedBlock.type !== "divider") {
+            return true;
+          }
+          const next = updatedBlocks[index + 1] as InteractionMessageBlock | undefined;
+          return !next || !isBulkActionsBlock(next);
+        });
+      }
+
+      try {
+        await ctx.app.client.chat.update({
+          channel: channelId,
+          ts: messageTs,
+          text: typedBody.message?.text ?? "",
+          blocks: updatedBlocks as (Block | KnownBlock)[],
+        });
+      } catch {
+        // If update fails, fallback to ephemeral confirmation for immediate UX feedback.
+        if (!respond) {
+          return;
+        }
+        try {
+          await respond({
+            text: `Button "${actionId}" clicked!`,
+            response_type: "ephemeral",
+          });
+        } catch {
+          // Action was acknowledged and system event enqueued even when response updates fail.
+        }
+      }
+    },
+  );
+
+  if (typeof ctx.app.view !== "function") {
+    return;
+  }
+  const modalMatcher = new RegExp(`^${OPENCLAW_ACTION_PREFIX}`);
+
+  // Handle OpenClaw modal submissions with callback_ids scoped by our prefix.
+  registerModalLifecycleHandler({
+    register: (matcher, handler) => ctx.app.view(matcher, handler),
+    matcher: modalMatcher,
+    ctx,
+    interactionType: "view_submission",
+    contextPrefix: "slack:interaction:view",
+    summarizeViewState,
+    formatSystemEvent: formatSlackInteractionSystemEvent,
+  });
+
+  const viewClosed = (
+    ctx.app as unknown as {
+      viewClosed?: RegisterSlackModalHandler;
+    }
+  ).viewClosed;
+  if (typeof viewClosed !== "function") {
+    return;
+  }
+
+  // Handle modal close events so agent workflows can react to cancelled forms.
+  registerModalLifecycleHandler({
+    register: viewClosed,
+    matcher: modalMatcher,
+    ctx,
+    interactionType: "view_closed",
+    contextPrefix: "slack:interaction:view-closed",
+    summarizeViewState,
+    formatSystemEvent: formatSlackInteractionSystemEvent,
+  });
+}
