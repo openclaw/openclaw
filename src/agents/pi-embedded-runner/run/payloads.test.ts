@@ -131,7 +131,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Write",
-      detail: "<path>",
+      detail: "Sandbox path escapes allowed mounts; cannot write: <path>",
       absentDetail: "/home/openclaw",
     });
   });
@@ -195,7 +195,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Write",
-      detail: "<path>",
+      detail: "Failed boundary read for <path>",
       absentDetail: "/workspace/",
     });
   });
@@ -270,7 +270,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Write",
-      detail: "<path>",
+      detail: "ENOENT: no such file or directory: <path>",
       absentDetail: "/private/var",
     });
   });
@@ -293,6 +293,9 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   });
 
   it("scrubs Unix paths with spaces from non-verbose error reasons", () => {
+    // Paths with spaces are partially redacted — each segment-run is replaced
+    // individually.  The space-delimited words ("My", "Documents") remain but
+    // the actual directory structure ("/home/user/...") is scrubbed.
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "read",
@@ -304,7 +307,86 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSingleToolErrorPayload(payloads, {
       title: "Read",
       detail: "<path>",
-      absentDetail: "My Documents",
+      absentDetail: "/home/user",
+    });
+  });
+
+  it("preserves post-path reason text when redacting Unix paths", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "write",
+        error: "Failed boundary read for /workspace/project/src/index.ts (unsafe path)",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Write",
+      detail: "(unsafe path)",
+      absentDetail: "/workspace/project",
+    });
+  });
+
+  it("preserves colon-delimited reason after redacted Unix path", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "read",
+        error: "Cannot open /etc/passwd: permission denied",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Read",
+      detail: "permission denied",
+      absentDetail: "/etc/passwd",
+    });
+  });
+
+  it("redacts absolute Unix paths outside the hardcoded root list", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "write",
+        error: "ENOENT: /opt/homebrew/bin/node not found",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Write",
+      detail: "ENOENT: <path> not found",
+      absentDetail: "/opt/homebrew",
+    });
+  });
+
+  it("redacts /etc paths from non-verbose error reasons", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "read",
+        error: "Cannot read /etc/hosts: access denied",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Read",
+      detail: "Cannot read <path>: access denied",
+      absentDetail: "/etc/hosts",
+    });
+  });
+
+  it("does not redact /dev/null in prose", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "write",
+        error: "Redirecting output to /dev/null failed",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Write",
+      detail: "/dev/null",
     });
   });
 

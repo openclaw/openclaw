@@ -69,21 +69,27 @@ function truncateErrorReason(error: string): string {
   // Strip internal tool-context prefixes (e.g. "agent=… node=… gateway=… action=…: ")
   // to avoid leaking implementation details into user-facing warnings (#46592).
   let cleaned = firstLine.replace(/^(?:\w+=\S+\s+)*\w+=\S+:\s*/, "");
-  // Scrub absolute filesystem paths — Unix (/home, /tmp, /var, /root, /Users,
-  // /workspace, /private) and Windows drive-letter roots (C:\...) — to avoid
-  // leaking sandbox/host directory structure in non-verbose mode (#46592).
-  // Consume to end-of-string so paths with embedded spaces (e.g.
-  // "/home/user/My Documents/file.txt") are fully redacted.  Over-redacting
-  // trailing text is preferable to leaking directory structure.
-  cleaned = cleaned.replace(/\/(?:home|tmp|var|root|Users|workspace|private)\/[^\n]*/g, "<path>");
+  // Scrub data: URIs which may embed raw file content (e.g. base64 PDFs)
+  // and http(s) URLs which may contain signed tokens / credentials (#46592).
+  // URL scrubbing runs BEFORE path scrubbing so URLs like
+  // "https://s3.amazonaws.com/bucket/file.pdf" are not partially matched
+  // by the filesystem-path regex.
+  cleaned = cleaned.replace(/data:[a-zA-Z0-9/+._-]*[;,]\S*/g, "<data-uri>");
+  cleaned = cleaned.replace(/https?:\/\/\S+/g, "<url>");
+  // Scrub absolute filesystem paths — any Unix path with 2+ segments and
+  // Windows drive-letter roots (C:\...) — to avoid leaking sandbox/host
+  // directory structure in non-verbose mode (#46592).
+  // Match path segments (no spaces) to preserve trailing reason text such as
+  // "(unsafe path)" or ": permission denied".  Excludes /dev/null which
+  // commonly appears in prose.
+  cleaned = cleaned.replace(
+    /\/(?!dev\/null\b)[a-zA-Z0-9_][a-zA-Z0-9._+-]*(?:\/[a-zA-Z0-9._+-]+)+/g,
+    "<path>",
+  );
   // Windows paths may contain spaces (e.g. "C:\Users\Jane Doe\...") and parens
   // ("C:\Program Files (x86)\..."), so consume until end-of-string or a
   // delimiter that cannot appear in a path context.
   cleaned = cleaned.replace(/[A-Z]:\\[\w\\. ()+-]+(?:\\[\w\\. ()+-]+)*/g, "<path>");
-  // Scrub data: URIs which may embed raw file content (e.g. base64 PDFs)
-  // and http(s) URLs which may contain signed tokens / credentials (#46592).
-  cleaned = cleaned.replace(/data:[a-zA-Z0-9/+._-]*[;,]\S*/g, "<data-uri>");
-  cleaned = cleaned.replace(/https?:\/\/\S+/g, "<url>");
   // Scrub session keys that may embed channel-specific PII such as phone
   // numbers or chat IDs (e.g. "agent:main:whatsapp:direct:+15555550123").
   // P2 review thread on #46592.
