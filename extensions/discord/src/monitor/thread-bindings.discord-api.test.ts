@@ -25,6 +25,7 @@ vi.mock("../client.js", () => ({
 }));
 
 vi.mock("../send.js", () => ({
+  addRoleDiscord: vi.fn(),
   sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscord(...args),
   sendWebhookMessageDiscord: (...args: unknown[]) => hoisted.sendWebhookMessageDiscord(...args),
 }));
