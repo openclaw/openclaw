@@ -42,7 +42,9 @@ describe("copilot-sdk", () => {
 
   describe("isCopilotCliInstalled", () => {
     it("returns true when @github/copilot-sdk is resolvable", async () => {
-      const resolveFn = vi.fn().mockReturnValue("file:///node_modules/@github/copilot-sdk/index.js");
+      const resolveFn = vi
+        .fn()
+        .mockReturnValue("file:///node_modules/@github/copilot-sdk/index.js");
       const { isCopilotCliInstalled } = await import("./copilot-sdk.js");
       expect(isCopilotCliInstalled({ resolveFn })).toBe(true);
       expect(resolveFn).toHaveBeenCalledWith("@github/copilot-sdk");
@@ -70,7 +72,9 @@ describe("copilot-sdk", () => {
     });
 
     it("returns available when SDK is installed", async () => {
-      const resolveFn = vi.fn().mockReturnValue("file:///node_modules/@github/copilot-sdk/index.js");
+      const resolveFn = vi
+        .fn()
+        .mockReturnValue("file:///node_modules/@github/copilot-sdk/index.js");
 
       const { checkCopilotAvailable } = await import("./copilot-sdk.js");
       const result = checkCopilotAvailable({ resolveFn });

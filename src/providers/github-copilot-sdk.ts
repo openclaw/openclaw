@@ -171,7 +171,10 @@ export function buildCopilotModelDefinitionFromSdk(model: SdkModelInfo): ModelDe
     input: supportsVision ? ["text", "image"] : ["text"],
     cost: copilotModelCost(model.id),
     contextWindow: model.capabilities?.limits?.max_context_window_tokens ?? 128_000,
-    maxTokens: model.capabilities?.limits?.max_output_tokens ?? model.capabilities?.limits?.max_completion_tokens ?? 8192,
+    maxTokens:
+      model.capabilities?.limits?.max_output_tokens ??
+      model.capabilities?.limits?.max_completion_tokens ??
+      8192,
   };
 }
 
