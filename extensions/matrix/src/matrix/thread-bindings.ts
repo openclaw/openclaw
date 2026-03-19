@@ -173,6 +173,7 @@ function resolveBindingsPath(params: {
   auth: MatrixAuth;
   accountId: string;
   env?: NodeJS.ProcessEnv;
+  stateDir?: string;
 }): string {
   const storagePaths = resolveMatrixStoragePaths({
     homeserver: params.auth.homeserver,
@@ -181,6 +182,7 @@ function resolveBindingsPath(params: {
     accountId: params.accountId,
     deviceId: params.auth.deviceId,
     env: params.env,
+    stateDir: params.stateDir,
   });
   return path.join(storagePaths.rootDir, "thread-bindings.json");
 }
@@ -341,6 +343,7 @@ export async function createMatrixThreadBindingManager(params: {
   auth: MatrixAuth;
   client: MatrixClient;
   env?: NodeJS.ProcessEnv;
+  stateDir?: string;
   idleTimeoutMs: number;
   maxAgeMs: number;
   enableSweeper?: boolean;
@@ -360,6 +363,7 @@ export async function createMatrixThreadBindingManager(params: {
     auth: params.auth,
     accountId: params.accountId,
     env: params.env,
+    stateDir: params.stateDir,
   });
   const loaded = await loadBindingsFromDisk(filePath, params.accountId);
   for (const record of loaded) {
