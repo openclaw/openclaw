@@ -167,36 +167,13 @@ void systemd_init(void) {
     cached_exec_start = extract_exec_start_from_file();
 }
 
-void systemd_refresh(void) {
-    if (!manager_proxy) return;
-
+static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointer user_data) {
+    (void)user_data;
     g_autoptr(GError) error = NULL;
-    
-    // 1. Check if unit file exists/is installed at all
-    g_autoptr(GVariant) file_state_res = g_dbus_proxy_call_sync(
-        manager_proxy, "GetUnitFileState",
-        g_variant_new("(s)", "openclaw-gateway.service"),
-        G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
-        
-    if (!file_state_res) {
-        // Failed to get file state -> assume not installed
-        SystemdState sys_state = {0};
-        state_update_systemd(&sys_state);
-        return;
-    }
-    
-    // 2. Refresh ExecStart if we haven't got it yet (user might have just installed it)
-    if (!cached_exec_start) {
-        cached_exec_start = extract_exec_start_from_file();
-    }
+    g_autoptr(GVariant) result = g_dbus_proxy_call_finish(G_DBUS_PROXY(source_object), res, &error);
 
-    // 3. Get runtime state
-    g_autoptr(GVariant) res = g_dbus_proxy_call_sync(
-        manager_proxy, "GetUnit",
-        g_variant_new("(s)", "openclaw-gateway.service"),
-        G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
-
-    if (!res) {
+    // 3 (continued). Evaluate runtime state result
+    if (!result) {
         // Unit is installed but completely stopped/inactive/unloaded
         SystemdState sys_state = {0};
         sys_state.installed = TRUE;
@@ -219,12 +196,50 @@ void systemd_refresh(void) {
         return;
     }
 
+    // 3 (success). Extract unit path and subscribe to properties
     const gchar *unit_path = NULL;
-    g_variant_get(res, "(&o)", &unit_path);
+    g_variant_get(result, "(&o)", &unit_path);
 
     if (unit_path) {
         subscribe_to_unit(g_dbus_proxy_get_connection(manager_proxy), unit_path);
     }
+}
+
+static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *res, gpointer user_data) {
+    (void)user_data;
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GVariant) result = g_dbus_proxy_call_finish(G_DBUS_PROXY(source_object), res, &error);
+
+    // 1 (continued). If GetUnitFileState fails, treat as not installed
+    if (!result) {
+        // Failed to get file state -> assume not installed
+        SystemdState sys_state = {0};
+        state_update_systemd(&sys_state);
+        return;
+    }
+    
+    // 2. Refresh ExecStart if we haven't got it yet (user might have just installed it)
+    if (!cached_exec_start) {
+        cached_exec_start = extract_exec_start_from_file();
+    }
+
+    // 3. Fetch runtime unit path asynchronously
+    g_dbus_proxy_call(
+        manager_proxy, "GetUnit",
+        g_variant_new("(s)", "openclaw-gateway.service"),
+        G_DBUS_CALL_FLAGS_NONE, -1, NULL,
+        on_get_unit_ready, NULL);
+}
+
+void systemd_refresh(void) {
+    if (!manager_proxy) return;
+
+    // 1. Start async check if unit file exists/is installed at all
+    g_dbus_proxy_call(
+        manager_proxy, "GetUnitFileState",
+        g_variant_new("(s)", "openclaw-gateway.service"),
+        G_DBUS_CALL_FLAGS_NONE, -1, NULL,
+        on_get_unit_file_state_ready, NULL);
 }
 
 void systemd_start_gateway(void) {

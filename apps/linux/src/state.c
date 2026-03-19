@@ -31,14 +31,21 @@ static AppState compute_state(void) {
     if (current_sys_state.deactivating) return STATE_STOPPING;
     
     if (current_sys_state.active) {
-        if (!current_health_state.loaded) {
-            return STATE_DEGRADED;
-        }
-        if (!current_health_state.rpc_ok || !current_health_state.health_healthy) {
-            return STATE_DEGRADED;
-        }
-        if (!current_health_state.config_audit_ok && current_health_state.config_issues_count > 0) {
-            return STATE_RUNNING_WITH_WARNING;
+        // Startup Hydration Guard:
+        // If the systemd service is active, but we haven't received a real health payload
+        // from the gateway yet (last_updated == 0), we default to STATE_RUNNING.
+        // This intentional startup rule prevents the tray from flashing 'STATE_DEGRADED'
+        // momentarily while waiting for lane 2 (health probe) to produce its first sample.
+        if (current_health_state.last_updated > 0) {
+            if (!current_health_state.loaded) {
+                return STATE_DEGRADED;
+            }
+            if (!current_health_state.rpc_ok || !current_health_state.health_healthy) {
+                return STATE_DEGRADED;
+            }
+            if (!current_health_state.config_audit_ok && current_health_state.config_issues_count > 0) {
+                return STATE_RUNNING_WITH_WARNING;
+            }
         }
         return STATE_RUNNING;
     }
