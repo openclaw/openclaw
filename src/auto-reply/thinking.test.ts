@@ -135,7 +135,8 @@ describe("listThinkingLevels", () => {
 
     expect(supportsXHighThinking("robot", "gpt-5.4", source)).toBe(true);
     expect(listThinkingLevels("robot", "gpt-5.4", source)).toContain("xhigh");
-    expect(formatXHighModelHint(source)).toContain("robot/gpt-5.4");
+    expect(formatXHighModelHint(source)).toContain("config-defined models: robot/gpt-5.4");
+    expect(formatXHighModelHint(source)).not.toContain("including");
   });
 
   it("allows config to explicitly disable xhigh for an otherwise supported ref", () => {
@@ -159,6 +160,14 @@ describe("listThinkingLevels", () => {
 
     expect(supportsXHighThinking("openai", "gpt-5.4", source)).toBe(false);
     expect(formatXHighModelHint(source)).not.toContain("openai/gpt-5.4");
+  });
+
+  it("does not allow explicit xhigh overrides for binary thinking providers", () => {
+    const source = createThinkingSupportSource("zai", true);
+
+    expect(supportsXHighThinking("zai", "gpt-5.4", source)).toBe(false);
+    expect(listThinkingLevels("zai", "gpt-5.4", source)).not.toContain("xhigh");
+    expect(listThinkingLevelLabels("zai", "gpt-5.4", source)).toEqual(["off", "on"]);
   });
 
   it("always includes adaptive", () => {

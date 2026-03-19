@@ -210,6 +210,10 @@ export function supportsXHighThinking(
   model?: string | null,
   source?: ThinkingSupportSource,
 ): boolean {
+  if (isBinaryThinkingProvider(provider, model)) {
+    return false;
+  }
+
   const explicitOverride = resolveExplicitXHighOverride(provider, model, source);
   if (typeof explicitOverride === "boolean") {
     return explicitOverride;
@@ -279,7 +283,7 @@ export function formatXHighModelHint(source?: ThinkingSupportSource): string {
   if (explicitRefs.length === 0) {
     return formatXHighModelHintFallback();
   }
-  return `${formatXHighModelHintFallback()} (including ${explicitRefs.join(", ")})`;
+  return `${formatXHighModelHintFallback()} or config-defined models: ${explicitRefs.join(", ")}`;
 }
 
 export function resolveThinkingDefaultForModel(params: {

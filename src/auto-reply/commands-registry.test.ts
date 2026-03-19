@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -417,6 +418,47 @@ describe("commands registry args", () => {
     expect(seenChoice?.argName).toBe("level");
     expect(seenChoice?.provider).toBeTruthy();
     expect(seenChoice?.model).toBeTruthy();
+  });
+
+  it("keeps think arg choices config-aware for custom xhigh models", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          robot: {
+            baseUrl: "https://example.test/v1",
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "robot/gpt-5.4",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 8192,
+                compat: { supportsXHighThinking: true },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const command = listChatCommands().find((entry) => entry.key === "think");
+    const arg = command?.args?.find((entry) => entry.name === "level");
+    expect(command).toBeTruthy();
+    expect(arg).toBeTruthy();
+    if (!command || !arg) {
+      throw new Error("think level arg is missing from the command registry");
+    }
+
+    const choices = resolveCommandArgChoices({
+      command,
+      arg,
+      cfg,
+      provider: "robot",
+      model: "gpt-5.4",
+    });
+
+    expect(choices.map((choice) => choice.value)).toContain("xhigh");
   });
 
   it("does not show menus when args were provided as raw text only", () => {

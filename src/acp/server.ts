@@ -125,7 +125,10 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const stream = ndJsonStream(input, output);
 
   new AgentSideConnection((conn: AgentSideConnection) => {
-    agent = new AcpGatewayAgent(conn, gateway, opts);
+    agent = new AcpGatewayAgent(conn, gateway, {
+      ...opts,
+      cfg,
+    });
     agent.start();
     return agent;
   }, stream);

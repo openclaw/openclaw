@@ -7,6 +7,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { listThinkingLevels } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import { createInMemorySessionStore } from "./session.js";
@@ -238,6 +239,77 @@ describe("acp session UX bridge behavior", () => {
         }),
       ]),
     );
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("keeps ACP thought-level modes config-aware for custom xhigh models", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          robot: {
+            baseUrl: "https://example.test/v1",
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "robot/gpt-5.4",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 8192,
+                compat: { supportsXHighThinking: true },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "robot-session",
+              kind: "direct",
+              updatedAt: 1_710_000_000_000,
+              thinkingLevel: "high",
+              modelProvider: "robot",
+              model: "gpt-5.4",
+              totalTokens: 0,
+              totalTokensFresh: true,
+              contextTokens: 0,
+            },
+          ],
+        };
+      }
+      if (method === "sessions.get") {
+        return { messages: [] };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      cfg,
+      sessionStore,
+    });
+
+    const result = await agent.loadSession(createLoadSessionRequest("robot-session"));
+
+    expect(result.modes?.availableModes.map((mode) => mode.id)).toContain("xhigh");
+    expect(
+      result.configOptions?.find((option) => option.id === "thought_level")?.options.map(
+        (option) => option.value,
+      ),
+    ).toContain("xhigh");
 
     sessionStore.clearAllSessionsForTest();
   });

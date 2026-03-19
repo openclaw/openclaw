@@ -28,6 +28,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { listThinkingLevels } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
@@ -79,6 +80,7 @@ type PendingToolCall = {
 };
 
 type AcpGatewayAgentOptions = AcpServerOptions & {
+  cfg?: Pick<OpenClawConfig, "models"> | null;
   sessionStore?: AcpSessionStore;
 };
 
@@ -179,6 +181,7 @@ function buildSelectConfigOption(params: {
 }
 
 function buildSessionPresentation(params: {
+  cfg?: Pick<OpenClawConfig, "models"> | null;
   row?: GatewaySessionPresentationRow;
   overrides?: Partial<GatewaySessionPresentationRow>;
 }): SessionPresentation {
@@ -186,7 +189,10 @@ function buildSessionPresentation(params: {
     ...params.row,
     ...params.overrides,
   };
-  const availableLevelIds: string[] = [...listThinkingLevels(row.modelProvider, row.model)];
+  const thinkingSupportSource = params.cfg ? { config: params.cfg } : undefined;
+  const availableLevelIds: string[] = [
+    ...listThinkingLevels(row.modelProvider, row.model, thinkingSupportSource),
+  ];
   const currentModeId = row.thinkingLevel?.trim() || "adaptive";
   if (!availableLevelIds.includes(currentModeId)) {
     availableLevelIds.push(currentModeId);
@@ -907,14 +913,14 @@ export class AcpGatewayAgent implements Agent {
     try {
       const row = await this.getGatewaySessionRow(sessionKey);
       return {
-        ...buildSessionPresentation({ row, overrides }),
+        ...buildSessionPresentation({ cfg: this.opts.cfg, row, overrides }),
         metadata: buildSessionMetadata({ row, sessionKey }),
         usage: buildSessionUsageSnapshot(row),
       };
     } catch (err) {
       this.log(`session presentation fallback for ${sessionKey}: ${String(err)}`);
       return {
-        ...buildSessionPresentation({ overrides }),
+        ...buildSessionPresentation({ cfg: this.opts.cfg, overrides }),
         metadata: buildSessionMetadata({ sessionKey }),
       };
     }

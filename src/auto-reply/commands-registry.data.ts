@@ -634,7 +634,8 @@ function buildChatCommands(): ChatCommandDefinition[] {
           name: "level",
           description: "off, minimal, low, medium, high, xhigh",
           type: "string",
-          choices: ({ provider, model }) => listThinkingLevels(provider, model),
+          choices: ({ cfg, provider, model }) =>
+            listThinkingLevels(provider, model, cfg ? { config: cfg } : undefined),
         },
       ],
       argsMenu: "auto",
