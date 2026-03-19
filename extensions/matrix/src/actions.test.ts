@@ -59,7 +59,7 @@ describe("matrixMessageActions", () => {
 
     const discovery = describeMessageTool!({
       cfg: createConfiguredMatrixConfig(),
-    } as never);
+    } as never) ?? { actions: [] };
     const actions = discovery.actions;
 
     expect(actions).toContain("poll");
@@ -74,7 +74,7 @@ describe("matrixMessageActions", () => {
 
     const discovery = describeMessageTool!({
       cfg: createConfiguredMatrixConfig(),
-    } as never);
+    } as never) ?? { actions: [], schema: null };
     const actions = discovery.actions;
     const properties =
       (discovery.schema as { properties?: Record<string, unknown> } | null)?.properties ?? {};
@@ -87,64 +87,66 @@ describe("matrixMessageActions", () => {
   });
 
   it("hides gated actions when the default Matrix account disables them", () => {
-    const actions = matrixMessageActions.describeMessageTool!({
-      cfg: {
-        channels: {
-          matrix: {
-            defaultAccount: "assistant",
-            actions: {
-              messages: true,
-              reactions: true,
-              pins: true,
-              profile: true,
-              memberInfo: true,
-              channelInfo: true,
-              verification: true,
-            },
-            accounts: {
-              assistant: {
-                homeserver: "https://matrix.example.org",
-                userId: "@bot:example.org",
-                accessToken: "token",
-                encryption: true,
-                actions: {
-                  messages: false,
-                  reactions: false,
-                  pins: false,
-                  profile: false,
-                  memberInfo: false,
-                  channelInfo: false,
-                  verification: false,
+    const actions =
+      matrixMessageActions.describeMessageTool!({
+        cfg: {
+          channels: {
+            matrix: {
+              defaultAccount: "assistant",
+              actions: {
+                messages: true,
+                reactions: true,
+                pins: true,
+                profile: true,
+                memberInfo: true,
+                channelInfo: true,
+                verification: true,
+              },
+              accounts: {
+                assistant: {
+                  homeserver: "https://matrix.example.org",
+                  userId: "@bot:example.org",
+                  accessToken: "token",
+                  encryption: true,
+                  actions: {
+                    messages: false,
+                    reactions: false,
+                    pins: false,
+                    profile: false,
+                    memberInfo: false,
+                    channelInfo: false,
+                    verification: false,
+                  },
                 },
               },
             },
           },
-        },
-      } as CoreConfig,
-    } as never).actions;
+        } as CoreConfig,
+      } as never)?.actions ?? [];
 
     expect(actions).toEqual(["poll", "poll-vote"]);
   });
 
   it("hides actions until defaultAccount is set for ambiguous multi-account configs", () => {
-    const actions = matrixMessageActions.describeMessageTool!({
-      cfg: {
-        channels: {
-          matrix: {
-            accounts: {
-              assistant: {
-                homeserver: "https://matrix.example.org",
-                accessToken: "assistant-token",
-              },
-              ops: {
-                homeserver: "https://matrix.example.org",
-                accessToken: "ops-token",
+    const actions =
+      matrixMessageActions.describeMessageTool!({
+        cfg: {
+          channels: {
+            matrix: {
+              accounts: {
+                assistant: {
+                  homeserver: "https://matrix.example.org",
+                  accessToken: "assistant-token",
+                },
+                ops: {
+                  homeserver: "https://matrix.example.org",
+                  accessToken: "ops-token",
+                },
               },
             },
           },
-        },
-      } as CoreConfig,
-    } as never).actions;
+        } as CoreConfig,
+      } as never)?.actions ?? [];
 
     expect(actions).toEqual([]);
   });

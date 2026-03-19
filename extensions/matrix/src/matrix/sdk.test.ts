@@ -222,7 +222,10 @@ describe("MatrixClient request hardening", () => {
 
   it("prefers authenticated client media downloads", async () => {
     const payload = Buffer.from([1, 2, 3, 4]);
-    const fetchMock = vi.fn(async () => new Response(payload, { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(payload, { status: 200 }),
+    );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("https://matrix.example.org", "token");

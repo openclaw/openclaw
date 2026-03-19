@@ -52,7 +52,7 @@ function toPersistedSyncData(value: unknown): ISyncData | null {
       nextBatch: value.nextBatch,
       accountData: value.accountData,
       roomsData: value.roomsData,
-    } as ISyncData;
+    } as unknown as ISyncData;
   }
 
   // Older Matrix state files stored the raw /sync-shaped payload directly.
@@ -64,7 +64,7 @@ function toPersistedSyncData(value: unknown): ISyncData | null {
           ? value.account_data.events
           : [],
       roomsData: isRecord(value.rooms) ? value.rooms : {},
-    } as ISyncData;
+    } as unknown as ISyncData;
   }
 
   return null;

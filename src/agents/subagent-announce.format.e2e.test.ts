@@ -68,8 +68,8 @@ const readLatestAssistantReplyMock = vi.fn(
 const embeddedRunMock = {
   isEmbeddedPiRunActive: vi.fn(() => false),
   isEmbeddedPiRunStreaming: vi.fn(() => false),
-  queueEmbeddedPiMessage: vi.fn(() => false),
-  waitForEmbeddedPiRunEnd: vi.fn(async () => true),
+  queueEmbeddedPiMessage: vi.fn((_: string, __: string) => false),
+  waitForEmbeddedPiRunEnd: vi.fn(async (_: string, __?: number) => true),
 };
 const { subagentRegistryMock } = vi.hoisted(() => ({
   subagentRegistryMock: {
@@ -131,11 +131,17 @@ function setConfigOverride(next: OpenClawConfig): void {
   setRuntimeConfigSnapshot(configOverride);
 }
 
-function loadSessionStoreFixture(): Record<string, Record<string, unknown>> {
-  return new Proxy(sessionStore, {
+function loadSessionStoreFixture(): ReturnType<typeof configSessions.loadSessionStore> {
+  return new Proxy(sessionStore as ReturnType<typeof configSessions.loadSessionStore>, {
     get(target, key: string | symbol) {
       if (typeof key === "string" && !(key in target) && key.includes(":subagent:")) {
-        return { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+        return {
+          sessionId: key,
+          updatedAt: Date.now(),
+          inputTokens: 1,
+          outputTokens: 1,
+          totalTokens: 2,
+        };
       }
       return target[key as keyof typeof target];
     },
@@ -207,7 +213,11 @@ describe("subagent announce formatting", () => {
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
     resolveStorePathSpy.mockReset().mockImplementation(() => "/tmp/sessions.json");
     resolveMainSessionKeySpy.mockReset().mockImplementation(() => "agent:main:main");
-    getGlobalHookRunnerSpy.mockReset().mockImplementation(() => hookRunnerMock);
+    getGlobalHookRunnerSpy
+      .mockReset()
+      .mockImplementation(
+        () => hookRunnerMock as unknown as ReturnType<typeof hookRunnerGlobal.getGlobalHookRunner>,
+      );
     readLatestAssistantReplySpy
       .mockReset()
       .mockImplementation(async (params) => await readLatestAssistantReplyMock(params?.sessionKey));
