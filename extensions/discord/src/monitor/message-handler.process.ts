@@ -397,12 +397,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     storePath,
     sessionKey: persistedSessionKey,
     ctx: ctxPayload,
-    updateLastRoute: {
-      sessionKey: persistedSessionKey,
-      channel: "discord",
-      to: lastRouteTo,
-      accountId: route.accountId,
-    },
+    updateLastRoute: isDirectMessage
+      ? {
+          sessionKey: persistedSessionKey,
+          channel: "discord",
+          to: lastRouteTo,
+          accountId: route.accountId,
+        }
+      : undefined,
     onRecordError: (err) => {
       logVerbose(`discord: failed updating session meta: ${String(err)}`);
     },
