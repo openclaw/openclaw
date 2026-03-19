@@ -387,7 +387,28 @@ describe("createWebhookHandler", () => {
         senderName: "testuser",
         provider: "synology-chat",
         chatType: "direct",
+        sessionKey: expect.stringMatching(/^synology-chat-async-test-\d+-123$/),
         commandAuthorized: true,
+      }),
+    );
+  });
+
+  it("keeps the legacy session key shape for the default account", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount(),
+      deliver,
+      log,
+    });
+
+    const req = makeReq("POST", validBody);
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(204);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "synology-chat-123",
       }),
     );
   });

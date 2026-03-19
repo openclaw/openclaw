@@ -6,6 +6,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
 import {
+  DEFAULT_ACCOUNT_ID,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
@@ -358,7 +359,10 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         );
       }
 
-      const sessionKey = `synology-chat-${payload.user_id}`;
+      const sessionKey =
+        account.accountId && account.accountId !== DEFAULT_ACCOUNT_ID
+          ? `synology-chat-${account.accountId}-${payload.user_id}`
+          : `synology-chat-${payload.user_id}`;
       const deliverPromise = deliver({
         body: cleanText,
         from: payload.user_id,
