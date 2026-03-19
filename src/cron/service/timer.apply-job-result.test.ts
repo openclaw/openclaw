@@ -137,4 +137,31 @@ describe("applyJobResult – delivered=true overrides error status (#50170)", ()
     expect(job.state.lastRunStatus).toBe("ok");
     expect(job.state.consecutiveErrors).toBe(0);
   });
+
+  it("does not apply error backoff to nextRunAtMs for recurring job when delivered=true overrides error", () => {
+    // Use a high-frequency schedule so the backoff (30 s minimum) would
+    // exceed the natural interval and push nextRunAtMs out if applied.
+    const schedule = { kind: "every" as const, intervalMs: 5_000 };
+
+    const jobError = createJob({ schedule });
+    const jobOk = createJob({ id: "test-job-2", schedule });
+    const stateError = createMockState([jobError]);
+    const stateOk = createMockState([jobOk]);
+
+    applyJobResult(stateError, jobError, {
+      ...BASE_RESULT,
+      status: "error",
+      error: "Warning: Canvas failed",
+      delivered: true,
+    });
+
+    applyJobResult(stateOk, jobOk, {
+      ...BASE_RESULT,
+      status: "ok",
+      delivered: true,
+    });
+
+    // Both should schedule the same natural next run — no backoff on delivered=true.
+    expect(jobError.state.nextRunAtMs).toBe(jobOk.state.nextRunAtMs);
+  });
 });

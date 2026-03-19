@@ -417,7 +417,7 @@ export function applyJobResult(
           );
         }
       }
-    } else if (result.status === "error" && job.enabled) {
+    } else if (effectiveStatus === "error" && job.enabled) {
       // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
       let normalNext: number | undefined;
