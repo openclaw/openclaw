@@ -510,6 +510,60 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal: false, counts };
     }
 
+    // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
+    if (hookRunner?.hasHooks("before_dispatch")) {
+      const beforeDispatchResult = await hookRunner.runBeforeDispatch(
+        {
+          content: ctx.Body ?? "",
+          body: ctx.BodyForAgent ?? ctx.Body,
+          channel: ctx.Surface ?? ctx.Provider,
+          sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+          senderId: ctx.From,
+          isGroup: ctx.ChatType === "group",
+          timestamp,
+        },
+        {
+          channelId: hookContext.channelId,
+          accountId: hookContext.accountId,
+          conversationId: hookContext.conversationId,
+          sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+          senderId: ctx.From,
+        },
+      );
+      if (beforeDispatchResult?.handled) {
+        const text = beforeDispatchResult.text;
+        let queuedFinal = false;
+        let routedFinalCount = 0;
+        if (text) {
+          const payload = { text } satisfies ReplyPayload;
+          if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+            const result = await routeReply({
+              payload,
+              channel: originatingChannel,
+              to: originatingTo,
+              sessionKey: ctx.SessionKey,
+              accountId: ctx.AccountId,
+              threadId: routeThreadId,
+              cfg,
+              isGroup,
+              groupId,
+            });
+            queuedFinal = result.ok;
+            if (result.ok) {
+              routedFinalCount += 1;
+            }
+          } else {
+            queuedFinal = dispatcher.sendFinalReply(payload);
+          }
+        }
+        const counts = dispatcher.getQueuedCounts();
+        counts.final += routedFinalCount;
+        recordProcessed("completed", { reason: "before_dispatch_handled" });
+        markIdle("message_completed");
+        return { queuedFinal, counts };
+      }
+    }
+
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
     const acpDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
       ctx,

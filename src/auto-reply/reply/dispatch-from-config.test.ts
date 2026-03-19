@@ -42,6 +42,7 @@ const hookMocks = vi.hoisted(() => ({
       async () => ({ status: "no_handler" as const }),
     ),
     runMessageReceived: vi.fn(async () => {}),
+    runBeforeDispatch: vi.fn(async () => undefined),
   },
 }));
 const internalHookMocks = vi.hoisted(() => ({
@@ -331,6 +332,8 @@ describe("dispatchReplyFromConfig", () => {
       status: "no_handler",
     });
     hookMocks.runner.runMessageReceived.mockClear();
+    hookMocks.runner.runBeforeDispatch.mockClear();
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue(undefined);
     hookMocks.registry.plugins = [];
     internalHookMocks.createInternalHookEvent.mockClear();
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
@@ -2721,5 +2724,75 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+});
+
+describe("before_dispatch hook", () => {
+  it("skips model dispatch when hook returns handled", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "before_dispatch");
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({
+      handled: true,
+      text: "Blocked by plugin",
+    });
+    const dispatcher = createDispatcher();
+    const ctx = {
+      Body: "hello",
+      BodyForAgent: "hello",
+      From: "user1",
+      Surface: "telegram",
+      ChatType: "private",
+    } as DispatchReplyArgs["ctx"];
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Blocked by plugin" });
+    expect(result.queuedFinal).toBe(true);
+  });
+
+  it("silently short-circuits when hook returns handled without text", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "before_dispatch");
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
+    const dispatcher = createDispatcher();
+    const ctx = {
+      Body: "hello",
+      BodyForAgent: "hello",
+      From: "user1",
+      Surface: "telegram",
+      ChatType: "private",
+    } as DispatchReplyArgs["ctx"];
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+    });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+  });
+
+  it("continues default dispatch when hook returns not handled", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "before_dispatch");
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: false });
+    const dispatcher = createDispatcher();
+    const ctx = {
+      Body: "hello",
+      BodyForAgent: "hello",
+      From: "user1",
+      Surface: "telegram",
+      ChatType: "private",
+    } as DispatchReplyArgs["ctx"];
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "model reply" }),
+    });
+    // sendFinalReply should be called with model reply, not plugin text
+    expect(hookMocks.runner.runBeforeDispatch).toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "model reply" });
   });
 });
