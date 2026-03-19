@@ -396,13 +396,36 @@ export async function applySessionsPatchToStore(params: {
         };
       }
       const catalog = await params.loadGatewayModelCatalog();
-      const resolved = resolveAllowedModelRef({
+      let resolved = resolveAllowedModelRef({
         cfg,
         catalog,
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
         defaultModel: subagentModelHint ?? resolvedDefault.model,
       });
+      // Retry with provider prefix fallback for bare model IDs containing slash (e.g. Ollama's "deepseek-ai/DeepSeek-R1")
+      // This handles the case where user enters a bare model ID that gets misparsed as provider/model
+      if ("error" in resolved && resolved.error.startsWith("model not allowed:")) {
+        const configuredProviders = [
+          ...new Set(
+            Object.keys(cfg.agents?.defaults?.models ?? {})
+              .map((k) => (k.includes("/") ? k.split("/")[0] : null))
+              .filter(Boolean),
+          ),
+        ];
+        for (const provider of configuredProviders) {
+          resolved = resolveAllowedModelRef({
+            cfg,
+            catalog,
+            raw: `${provider}/${trimmed}`,
+            defaultProvider: resolvedDefault.provider,
+            defaultModel: subagentModelHint ?? resolvedDefault.model,
+          });
+          if (!("error" in resolved)) {
+            break;
+          }
+        }
+      }
       if ("error" in resolved) {
         return invalid(resolved.error);
       }
