@@ -163,6 +163,36 @@ describe("redactConfigSnapshot", () => {
     expect(result.config).toEqual(snapshot.config);
   });
 
+  it("removes embedded credentials from URL-valued endpoint fields", () => {
+    const raw = `{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://alice:secret@example.test/v1",
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://alice:secret@example.test/v1",
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.models.providers.openai.baseUrl).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("alice:secret@");
+  });
+
   it("does not redact maxTokens-style fields", () => {
     const snapshot = makeSnapshot({
       maxTokens: 16384,
@@ -890,6 +920,25 @@ describe("redactConfigSnapshot", () => {
 });
 
 describe("restoreRedactedValues", () => {
+  it("restores redacted URL endpoint fields on round-trip", () => {
+    const incoming = {
+      models: {
+        providers: {
+          openai: { baseUrl: REDACTED_SENTINEL },
+        },
+      },
+    };
+    const original = {
+      models: {
+        providers: {
+          openai: { baseUrl: "https://alice:secret@example.test/v1" },
+        },
+      },
+    };
+    const result = restoreRedactedValues(incoming, original, mainSchemaHints);
+    expect(result.models.providers.openai.baseUrl).toBe("https://alice:secret@example.test/v1");
+  });
+
   it("restores sentinel values from original config", () => {
     const incoming = {
       gateway: { auth: { token: REDACTED_SENTINEL } },

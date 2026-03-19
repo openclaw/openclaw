@@ -1,0 +1,227 @@
+{
+  "config": "vitest.unit.config.ts",
+  "generatedAt": "2026-03-18T17:10:00.000Z",
+  "defaultDurationMs": 250,
+  "files": {
+    "src/security/audit.test.ts": {
+      "durationMs": 6200,
+      "testCount": 380
+    },
+    "src/plugins/loader.test.ts": {
+      "durationMs": 6100,
+      "testCount": 260
+    },
+    "src/cli/update-cli.test.ts": {
+      "durationMs": 5400,
+      "testCount": 210
+    },
+    "src/agents/pi-embedded-runner.test.ts": {
+      "durationMs": 5200,
+      "testCount": 140
+    },
+    "src/process/supervisor/supervisor.test.ts": {
+      "durationMs": 5000,
+      "testCount": 120
+    },
+    "src/agents/bash-tools.test.ts": {
+      "durationMs": 4700,
+      "testCount": 150
+    },
+    "src/cli/program.smoke.test.ts": {
+      "durationMs": 4500,
+      "testCount": 95
+    },
+    "src/hooks/install.test.ts": {
+      "durationMs": 4300,
+      "testCount": 95
+    },
+    "src/agents/skills.test.ts": {
+      "durationMs": 4200,
+      "testCount": 135
+    },
+    "src/config/schema.test.ts": {
+      "durationMs": 4000,
+      "testCount": 110
+    },
+    "src/media/store.test.ts": {
+      "durationMs": 3900,
+      "testCount": 120
+    },
+    "src/commands/agent.test.ts": {
+      "durationMs": 3700,
+      "testCount": 110
+    },
+    "extensions/telegram/src/bot.create-telegram-bot.test.ts": {
+      "durationMs": 3600,
+      "testCount": 80
+    },
+    "extensions/telegram/src/bot.test.ts": {
+      "durationMs": 3400,
+      "testCount": 95
+    },
+    "src/agents/openclaw-tools.subagents.sessions-spawn.lifecycle.test.ts": {
+      "durationMs": 3300,
+      "testCount": 85
+    },
+    "src/infra/archive.test.ts": {
+      "durationMs": 3200,
+      "testCount": 75
+    },
+    "src/auto-reply/reply.block-streaming.test.ts": {
+      "durationMs": 3100,
+      "testCount": 60
+    },
+    "src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts": {
+      "durationMs": 3000,
+      "testCount": 55
+    },
+    "src/agents/skills.buildworkspaceskillsnapshot.test.ts": {
+      "durationMs": 2900,
+      "testCount": 70
+    },
+    "src/docker-setup.test.ts": {
+      "durationMs": 2800,
+      "testCount": 65
+    },
+    "src/agents/skills-install.download.test.ts": {
+      "durationMs": 2700,
+      "testCount": 60
+    },
+    "src/config/schema.tags.test.ts": {
+      "durationMs": 2600,
+      "testCount": 70
+    },
+    "src/cli/daemon-cli.coverage.test.ts": {
+      "durationMs": 2500,
+      "testCount": 50
+    },
+    "extensions/slack/src/monitor/slash.test.ts": {
+      "durationMs": 2400,
+      "testCount": 55
+    },
+    "test/git-hooks-pre-commit.test.ts": {
+      "durationMs": 2300,
+      "testCount": 20
+    },
+    "src/commands/doctor.warns-state-directory-is-missing.test.ts": {
+      "durationMs": 2200,
+      "testCount": 35
+    },
+    "src/commands/doctor.warns-per-agent-sandbox-docker-browser-prune.test.ts": {
+      "durationMs": 2100,
+      "testCount": 30
+    },
+    "src/commands/doctor.runs-legacy-state-migrations-yes-mode-without.test.ts": {
+      "durationMs": 2000,
+      "testCount": 28
+    },
+    "src/browser/server.agent-contract-snapshot-endpoints.test.ts": {
+      "durationMs": 1900,
+      "testCount": 45
+    },
+    "src/browser/server.agent-contract-form-layout-act-commands.test.ts": {
+      "durationMs": 1800,
+      "testCount": 40
+    },
+    "src/agents/models-config.normalizes-gemini-3-ids-preview-google-providers.test.ts": {
+      "durationMs": 1700,
+      "testCount": 25
+    },
+    "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts": {
+      "durationMs": 1600,
+      "testCount": 22
+    },
+    "src/plugins/tools.optional.test.ts": {
+      "durationMs": 1590,
+      "testCount": 18
+    },
+    "src/security/fix.test.ts": {
+      "durationMs": 1580,
+      "testCount": 24
+    },
+    "src/utils.test.ts": {
+      "durationMs": 1570,
+      "testCount": 34
+    },
+    "src/auto-reply/tool-meta.test.ts": {
+      "durationMs": 1560,
+      "testCount": 26
+    },
+    "src/auto-reply/envelope.test.ts": {
+      "durationMs": 1550,
+      "testCount": 20
+    },
+    "src/commands/auth-choice.test.ts": {
+      "durationMs": 1540,
+      "testCount": 18
+    },
+    "src/agents/skills.build-workspace-skills-prompt.syncs-merged-skills-into-target-workspace.test.ts": {
+      "durationMs": 1530,
+      "testCount": 14
+    },
+    "src/media/store.header-ext.test.ts": {
+      "durationMs": 1520,
+      "testCount": 16
+    },
+    "extensions/whatsapp/src/media.test.ts": {
+      "durationMs": 1510,
+      "testCount": 16
+    },
+    "extensions/whatsapp/src/auto-reply.web-auto-reply.falls-back-text-media-send-fails.test.ts": {
+      "durationMs": 1500,
+      "testCount": 10
+    },
+    "src/browser/server.covers-additional-endpoint-branches.test.ts": {
+      "durationMs": 1490,
+      "testCount": 18
+    },
+    "src/browser/server.post-tabs-open-profile-unknown-returns-404.test.ts": {
+      "durationMs": 1480,
+      "testCount": 12
+    },
+    "src/browser/server.skips-default-maxchars-explicitly-set-zero.test.ts": {
+      "durationMs": 1470,
+      "testCount": 10
+    },
+    "src/browser/server.auth-token-gates-http.test.ts": {
+      "durationMs": 1460,
+      "testCount": 15
+    },
+    "extensions/acpx/src/runtime.test.ts": {
+      "durationMs": 1450,
+      "testCount": 12
+    },
+    "test/scripts/ios-team-id.test.ts": {
+      "durationMs": 1440,
+      "testCount": 12
+    },
+    "src/agents/bash-tools.exec.background-abort.test.ts": {
+      "durationMs": 1430,
+      "testCount": 10
+    },
+    "src/agents/subagent-announce.format.test.ts": {
+      "durationMs": 1420,
+      "testCount": 12
+    },
+    "src/auto-reply/reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.test.ts": {
+      "durationMs": 1410,
+      "testCount": 14
+    },
+    "src/auto-reply/reply.triggers.trigger-handling.targets-active-session-native-stop.test.ts": {
+      "durationMs": 1400,
+      "testCount": 10
+    },
+    "src/auto-reply/reply.triggers.group-intro-prompts.test.ts": {
+      "durationMs": 1390,
+      "testCount": 12
+    },
+    "src/auto-reply/reply.triggers.trigger-handling.handles-inline-commands-strips-it-before-agent.test.ts": {
+      "durationMs": 1380,
+      "testCount": 10
+    },
+    "extensions/whatsapp/src/auto-reply.web-auto-reply.compresses-common-formats-jpeg-cap.test.ts": {
+      "durationMs": 1370,
+      "testCount": 10
+    }
+  }
+}
