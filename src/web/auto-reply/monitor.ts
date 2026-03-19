@@ -198,6 +198,8 @@ export async function monitorWebChannel(
       sendReadReceipts: account.sendReadReceipts,
       debounceMs: inboundDebounceMs,
       shouldDebounce,
+      pingIntervalMs: tuning.pingIntervalMs,
+      pingTimeoutMs: tuning.pingTimeoutMs,
       onMessage: async (msg: WebInboundMsg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();
@@ -227,6 +229,48 @@ export async function monitorWebChannel(
     });
 
     setActiveWebListener(account.accountId, listener);
+
+    // Wrap outbound methods so that send activity also resets the watchdog timer.
+    // Without this, an outbound-only channel (e.g., cron sending but no human replies)
+    // would falsely trigger the watchdog after MESSAGE_TIMEOUT_MS.
+    // The listener object is returned as `const` (readonly), so we need a mutable
+    // handle to patch outbound methods.
+    const updateLastActivity = () => {
+      lastMessageAt = Date.now();
+      status.lastMessageAt = lastMessageAt;
+      status.lastEventAt = lastMessageAt;
+      emitStatus();
+    };
+    const wrapOutbound = <F extends (...args: never[]) => Promise<unknown>>(fn: F): F =>
+      (async (...args: Parameters<F>) => {
+        const result = await fn(...args);
+        updateLastActivity();
+        return result;
+      }) as unknown as F;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- need mutable access
+    const mutableListener = listener as any;
+    if (typeof mutableListener.sendMessage === "function") {
+      mutableListener.sendMessage = wrapOutbound(mutableListener.sendMessage);
+    }
+    if (typeof mutableListener.sendPoll === "function") {
+      mutableListener.sendPoll = wrapOutbound(mutableListener.sendPoll);
+    }
+    if (typeof mutableListener.sendReaction === "function") {
+      mutableListener.sendReaction = wrapOutbound(mutableListener.sendReaction);
+    }
+    if (typeof mutableListener.sendComposingTo === "function") {
+      mutableListener.sendComposingTo = wrapOutbound(mutableListener.sendComposingTo);
+    }
+
+    // Log reconnect gap duration for debugging (only on subsequent connections).
+    if (status.lastDisconnect?.at) {
+      const gapMs = Date.now() - status.lastDisconnect.at;
+      reconnectLogger.info(
+        { gapMs, gapSeconds: Math.round(gapMs / 1000) },
+        "web reconnect: gap duration since last disconnect",
+      );
+    }
+
     unregisterUnhandled = registerUnhandledRejectionHandler((reason) => {
       if (!isLikelyWhatsAppCryptoError(reason)) {
         return false;

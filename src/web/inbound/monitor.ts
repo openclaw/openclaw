@@ -34,6 +34,10 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /** Active socket health ping interval (ms). Set 0 to disable. Default: 25000. */
+  pingIntervalMs?: number;
+  /** Active socket health ping timeout (ms). Default: 10000. */
+  pingTimeoutMs?: number;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -42,6 +46,12 @@ export async function monitorWebInbox(options: {
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
+
+  // Active health ping to detect stale sockets quickly.
+  // Configurable via options; 0 disables the ping entirely.
+  const PING_INTERVAL_MS = options.pingIntervalMs ?? 25_000;
+  const PING_TIMEOUT_MS = options.pingTimeoutMs ?? 10_000;
+  let pingTimer: ReturnType<typeof setInterval> | null = null;
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -63,6 +73,28 @@ export async function monitorWebInbox(options: {
     }
   } catch (err) {
     logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
+  }
+
+  // Periodically ping the socket to detect stale connections within seconds.
+  // A PING_INTERVAL_MS of 0 disables the health ping entirely.
+  if (PING_INTERVAL_MS > 0) pingTimer = setInterval(() => {
+    const timeout = setTimeout(() => {
+      logVerbose("Health ping timed out — forcing reconnect");
+      resolveClose({ status: 499, isLoggedOut: false, error: "health-ping-timeout" });
+    }, PING_TIMEOUT_MS);
+    sock
+      .sendPresenceUpdate("available")
+      .then(() => clearTimeout(timeout))
+      .catch((err: unknown) => {
+        clearTimeout(timeout);
+        logVerbose(`Health ping failed: ${String(err)} — forcing reconnect`);
+        resolveClose({ status: 499, isLoggedOut: false, error: err });
+      });
+  }, PING_INTERVAL_MS);
+
+  // If ping is disabled, log it for clarity.
+  if (PING_INTERVAL_MS <= 0) {
+    logVerbose("Active health ping disabled (pingIntervalMs=0)");
   }
 
   const selfJid = sock.user?.id;
@@ -374,6 +406,10 @@ export async function monitorWebInbox(options: {
 
   return {
     close: async () => {
+      if (pingTimer) {
+        clearInterval(pingTimer);
+        pingTimer = null;
+      }
       try {
         const ev = sock.ev as unknown as {
           off?: (event: string, listener: (...args: unknown[]) => void) => void;

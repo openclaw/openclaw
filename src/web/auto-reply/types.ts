@@ -34,4 +34,8 @@ export type WebMonitorTuning = {
   accountId?: string;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender. */
   debounceMs?: number;
+  /** Interval (ms) between active socket health pings (default 25000). */
+  pingIntervalMs?: number;
+  /** Timeout (ms) for each health ping before declaring the socket stale (default 10000). */
+  pingTimeoutMs?: number;
 };
