@@ -368,7 +368,7 @@ async function requestOpenAiVerification(params: {
       body: {
         model: params.modelId,
         input: "Hi",
-        max_output_tokens: 1,
+        max_output_tokens: 16,
         stream: false,
       },
     });
