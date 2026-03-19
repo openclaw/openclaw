@@ -1,9 +1,16 @@
 import fs from "node:fs/promises";
+import http from "node:http";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeBundleProbeMcpServer, writeClaudeBundle } from "./bundle-mcp.test-harness.js";
 import { createBundleMcpToolRuntime } from "./pi-bundle-mcp-tools.js";
+
+const require = createRequire(import.meta.url);
+const SDK_SERVER_MCP_PATH = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
+const SDK_SERVER_STDIO_PATH = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
+const SDK_SERVER_SSE_PATH = require.resolve("@modelcontextprotocol/sdk/server/sse.js");
 
 const tempDirs: string[] = [];
 
@@ -109,6 +116,79 @@ describe("createBundleMcpToolRuntime", () => {
       });
     } finally {
       await runtime.dispose();
+    }
+  });
+
+  it("loads configured SSE MCP tools via url", async () => {
+    // Dynamically import the SSE server transport from the SDK.
+    const { McpServer } = await import(SDK_SERVER_MCP_PATH);
+    const { SSEServerTransport } = await import(SDK_SERVER_SSE_PATH);
+
+    const mcpServer = new McpServer({ name: "sse-probe", version: "1.0.0" });
+    mcpServer.tool("sse_probe", "SSE MCP probe", async () => {
+      return {
+        content: [{ type: "text", text: "FROM-SSE" }],
+      };
+    });
+
+    // Start an HTTP server that hosts the SSE MCP transport.
+    let sseTransport:
+      | {
+          handlePostMessage: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+        }
+      | undefined;
+    const httpServer = http.createServer(async (req, res) => {
+      if (req.url === "/sse") {
+        sseTransport = new SSEServerTransport("/messages", res);
+        await mcpServer.connect(sseTransport);
+      } else if (req.url?.startsWith("/messages") && req.method === "POST") {
+        if (sseTransport) {
+          await sseTransport.handlePostMessage(req, res);
+        } else {
+          res.writeHead(400).end("No SSE session");
+        }
+      } else {
+        res.writeHead(404).end();
+      }
+    });
+
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    const addr = httpServer.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    try {
+      const workspaceDir = await makeTempDir("openclaw-bundle-mcp-sse-");
+      const runtime = await createBundleMcpToolRuntime({
+        workspaceDir,
+        cfg: {
+          mcp: {
+            servers: {
+              sseProbe: {
+                url: `http://127.0.0.1:${port}/sse`,
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(runtime.tools.map((tool) => tool.name)).toEqual(["sse_probe"]);
+        const result = await runtime.tools[0].execute("call-sse-probe", {}, undefined, undefined);
+        expect(result.content[0]).toMatchObject({
+          type: "text",
+          text: "FROM-SSE",
+        });
+        expect(result.details).toEqual({
+          mcpServer: "sseProbe",
+          mcpTool: "sse_probe",
+        });
+      } finally {
+        await runtime.dispose();
+      }
+    } finally {
+      httpServer.close();
     }
   });
 });
