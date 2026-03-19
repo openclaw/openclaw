@@ -64,6 +64,10 @@
         "reason": "Plugin SDK index coverage retained a broad export graph in unit-fast and is safer outside the shared lane."
       },
       {
+        "file": "src/plugin-sdk/index.bundle.test.ts",
+        "reason": "Plugin SDK bundle validation builds and imports the full bundled export graph and is safer outside the shared lane."
+      },
+      {
         "file": "src/config/sessions.cache.test.ts",
         "reason": "Session cache coverage retained a large config/session graph in unit-fast on Linux CI."
       },
