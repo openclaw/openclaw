@@ -9,12 +9,6 @@ import {
   type NativeCommandTestParams as RegisterTelegramNativeCommandsParams,
 } from "./bot-native-commands.fixture-test-support.js";
 
-const EMPTY_REPLY_COUNTS = {
-  block: 0,
-  final: 0,
-  tool: 0,
-} as const;
-
 type RegisteredCommand = {
   command: string;
   description: string;
@@ -88,17 +82,35 @@ export function createNativeCommandTestParams(
   cfg: OpenClawConfig,
   params: Partial<RegisterTelegramNativeCommandsParams> = {},
 ): RegisterTelegramNativeCommandsParams {
+  const dispatchResult: Awaited<
+    ReturnType<TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]>
+  > = {
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  };
   const telegramDeps: TelegramBotDeps = {
-    loadConfig: vi.fn(() => ({})),
-    resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/sessions.json"),
-    readChannelAllowFromStore: vi.fn(async () => []),
-    enqueueSystemEvent: vi.fn(),
-    dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => ({
-      queuedFinal: false,
-      counts: EMPTY_REPLY_COUNTS,
-    })),
+    loadConfig: vi.fn(() => ({}) as OpenClawConfig) as TelegramBotDeps["loadConfig"],
+    resolveStorePath: vi.fn(
+      (storePath?: string) => storePath ?? "/tmp/sessions.json",
+    ) as TelegramBotDeps["resolveStorePath"],
+    readChannelAllowFromStore: vi.fn(
+      async () => [],
+    ) as TelegramBotDeps["readChannelAllowFromStore"],
+    upsertChannelPairingRequest: vi.fn(async () => ({
+      code: "PAIRCODE",
+      created: true,
+    })) as TelegramBotDeps["upsertChannelPairingRequest"],
+    enqueueSystemEvent: vi.fn() as TelegramBotDeps["enqueueSystemEvent"],
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(
+      async () => dispatchResult,
+    ) as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    buildModelsProviderData: vi.fn(async () => ({
+      byProvider: new Map<string, Set<string>>(),
+      providers: [],
+      resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+    })) as TelegramBotDeps["buildModelsProviderData"],
     listSkillCommandsForAgents,
-    wasSentByBot: vi.fn(() => false),
+    wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
   };
   return createBaseNativeCommandTestParams({
     cfg,

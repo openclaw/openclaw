@@ -142,7 +142,7 @@ function createMinimaxImageConfig(): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        model: { primary: "minimax/MiniMax-M2.5" },
+        model: { primary: "minimax/MiniMax-M2.7" },
         imageModel: { primary: "minimax/MiniMax-VL-01" },
       },
     },
@@ -272,7 +272,7 @@ describe("image tool implicit imageModel config", () => {
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.5" } } },
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
@@ -298,7 +298,7 @@ describe("image tool implicit imageModel config", () => {
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "minimax-portal/MiniMax-M2.5" } } },
+        agents: { defaults: { model: { primary: "minimax-portal/MiniMax-M2.7" } } },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("minimax-portal/MiniMax-VL-01"),
@@ -356,7 +356,7 @@ describe("image tool implicit imageModel config", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "minimax/MiniMax-M2.5" },
+            model: { primary: "minimax/MiniMax-M2.7" },
             imageModel: { primary: "openai/gpt-5-mini" },
           },
         },
@@ -584,7 +584,7 @@ describe("image tool implicit imageModel config", () => {
 
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.5" } } },
+        agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
       };
       const tool = createRequiredImageTool({ config: cfg, agentDir, sandbox });
 
@@ -651,7 +651,7 @@ describe("image tool implicit imageModel config", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "minimax/MiniMax-M2.5" },
+            model: { primary: "minimax/MiniMax-M2.7" },
             imageModel: { primary: "minimax/MiniMax-VL-01" },
           },
         },
@@ -704,7 +704,7 @@ describe("image tool MiniMax VLM routing", () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-vlm-"));
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "minimax/MiniMax-M2.5" } } },
+      agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
     };
     const tool = createRequiredImageTool({ config: cfg, agentDir });
     return { fetch, tool };
