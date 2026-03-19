@@ -96,6 +96,34 @@ describe("dashboardCommand", () => {
     );
   });
 
+  it("never logs the gateway token in the dashboard URL (CVE regression)", async () => {
+    const secretToken = "super-secret-bearer-token";
+    mockSnapshot(secretToken);
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+
+    await dashboardCommand(runtime);
+
+    // Clipboard and browser should still receive the tokenized URL.
+    expect(copyToClipboardMock).toHaveBeenCalledWith(
+      `http://127.0.0.1:18789/#token=${secretToken}`,
+    );
+    expect(openUrlMock).toHaveBeenCalledWith(`http://127.0.0.1:18789/#token=${secretToken}`);
+
+    // The logged output must never contain the token — it flows into
+    // console-captured log files readable by operator.read-scoped devices.
+    for (const call of runtime.log.mock.calls) {
+      const line = String(call[0]);
+      expect(line).not.toContain(secretToken);
+      expect(line).not.toContain("#token=");
+    }
+
+    // Base URL should be logged without the fragment.
+    expect(runtime.log).toHaveBeenCalledWith("Dashboard URL: http://127.0.0.1:18789/");
+    expect(runtime.log).toHaveBeenCalledWith("Token auto-auth included in browser/clipboard URL.");
+  });
+
   it("prints SSH hint when browser cannot open", async () => {
     mockSnapshot("shhhh");
     copyToClipboardMock.mockResolvedValue(false);
