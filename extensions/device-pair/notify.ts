@@ -25,9 +25,32 @@ export type PendingPairingRequest = {
   deviceId: string;
   displayName?: string;
   platform?: string;
+  role?: string;
+  roles?: string[];
+  scopes?: string[];
   remoteIp?: string;
   ts?: number;
 };
+
+function formatStringList(values?: readonly string[]): string {
+  if (!Array.isArray(values) || values.length === 0) {
+    return "none";
+  }
+  const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
+  return normalized.length > 0 ? normalized.join(", ") : "none";
+}
+
+function formatRoleList(request: PendingPairingRequest): string {
+  const role = request.role?.trim();
+  if (role) {
+    return role;
+  }
+  return formatStringList(request.roles);
+}
+
+function formatScopeList(request: PendingPairingRequest): string {
+  return formatStringList(request.scopes);
+}
 
 export function formatPendingRequests(pending: PendingPairingRequest[]): string {
   if (pending.length === 0) {
@@ -42,6 +65,8 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
       `- ${req.requestId}`,
       label ? `name=${label}` : null,
       platform ? `platform=${platform}` : null,
+      `role=${formatRoleList(req)}`,
+      `scopes=${formatScopeList(req)}`,
       ip ? `ip=${ip}` : null,
     ].filter(Boolean);
     lines.push(parts.join(" · "));
@@ -182,11 +207,15 @@ function buildPairingRequestNotificationText(request: PendingPairingRequest): st
   const label = request.displayName?.trim() || request.deviceId;
   const platform = request.platform?.trim();
   const ip = request.remoteIp?.trim();
+  const role = formatRoleList(request);
+  const scopes = formatScopeList(request);
   const lines = [
     "📲 New device pairing request",
     `ID: ${request.requestId}`,
     `Name: ${label}`,
     ...(platform ? [`Platform: ${platform}`] : []),
+    `Role: ${role}`,
+    `Scopes: ${scopes}`,
     ...(ip ? [`IP: ${ip}`] : []),
     "",
     `Approve: /pair approve ${request.requestId}`,

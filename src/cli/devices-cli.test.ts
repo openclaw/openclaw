@@ -287,6 +287,30 @@ describe("devices cli local fallback", () => {
   });
 });
 
+describe("devices cli list", () => {
+  it("renders pending scopes when present", async () => {
+    callGateway.mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "device-1",
+          displayName: "Device One",
+          role: "operator",
+          scopes: ["operator.admin", "operator.read"],
+          ts: 1,
+        },
+      ],
+      paired: [],
+    });
+
+    await runDevicesCommand(["list"]);
+
+    const output = runtime.log.mock.calls.map((entry) => String(entry[0] ?? "")).join("\n");
+    expect(output).toContain("Scopes");
+    expect(output).toContain("operator.admin, operator.read");
+  });
+});
+
 afterEach(() => {
   callGateway.mockClear();
   buildGatewayConnectionDetails.mockClear();
