@@ -223,10 +223,10 @@ bundledChannelRuntimeSetters.setLineRuntime({
   },
 } as never);
 
-vi.mock("../../../../extensions/matrix/src/matrix/send.js", async () => {
+vi.mock("../../../../extensions/matrix/runtime-api.js", async () => {
   const actual = await vi.importActual<
-    typeof import("../../../../extensions/matrix/src/matrix/send.js")
-  >("../../../../extensions/matrix/src/matrix/send.js");
+    typeof import("../../../../extensions/matrix/runtime-api.js")
+  >("../../../../extensions/matrix/runtime-api.js");
   return {
     ...actual,
     sendMessageMatrix: sendMessageMatrixMock,

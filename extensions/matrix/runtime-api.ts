@@ -2,3 +2,4 @@
 // helpers without traversing the full plugin-sdk/runtime graph.
 export * from "./src/auth-precedence.js";
 export * from "./helper-api.js";
+export { sendMessageMatrix } from "./src/matrix/send.js";
