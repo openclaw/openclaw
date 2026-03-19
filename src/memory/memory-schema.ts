@@ -76,8 +76,14 @@ export function ensureMemoryIndexSchema(params: {
 
   ensureColumn(params.db, "files", "source", "TEXT NOT NULL DEFAULT 'memory'");
   ensureColumn(params.db, "chunks", "source", "TEXT NOT NULL DEFAULT 'memory'");
+  // Phase 1: salience (importance score 0-1) and access_count for active forgetting
+  ensureColumn(params.db, "chunks", "salience", "REAL NOT NULL DEFAULT 0.5");
+  ensureColumn(params.db, "chunks", "access_count", "INTEGER NOT NULL DEFAULT 0");
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);`);
+  // Index for forgetting queries - find low salience chunks
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_salience ON chunks(salience);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_access_count ON chunks(access_count);`);
 
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }
