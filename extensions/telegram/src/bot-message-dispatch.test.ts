@@ -891,7 +891,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(boundaryRotationOrder).toBeLessThan(earlyUpdateOrder);
   });
 
-  it("rotates on message start after preview finalization falls back to a normal send", async () => {
+  it("keeps same preview target after message start when final edit failure is retained", async () => {
     const { createTelegramDraftStream: createRealTelegramDraftStream } =
       await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
     const bot = createBot();
@@ -932,12 +932,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial", bot });
 
-    expect(answerApi.deleteMessage).toHaveBeenCalledWith(123, 1001);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [expect.objectContaining({ text: "Message A final" })],
-      }),
-    );
+    expect(answerApi.deleteMessage).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).toHaveBeenNthCalledWith(
       2,
       123,
@@ -945,7 +941,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
       "Message B final",
       expect.any(Object),
     );
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
   });
 
   it("does not force new message on first assistant message start", async () => {

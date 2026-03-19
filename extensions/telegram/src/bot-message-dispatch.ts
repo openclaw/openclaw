@@ -361,7 +361,10 @@ export const dispatchTelegramMessage = async ({
   const ingestDraftLaneSegments = async (text: string | undefined) => {
     const split = splitTextIntoLaneSegments(text);
     const hasAnswerSegment = split.segments.some((segment) => segment.lane === "answer");
-    if (hasAnswerSegment && activePreviewLifecycleByLane.answer !== "transient") {
+    if (
+      hasAnswerSegment &&
+      (activePreviewLifecycleByLane.answer !== "transient" || answerLaneNeedsBoundaryReset)
+    ) {
       // Some providers can emit the first partial of a new assistant message before
       // onAssistantMessageStart() arrives. Rotate preemptively so we do not edit
       // the previously finalized preview message with the next message's text.
@@ -526,7 +529,9 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     answerLaneNeedsBoundaryReset = true;
-    clearAnswerPreviewOnBoundaryReset = answerLane.hasStreamedMessage;
+    // Best-effort cleanup: clear any preview that may still be visible before
+    // the next assistant-message boundary starts a fresh lane.
+    clearAnswerPreviewOnBoundaryReset = true;
   };
   const waitForPendingAnswerFinalDelivery = async () => {
     await pendingAnswerFinalDelivery;
