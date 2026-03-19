@@ -75,6 +75,7 @@ export type AgentRunLoopResult =
   | { kind: "final"; payload: ReplyPayload };
 
 export async function runAgentTurnWithFallback(params: {
+  runId?: string;
   commandBody: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;

@@ -120,7 +120,7 @@ function adoptNewerMainOAuthCredential(params: {
   profileId: string;
   agentDir?: string;
   cred: OAuthCredentialWithMeta;
-}): OAuthCredentialWithMeta | null {
+}): StoreOAuthCredential | null {
   if (!params.agentDir) {
     return null;
   }
@@ -142,7 +142,7 @@ function adoptNewerMainOAuthCredential(params: {
         agentDir: params.agentDir,
         expires: new Date(mainCred.expires).toISOString(),
       });
-      return mainCred as OAuthCredentialWithMeta;
+      return mainCred;
     }
   } catch (err) {
     // Best-effort: don't crash if main agent store is missing or unreadable.
@@ -206,14 +206,15 @@ async function refreshOAuthTokenWithLock(params: {
     if (!result) {
       return null;
     }
+    const newCred = result.newCredentials as StoreOAuthCredential;
     store.profiles[params.profileId] = {
       ...cred,
-      ...result.newCredentials,
+      ...newCred,
       type: "oauth",
     };
     saveAuthProfileStore(store, params.agentDir);
 
-    return result;
+    return { apiKey: result.apiKey, newCredentials: newCred };
   });
 }
 

@@ -31,6 +31,7 @@ export type {
   UsageDisplayLevel,
   VerboseLevel,
 } from "./thinking.shared.js";
+export type ConfiguredThinkLevel = ThinkLevel | "auto";
 import {
   resolveProviderBinaryThinking,
   resolveProviderDefaultThinkingLevel,
