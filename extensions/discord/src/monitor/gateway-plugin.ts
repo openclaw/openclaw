@@ -256,6 +256,9 @@ function createGatewayPlugin(params: {
     }
 
     override createWebSocket(url: string) {
+      if (!url) {
+        throw new Error("Gateway URL is required");
+      }
       return new WebSocket(url, {
         handshakeTimeout: DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS,
         ...(params.wsAgent ? { agent: params.wsAgent } : {}),
