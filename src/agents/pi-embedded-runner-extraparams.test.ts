@@ -2291,4 +2291,83 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+
+  it("strips prompt cache fields for non-OpenAI openai-responses endpoints", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-proxy",
+      applyModelId: "some-model",
+      model: {
+        api: "openai-responses",
+        provider: "custom-proxy",
+        id: "some-model",
+        baseUrl: "https://my-proxy.example.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-xyz",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload).not.toHaveProperty("prompt_cache_key");
+    expect(payload).not.toHaveProperty("prompt_cache_retention");
+  });
+
+  it("keeps prompt cache fields for direct OpenAI openai-responses endpoints", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-123",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload.prompt_cache_key).toBe("session-123");
+    expect(payload.prompt_cache_retention).toBe("24h");
+  });
+
+  it("keeps prompt cache fields for direct Azure OpenAI openai-responses endpoints", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "azure-openai-responses",
+      applyModelId: "gpt-4o",
+      model: {
+        api: "openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-4o",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-azure",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload.prompt_cache_key).toBe("session-azure");
+    expect(payload.prompt_cache_retention).toBe("24h");
+  });
+
+  it("keeps prompt cache fields when openai-responses baseUrl is omitted", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-default",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload.prompt_cache_key).toBe("session-default");
+    expect(payload.prompt_cache_retention).toBe("24h");
+  });
 });
