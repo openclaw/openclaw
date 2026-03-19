@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 
 let cfg: Record<string, unknown> = {};
-const authMock = vi.fn(async () => ({ ok: true }));
+const authMock = vi.fn(async () => ({ ok: true }) as { ok: boolean; rateLimited?: boolean });
 const isLocalDirectRequestMock = vi.fn(() => true);
 const loadSessionEntryMock = vi.fn();
 const getSubagentRunByChildSessionKeyMock = vi.fn();
@@ -18,23 +18,22 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("./auth.js", () => ({
-  authorizeHttpGatewayConnect: (...args: unknown[]) => authMock(...args),
-  isLocalDirectRequest: (...args: unknown[]) => isLocalDirectRequestMock(...args),
+  authorizeHttpGatewayConnect: authMock,
+  isLocalDirectRequest: isLocalDirectRequestMock,
 }));
 
 vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
+  loadSessionEntry: loadSessionEntryMock,
 }));
 
 vi.mock("../agents/subagent-registry.js", () => ({
-  getSubagentRunByChildSessionKey: (...args: unknown[]) =>
-    getSubagentRunByChildSessionKeyMock(...args),
+  getSubagentRunByChildSessionKey: getSubagentRunByChildSessionKeyMock,
 }));
 
 vi.mock("../agents/subagent-control.js", () => ({
-  killControlledSubagentRun: (...args: unknown[]) => killControlledSubagentRunMock(...args),
-  killSubagentRunAdmin: (...args: unknown[]) => killSubagentRunAdminMock(...args),
-  resolveSubagentController: (...args: unknown[]) => resolveSubagentControllerMock(...args),
+  killControlledSubagentRun: killControlledSubagentRunMock,
+  killSubagentRunAdmin: killSubagentRunAdminMock,
+  resolveSubagentController: resolveSubagentControllerMock,
 }));
 
 const { handleSessionKillHttpRequest } = await import("./session-kill-http.js");
