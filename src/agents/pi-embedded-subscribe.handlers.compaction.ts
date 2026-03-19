@@ -30,6 +30,15 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
         },
         {
           sessionKey: ctx.params.sessionKey,
+          agentId: ctx.params.agentId,
+          sessionId: ctx.params.sessionId,
+          messageProvider: undefined,
+          sourceProvider: ctx.params.sourceProvider,
+          senderId: ctx.params.senderId ?? null,
+          senderName: ctx.params.senderName ?? null,
+          senderIsOwner: ctx.params.senderIsOwner,
+          groupId: ctx.params.groupId ?? null,
+          spawnedBy: ctx.params.spawnedBy ?? null,
         },
       )
       .catch((err) => {
@@ -82,7 +91,18 @@ export function handleAutoCompactionEnd(
             compactedCount: ctx.getCompactionCount(),
             sessionFile: ctx.params.session.sessionFile,
           },
-          { sessionKey: ctx.params.sessionKey },
+          {
+            sessionKey: ctx.params.sessionKey,
+            agentId: ctx.params.agentId,
+            sessionId: ctx.params.sessionId,
+            messageProvider: undefined,
+            sourceProvider: ctx.params.sourceProvider,
+            senderId: ctx.params.senderId ?? null,
+            senderName: ctx.params.senderName ?? null,
+            senderIsOwner: ctx.params.senderIsOwner,
+            groupId: ctx.params.groupId ?? null,
+            spawnedBy: ctx.params.spawnedBy ?? null,
+          },
         )
         .catch((err) => {
           ctx.log.warn(`after_compaction hook failed: ${String(err)}`);

@@ -36,6 +36,18 @@ export type SubscribeEmbeddedPiSessionParams = {
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
+  /** Raw platform origin for trust classification (e.g. "slack", "discord"). */
+  sourceProvider?: string;
+  /** Sender identifier for trust/policy hooks. */
+  senderId?: string | null;
+  /** Sender display name for trust/policy hooks. */
+  senderName?: string | null;
+  /** Whether the sender is an owner — forwarded into compaction hook context. */
+  senderIsOwner?: boolean;
+  /** Group/channel id for group-chat trust policies. */
+  groupId?: string | null;
+  /** Parent session key for subagent policy inheritance. */
+  spawnedBy?: string | null;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
