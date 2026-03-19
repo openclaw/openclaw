@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import {
   fetchTelegramChatId,
   inspectTelegramAccount,
@@ -13,7 +11,7 @@ import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gatewa
 import { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { CONFIG_PATH, migrateLegacyConfig, readConfigFileSnapshot } from "../config/config.js";
+import { CONFIG_PATH, migrateLegacyConfig } from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -51,17 +49,15 @@ import {
   isZalouserMutableGroupEntry,
 } from "../security/mutable-allowlist-detectors.js";
 import { note } from "../terminal/note.js";
-import { resolveHomeDir } from "../utils.js";
 import {
   formatConfigPath,
-  noteIncludeConfinementWarning,
   noteOpencodeProviderOverrides,
   resolveConfigPathTarget,
   stripUnknownConfigKeys,
 } from "./doctor-config-analysis.js";
+import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
-import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
 
@@ -1640,87 +1636,19 @@ function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
   return { config: next, changes };
 }
 
-async function maybeMigrateLegacyConfig(): Promise<string[]> {
-  const changes: string[] = [];
-  const home = resolveHomeDir();
-  if (!home) {
-    return changes;
-  }
-
-  const targetDir = path.join(home, ".openclaw");
-  const targetPath = path.join(targetDir, "openclaw.json");
-  try {
-    await fs.access(targetPath);
-    return changes;
-  } catch {
-    // missing config
-  }
-
-  const legacyCandidates = [
-    path.join(home, ".clawdbot", "clawdbot.json"),
-    path.join(home, ".moldbot", "moldbot.json"),
-    path.join(home, ".moltbot", "moltbot.json"),
-  ];
-
-  let legacyPath: string | null = null;
-  for (const candidate of legacyCandidates) {
-    try {
-      await fs.access(candidate);
-      legacyPath = candidate;
-      break;
-    } catch {
-      // continue
-    }
-  }
-  if (!legacyPath) {
-    return changes;
-  }
-
-  await fs.mkdir(targetDir, { recursive: true });
-  try {
-    await fs.copyFile(legacyPath, targetPath, fs.constants.COPYFILE_EXCL);
-    changes.push(`Migrated legacy config: ${legacyPath} -> ${targetPath}`);
-  } catch {
-    // If it already exists, skip silently.
-  }
-
-  return changes;
-}
-
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
-  if (stateDirResult.changes.length > 0) {
-    note(stateDirResult.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
-  }
-  if (stateDirResult.warnings.length > 0) {
-    note(stateDirResult.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
-  }
-
-  const legacyConfigChanges = await maybeMigrateLegacyConfig();
-  if (legacyConfigChanges.length > 0) {
-    note(legacyConfigChanges.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
-  }
-
-  let snapshot = await readConfigFileSnapshot();
-  const baseCfg = snapshot.config ?? {};
+  const preflight = await runDoctorConfigPreflight();
+  let snapshot = preflight.snapshot;
+  const baseCfg = preflight.baseConfig;
   let cfg: OpenClawConfig = baseCfg;
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
   let shouldWriteConfig = false;
   const fixHints: string[] = [];
-  if (snapshot.exists && !snapshot.valid && snapshot.legacyIssues.length === 0) {
-    note("Config invalid; doctor will run with best-effort config.", "Config");
-    noteIncludeConfinementWarning(snapshot);
-  }
-  const warnings = snapshot.warnings ?? [];
-  if (warnings.length > 0) {
-    const lines = formatConfigIssueLines(warnings, "-").join("\n");
-    note(lines, "Config warnings");
-  }
 
   if (snapshot.legacyIssues.length > 0) {
     note(

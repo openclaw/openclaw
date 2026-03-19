@@ -21,6 +21,7 @@ describe("legacy root entry", () => {
   it("does not run CLI bootstrap when imported as a library dependency", async () => {
     const mod = await import("./index.js");
 
+    expect(typeof mod.applyTemplate).toBe("function");
     expect(typeof mod.runLegacyCliEntry).toBe("function");
   });
 });
