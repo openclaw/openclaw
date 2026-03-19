@@ -371,6 +371,7 @@ Respond with exactly 3 queries, one per line. No numbers, bullets, or explanatio
       content = content.replace(/\[TIMESTAMP:[^\]]+\]/g, "").trim();
 
       if (content.startsWith("{") && content.endsWith("}")) {
+        this.log(`  🚫 [MIND] Skipping JSON content: ${content.substring(0, 80)}`);
         continue;
       }
 
@@ -379,6 +380,7 @@ Respond with exactly 3 queries, one per line. No numbers, bullets, or explanatio
         .replace(/[^a-z0-9]/g, "")
         .substring(0, 30);
       if (!normalized || seenContent.has(normalized)) {
+        this.log(`  🚫 [MIND] Skipping duplicate/empty content: "${content.substring(0, 60)}"`);
         continue;
       }
       seenContent.add(normalized);

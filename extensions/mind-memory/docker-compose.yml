@@ -1,23 +1,19 @@
 services:
   graphiti:
-    image: zepai/knowledge-graph-mcp:latest
+    build:
+      context: ../../../graphiti/mcp_server
+      dockerfile: docker/Dockerfile
     container_name: graphiti
     ports:
       - "8001:8000"
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - FALKORDB_URL=redis://falkordb:6379
-    restart: unless-stopped
-    depends_on:
-      - falkordb
-
-  falkordb:
-    image: falkordb/falkordb:latest
-    container_name: falkordb
-    ports:
       - "6379:6379"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - MODEL_NAME=${LLM_MODEL:-}
+      - FALKORDB_URL=redis://localhost:6379
     volumes:
-      - falkordb_data:/data
+      - falkordb_data:/var/lib/falkordb/data
     restart: unless-stopped
 
 volumes:

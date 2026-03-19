@@ -46,6 +46,7 @@ interface GraphFact {
   fact?: string;
   target_name?: string;
   created_at?: string;
+  episodes?: string[];
 }
 
 interface GraphEpisode {
@@ -254,13 +255,20 @@ export class GraphService {
       // Check for session errors specifically
       if (!res.ok) {
         if (
-          (res.status === 400 || res.status === 500) &&
-          (text.includes("No valid session ID") || text.includes("session ID provided"))
+          retryCount === 0 &&
+          (res.status === 400 || res.status === 404 || res.status === 500) &&
+          (text.includes("No valid session ID") ||
+            text.includes("session ID provided") ||
+            text.includes("Session not found"))
         ) {
-          if (retryCount === 0) {
-            this.log(`⚠️ [GRAPH] Stale Session ID detected. Retrying with fresh session...`);
-            return this.callMcpTool(name, args, timeoutMs, retryCount + 1);
+          this.log(`⚠️ [GRAPH] Stale Session ID detected. Retrying with fresh session...`);
+          this.mcpSessionId = null;
+          try {
+            fs.unlinkSync(MCP_SESSION_CACHE_FILE);
+          } catch {
+            /* ignore */
           }
+          return this.callMcpTool(name, args, timeoutMs, retryCount + 1);
         }
         throw new Error(`MCP Error (${res.status}): ${text}`);
       }
@@ -459,6 +467,33 @@ export class GraphService {
    * Search specifically for facts (edges) in the graph.
    * This is useful for finding specific relational data.
    */
+  /** Fetch a single episode by UUID and return its valid_at (reference_time) if available. */
+  async getEpisodeValidAt(episodeUuid: string): Promise<string | undefined> {
+    try {
+      const data = await this.callMcpTool("get_episode_by_uuid", { uuid: episodeUuid }, 3000);
+      if (!data) {
+        return undefined;
+      }
+      const content = data.result?.content || data.content || [];
+      const item = (content as Array<Record<string, unknown>>)[0];
+      if (!item) {
+        return undefined;
+      }
+      const text = item.text as string | undefined;
+      if (text) {
+        try {
+          const parsed = JSON.parse(text) as { valid_at?: string };
+          return parsed.valid_at ?? undefined;
+        } catch {
+          return undefined;
+        }
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   async searchFacts(sessionId: string | string[], query: string): Promise<MemoryResult[]> {
     const groupIds = Array.isArray(sessionId) ? sessionId : [sessionId];
     const safeQuery = this.sanitizeQuery(query);
@@ -483,12 +518,8 @@ export class GraphService {
         return !str.includes("No relevant facts found") && !str.includes("no_relevant_facts");
       });
 
-      const allMatches: Array<{
-        content: string;
-        timestamp: string;
-        _sourceQuery: string;
-        _boosted: boolean;
-      }> = [];
+      // Collect raw fact entries first, then resolve episode valid_at in parallel
+      const rawFacts: Array<{ content: string; fallbackTs: string; episodeUuid?: string }> = [];
       for (const c of filteredResults) {
         try {
           const cText = c.text as string | undefined;
@@ -496,38 +527,45 @@ export class GraphService {
             const parsed = JSON.parse(cText) as { facts?: GraphFact[] };
             if (parsed.facts && Array.isArray(parsed.facts)) {
               for (const f of parsed.facts) {
-                allMatches.push({
+                rawFacts.push({
                   content:
                     `${f.source_name || ""} ${f.fact || ""} ${f.target_name || ""}`.trim() ||
                     "Unknown fact",
-                  timestamp: String(f.created_at || c.created_at),
-                  _sourceQuery: `Graph Facts (${query})`,
-                  _boosted: true,
+                  fallbackTs: String(f.created_at || c.created_at),
+                  episodeUuid: f.episodes?.[0],
                 });
               }
               continue;
             }
           }
-          allMatches.push({
+          rawFacts.push({
             content:
               (c.content as string) ||
               (c.fact as string) ||
               (typeof c === "string" ? c : JSON.stringify(c)),
-            timestamp: String(c.created_at),
-            _sourceQuery: `Graph Facts (${query})`,
-            _boosted: true,
+            fallbackTs: String(c.created_at),
           });
         } catch {
-          allMatches.push({
+          rawFacts.push({
             content: typeof c === "string" ? c : JSON.stringify(c),
-            timestamp: String(c.created_at),
-            _sourceQuery: `Graph Facts (${query})`,
-            _boosted: true,
+            fallbackTs: String(c.created_at),
           });
         }
       }
 
-      return allMatches;
+      // Resolve valid_at for facts that have an episode UUID (in parallel)
+      const resolvedTimestamps = await Promise.all(
+        rawFacts.map((f) =>
+          f.episodeUuid ? this.getEpisodeValidAt(f.episodeUuid) : Promise.resolve(undefined),
+        ),
+      );
+
+      return rawFacts.map((f, i) => ({
+        content: f.content,
+        timestamp: resolvedTimestamps[i] ?? f.fallbackTs,
+        _sourceQuery: `Graph Facts (${query})`,
+        _boosted: true,
+      }));
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") {
         process.stderr.write(`⚠️ [GRAPH] Fact Search timed out (5s)\n`);

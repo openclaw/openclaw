@@ -22,10 +22,22 @@ export async function installDocker(): Promise<boolean> {
   return false;
 }
 
+export interface GraphitiLlmConfig {
+  /** OpenAI-compatible base URL (e.g. "http://192.168.1.250:8081/v1"). Omit to use OpenAI. */
+  baseUrl?: string;
+  /** API key for the LLM provider. */
+  apiKey?: string;
+  /** Model name to use inside the container (e.g. "Qwen-3.5-4B"). */
+  modelName?: string;
+}
+
 /**
  * Background Service: Ensures the Docker daemon is running and the Graphiti container is up.
  */
-export async function ensureGraphitiDocker(pluginDir: string): Promise<boolean> {
+export async function ensureGraphitiDocker(
+  pluginDir: string,
+  llmConfig?: GraphitiLlmConfig,
+): Promise<boolean> {
   try {
     // 1. Ensure Daemon is running
     const ok = await ensureDockerDaemon({
@@ -72,7 +84,17 @@ export async function ensureGraphitiDocker(pluginDir: string): Promise<boolean> 
     process.stderr.write(
       `🐳 [DOCKER] Starting Graphiti via: docker compose -f ${composePath} up -d\n`,
     );
-    await execAsync(`docker compose -f ${composePath} up -d`);
+    const childEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
+    if (llmConfig?.baseUrl) {
+      childEnv.OPENAI_BASE_URL = llmConfig.baseUrl;
+    }
+    if (llmConfig?.apiKey) {
+      childEnv.OPENAI_API_KEY = llmConfig.apiKey;
+    }
+    if (llmConfig?.modelName) {
+      childEnv.LLM_MODEL = llmConfig.modelName;
+    }
+    await execAsync(`docker compose -f ${composePath} up -d`, { env: childEnv });
     process.stderr.write("✅ [DOCKER] Graphiti started successfully.\n");
     return true;
   } catch (e: unknown) {

@@ -105,7 +105,24 @@ export default function register(api: PluginApi) {
       if (config.graphiti?.autoStart) {
         // Resolve plugin dir (root of src/plugins/mind-memory or dist/plugins/mind-memory)
         const pluginDir = path.dirname(fileURLToPath(import.meta.url));
-        await ensureGraphitiDocker(pluginDir);
+        // Resolve LLM config for Docker from smallModel provider
+        const smallModelRaw = api.config.agents?.defaults?.smallModel;
+        const [smProvider] = smallModelRaw?.includes("/")
+          ? smallModelRaw.split("/", 2)
+          : [undefined];
+        const providerCfg = smProvider
+          ? ((api.config as Record<string, unknown>)?.models?.providers?.[smProvider] as
+              | { baseUrl?: string; apiKey?: string }
+              | undefined)
+          : undefined;
+        const smModelName = smallModelRaw?.includes("/")
+          ? smallModelRaw.split("/").slice(1).join("/")
+          : undefined;
+        await ensureGraphitiDocker(pluginDir, {
+          baseUrl: providerCfg?.baseUrl,
+          apiKey: providerCfg?.apiKey,
+          modelName: smModelName,
+        });
       }
     },
     stop: async () => {
