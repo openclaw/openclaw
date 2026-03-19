@@ -89,17 +89,21 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
-const makeContext = (): GatewayRequestContext =>
+const makeContext = (overrides?: Partial<GatewayRequestContext>): GatewayRequestContext =>
   ({
     dedupe: new Map(),
+    ...overrides,
   }) as unknown as GatewayRequestContext;
 
-async function runSend(params: Record<string, unknown>) {
+async function runSend(
+  params: Record<string, unknown>,
+  contextOverrides?: Partial<GatewayRequestContext>,
+) {
   const respond = vi.fn();
   await sendHandlers.send({
     params: params as never,
     respond,
-    context: makeContext(),
+    context: makeContext(contextOverrides),
     req: { type: "req", id: "1", method: "send" },
     client: null,
     isWebchatConnect: () => false,
@@ -237,6 +241,31 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({ messageId: "m-single-send" }),
       undefined,
       expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
+  it("does not override WhatsApp outbound with gateway deps", async () => {
+    mockDeliverySuccess("m-wa");
+
+    await runSend(
+      {
+        to: "+601116417699",
+        message: "hi",
+        channel: "whatsapp",
+        idempotencyKey: "idem-wa-no-override",
+      },
+      {
+        deps: {
+          sendMessageWhatsApp: vi.fn(),
+        } as unknown as GatewayRequestContext["deps"],
+      },
+    );
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        deps: undefined,
+      }),
     );
   });
 

@@ -203,7 +203,10 @@ export const sendHandlers: GatewayRequestHandlers = {
           accountId,
         });
         const deliveryTarget = idLikeTarget?.to ?? resolved.to;
-        const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
+        const outboundDeps =
+          context.deps && outboundChannel !== "whatsapp"
+            ? createOutboundSendDeps(context.deps)
+            : undefined;
         const mirrorPayloads = normalizeReplyPayloadsForDelivery([
           { text: message, mediaUrl, mediaUrls },
         ]);
