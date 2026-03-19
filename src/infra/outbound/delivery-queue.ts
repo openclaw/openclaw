@@ -442,13 +442,13 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
  * Matches HTTP status codes embedded in error strings, e.g.
  * "status 400", "HTTP 403", "Status code: 413", "status code 400".
  */
-const HTTP_STATUS_PATTERN = /(?:status(?:\s+code)?:?\s*|HTTP\/?\s*)(\d{3})/i;
+const HTTP_STATUS_PATTERN = /(?:status(?:\s+code)?:?\s*|HTTP\/?\s*)(\d{3})(?!\d)/i;
 
 export function isPermanentDeliveryError(error: string): boolean {
   if (PERMANENT_ERROR_PATTERNS.some((re) => re.test(error))) {
     return true;
   }
-  // Detect HTTP 4xx client errors (permanent), except 429 (rate limit).
+  // Detect HTTP 4xx client errors (permanent), except 408 (timeout) and 429 (rate limit).
   const statusMatch = HTTP_STATUS_PATTERN.exec(error);
   if (statusMatch) {
     const status = parseInt(statusMatch[1], 10);
