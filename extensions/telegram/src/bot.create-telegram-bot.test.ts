@@ -159,6 +159,59 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
+  it("reloads callback model routing bindings without recreating the bot", async () => {
+    const buildModelsProviderDataMock =
+      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+    let boundAgentId = "agent-a";
+    loadConfig.mockImplementation(() => ({
+      agents: {
+        defaults: {
+          model: "openai/gpt-4.1",
+        },
+        list: [{ id: "agent-a" }, { id: "agent-b" }],
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+      bindings: [
+        {
+          agentId: boundAgentId,
+          match: { channel: "telegram", accountId: "default" },
+        },
+      ],
+    }));
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    const sendModelCallback = async (id: number) => {
+      await callbackHandler({
+        callbackQuery: {
+          id: `cbq-model-${id}`,
+          data: "mdl_prov",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800 + id,
+            message_id: id,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+    };
+
+    buildModelsProviderDataMock.mockClear();
+    await sendModelCallback(1);
+    expect(buildModelsProviderDataMock).toHaveBeenCalled();
+    expect(buildModelsProviderDataMock.mock.calls.at(-1)?.[1]).toBe("agent-a");
+
+    boundAgentId = "agent-b";
+    await sendModelCallback(2);
+    expect(buildModelsProviderDataMock.mock.calls.at(-1)?.[1]).toBe("agent-b");
+  });
   it("wraps inbound message with Telegram envelope", async () => {
     await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
       createTelegramBot({ token: "tok" });
@@ -890,6 +943,57 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(2);
     expect(replySpy.mock.calls[1]?.[0].AccountId).toBe("opie");
     expect(replySpy.mock.calls[1]?.[0].SessionKey).toContain("agent:agent-b:");
+  });
+
+  it("reloads topic agent overrides between messages without recreating the bot", async () => {
+    let topicAgentId = "topic-a";
+    loadConfig.mockImplementation(() => ({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-1001234567890": {
+              requireMention: false,
+              topics: {
+                "99": {
+                  agentId: topicAgentId,
+                },
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "topic-a" }, { id: "topic-b" }],
+      },
+    }));
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    const sendTopicMessage = async (messageId: number) => {
+      await handler({
+        message: {
+          chat: { id: -1001234567890, type: "supergroup", title: "Forum Group", is_forum: true },
+          from: { id: 12345, username: "testuser" },
+          text: "hello",
+          date: 1736380800 + messageId,
+          message_id: messageId,
+          message_thread_id: 99,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+    };
+
+    await sendTopicMessage(301);
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls[0]?.[0].SessionKey).toContain("agent:topic-a:");
+
+    topicAgentId = "topic-b";
+    await sendTopicMessage(302);
+    expect(replySpy).toHaveBeenCalledTimes(2);
+    expect(replySpy.mock.calls[1]?.[0].SessionKey).toContain("agent:topic-b:");
   });
 
   it("routes non-default account DMs to the per-account fallback session without explicit bindings", async () => {
@@ -1917,6 +2021,60 @@ describe("createTelegramBot", () => {
       expect.any(String),
       expect.objectContaining({ message_thread_id: 99 }),
     );
+  });
+  it("reloads native command routing bindings between invocations without recreating the bot", async () => {
+    commandSpy.mockClear();
+    replySpy.mockClear();
+
+    let boundAgentId = "agent-a";
+    loadConfig.mockImplementation(() => ({
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+      agents: {
+        list: [{ id: "agent-a" }, { id: "agent-b" }],
+      },
+      bindings: [
+        {
+          agentId: boundAgentId,
+          match: { channel: "telegram", accountId: "default" },
+        },
+      ],
+    }));
+
+    createTelegramBot({ token: "tok" });
+    const statusHandler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
+      | ((ctx: Record<string, unknown>) => Promise<void>)
+      | undefined;
+    if (!statusHandler) {
+      throw new Error("status command handler missing");
+    }
+
+    const invokeStatus = async (messageId: number) => {
+      await statusHandler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          from: { id: 9, username: "ada_bot" },
+          text: "/status",
+          date: 1736380800 + messageId,
+          message_id: messageId,
+        },
+        match: "",
+      });
+    };
+
+    await invokeStatus(401);
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls[0]?.[0].SessionKey).toContain("agent:agent-a:");
+
+    boundAgentId = "agent-b";
+    await invokeStatus(402);
+    expect(replySpy).toHaveBeenCalledTimes(2);
+    expect(replySpy.mock.calls[1]?.[0].SessionKey).toContain("agent:agent-b:");
   });
   it("skips tool summaries for native slash commands", async () => {
     commandSpy.mockClear();

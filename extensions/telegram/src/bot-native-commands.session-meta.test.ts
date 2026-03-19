@@ -524,7 +524,13 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
 
     const { handler } = registerAndResolveStatusHandler({
-      cfg: {},
+      cfg: {
+        channels: {
+          telegram: {
+            silentErrorReplies: true,
+          },
+        },
+      },
       telegramCfg: { silentErrorReplies: true },
     });
     await handler(createTelegramPrivateCommandContext());

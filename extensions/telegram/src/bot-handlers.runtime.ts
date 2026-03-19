@@ -277,6 +277,7 @@ export const registerTelegramHandlers = ({
     sessionKey: string;
     model?: string;
   } => {
+    const runtimeCfg = telegramDeps.loadConfig();
     const resolvedThreadId =
       params.resolvedThreadId ??
       resolveTelegramForumThreadId({
@@ -287,7 +288,7 @@ export const registerTelegramHandlers = ({
     const topicThreadId = resolvedThreadId ?? dmThreadId;
     const { topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
     const { route } = resolveTelegramConversationRoute({
-      cfg,
+      cfg: runtimeCfg,
       accountId,
       chatId: params.chatId,
       isGroup: params.isGroup,
@@ -297,7 +298,7 @@ export const registerTelegramHandlers = ({
       topicAgentId: topicConfig?.agentId,
     });
     const baseSessionKey = resolveTelegramConversationBaseSessionKey({
-      cfg,
+      cfg: runtimeCfg,
       route,
       chatId: params.chatId,
       isGroup: params.isGroup,
@@ -308,7 +309,7 @@ export const registerTelegramHandlers = ({
         ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
         : null;
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
-    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, {
+    const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
     const store = loadSessionStore(storePath);
@@ -338,7 +339,7 @@ export const registerTelegramHandlers = ({
         model: `${provider}/${model}`,
       };
     }
-    const modelCfg = cfg.agents?.defaults?.model;
+    const modelCfg = runtimeCfg.agents?.defaults?.model;
     return {
       agentId: route.agentId,
       sessionEntry: entry,
@@ -1263,10 +1264,11 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      const runtimeCfg = telegramDeps.loadConfig();
       if (isApprovalCallback) {
         if (
-          !isTelegramExecApprovalClientEnabled({ cfg, accountId }) ||
-          !isTelegramExecApprovalApprover({ cfg, accountId, senderId })
+          !isTelegramExecApprovalClientEnabled({ cfg: runtimeCfg, accountId }) ||
+          !isTelegramExecApprovalApprover({ cfg: runtimeCfg, accountId, senderId })
         ) {
           logVerbose(
             `Blocked telegram exec approval callback from ${senderId || "unknown"} (not an approver)`,
@@ -1298,12 +1300,12 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        const agentId = paginationMatch[2]?.trim() || resolveDefaultAgentId(cfg);
+        const agentId = paginationMatch[2]?.trim() || resolveDefaultAgentId(runtimeCfg);
         const skillCommands = telegramDeps.listSkillCommandsForAgents({
-          cfg,
+          cfg: runtimeCfg,
           agentIds: [agentId],
         });
-        const result = buildCommandsMessagePaginated(cfg, skillCommands, {
+        const result = buildCommandsMessagePaginated(runtimeCfg, skillCommands, {
           page,
           surface: "telegram",
         });
@@ -1337,7 +1339,10 @@ export const registerTelegramHandlers = ({
           resolvedThreadId,
           senderId,
         });
-        const modelData = await telegramDeps.buildModelsProviderData(cfg, sessionState.agentId);
+        const modelData = await telegramDeps.buildModelsProviderData(
+          runtimeCfg,
+          sessionState.agentId,
+        );
         const { byProvider, providers } = modelData;
 
         const editMessageWithButtons = async (
