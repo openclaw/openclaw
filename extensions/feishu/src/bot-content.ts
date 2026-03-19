@@ -232,12 +232,12 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
   if (!botOpenId) {
     return false;
   }
-  if ((event.message.content ?? "").includes("@_all")) {
-    return true;
-  }
+  // @_all ("@所有人") mentions every group member, not a specific bot.
+  // Treating it as a bot mention causes all bots in the group to respond
+  // simultaneously (#49761). Only explicit per-bot mentions should trigger.
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
-    return mentions.some((mention) => mention.id.open_id === botOpenId);
+    return mentions.some((mention) => mention.id.open_id === botOpenId && mention.key !== "@_all");
   }
   if (event.message.message_type === "post") {
     return parsePostContent(event.message.content).mentionedOpenIds.some((id) => id === botOpenId);
