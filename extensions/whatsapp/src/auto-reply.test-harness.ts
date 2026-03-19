@@ -24,6 +24,7 @@ type MockWebListener = {
   sendMessage: () => Promise<{ messageId: string }>;
   sendPoll: () => Promise<{ messageId: string }>;
   sendReaction: () => Promise<void>;
+  sendLocation: () => Promise<{ messageId: string }>;
   sendComposingTo: () => Promise<void>;
 };
 
@@ -183,6 +184,7 @@ export function createMockWebListener(): MockWebListener {
     sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
     sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
     sendReaction: vi.fn(async () => undefined),
+    sendLocation: vi.fn(async () => ({ messageId: "loc-1" })),
     sendComposingTo: vi.fn(async () => undefined),
   };
 }
