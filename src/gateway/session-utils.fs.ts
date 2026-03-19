@@ -82,56 +82,78 @@ export function readSessionMessages(
     return [];
   }
 
+
   // NOTE: This is on the Gateway hot path (chat.history). Reading + splitting an entire transcript
   // file can freeze the UI when a session grows large (or when a single JSONL record is huge).
   // We therefore tail-read large files and apply a per-line size guard.
   //
-  // MAX_TAIL_BYTES must exceed the chat.history response budget (6 MB) with enough headroom
-  // that the file-read layer never drops records that would fit in the response. Set to 3×
-  // the 6 MB response budget so truncation always happens at the response-cap layer in
-  // chat.ts (which the caller can observe), never silently here.
-  const MAX_TAIL_BYTES = 18 * 1024 * 1024; // 3× the 6 MB chat.history response budget
+  // Important: the downstream chat.history handler applies a 6 MB response budget *after*
+  // sanitization/stripping, so the raw transcript can be substantially larger on disk while still
+  // fitting in the response. To avoid silently dropping history that would fit post-sanitization,
+  // we grow the tail window until we either (a) start at byte 0, (b) have enough line coverage, or
+  // (c) hit a hard cap.
+  const INITIAL_TAIL_BYTES = 18 * 1024 * 1024; // 3× the 6 MB chat.history response budget
+  const MAX_TAIL_BYTES_CAP = 128 * 1024 * 1024; // hard cap to avoid huge reads on the RPC hot path
+  const MIN_TAIL_LINES_TARGET = 1500; // heuristic: enough for ~1000 recent messages + headroom
+
   // 200KB per line: a normal assistant reply is well under 50KB. Anything larger is a runaway
-  // prompt/response that would only stall JSON.parse and bloat the UI — skip it entirely.
-  // (The confirmed 447KB line causing Gateway freezes is caught by this threshold.)
+  // prompt/response that would only stall JSON.parse and bloat the UI.
   const MAX_LINE_CHARS = 200 * 1024;
 
   let content = "";
   try {
     const stat = fs.statSync(filePath);
-    if (stat.size > MAX_TAIL_BYTES) {
+
+    if (stat.size <= INITIAL_TAIL_BYTES) {
+      content = fs.readFileSync(filePath, "utf-8");
+    } else {
       const fd = fs.openSync(filePath, "r");
       try {
-        const start = Math.max(0, stat.size - MAX_TAIL_BYTES);
-        const buf = Buffer.allocUnsafe(stat.size - start);
-        // Capture bytesRead: if the file shrank between statSync and readSync (TOCTOU),
-        // readSync returns fewer bytes than buf.length — slice to avoid feeding
-        // uninitialized memory into the UTF-8 / JSON pipeline.
-        const bytesRead = fs.readSync(fd, buf, 0, buf.length, start);
-        content = buf.toString("utf-8", 0, bytesRead);
+        let tailBytes = Math.min(stat.size, INITIAL_TAIL_BYTES);
+        while (true) {
+          const start = Math.max(0, stat.size - tailBytes);
+          const buf = Buffer.allocUnsafe(stat.size - start);
 
-        // If we started mid-line, drop the partial first line.
-        // Note: messages before the MAX_TAIL_BYTES boundary are intentionally omitted to keep
-        // this RPC fast; the UI will show the most recent history only.
-        if (start > 0) {
-          // Only drop the first line if we actually started in the middle of a record.
-          // If the byte before `start` is a newline, `content` begins at a record boundary
-          // and we must not discard the first complete record.
-          const prev = Buffer.allocUnsafe(1);
-          const prevRead = fs.readSync(fd, prev, 0, 1, start - 1);
-          const prevChar = prevRead == 1 ? prev.toString("utf-8", 0, 1) : "";
-          if (prevChar !== "\n") {
-            const firstNewline = content.indexOf("\n");
-            if (firstNewline >= 0) {
-              content = content.slice(firstNewline + 1);
+          // Capture bytesRead: if the file shrank between statSync and readSync (TOCTOU),
+          // readSync returns fewer bytes than buf.length — slice to avoid feeding uninitialized
+          // memory into the UTF-8 / JSON pipeline.
+          const bytesRead = fs.readSync(fd, buf, 0, buf.length, start);
+          content = buf.toString("utf-8", 0, bytesRead);
+
+
+          // If we started mid-line, drop the partial first line.
+          // Note: messages before the tail boundary are intentionally omitted to keep this RPC fast;
+          // the UI will show the most recent history only.
+          if (start > 0) {
+            // Only drop the first line if we actually started in the middle of a record.
+            // If the byte before `start` is a newline, `content` begins at a record boundary.
+            const prev = Buffer.allocUnsafe(1);
+            const prevRead = fs.readSync(fd, prev, 0, 1, start - 1);
+            const prevChar = prevRead === 1 ? prev.toString("utf-8", 0, 1) : "";
+            if (prevChar !== "\n") {
+              const firstNewline = content.indexOf("\n");
+              if (firstNewline >= 0) {
+                content = content.slice(firstNewline + 1);
+              }
             }
           }
+
+          const newlineCount = (content.match(/\n/g) || []).length;
+          const lineCount = newlineCount + 1;
+
+          if (
+            start === 0 ||
+            lineCount >= MIN_TAIL_LINES_TARGET ||
+            tailBytes >= MAX_TAIL_BYTES_CAP
+          ) {
+            break;
+          }
+
+          tailBytes = Math.min(MAX_TAIL_BYTES_CAP, tailBytes * 2);
         }
       } finally {
         fs.closeSync(fd);
       }
-    } else {
-      content = fs.readFileSync(filePath, "utf-8");
     }
   } catch {
     return [];
@@ -150,13 +172,40 @@ export function readSessionMessages(
       console.warn(
         `[session-utils] oversized transcript line in session ${sessionId}: ${trimmed.length} chars (max ${MAX_LINE_CHARS}); emitting placeholder`,
       );
+      // Best-effort: preserve original role/timestamp without JSON.parse (which would stall).
+      const roleMatch = trimmed.match(/"role"\s*:\s*"([^"]+)"/);
+      const roleCandidate = roleMatch?.[1];
+      const role =
+        roleCandidate === "user" ||
+        roleCandidate === "assistant" ||
+        roleCandidate === "tool" ||
+        roleCandidate === "system"
+          ? roleCandidate
+          : "assistant";
+
+      let timestamp = Date.now();
+      const tsNum = trimmed.match(/"timestamp"\s*:\s*(\d{10,13})/);
+      if (tsNum?.[1]) {
+        const n = Number(tsNum[1]);
+        if (Number.isFinite(n)) {
+          timestamp = n;
+        }
+      } else {
+        const tsIso = trimmed.match(/"timestamp"\s*:\s*"([^"]+)"/);
+        const d = tsIso?.[1] ? Date.parse(tsIso[1]) : Number.NaN;
+        if (Number.isFinite(d)) {
+          timestamp = d;
+        }
+      }
+
       messages.push({
-        role: "system",
+        role,
         content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
-        timestamp: Date.now(),
+        timestamp,
         __openclaw: {
           kind: "oversized_transcript_line",
           sizeChars: trimmed.length,
+          guessed: true,
         },
       });
       continue;
