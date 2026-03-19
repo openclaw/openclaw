@@ -35,7 +35,10 @@ vi.mock("./delivery-info.js", () => ({
 vi.mock("./paths.js", () => ({
   resolveDefaultSessionStorePath: () => "/tmp/session-store.json",
   resolveSessionFilePath: () => state.sessionFile,
-  resolveSessionFilePathOptions: () => ({ agentId: "sunke", sessionsDir: path.dirname(state.sessionFile) }),
+  resolveSessionFilePathOptions: () => ({
+    agentId: "sunke",
+    sessionsDir: path.dirname(state.sessionFile),
+  }),
   resolveSessionTranscriptPath: () => state.sessionFile,
 }));
 

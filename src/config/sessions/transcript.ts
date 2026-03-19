@@ -75,11 +75,6 @@ async function ensureSessionHeader(params: {
     return;
   }
   await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
-  const cfg = loadConfig();
-  const agentId =
-    typeof params.agentId === "string" && params.agentId.trim()
-      ? params.agentId.trim()
-      : resolveDefaultAgentId(cfg);
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
