@@ -1,0 +1,42 @@
+{
+  "env": {
+    "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+    "OPENAI_API_KEY": "${OPENAI_API_KEY}"
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-6"
+      },
+      "workspace": "/data/.openclaw/sophia",
+      "memorySearch": {
+        "provider": "openai",
+        "model": "text-embedding-3-small"
+      },
+      "heartbeat": {
+        "every": "2h",
+        "target": "whatsapp"
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "identity": {
+          "name": "Sophia",
+          "theme": "AI companion"
+        }
+      }
+    ]
+  },
+  "cron": {
+    "enabled": true
+  },
+  "channels": {
+    "whatsapp": {
+      "enabled": true,
+      "dmPolicy": "pairing",
+      "allowFrom": ["+YOUR_PHONE_NUMBER"],
+      "groupPolicy": "allowlist"
+    }
+  }
+}
