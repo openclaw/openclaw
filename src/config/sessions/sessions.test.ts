@@ -20,7 +20,7 @@ import {
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
-import { resolveSessionResetPolicy } from "./reset.js";
+import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
@@ -143,7 +143,36 @@ describe("resolveSessionResetPolicy", () => {
         resetType: "group",
       });
 
-      expect(groupPolicy.mode).toBe("daily");
+      expect(groupPolicy.mode).toBe("idle");
+    });
+  });
+
+  it("defaults idle resets to zero idle minutes so sessions do not auto reset", () => {
+    const policy = resolveSessionResetPolicy({
+      resetType: "direct",
+    });
+
+    expect(policy).toMatchObject({
+      mode: "idle",
+      idleMinutes: 0,
+    });
+  });
+
+  it("treats idleMinutes=0 as never expiring by inactivity", () => {
+    const freshness = evaluateSessionFreshness({
+      updatedAt: 1_000,
+      now: 60 * 60 * 1_000,
+      policy: {
+        mode: "idle",
+        atHour: 4,
+        idleMinutes: 0,
+      },
+    });
+
+    expect(freshness).toEqual({
+      fresh: true,
+      dailyResetAt: undefined,
+      idleExpiresAt: undefined,
     });
   });
 });

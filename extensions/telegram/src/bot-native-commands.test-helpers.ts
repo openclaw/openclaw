@@ -58,7 +58,7 @@ const replyPipelineMocks = vi.hoisted(() => {
     dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
       async () => dispatchReplyResult,
     ),
-    createReplyPrefixOptions: vi.fn(() => ({ onModelSelected: () => {} })),
+    createChannelReplyPipeline: vi.fn(() => ({ onModelSelected: () => {} })),
     recordInboundSessionMetaSafe: vi.fn<RecordInboundSessionMetaSafeFn>(async () => undefined),
   };
 });
@@ -78,8 +78,15 @@ vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
   return {
     ...actual,
-    createReplyPrefixOptions: replyPipelineMocks.createReplyPrefixOptions,
     recordInboundSessionMetaSafe: replyPipelineMocks.recordInboundSessionMetaSafe,
+  };
+});
+vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>();
+  return {
+    ...actual,
+    createChannelReplyPipeline: replyPipelineMocks.createChannelReplyPipeline,
   };
 });
 
@@ -116,9 +123,15 @@ export function createNativeCommandsHarness(params?: {
     loadConfig: vi.fn(() => params?.cfg ?? ({} as OpenClawConfig)),
     resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/sessions.json"),
     readChannelAllowFromStore: vi.fn(async () => []),
+    upsertChannelPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
     enqueueSystemEvent: vi.fn(),
     dispatchReplyWithBufferedBlockDispatcher:
       replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
+    buildModelsProviderData: vi.fn(async () => ({
+      byProvider: new Map<string, Set<string>>(),
+      providers: [],
+      resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+    })),
     listSkillCommandsForAgents: vi.fn(() => []),
     wasSentByBot: vi.fn(() => false),
   };

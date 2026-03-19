@@ -40,9 +40,6 @@ importers:
       '@homebridge/ciao':
         specifier: ^1.3.5
         version: 1.3.5
-      '@lancedb/lancedb':
-        specifier: ^0.27.0
-        version: 0.27.0(apache-arrow@18.1.0)
       '@line/bot-sdk':
         specifier: ^10.6.0
         version: 10.6.0
@@ -73,9 +70,6 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
-      '@whiskeysockets/baileys':
-        specifier: 7.0.0-rc.9
-        version: 7.0.0-rc.9(audio-decode@2.2.3)(jimp@1.6.0)(sharp@0.34.5)
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
@@ -590,7 +584,11 @@ importers:
 
   extensions/volcengine: {}
 
-  extensions/whatsapp: {}
+  extensions/whatsapp:
+    dependencies:
+      '@whiskeysockets/baileys':
+        specifier: 7.0.0-rc.9
+        version: 7.0.0-rc.9(audio-decode@2.2.3)(jimp@1.6.0)(sharp@0.34.5)
 
   extensions/xai: {}
 
