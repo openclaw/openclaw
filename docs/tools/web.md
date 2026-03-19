@@ -26,7 +26,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 - `web_fetch` is enabled by default (unless explicitly disabled).
 - The bundled Firecrawl plugin also adds `firecrawl_search` and `firecrawl_scrape` when enabled.
 
-See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexity) for provider-specific details.
+See [Brave Search setup](/tools/brave-search) and [Perplexity Search setup](/tools/perplexity-search) for provider-specific details.
 
 ## Choosing a search provider
 

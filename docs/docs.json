@@ -52,6 +52,18 @@
       "destination": "/start/getting-started"
     },
     {
+      "source": "/brave-search",
+      "destination": "/tools/brave-search"
+    },
+    {
+      "source": "/perplexity",
+      "destination": "/tools/perplexity-search"
+    },
+    {
+      "source": "/tts",
+      "destination": "/tools/tts"
+    },
+    {
       "source": "/messages",
       "destination": "/concepts/messages"
     },
@@ -864,7 +876,7 @@
             "groups": [
               {
                 "group": "Install overview",
-                "pages": ["install/index", "install/installer"]
+                "pages": ["install/index", "install/installer", "install/node"]
               },
               {
                 "group": "Other install methods",
@@ -956,7 +968,6 @@
               {
                 "group": "Fundamentals",
                 "pages": [
-                  "pi",
                   "concepts/architecture",
                   "concepts/agent",
                   "concepts/agent-loop",
@@ -964,12 +975,9 @@
                   "concepts/context",
                   "concepts/context-engine",
                   "concepts/agent-workspace",
-                  "concepts/oauth"
+                  "concepts/oauth",
+                  "start/bootstrapping"
                 ]
-              },
-              {
-                "group": "Bootstrapping",
-                "pages": ["start/bootstrapping"]
               },
               {
                 "group": "Sessions and memory",
@@ -1007,7 +1015,7 @@
                 "group": "Built-in tools",
                 "pages": [
                   "tools/apply-patch",
-                  "brave-search",
+                  "tools/brave-search",
                   "tools/btw",
                   "tools/diffs",
                   "tools/elevated",
@@ -1018,7 +1026,7 @@
                   "tools/lobster",
                   "tools/loop-detection",
                   "tools/pdf",
-                  "perplexity",
+                  "tools/perplexity-search",
                   "tools/reactions",
                   "tools/thinking",
                   "tools/web"
@@ -1050,7 +1058,8 @@
                   "tools/skills",
                   "tools/skills-config",
                   "tools/clawhub",
-                  "tools/plugin"
+                  "tools/plugin",
+                  "prose"
                 ]
               },
               {
@@ -1064,8 +1073,7 @@
                   "plugins/zalouser",
                   "plugins/manifest",
                   "plugins/agent-tools",
-                  "tools/capability-cookbook",
-                  "prose"
+                  "tools/capability-cookbook"
                 ]
               },
               {
@@ -1093,7 +1101,7 @@
                   "nodes/talk",
                   "nodes/voicewake",
                   "nodes/location-command",
-                  "tts"
+                  "tools/tts"
                 ]
               }
             ]
@@ -1106,12 +1114,8 @@
                 "pages": ["providers/index", "providers/models"]
               },
               {
-                "group": "Model concepts",
-                "pages": ["concepts/models"]
-              },
-              {
-                "group": "Configuration",
-                "pages": ["concepts/model-providers", "concepts/model-failover"]
+                "group": "Concepts and configuration",
+                "pages": ["concepts/models", "concepts/model-providers", "concepts/model-failover"]
               },
               {
                 "group": "Providers",
@@ -1351,6 +1355,7 @@
               {
                 "group": "Technical reference",
                 "pages": [
+                  "pi",
                   "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
@@ -1401,10 +1406,6 @@
                   "debug/node-issue",
                   "diagnostics/flags"
                 ]
-              },
-              {
-                "group": "Node runtime",
-                "pages": ["install/node"]
               },
               {
                 "group": "Compaction internals",
