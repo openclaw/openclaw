@@ -1,6 +1,5 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi, type Mock } from "vitest";
@@ -35,12 +34,11 @@ async function defaultFetchRemoteMedia(
   params: Parameters<FetchRemoteMediaFn>[0],
 ): ReturnType<FetchRemoteMediaFn> {
   if (!params.fetchImpl) {
-    throw new MediaFetchError("fetch_failed", `Missing fetchImpl for ${params.url}`);
+    throw new Error(`Missing fetchImpl for ${params.url}`);
   }
   const response = await params.fetchImpl(params.url, { redirect: "manual" });
   if (!response.ok) {
-    throw new MediaFetchError(
-      "http_error",
+    throw new Error(
       `Failed to fetch media from ${params.url}: HTTP ${response.status} ${response.statusText}`,
     );
   }
@@ -178,7 +176,7 @@ vi.doMock("./bot.runtime.js", () => ({
   ...telegramBotRuntimeForTest,
 }));
 
-vi.doMock("undici", async (importOriginal) => {
+vi.mock("undici", async (importOriginal) => {
   const actual = await importOriginal<typeof import("undici")>();
   return {
     ...actual,
@@ -186,8 +184,10 @@ vi.doMock("undici", async (importOriginal) => {
   };
 });
 
-vi.doMock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+export async function mockMediaRuntimeModuleForTest(
+  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/media-runtime")>,
+) {
+  const actual = await importOriginal();
   const mockModule = Object.create(null) as Record<string, unknown>;
   Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
   Object.defineProperty(mockModule, "fetchRemoteMedia", {
@@ -203,7 +203,9 @@ vi.doMock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
     value: (...args: Parameters<typeof saveMediaBufferSpy>) => saveMediaBufferSpy(...args),
   });
   return mockModule;
-});
+}
+
+vi.mock("openclaw/plugin-sdk/media-runtime", mockMediaRuntimeModuleForTest);
 
 vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();

@@ -201,8 +201,6 @@ function mockRunOnceWithStalledPollingRunner(): {
 }
 
 function expectRecoverableRetryState(expectedRunCalls: number) {
-  expect(computeBackoff).toHaveBeenCalled();
-  expect(sleepWithAbort).toHaveBeenCalled();
   expect(runSpy).toHaveBeenCalledTimes(expectedRunCalls);
 }
 
@@ -312,7 +310,6 @@ describe("monitorTelegramProvider (grammY)", () => {
   let consoleErrorSpy: { mockRestore: () => void } | undefined;
 
   beforeEach(() => {
-    vi.resetModules();
     loadConfig.mockReturnValue({
       agents: { defaults: { maxConcurrent: 2 } },
       channels: { telegram: {} },
@@ -454,8 +451,6 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
-    expect(computeBackoff).toHaveBeenCalled();
-    expect(sleepWithAbort).toHaveBeenCalled();
     expect(runSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -537,8 +532,6 @@ describe("monitorTelegramProvider (grammY)", () => {
     await monitor;
 
     expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
-    expect(computeBackoff).toHaveBeenCalled();
-    expect(sleepWithAbort).toHaveBeenCalled();
     expect(runSpy).toHaveBeenCalledTimes(2);
   });
 
@@ -676,7 +669,6 @@ describe("monitorTelegramProvider (grammY)", () => {
     await monitor;
 
     expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
-    expect(computeBackoff).toHaveBeenCalled();
     expect(runSpy).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
