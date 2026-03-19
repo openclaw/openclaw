@@ -27,7 +27,7 @@ export const DEEPINFRA_MODEL_CATALOG: DeepInfraModelCatalogEntry[] = [
     maxTokens: 131072,
   },
   {
-    id: "minimaxai/minimax-m2.5",
+    id: "MiniMaxAI/MiniMax-M2.5",
     name: "MiniMax M2.5",
     reasoning: false,
     input: ["text"],
@@ -35,7 +35,7 @@ export const DEEPINFRA_MODEL_CATALOG: DeepInfraModelCatalogEntry[] = [
     maxTokens: 196608,
   },
   {
-    id: "zai-org/glm-5",
+    id: "zai-org/GLM-5",
     name: "GLM 5",
     reasoning: false,
     input: ["text"],
@@ -43,7 +43,7 @@ export const DEEPINFRA_MODEL_CATALOG: DeepInfraModelCatalogEntry[] = [
     maxTokens: 202752,
   },
   {
-    id: "moonshotai/kimi-k2.5",
+    id: "moonshotai/Kimi-K2.5",
     name: "Kimi K2.5",
     reasoning: false,
     input: ["text", "image"],

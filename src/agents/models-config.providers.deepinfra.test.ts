@@ -8,9 +8,9 @@ import { buildDeepInfraStaticProvider } from "./models-config.providers.ts";
 
 const DEEPINFRA_MODEL_IDS = [
   "openai/gpt-oss-120b",
-  "minimaxai/minimax-m2.5",
-  "zai-org/glm-5",
-  "moonshotai/kimi-k2.5",
+  "MiniMaxAI/MiniMax-M2.5",
+  "zai-org/GLM-5",
+  "moonshotai/Kimi-K2.5",
 ];
 
 describe("DeepInfra implicit provider", () => {

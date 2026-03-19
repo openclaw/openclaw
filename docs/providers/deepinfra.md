@@ -49,9 +49,9 @@ OpenClaw dynamically discovers available DeepInfra models at startup. Use
 Any model available on [DeepInfra.com](https://deepinfra.com/) can be used with the `deepinfra/` prefix:
 
 ```
-deepinfra/minimaxai/minimax-m2.5
-deepinfra/zai-org/glm-5
-deepinfra/moonshotai/kimi-k2.5
+deepinfra/MiniMaxAI/MiniMax-M2.5
+deepinfra/zai-org/GLM-5
+deepinfra/moonshotai/Kimi-K2.5
 ...and many more
 ```
 
