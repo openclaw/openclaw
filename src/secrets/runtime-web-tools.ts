@@ -208,23 +208,16 @@ function ensureObject(target: Record<string, unknown>, key: string): Record<stri
 
 function setResolvedWebSearchApiKey(params: {
   resolvedConfig: OpenClawConfig;
-  provider: WebSearchProvider;
+  provider: PluginWebSearchProviderEntry;
   value: string;
-  sourceConfig: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
 }): void {
   const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
   const web = ensureObject(tools, "web");
   const search = ensureObject(web, "search");
-  const provider = resolvePluginWebSearchProviders({
-    config: params.sourceConfig,
-    env: { ...process.env, ...params.env },
-    bundledAllowlistCompat: true,
-  }).find((entry) => entry.id === params.provider);
-  if (provider?.setConfiguredCredentialValue) {
-    provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
+  if (params.provider.setConfiguredCredentialValue) {
+    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
   }
-  provider?.setCredentialValue(search, params.value);
+  params.provider.setCredentialValue(search, params.value);
 }
 
 function setResolvedFirecrawlApiKey(params: {
@@ -364,10 +357,8 @@ export async function resolveRuntimeWebTools(params: {
         if (resolution.value) {
           setResolvedWebSearchApiKey({
             resolvedConfig: params.resolvedConfig,
-            provider: provider.id,
+            provider,
             value: resolution.value,
-            sourceConfig: params.sourceConfig,
-            env: params.context.env,
           });
         }
         break;
@@ -378,10 +369,8 @@ export async function resolveRuntimeWebTools(params: {
         selectedResolution = resolution;
         setResolvedWebSearchApiKey({
           resolvedConfig: params.resolvedConfig,
-          provider: provider.id,
+          provider,
           value: resolution.value,
-          sourceConfig: params.sourceConfig,
-          env: params.context.env,
         });
         break;
       }

@@ -3327,8 +3327,8 @@ module.exports = {
 
   it("derives plugin-sdk subpaths from package exports", () => {
     const subpaths = __testing.listPluginSdkExportedSubpaths();
-    expect(subpaths).toContain("compat");
     expect(subpaths).toContain("telegram");
+    expect(subpaths).not.toContain("compat");
     expect(subpaths).not.toContain("root-alias");
   });
 
@@ -3351,7 +3351,7 @@ module.exports = {
 
   it("loads source runtime shims through the non-native Jiti boundary", async () => {
     const jiti = createJiti(import.meta.url, {
-      ...__testing.buildPluginLoaderJitiOptions({}),
+      ...__testing.buildPluginLoaderJitiOptions(__testing.resolvePluginSdkScopedAliasMap()),
       tryNative: false,
     });
     const discordChannelRuntime = path.join(

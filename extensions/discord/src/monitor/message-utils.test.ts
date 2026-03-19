@@ -9,9 +9,13 @@ vi.mock("../../../../src/media/fetch.js", () => ({
   fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
 }));
 
-vi.mock("../../../../src/media/store.js", () => ({
-  saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
-}));
+vi.mock("../../../../src/media/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/media/store.js")>();
+  return {
+    ...actual,
+    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
+  };
+});
 
 vi.mock("../../../../src/globals.js", () => ({
   logVerbose: () => {},

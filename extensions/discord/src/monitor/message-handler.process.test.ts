@@ -68,6 +68,7 @@ const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
 const resolveStorePath = configSessionsMocks.resolveStorePath;
 
 vi.mock("../send.js", () => ({
+  addRoleDiscord: vi.fn(),
   reactMessageDiscord: sendMocks.reactMessageDiscord,
   removeReactionDiscord: sendMocks.removeReactionDiscord,
 }));

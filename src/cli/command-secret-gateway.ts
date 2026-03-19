@@ -97,6 +97,78 @@ function targetsRuntimeWebPath(path: string): boolean {
   return WEB_RUNTIME_SECRET_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
+function classifyRuntimeWebTargetPathState(params: {
+  config: OpenClawConfig;
+  path: string;
+}): "active" | "inactive" | "unknown" {
+  if (params.path === "tools.web.fetch.firecrawl.apiKey") {
+    const fetch = params.config.tools?.web?.fetch;
+    return fetch?.enabled !== false && fetch?.firecrawl?.enabled !== false ? "active" : "inactive";
+  }
+
+  if (params.path === "tools.web.search.apiKey") {
+    return params.config.tools?.web?.search?.enabled !== false ? "active" : "inactive";
+  }
+
+  const match = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
+  if (!match) {
+    return "unknown";
+  }
+
+  const search = params.config.tools?.web?.search;
+  if (search?.enabled === false) {
+    return "inactive";
+  }
+
+  const configuredProvider =
+    typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+  if (!configuredProvider) {
+    return "active";
+  }
+
+  return configuredProvider === match[1] ? "active" : "inactive";
+}
+
+function describeInactiveRuntimeWebTargetPath(params: {
+  config: OpenClawConfig;
+  path: string;
+}): string | undefined {
+  if (params.path === "tools.web.fetch.firecrawl.apiKey") {
+    const fetch = params.config.tools?.web?.fetch;
+    if (fetch?.enabled === false) {
+      return "tools.web.fetch is disabled.";
+    }
+    if (fetch?.firecrawl?.enabled === false) {
+      return "tools.web.fetch.firecrawl.enabled is false.";
+    }
+    return undefined;
+  }
+
+  if (params.path === "tools.web.search.apiKey") {
+    return params.config.tools?.web?.search?.enabled === false
+      ? "tools.web.search is disabled."
+      : undefined;
+  }
+
+  const match = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
+  if (!match) {
+    return undefined;
+  }
+
+  const search = params.config.tools?.web?.search;
+  if (search?.enabled === false) {
+    return "tools.web.search is disabled.";
+  }
+
+  const configuredProvider =
+    typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+  if (configuredProvider && configuredProvider !== match[1]) {
+    return `tools.web.search.provider is "${configuredProvider}".`;
+  }
+
+  return undefined;
+}
+
 function targetsRuntimeWebResolution(params: {
   targetIds: ReadonlySet<string>;
   allowedPaths?: ReadonlySet<string>;
@@ -285,6 +357,34 @@ async function resolveCommandSecretRefsLocally(params: {
       .filter((warning) => !params.allowedPaths || params.allowedPaths.has(warning.path))
       .map((warning) => warning.path),
   );
+  const runtimeWebActivePaths = new Set<string>();
+  const runtimeWebInactiveDiagnostics: string[] = [];
+  for (const target of discoverConfigSecretTargetsByIds(sourceConfig, params.targetIds)) {
+    if (!targetsRuntimeWebPath(target.path)) {
+      continue;
+    }
+    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
+      continue;
+    }
+    const runtimeState = classifyRuntimeWebTargetPathState({
+      config: sourceConfig,
+      path: target.path,
+    });
+    if (runtimeState === "inactive") {
+      inactiveRefPaths.add(target.path);
+      const inactiveDetail = describeInactiveRuntimeWebTargetPath({
+        config: sourceConfig,
+        path: target.path,
+      });
+      if (inactiveDetail) {
+        runtimeWebInactiveDiagnostics.push(`${target.path}: ${inactiveDetail}`);
+      }
+      continue;
+    }
+    if (runtimeState === "active") {
+      runtimeWebActivePaths.add(target.path);
+    }
+  }
   const inactiveWarningDiagnostics = context.warnings
     .filter((warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")
     .filter((warning) => !params.allowedPaths || params.allowedPaths.has(warning.path))
@@ -301,6 +401,7 @@ async function resolveCommandSecretRefsLocally(params: {
       env: context.env,
       cache: context.cache,
       activePaths,
+      runtimeWebActivePaths,
       inactiveRefPaths,
       mode: params.mode,
       commandName: params.commandName,
@@ -330,6 +431,7 @@ async function resolveCommandSecretRefsLocally(params: {
     resolvedConfig,
     diagnostics: dedupeDiagnostics([
       ...params.preflightDiagnostics,
+      ...runtimeWebInactiveDiagnostics,
       ...inactiveWarningDiagnostics,
       ...filterInactiveSurfaceDiagnostics({
         diagnostics: analyzed.diagnostics,
@@ -405,6 +507,7 @@ async function resolveTargetSecretLocally(params: {
   env: NodeJS.ProcessEnv;
   cache: ReturnType<typeof createResolverContext>["cache"];
   activePaths: ReadonlySet<string>;
+  runtimeWebActivePaths: ReadonlySet<string>;
   inactiveRefPaths: ReadonlySet<string>;
   mode: CommandSecretResolutionMode;
   commandName: string;
@@ -419,7 +522,8 @@ async function resolveTargetSecretLocally(params: {
   if (
     !ref ||
     params.inactiveRefPaths.has(params.target.path) ||
-    !params.activePaths.has(params.target.path)
+    (!params.activePaths.has(params.target.path) &&
+      !params.runtimeWebActivePaths.has(params.target.path))
   ) {
     return;
   }

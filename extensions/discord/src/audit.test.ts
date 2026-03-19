@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./send.js", () => ({
+  addRoleDiscord: vi.fn(),
   fetchChannelPermissionsDiscord: vi.fn(),
 }));
 
