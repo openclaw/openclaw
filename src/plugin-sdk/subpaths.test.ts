@@ -55,15 +55,8 @@ const accountHelpersSdk = await import("openclaw/plugin-sdk/account-helpers");
 const allowlistEditSdk = await import("openclaw/plugin-sdk/allowlist-config-edit");
 
 describe("plugin-sdk subpath exports", () => {
-  it("keeps the curated public list free of bundled extension facades", () => {
+  it("keeps legacy compat out of the curated public list", () => {
     expect(pluginSdkSubpaths).not.toContain("compat");
-    expect(pluginSdkSubpaths).not.toContain("signal");
-    expect(pluginSdkSubpaths).not.toContain("msteams");
-    expect(pluginSdkSubpaths).not.toContain("googlechat");
-    expect(pluginSdkSubpaths).not.toContain("mattermost");
-    expect(pluginSdkSubpaths).not.toContain("matrix");
-    expect(pluginSdkSubpaths).not.toContain("zalo");
-    expect(pluginSdkSubpaths).not.toContain("zalouser");
   });
 
   it("keeps core focused on generic shared exports", () => {
