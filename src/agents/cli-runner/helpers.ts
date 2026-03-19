@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
@@ -48,7 +48,6 @@ export function buildSystemPrompt(params: {
   docsPath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
-  bootstrapTruncationWarningLines?: string[];
   modelDisplay: string;
   agentId?: string;
 }) {
@@ -92,7 +91,6 @@ export function buildSystemPrompt(params: {
     userTime,
     userTimeFormat,
     contextFiles: params.contextFiles,
-    bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
   });

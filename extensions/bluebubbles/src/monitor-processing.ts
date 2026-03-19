@@ -1,22 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import {
-  DM_GROUP_ACCESS_REASON,
-  createScopedPairingAccess,
-  createReplyPrefixOptions,
-  evictOldHistoryKeys,
-  issuePairingChallenge,
-  logAckFailure,
-  logInboundDrop,
-  logTypingFailure,
-  mapAllowFromEntries,
-  readStoreAllowFromForDmPolicy,
-  recordPendingHistoryEntryIfEnabled,
-  resolveAckReaction,
-  resolveDmGroupAccessWithLists,
-  resolveControlCommandGate,
-  stripMarkdown,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/bluebubbles";
+  resolveOutboundMediaUrls,
+  resolveTextChunksWithFallback,
+  sendMediaWithLeadingCaption,
+} from "openclaw/plugin-sdk/reply-payload";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { fetchBlueBubblesHistory } from "./history.js";
@@ -38,6 +24,10 @@ import {
   resolveBlueBubblesMessageId,
   resolveReplyContextFromCache,
 } from "./monitor-reply-cache.js";
+import {
+  hasBlueBubblesSelfChatCopy,
+  rememberBlueBubblesSelfChatCopy,
+} from "./monitor-self-chat-cache.js";
 import type {
   BlueBubblesCoreRuntime,
   BlueBubblesRuntimeEnv,
@@ -45,9 +35,33 @@ import type {
 } from "./monitor-shared.js";
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
+import type { OpenClawConfig } from "./runtime-api.js";
+import {
+  DM_GROUP_ACCESS_REASON,
+  createScopedPairingAccess,
+  createReplyPrefixOptions,
+  evictOldHistoryKeys,
+  issuePairingChallenge,
+  logAckFailure,
+  logInboundDrop,
+  logTypingFailure,
+  mapAllowFromEntries,
+  readStoreAllowFromForDmPolicy,
+  recordPendingHistoryEntryIfEnabled,
+  resolveAckReaction,
+  resolveDmGroupAccessWithLists,
+  resolveControlCommandGate,
+  stripMarkdown,
+  type HistoryEntry,
+} from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
-import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender } from "./targets.js";
+import {
+  extractHandleFromChatGuid,
+  formatBlueBubblesChatTarget,
+  isAllowedBlueBubblesSender,
+  normalizeBlueBubblesHandle,
+} from "./targets.js";
 
 const DEFAULT_TEXT_LIMIT = 4000;
 const invalidAckReactions = new Set<string>();
@@ -78,6 +92,19 @@ function trimOrUndefined(value?: string | null): string | undefined {
 
 function normalizeSnippet(value: string): string {
   return stripMarkdown(value).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function isBlueBubblesSelfChatMessage(
+  message: NormalizedWebhookMessage,
+  isGroup: boolean,
+): boolean {
+  if (isGroup || !message.senderIdExplicit) {
+    return false;
+  }
+  const chatHandle =
+    (message.chatGuid ? extractHandleFromChatGuid(message.chatGuid) : null) ??
+    normalizeBlueBubblesHandle(message.chatIdentifier ?? "");
+  return Boolean(chatHandle) && chatHandle === message.senderId;
 }
 
 function prunePendingOutboundMessageIds(now = Date.now()): void {
@@ -453,8 +480,27 @@ export async function processMessage(
       ? `removed ${tapbackParsed.emoji} reaction`
       : `reacted with ${tapbackParsed.emoji}`
     : text || placeholder;
+  const isSelfChatMessage = isBlueBubblesSelfChatMessage(message, isGroup);
+  const selfChatLookup = {
+    accountId: account.accountId,
+    chatGuid: message.chatGuid,
+    chatIdentifier: message.chatIdentifier,
+    chatId: message.chatId,
+    senderId: message.senderId,
+    body: rawBody,
+    timestamp: message.timestamp,
+  };
 
   const cacheMessageId = message.messageId?.trim();
+  const confirmedOutboundCacheEntry = cacheMessageId
+    ? resolveReplyContextFromCache({
+        accountId: account.accountId,
+        replyToId: cacheMessageId,
+        chatGuid: message.chatGuid,
+        chatIdentifier: message.chatIdentifier,
+        chatId: message.chatId,
+      })
+    : null;
   let messageShortId: string | undefined;
   const cacheInboundMessage = () => {
     if (!cacheMessageId) {
@@ -476,6 +522,12 @@ export async function processMessage(
   if (message.fromMe) {
     // Cache from-me messages so reply context can resolve sender/body.
     cacheInboundMessage();
+    const confirmedAssistantOutbound =
+      confirmedOutboundCacheEntry?.senderLabel === "me" &&
+      normalizeSnippet(confirmedOutboundCacheEntry.body ?? "") === normalizeSnippet(rawBody);
+    if (isSelfChatMessage && confirmedAssistantOutbound) {
+      rememberBlueBubblesSelfChatCopy(selfChatLookup);
+    }
     if (cacheMessageId) {
       const pending = consumePendingOutboundMessageId({
         accountId: account.accountId,
@@ -496,6 +548,11 @@ export async function processMessage(
         });
       }
     }
+    return;
+  }
+
+  if (isSelfChatMessage && hasBlueBubblesSelfChatCopy(selfChatLookup)) {
+    logVerbose(core, runtime, `drop: reflected self-chat duplicate sender=${message.senderId}`);
     return;
   }
 
@@ -1191,11 +1248,7 @@ export async function processMessage(
           const replyToMessageGuid = rawReplyToId
             ? resolveBlueBubblesMessageId(rawReplyToId, { requireKnownShortId: true })
             : "";
-          const mediaList = payload.mediaUrls?.length
-            ? payload.mediaUrls
-            : payload.mediaUrl
-              ? [payload.mediaUrl]
-              : [];
+          const mediaList = resolveOutboundMediaUrls(payload);
           if (mediaList.length > 0) {
             const tableMode = core.channel.text.resolveMarkdownTableMode({
               cfg: config,
@@ -1205,43 +1258,44 @@ export async function processMessage(
             const text = sanitizeReplyDirectiveText(
               core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
             );
-            let first = true;
-            for (const mediaUrl of mediaList) {
-              const caption = first ? text : undefined;
-              first = false;
-              const cachedBody = (caption ?? "").trim() || "<media:attachment>";
-              const pendingId = rememberPendingOutboundMessageId({
-                accountId: account.accountId,
-                sessionKey: route.sessionKey,
-                outboundTarget,
-                chatGuid: chatGuidForActions ?? chatGuid,
-                chatIdentifier,
-                chatId,
-                snippet: cachedBody,
-              });
-              let result: Awaited<ReturnType<typeof sendBlueBubblesMedia>>;
-              try {
-                result = await sendBlueBubblesMedia({
-                  cfg: config,
-                  to: outboundTarget,
-                  mediaUrl,
-                  caption: caption ?? undefined,
-                  replyToId: replyToMessageGuid || null,
+            await sendMediaWithLeadingCaption({
+              mediaUrls: mediaList,
+              caption: text,
+              send: async ({ mediaUrl, caption }) => {
+                const cachedBody = (caption ?? "").trim() || "<media:attachment>";
+                const pendingId = rememberPendingOutboundMessageId({
                   accountId: account.accountId,
+                  sessionKey: route.sessionKey,
+                  outboundTarget,
+                  chatGuid: chatGuidForActions ?? chatGuid,
+                  chatIdentifier,
+                  chatId,
+                  snippet: cachedBody,
                 });
-              } catch (err) {
-                forgetPendingOutboundMessageId(pendingId);
-                throw err;
-              }
-              if (maybeEnqueueOutboundMessageId(result.messageId, cachedBody)) {
-                forgetPendingOutboundMessageId(pendingId);
-              }
-              sentMessage = true;
-              statusSink?.({ lastOutboundAt: Date.now() });
-              if (info.kind === "block") {
-                restartTypingSoon();
-              }
-            }
+                let result: Awaited<ReturnType<typeof sendBlueBubblesMedia>>;
+                try {
+                  result = await sendBlueBubblesMedia({
+                    cfg: config,
+                    to: outboundTarget,
+                    mediaUrl,
+                    caption: caption ?? undefined,
+                    replyToId: replyToMessageGuid || null,
+                    accountId: account.accountId,
+                  });
+                } catch (err) {
+                  forgetPendingOutboundMessageId(pendingId);
+                  throw err;
+                }
+                if (maybeEnqueueOutboundMessageId(result.messageId, cachedBody)) {
+                  forgetPendingOutboundMessageId(pendingId);
+                }
+                sentMessage = true;
+                statusSink?.({ lastOutboundAt: Date.now() });
+                if (info.kind === "block") {
+                  restartTypingSoon();
+                }
+              },
+            });
             return;
           }
 
@@ -1260,11 +1314,14 @@ export async function processMessage(
           );
           const chunks =
             chunkMode === "newline"
-              ? core.channel.text.chunkTextWithMode(text, textLimit, chunkMode)
-              : core.channel.text.chunkMarkdownText(text, textLimit);
-          if (!chunks.length && text) {
-            chunks.push(text);
-          }
+              ? resolveTextChunksWithFallback(
+                  text,
+                  core.channel.text.chunkTextWithMode(text, textLimit, chunkMode),
+                )
+              : resolveTextChunksWithFallback(
+                  text,
+                  core.channel.text.chunkMarkdownText(text, textLimit),
+                );
           if (!chunks.length) {
             return;
           }

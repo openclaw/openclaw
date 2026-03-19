@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
@@ -128,16 +129,17 @@ export function buildEmbeddedRunPayloads(params: {
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
   const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
-  const errorText = params.lastAssistant
-    ? suppressAssistantArtifacts
-      ? undefined
-      : formatAssistantErrorText(params.lastAssistant, {
-          cfg: params.config,
-          sessionKey: params.sessionKey,
-          provider: params.provider,
-          model: params.model,
-        })
-    : undefined;
+  const errorText =
+    params.lastAssistant && lastAssistantErrored
+      ? suppressAssistantArtifacts
+        ? undefined
+        : formatAssistantErrorText(params.lastAssistant, {
+            cfg: params.config,
+            sessionKey: params.sessionKey,
+            provider: params.provider,
+            model: params.model,
+          })
+      : undefined;
   const rawErrorMessage = lastAssistantErrored
     ? params.lastAssistant?.errorMessage?.trim() || undefined
     : undefined;
@@ -335,7 +337,7 @@ export function buildEmbeddedRunPayloads(params: {
       audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
     }))
     .filter((p) => {
-      if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0)) {
+      if (!hasOutboundReplyContent(p)) {
         return false;
       }
       if (p.text && isSilentReplyText(p.text, SILENT_REPLY_TOKEN)) {

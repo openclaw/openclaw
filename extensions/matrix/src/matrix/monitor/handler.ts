@@ -14,7 +14,7 @@ import {
   type PluginRuntime,
   type RuntimeEnv,
   type RuntimeLogger,
-} from "openclaw/plugin-sdk/matrix";
+} from "../../../runtime-api.js";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { fetchEventSummary } from "../actions/summary.js";
 import {
@@ -686,6 +686,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         channel: "matrix",
         accountId: route.accountId,
       });
+      const humanDelay = core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId);
       const typingCallbacks = createTypingCallbacks({
         start: () => sendTypingMatrix(roomId, true, undefined, client),
         stop: () => sendTypingMatrix(roomId, false, undefined, client),
@@ -711,7 +712,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
           ...prefixOptions,
-          humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+          humanDelay,
           typingCallbacks,
           deliver: async (payload) => {
             await deliverMatrixReplies({

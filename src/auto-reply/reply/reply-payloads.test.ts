@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
@@ -162,5 +164,19 @@ describe("shouldSuppressMessagingToolReplies", () => {
         messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "123" }],
       }),
     ).toBe(false);
+  });
+
+  it("suppresses telegram replies even when the active plugin registry omits telegram", () => {
+    setActivePluginRegistry(createTestRegistry([]));
+
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "telegram",
+        originatingTo: "telegram:group:-100123:topic:77",
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "-100123", threadId: "77" },
+        ],
+      }),
+    ).toBe(true);
   });
 });

@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  INVALID_EXEC_SECRET_REF_IDS,
+  VALID_EXEC_SECRET_REF_IDS,
+} from "../test-utils/secret-ref-test-vectors.js";
 import { isSecretsApplyPlan, resolveValidatedPlanTarget } from "./plan.js";
 
 describe("secrets plan validation", () => {
@@ -97,5 +101,45 @@ describe("secrets plan validation", () => {
       ],
     });
     expect(withAgent).toBe(true);
+  });
+
+  it("accepts valid exec secret ref ids in plans", () => {
+    for (const id of VALID_EXEC_SECRET_REF_IDS) {
+      const isValid = isSecretsApplyPlan({
+        version: 1,
+        protocolVersion: 1,
+        generatedAt: "2026-03-10T00:00:00.000Z",
+        generatedBy: "manual",
+        targets: [
+          {
+            type: "talk.apiKey",
+            path: "talk.apiKey",
+            pathSegments: ["talk", "apiKey"],
+            ref: { source: "exec", provider: "vault", id },
+          },
+        ],
+      });
+      expect(isValid, `expected valid plan exec ref id: ${id}`).toBe(true);
+    }
+  });
+
+  it("rejects invalid exec secret ref ids in plans", () => {
+    for (const id of INVALID_EXEC_SECRET_REF_IDS) {
+      const isValid = isSecretsApplyPlan({
+        version: 1,
+        protocolVersion: 1,
+        generatedAt: "2026-03-10T00:00:00.000Z",
+        generatedBy: "manual",
+        targets: [
+          {
+            type: "talk.apiKey",
+            path: "talk.apiKey",
+            pathSegments: ["talk", "apiKey"],
+            ref: { source: "exec", provider: "vault", id },
+          },
+        ],
+      });
+      expect(isValid, `expected invalid plan exec ref id: ${id}`).toBe(false);
+    }
   });
 });
