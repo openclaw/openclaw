@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   loadConfigMock as loadConfig,
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
@@ -322,6 +323,28 @@ describe("callGateway url resolution", () => {
     {
       label: "keeps legacy admin scopes for explicit CLI callers",
       call: () => callGatewayCli({ method: "health" }),
+      expectedScopes: [
+        "operator.admin",
+        "operator.read",
+        "operator.write",
+        "operator.approvals",
+        "operator.pairing",
+      ],
+    },
+    {
+      label: "routes mode=CLI callers through CLI default scopes",
+      call: () => callGateway({ method: "health", mode: GATEWAY_CLIENT_MODES.CLI }),
+      expectedScopes: [
+        "operator.admin",
+        "operator.read",
+        "operator.write",
+        "operator.approvals",
+        "operator.pairing",
+      ],
+    },
+    {
+      label: "routes clientName=CLI callers through CLI default scopes",
+      call: () => callGateway({ method: "health", clientName: GATEWAY_CLIENT_NAMES.CLI }),
       expectedScopes: [
         "operator.admin",
         "operator.read",
