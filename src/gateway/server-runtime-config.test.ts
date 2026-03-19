@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { readTailscaleStatusJsonMock } = vi.hoisted(() => ({
+  readTailscaleStatusJsonMock: vi.fn<() => Promise<Record<string, unknown>>>(async () => ({})),
+}));
+
+vi.mock("../infra/tailscale.js", () => ({
+  readTailscaleStatusJson: () => readTailscaleStatusJsonMock(),
+}));
+
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 const TRUSTED_PROXY_AUTH = {
@@ -14,6 +23,11 @@ const TOKEN_AUTH = {
 };
 
 describe("resolveGatewayRuntimeConfig", () => {
+  beforeEach(() => {
+    readTailscaleStatusJsonMock.mockReset();
+    readTailscaleStatusJsonMock.mockResolvedValue({});
+  });
+
   describe("trusted-proxy auth mode", () => {
     // This test validates BOTH validation layers:
     // 1. CLI validation in src/cli/gateway-cli/run.ts (line 246)
@@ -340,6 +354,44 @@ describe("resolveGatewayRuntimeConfig", () => {
       });
       expect(result.tailscaleMode).toBe("serve");
       expect(result.tailscaleConfig.controlUrl).toBeUndefined();
+    });
+
+    it("rejects serve mode when daemon uses a custom control server", async () => {
+      readTailscaleStatusJsonMock.mockResolvedValue({
+        Self: { ControlURL: "https://headscale.example.com" },
+      });
+
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              bind: "loopback",
+              auth: { mode: "none" },
+              tailscale: { mode: "serve" },
+            },
+          },
+          port: 18789,
+        }),
+      ).rejects.toThrow("not supported with a custom control server (tailscale daemon:");
+    });
+
+    it("allows serve mode when daemon uses official control server", async () => {
+      readTailscaleStatusJsonMock.mockResolvedValue({
+        Self: { ControlURL: "https://controlplane.tailscale.com" },
+      });
+
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            tailscale: { mode: "serve" },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.tailscaleMode).toBe("serve");
     });
   });
 });
