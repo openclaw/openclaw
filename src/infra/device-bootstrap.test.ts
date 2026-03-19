@@ -24,7 +24,23 @@ afterEach(async () => {
 });
 
 describe("device bootstrap tokens", () => {
-  it("binds the first successful verification to a device identity", async () => {
+  it("accepts the first successful verification", async () => {
+    const baseDir = await createBaseDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(
+      verifyDeviceBootstrapToken({
+        token: issued.token,
+        deviceId: "device-1",
+        publicKey: "pub-1",
+        role: "node",
+        scopes: ["node.invoke"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("rejects replay after the first successful verification", async () => {
     const baseDir = await createBaseDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
 
@@ -48,10 +64,10 @@ describe("device bootstrap tokens", () => {
         scopes: ["operator.read"],
         baseDir,
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
   });
 
-  it("rejects reuse from a different device after binding", async () => {
+  it("rejects reuse from a different device after consumption", async () => {
     const baseDir = await createBaseDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
 

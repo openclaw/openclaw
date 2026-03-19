@@ -57,6 +57,8 @@ export function authorizeConfigWrite(params: {
   if (params.hasAmbiguousTarget) {
     return { allowed: false, reason: "ambiguous-target" };
   }
+
+  // Check origin channel/account has configWrites enabled
   if (
     params.origin?.channelId &&
     !resolveChannelConfigWrites({
@@ -71,6 +73,7 @@ export function authorizeConfigWrite(params: {
       blockedScope: { kind: "origin", scope: params.origin },
     };
   }
+
   const seen = new Set<string>();
   for (const target of params.targets ?? []) {
     if (!target.channelId) {
@@ -81,6 +84,39 @@ export function authorizeConfigWrite(params: {
       continue;
     }
     seen.add(key);
+
+    // Security fix: check if cross-account config write is allowed
+    // When origin and target differ, also verify origin can write to target
+    const originAccountId = normalizeAccountId(params.origin?.accountId);
+    const targetAccountId = normalizeAccountId(target.accountId);
+
+    // If modifying a different account, check that origin account has permission for target
+    if (
+      params.origin?.accountId &&
+      target.accountId &&
+      originAccountId !== targetAccountId
+    ) {
+      const originCanWriteToTarget =
+        resolveChannelConfigWrites({
+          cfg: params.cfg,
+          channelId: params.origin.channelId,
+          accountId: params.origin.accountId,
+        }) &&
+        resolveChannelConfigWrites({
+          cfg: params.cfg,
+          channelId: target.channelId,
+          accountId: target.accountId,
+        });
+
+      if (!originCanWriteToTarget) {
+        return {
+          allowed: false,
+          reason: "target-disabled",
+          blockedScope: { kind: "target", scope: target },
+        };
+      }
+    }
+
     if (
       !resolveChannelConfigWrites({
         cfg: params.cfg,
