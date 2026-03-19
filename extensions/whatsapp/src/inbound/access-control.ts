@@ -1,10 +1,10 @@
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/config-runtime";
-import { issuePairingChallenge } from "openclaw/plugin-sdk/conversation-runtime";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -171,11 +171,8 @@ export async function checkInboundAccessControl(params: {
       if (suppressPairingReply) {
         logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
       } else {
-        await issuePairingChallenge({
+        await createChannelPairingChallengeIssuer({
           channel: "whatsapp",
-          senderId: candidate,
-          senderIdLine: `Your WhatsApp phone number: ${candidate}`,
-          meta: { name: (params.pushName ?? "").trim() || undefined },
           upsertPairingRequest: async ({ id, meta }) =>
             await upsertChannelPairingRequest({
               channel: "whatsapp",
@@ -183,6 +180,10 @@ export async function checkInboundAccessControl(params: {
               accountId: account.accountId,
               meta,
             }),
+        })({
+          senderId: candidate,
+          senderIdLine: `Your WhatsApp phone number: ${candidate}`,
+          meta: { name: (params.pushName ?? "").trim() || undefined },
           onCreated: () => {
             logVerbose(
               `whatsapp pairing request sender=${candidate} name=${params.pushName ?? "unknown"}`,

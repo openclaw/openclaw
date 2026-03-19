@@ -32,7 +32,7 @@ export {
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export type { ChannelGroupContext, ChannelSetupInput } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createChannelReplyPipeline, createReplyPrefixOptions } from "./channel-reply-pipeline.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { mapAllowFromEntries } from "./channel-config-helpers.js";
 export { evaluateMatchedGroupAccessForPolicy } from "./group-access.js";
@@ -88,7 +88,7 @@ export {
   listConfiguredAccountIds,
   resolveAccountWithDefaultFallback,
 } from "./account-resolution.js";
-export { createChannelPairingController, createScopedPairingAccess } from "./channel-pairing.js";
+export { createChannelPairingController } from "./channel-pairing.js";
 export { createPersistentDedupe } from "./persistent-dedupe.js";
 export type { OutboundReplyPayload } from "./reply-payload.js";
 export {

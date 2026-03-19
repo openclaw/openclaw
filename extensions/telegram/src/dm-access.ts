@@ -1,7 +1,7 @@
 import type { Message } from "@grammyjs/types";
 import type { Bot } from "grammy";
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
-import { issuePairingChallenge } from "openclaw/plugin-sdk/conversation-runtime";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -70,15 +70,8 @@ export async function enforceTelegramDmAccess(params: {
   if (dmPolicy === "pairing") {
     try {
       const telegramUserId = sender.userId ?? sender.candidateId;
-      await issuePairingChallenge({
+      await createChannelPairingChallengeIssuer({
         channel: "telegram",
-        senderId: telegramUserId,
-        senderIdLine: `Your Telegram user id: ${telegramUserId}`,
-        meta: {
-          username: sender.username || undefined,
-          firstName: sender.firstName,
-          lastName: sender.lastName,
-        },
         upsertPairingRequest: async ({ id, meta }) =>
           await upsertChannelPairingRequest({
             channel: "telegram",
@@ -86,6 +79,14 @@ export async function enforceTelegramDmAccess(params: {
             accountId,
             meta,
           }),
+      })({
+        senderId: telegramUserId,
+        senderIdLine: `Your Telegram user id: ${telegramUserId}`,
+        meta: {
+          username: sender.username || undefined,
+          firstName: sender.firstName,
+          lastName: sender.lastName,
+        },
         onCreated: () => {
           logger.info(
             {
