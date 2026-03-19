@@ -7,7 +7,7 @@ import type { SessionEntry } from "./types.js";
 const state = vi.hoisted(() => ({
   sessionFile: "",
   store: {} as Record<string, SessionEntry>,
-  appendMessage: vi.fn(),
+  appendMessage: vi.fn(() => "message-1"),
 }));
 
 vi.mock("../io.js", () => ({
@@ -51,6 +51,7 @@ vi.mock("./session-file.js", () => ({
 
 vi.mock("./store.js", () => ({
   loadSessionStore: () => state.store,
+  normalizeStoreSessionKey: (sessionKey: string) => sessionKey.trim(),
 }));
 
 vi.mock("@mariozechner/pi-coding-agent", () => ({
@@ -67,7 +68,7 @@ let originalCwd = process.cwd();
 
 beforeEach(async () => {
   vi.resetModules();
-  state.appendMessage = vi.fn();
+  state.appendMessage = vi.fn(() => "message-1");
   state.store = {
     "agent:main:test:user-1": {
       sessionId: "session-1",
@@ -99,6 +100,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(result).toEqual({
       ok: true,
       sessionFile: state.sessionFile,
+      messageId: "message-1",
     });
 
     const [headerLine] = fs.readFileSync(state.sessionFile, "utf-8").split(/\r?\n/);
