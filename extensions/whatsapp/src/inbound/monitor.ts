@@ -1,4 +1,4 @@
-import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
+import type { AnyMessageContent, proto, WAMessage, WASocket } from "@whiskeysockets/baileys";
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
@@ -34,6 +34,11 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /**
+   * Optional shared socket reference. When set, reply/send closures resolve
+   * the latest socket at call time so reconnect can swap sockets safely.
+   */
+  socketRef?: { current: WASocket | null };
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -42,6 +47,10 @@ export async function monitorWebInbox(options: {
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
+  if (options.socketRef) {
+    options.socketRef.current = sock;
+  }
+  const getCurrentSock = () => (options.socketRef ? options.socketRef.current : sock);
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -321,17 +330,29 @@ export async function monitorWebInbox(options: {
   ) => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
+        return;
+      }
       try {
-        await sock.sendPresenceUpdate("composing", chatJid);
+        await currentSock.sendPresenceUpdate("composing", chatJid);
       } catch (err) {
         logVerbose(`Presence update failed: ${String(err)}`);
       }
     };
     const reply = async (text: string) => {
-      await sock.sendMessage(chatJid, { text });
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
+        throw new Error("no active socket - reconnection in progress");
+      }
+      await currentSock.sendMessage(chatJid, { text });
     };
     const sendMedia = async (payload: AnyMessageContent) => {
-      await sock.sendMessage(chatJid, payload);
+      const currentSock = getCurrentSock();
+      if (!currentSock) {
+        throw new Error("no active socket - reconnection in progress");
+      }
+      await currentSock.sendMessage(chatJid, payload);
     };
     const timestamp = inbound.messageTimestampMs;
     const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
@@ -437,6 +458,9 @@ export async function monitorWebInbox(options: {
   ) => {
     try {
       if (update.connection === "close") {
+        if (options.socketRef) {
+          options.socketRef.current = null;
+        }
         const status = getStatusCode(update.lastDisconnect?.error);
         resolveClose({
           status,

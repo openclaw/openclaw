@@ -141,6 +141,11 @@ export async function monitorWebChannel(
   process.once("SIGINT", handleSigint);
 
   let reconnectAttempts = 0;
+  // Reply closures dereference this at send time, so reconnect can swap
+  // sockets without dropping in-flight messages on stale connections.
+  const socketRef: { current: import("@whiskeysockets/baileys").WASocket | null } = {
+    current: null,
+  };
 
   while (true) {
     if (stopRequested()) {
@@ -200,6 +205,7 @@ export async function monitorWebChannel(
       sendReadReceipts: account.sendReadReceipts,
       debounceMs: inboundDebounceMs,
       shouldDebounce,
+      socketRef,
       onMessage: async (msg: WebInboundMsg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();
@@ -245,6 +251,7 @@ export async function monitorWebChannel(
     });
 
     const closeListener = async () => {
+      socketRef.current = null;
       setActiveWebListener(account.accountId, null);
       if (unregisterUnhandled) {
         unregisterUnhandled();
