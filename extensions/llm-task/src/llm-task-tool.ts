@@ -10,6 +10,8 @@ import {
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
 
+const AjvCtor = Ajv as unknown as typeof import("ajv").default;
+
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
   const m = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -214,7 +216,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         // oxlint-disable-next-line typescript/no-explicit-any
         const schema = (params as any).schema as unknown;
         if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-          const ajv = new Ajv.default({ allErrors: true, strict: false });
+          const ajv = new AjvCtor({ allErrors: true, strict: false });
           // oxlint-disable-next-line typescript/no-explicit-any
           const validate = ajv.compile(schema as any);
           const ok = validate(parsed);

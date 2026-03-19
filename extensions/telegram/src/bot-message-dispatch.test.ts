@@ -27,11 +27,18 @@ vi.mock("./bot/delivery.js", () => ({
 }));
 
 vi.mock("./send.js", () => ({
+  createForumTopicTelegram: vi.fn(),
+  deleteMessageTelegram: vi.fn(),
+  editForumTopicTelegram: vi.fn(),
   editMessageTelegram,
+  reactMessageTelegram: vi.fn(),
+  sendMessageTelegram: vi.fn(),
+  sendPollTelegram: vi.fn(),
+  sendStickerTelegram: vi.fn(),
 }));
 
-vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadSessionStore,
