@@ -284,6 +284,18 @@ describe("getApiKeyForModel", () => {
     );
   });
 
+  it("resolves AIPing API key from env", async () => {
+    await withEnvAsync({ [envVar("AIPING", "API", "KEY")]: "aiping-api-key" }, async () => {
+      // pragma: allowlist secret
+      const resolved = await resolveApiKeyForProvider({
+        provider: "aiping",
+        store: { version: 1, profiles: {} },
+      });
+      expect(resolved.apiKey).toBe("aiping-api-key");
+      expect(resolved.source).toContain("AIPING_API_KEY");
+    });
+  });
+
   it("resolves synthetic local auth key for configured ollama provider without apiKey", async () => {
     await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
       const resolved = await resolveApiKeyForProvider({

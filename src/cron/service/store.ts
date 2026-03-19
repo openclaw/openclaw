@@ -35,6 +35,8 @@ export async function ensureLoaded(
   const loaded = await loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   const { mutated } = normalizeStoredCronJobs(jobs);
+  const { log } = state.deps;
+
   state.store = { version: 1, jobs: jobs as unknown as CronJob[] };
   state.storeLoadedAtMs = state.deps.nowMs();
   state.storeFileMtimeMs = fileMtimeMs;
@@ -44,6 +46,10 @@ export async function ensureLoaded(
   }
 
   if (mutated) {
+    log.info(
+      { storePath: state.deps.storePath, jobCount: jobs.length },
+      "cron: store migration applied; persisting updated store",
+    );
     await persist(state, { skipBackup: true });
   }
 }
@@ -69,4 +75,8 @@ export async function persist(state: CronServiceState, opts?: { skipBackup?: boo
   await saveCronStore(state.deps.storePath, state.store, opts);
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
+  state.deps.log.debug(
+    { storePath: state.deps.storePath, jobCount: state.store.jobs.length },
+    "cron: store persisted",
+  );
 }
