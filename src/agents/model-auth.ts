@@ -423,7 +423,7 @@ export function resolveEnvApiKey(
 
   if (normalized === "google-vertex") {
     const envKey = getEnvApiKey(normalized);
-    if (!envKey) {
+    if (!envKey || envKey.startsWith("<")) {
       return null;
     }
     return { apiKey: envKey, source: "gcloud adc" };
