@@ -13,8 +13,8 @@ import type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
-  PluginInteractiveTelegramHandlerContext,
   PluginCommandContext,
+  PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";
 
 export type {

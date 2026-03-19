@@ -12,6 +12,8 @@ vi.mock("./tool-actions.js", () => ({
 
 const { matrixMessageActions } = await import("./actions.js");
 
+const profileAction = "set-profile" as ChannelMessageActionContext["action"];
+
 function createContext(
   overrides: Partial<ChannelMessageActionContext>,
 ): ChannelMessageActionContext {
@@ -88,7 +90,7 @@ describe("matrixMessageActions account propagation", () => {
   it("forwards accountId for self-profile updates", async () => {
     await matrixMessageActions.handleAction?.(
       createContext({
-        action: "set-profile",
+        action: profileAction,
         accountId: "ops",
         params: {
           displayName: "Ops Bot",
@@ -112,7 +114,7 @@ describe("matrixMessageActions account propagation", () => {
   it("forwards local avatar paths for self-profile updates", async () => {
     await matrixMessageActions.handleAction?.(
       createContext({
-        action: "set-profile",
+        action: profileAction,
         accountId: "ops",
         params: {
           path: "/tmp/avatar.jpg",

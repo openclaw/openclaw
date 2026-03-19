@@ -350,15 +350,15 @@ export async function channelsAddCommand(
 
   await writeConfigFile(nextConfig);
   runtime.log(`Added ${channelLabel(channel)} account "${accountId}".`);
-  const setup = plugin.setup;
-  if (setup?.afterAccountConfigWritten) {
+  const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
+  if (afterAccountConfigWritten) {
     await runCollectedChannelOnboardingPostWriteHooks({
       hooks: [
         {
           channel,
           accountId,
           run: async ({ cfg: writtenCfg, runtime: hookRuntime }) =>
-            await setup.afterAccountConfigWritten?.({
+            await afterAccountConfigWritten({
               previousCfg: cfg,
               cfg: writtenCfg,
               accountId,
