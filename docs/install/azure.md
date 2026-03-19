@@ -280,7 +280,7 @@ This guide sets up an Azure Linux VM with the Azure CLI, applies Network Securit
 
 ## Cost considerations
 
-Azure Bastion Standard SKU runs approximately **$140/month** and the VM (Standard_B2as_v2) runs approximately **$55/month**. This is significantly more than some other hosting options in this repo.
+Azure Bastion Standard SKU runs approximately **\$140/month** and the VM (Standard\_B2as\_v2) runs approximately **\$55/month**.
 
 To reduce costs:
 
@@ -290,7 +290,7 @@ To reduce costs:
   az vm start -g rg-openclaw -n vm-openclaw   # restart later
   ```
 - **Delete Bastion when not needed** and recreate it when you need SSH access. Bastion is the largest cost component and takes only a few minutes to provision.
-- **Use the Basic Bastion SKU** (~$38/month) if you only need Portal-based SSH and don't require CLI tunneling (`az network bastion ssh`).
+- **Use the Basic Bastion SKU** (~\$38/month) if you only need Portal-based SSH and don't require CLI tunneling (`az network bastion ssh`).
 
 ## Cleanup
 
