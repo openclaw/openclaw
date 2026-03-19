@@ -76,20 +76,67 @@ export async function monitorWebInbox(options: {
   }
 
   // Periodically ping the socket to detect stale connections within seconds.
+  // Prefers WebSocket-level ping/pong (transport-layer, no side-effects) over
+  // sendPresenceUpdate which broadcasts "online" status to contacts every interval.
+  // Falls back to presence update only when the raw WebSocket is inaccessible.
   // A PING_INTERVAL_MS of 0 disables the health ping entirely.
+  //
+  // Note: Baileys has its own keepAlive (<iq><ping/></iq> every 30s) but it may
+  // not catch all stale-socket scenarios. This is an additional safety layer.
+  const rawWs = (sock.ws as unknown as { socket?: { ping?: (cb?: (err?: Error) => void) => void } })?.socket;
+  const canWsPing = typeof rawWs?.ping === "function";
+
   if (PING_INTERVAL_MS > 0) pingTimer = setInterval(() => {
-    const timeout = setTimeout(() => {
-      logVerbose("Health ping timed out — forcing reconnect");
-      resolveClose({ status: 499, isLoggedOut: false, error: "health-ping-timeout" });
-    }, PING_TIMEOUT_MS);
-    sock
-      .sendPresenceUpdate("available")
-      .then(() => clearTimeout(timeout))
-      .catch((err: unknown) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return false;
+      settled = true;
+      return true;
+    };
+
+    if (canWsPing) {
+      // WebSocket-level ping/pong: no presence side-effect.
+      const onPong = () => {
+        if (!settle()) return;
         clearTimeout(timeout);
-        logVerbose(`Health ping failed: ${String(err)} — forcing reconnect`);
-        resolveClose({ status: 499, isLoggedOut: false, error: err });
-      });
+      };
+      const timeout = setTimeout(() => {
+        if (!settle()) return;
+        sock.ws.removeListener("pong", onPong);
+        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+        logVerbose("Health ping timed out — forcing reconnect");
+        resolveClose({ status: 499, isLoggedOut: false, error: "health-ping-timeout" });
+      }, PING_TIMEOUT_MS);
+
+      sock.ws.once("pong", onPong);
+      try {
+        rawWs!.ping!();
+      } catch (err: unknown) {
+        if (settle()) {
+          sock.ws.removeListener("pong", onPong);
+          clearTimeout(timeout);
+          if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+          logVerbose(`Health ping failed: ${String(err)} — forcing reconnect`);
+          resolveClose({ status: 499, isLoggedOut: false, error: err });
+        }
+      }
+    } else {
+      // Fallback: presence update when raw WebSocket ping is unavailable.
+      const timeout = setTimeout(() => {
+        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+        logVerbose("Health ping timed out — forcing reconnect");
+        resolveClose({ status: 499, isLoggedOut: false, error: "health-ping-timeout" });
+      }, PING_TIMEOUT_MS);
+      sock
+        .sendPresenceUpdate("available")
+        .then(() => clearTimeout(timeout))
+        .catch((err: unknown) => {
+          clearTimeout(timeout);
+          if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+          logVerbose(`Health ping failed: ${String(err)} — forcing reconnect`);
+          resolveClose({ status: 499, isLoggedOut: false, error: err });
+        });
+    }
   }, PING_INTERVAL_MS);
 
   // If ping is disabled, log it for clarity.

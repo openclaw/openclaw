@@ -243,9 +243,25 @@ export async function monitorWebChannel(
     };
     const wrapOutbound = <F extends (...args: never[]) => Promise<unknown>>(fn: F): F =>
       (async (...args: Parameters<F>) => {
-        const result = await fn(...args);
-        updateLastActivity();
-        return result;
+        try {
+          const result = await fn(...args);
+          updateLastActivity();
+          return result;
+        } catch (err) {
+          // A failed outbound send may indicate a stale socket. Log it and
+          // trigger a proactive reconnect rather than silently aging the
+          // watchdog timer. The caller still receives the error.
+          reconnectLogger.warn(
+            { connectionId, error: formatError(err) },
+            "outbound send failed — may indicate stale socket",
+          );
+          listener.signalClose?.({
+            status: 499,
+            isLoggedOut: false,
+            error: err,
+          });
+          throw err;
+        }
       }) as unknown as F;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- need mutable access
     const mutableListener = listener as any;
