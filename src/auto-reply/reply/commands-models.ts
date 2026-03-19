@@ -30,40 +30,22 @@ export type ModelsProviderData = {
   resolvedDefault: { provider: string; model: string };
 };
 
-/**
- * Build provider/model data from config and catalog.
- * Exported for reuse by callback handlers.
- */
-export async function buildModelsProviderData(
-  cfg: OpenClawConfig,
-  agentId?: string,
-): Promise<ModelsProviderData> {
-  const resolvedDefault = resolveDefaultModelForAgent({
-    cfg,
-    agentId,
-  });
+function addProviderModel(byProvider: Map<string, Set<string>>, provider: string, model: string) {
+  const key = normalizeProviderId(provider);
+  const set = byProvider.get(key) ?? new Set<string>();
+  set.add(model);
+  byProvider.set(key, set);
+}
 
-  const catalog = await loadModelCatalog({ config: cfg });
-  const allowed = buildAllowedModelSet({
-    cfg,
-    catalog,
-    defaultProvider: resolvedDefault.provider,
-    defaultModel: resolvedDefault.model,
-    agentId,
-  });
-
+function buildConfiguredProviderModelMap(params: {
+  cfg: OpenClawConfig;
+  resolvedDefault: { provider: string; model: string };
+}): Map<string, Set<string>> {
   const aliasIndex = buildModelAliasIndex({
-    cfg,
-    defaultProvider: resolvedDefault.provider,
+    cfg: params.cfg,
+    defaultProvider: params.resolvedDefault.provider,
   });
-
   const byProvider = new Map<string, Set<string>>();
-  const add = (p: string, m: string) => {
-    const key = normalizeProviderId(p);
-    const set = byProvider.get(key) ?? new Set<string>();
-    set.add(m);
-    byProvider.set(key, set);
-  };
 
   const addRawModelRef = (raw?: string) => {
     const trimmed = raw?.trim();
@@ -72,17 +54,17 @@ export async function buildModelsProviderData(
     }
     const resolved = resolveModelRefFromString({
       raw: trimmed,
-      defaultProvider: resolvedDefault.provider,
+      defaultProvider: params.resolvedDefault.provider,
       aliasIndex,
     });
     if (!resolved) {
       return;
     }
-    add(resolved.ref.provider, resolved.ref.model);
+    addProviderModel(byProvider, resolved.ref.provider, resolved.ref.model);
   };
 
   const addModelConfigEntries = () => {
-    const modelConfig = cfg.agents?.defaults?.model;
+    const modelConfig = params.cfg.agents?.defaults?.model;
     if (typeof modelConfig === "string") {
       addRawModelRef(modelConfig);
     } else if (modelConfig && typeof modelConfig === "object") {
@@ -92,7 +74,7 @@ export async function buildModelsProviderData(
       }
     }
 
-    const imageConfig = cfg.agents?.defaults?.imageModel;
+    const imageConfig = params.cfg.agents?.defaults?.imageModel;
     if (typeof imageConfig === "string") {
       addRawModelRef(imageConfig);
     } else if (imageConfig && typeof imageConfig === "object") {
@@ -103,19 +85,60 @@ export async function buildModelsProviderData(
     }
   };
 
-  for (const entry of allowed.allowedCatalog) {
-    add(entry.provider, entry.id);
-  }
-
-  // Include config-only allowlist keys that aren't in the curated catalog.
-  for (const raw of Object.keys(cfg.agents?.defaults?.models ?? {})) {
+  for (const raw of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
     addRawModelRef(raw);
   }
 
-  // Ensure configured defaults/fallbacks/image models show up even when the
-  // curated catalog doesn't know about them (custom providers, dev builds, etc.).
-  add(resolvedDefault.provider, resolvedDefault.model);
+  // Always include the resolved default model even when it is not in the
+  // curated catalog yet (custom providers, discovery-backed providers, etc.).
+  addProviderModel(byProvider, params.resolvedDefault.provider, params.resolvedDefault.model);
   addModelConfigEntries();
+
+  return byProvider;
+}
+
+export function buildConfiguredModelsProviderData(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): ModelsProviderData {
+  const resolvedDefault = resolveDefaultModelForAgent({
+    cfg,
+    agentId,
+  });
+  const byProvider = buildConfiguredProviderModelMap({
+    cfg,
+    resolvedDefault,
+  });
+  const providers = [...byProvider.keys()].toSorted();
+  return { byProvider, providers, resolvedDefault };
+}
+
+/**
+ * Build provider/model data from config and catalog.
+ * Exported for reuse by callback handlers.
+ */
+export async function buildModelsProviderData(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): Promise<ModelsProviderData> {
+  const configured = buildConfiguredModelsProviderData(cfg, agentId);
+  const resolvedDefault = configured.resolvedDefault;
+  const byProvider = new Map(
+    [...configured.byProvider.entries()].map(([provider, models]) => [provider, new Set(models)]),
+  );
+
+  const catalog = await loadModelCatalog({ config: cfg });
+  const allowed = buildAllowedModelSet({
+    cfg,
+    catalog,
+    defaultProvider: resolvedDefault.provider,
+    defaultModel: resolvedDefault.model,
+    agentId,
+  });
+
+  for (const entry of allowed.allowedCatalog) {
+    addProviderModel(byProvider, entry.provider, entry.id);
+  }
 
   const providers = [...byProvider.keys()].toSorted();
 

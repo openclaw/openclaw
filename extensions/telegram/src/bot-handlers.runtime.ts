@@ -28,6 +28,7 @@ import {
 } from "openclaw/plugin-sdk/reply-runtime";
 import { buildCommandsPaginationKeyboard } from "openclaw/plugin-sdk/reply-runtime";
 import {
+  buildConfiguredModelsProviderData,
   buildModelsProviderData,
   formatModelsAvailableHeader,
 } from "openclaw/plugin-sdk/reply-runtime";
@@ -1339,8 +1340,9 @@ export const registerTelegramHandlers = ({
           resolvedThreadId,
           senderId,
         });
-        const modelData = await buildModelsProviderData(cfg, sessionState.agentId);
-        const { byProvider, providers } = modelData;
+        const configuredModelData = buildConfiguredModelsProviderData(cfg, sessionState.agentId);
+        let modelData = configuredModelData;
+        let { byProvider, providers } = modelData;
 
         const editMessageWithButtons = async (
           text: string,
@@ -1428,11 +1430,28 @@ export const registerTelegramHandlers = ({
         }
 
         if (modelCallback.type === "select") {
-          const selection = resolveModelSelection({
+          let selection = resolveModelSelection({
             callback: modelCallback,
             providers,
             byProvider,
           });
+          let selectionAllowed =
+            selection.kind === "resolved" &&
+            Boolean(byProvider.get(selection.provider)?.has(selection.model));
+
+          if (!selectionAllowed || selection.kind !== "resolved") {
+            modelData = await buildModelsProviderData(cfg, sessionState.agentId);
+            ({ byProvider, providers } = modelData);
+            selection = resolveModelSelection({
+              callback: modelCallback,
+              providers,
+              byProvider,
+            });
+            selectionAllowed =
+              selection.kind === "resolved" &&
+              Boolean(byProvider.get(selection.provider)?.has(selection.model));
+          }
+
           if (selection.kind !== "resolved") {
             const providerInfos: ProviderInfo[] = providers.map((p) => ({
               id: p,
@@ -1446,8 +1465,7 @@ export const registerTelegramHandlers = ({
             return;
           }
 
-          const modelSet = byProvider.get(selection.provider);
-          if (!modelSet?.has(selection.model)) {
+          if (!selectionAllowed) {
             await editMessageWithButtons(
               `❌ Model "${selection.provider}/${selection.model}" is not allowed.`,
               [],
