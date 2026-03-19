@@ -18,6 +18,7 @@ static AppState current_state = STATE_NOT_INSTALLED;
 static SystemdState current_sys_state = {0};
 static HealthState current_health_state = {0};
 static ProbeState current_probe_state = {0};
+static gboolean initial_hydration_done = FALSE;
 
 static AppState compute_state(void) {
     // Note: The primary normalized state is computed strictly from:
@@ -55,13 +56,16 @@ static AppState compute_state(void) {
 
 void state_init(void) {
     current_state = STATE_NOT_INSTALLED;
+    initial_hydration_done = FALSE;
 }
 
 static void trigger_updates(AppState new_state) {
     if (new_state != current_state) {
         AppState old_state = current_state;
         current_state = new_state;
-        notify_on_transition(old_state, new_state);
+        if (initial_hydration_done) {
+            notify_on_transition(old_state, new_state);
+        }
     }
     // Note: Tray/UI updates may still occur even when the normalized state enum
     // does not change. This is intentional because detailed lane data (like
@@ -84,6 +88,7 @@ void state_update_systemd(SystemdState *sys_state) {
     }
     
     trigger_updates(compute_state());
+    initial_hydration_done = TRUE;
 }
 
 void state_set_health_in_flight(gboolean in_flight) {

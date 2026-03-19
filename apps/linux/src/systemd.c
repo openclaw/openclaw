@@ -210,17 +210,16 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
     g_autoptr(GError) error = NULL;
     g_autoptr(GVariant) result = g_dbus_proxy_call_finish(G_DBUS_PROXY(source_object), res, &error);
 
-    // 1 (continued). If GetUnitFileState fails, treat as not installed
+    // 1. Refresh ExecStart unconditionally, so reconfigurations or deletions update the cache
+    g_free(cached_exec_start);
+    cached_exec_start = extract_exec_start_from_file();
+
+    // 2. If GetUnitFileState fails, treat as not installed
     if (!result) {
         // Failed to get file state -> assume not installed
         SystemdState sys_state = {0};
         state_update_systemd(&sys_state);
         return;
-    }
-    
-    // 2. Refresh ExecStart if we haven't got it yet (user might have just installed it)
-    if (!cached_exec_start) {
-        cached_exec_start = extract_exec_start_from_file();
     }
 
     // 3. Fetch runtime unit path asynchronously

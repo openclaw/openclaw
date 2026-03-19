@@ -84,6 +84,11 @@ static void on_helper_exited(GObject *source_object, GAsyncResult *res, gpointer
     g_print("Tray helper exited.\n");
     g_clear_object(&helper_process);
     helper_stdin = NULL;
+    
+    GApplication *app = g_application_get_default();
+    if (app) {
+        g_application_quit(app);
+    }
 }
 
 void tray_init(void) {
