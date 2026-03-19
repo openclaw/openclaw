@@ -562,6 +562,16 @@ export async function runMemoryFlushIfNeeded(params: {
           groupId: params.followupRun.run.groupId,
           groupChannel: params.followupRun.run.groupChannel,
           groupSpace: params.followupRun.run.groupSpace,
+          // Pin delivery routing to stored run values (same as
+          // agent-runner-execution.ts) so memory flush runs use the
+          // original channel credentials, not whatever the live session
+          // template reflects at flush time.
+          ...(params.followupRun.run.messageProvider != null && {
+            messageProvider: params.followupRun.run.messageProvider,
+          }),
+          ...(params.followupRun.run.agentAccountId != null && {
+            agentAccountId: params.followupRun.run.agentAccountId,
+          }),
           trigger: "memory",
           memoryFlushWritePath,
           prompt: resolveMemoryFlushPromptForRun({

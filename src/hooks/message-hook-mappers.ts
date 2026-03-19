@@ -235,6 +235,7 @@ export function toPluginInboundClaimContext(
   return {
     channelId: canonical.channelId,
     accountId: canonical.accountId,
+    sessionKey: canonical.sessionKey,
     conversationId,
     parentConversationId: deriveParentConversationId(canonical),
     senderId: canonical.senderId,
