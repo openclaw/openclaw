@@ -11,7 +11,7 @@ import {
   type ReplyPayload,
   type RuntimeEnv,
   type RuntimeLogger,
-} from "openclaw/plugin-sdk/matrix";
+} from "../../runtime-api.js";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { formatMatrixMediaUnavailableText } from "../media-text.js";
 import { fetchMatrixPollSnapshot } from "../poll-summary.js";

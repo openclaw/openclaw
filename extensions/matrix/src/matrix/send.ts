@@ -1,4 +1,4 @@
-import type { PollInput } from "openclaw/plugin-sdk/matrix";
+import type { PollInput } from "../runtime-api.js";
 import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
