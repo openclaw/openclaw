@@ -337,421 +337,426 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     if (!name) {
       return;
     }
-    switch (name) {
-      case "help":
-        chatLog.addSystem(
-          helpText({
-            provider: state.sessionInfo.modelProvider,
-            model: state.sessionInfo.model,
-          }),
-        );
-        break;
-      case "status":
-        try {
-          const status = await client.getStatus();
-          if (typeof status === "string") {
-            chatLog.addSystem(status);
-            break;
-          }
-          if (status && typeof status === "object") {
-            const lines = formatStatusSummary(status as GatewayStatusSummary);
-            for (const line of lines) {
-              chatLog.addSystem(line);
-            }
-            break;
-          }
-          chatLog.addSystem("status: unknown response");
-        } catch (err) {
-          chatLog.addSystem(`status failed: ${String(err)}`);
-        }
-        break;
-      case "agent":
-        if (!args) {
-          await openAgentSelector();
-        } else {
-          await setAgent(args);
-        }
-        break;
-      case "agents":
-        await openAgentSelector();
-        break;
-      case "session":
-        if (!args) {
-          await openSessionSelector();
-        } else {
-          await setSession(args);
-        }
-        break;
-      case "sessions":
-        await openSessionSelector();
-        break;
-      case "project": {
-        if (!args) {
-          openProjectSelector();
+    try {
+      switch (name) {
+        case "help":
+          chatLog.addSystem(
+            helpText({
+              provider: state.sessionInfo.modelProvider,
+              model: state.sessionInfo.model,
+            }),
+          );
           break;
-        }
-        const projectArgs = args.trim().split(/\s+/);
-        const subCmd = projectArgs[0];
-        const subArgs = projectArgs.slice(1).join(" ");
-        switch (subCmd) {
-          case "new": {
-            if (!subArgs) {
-              chatLog.addSystem("usage: /project new <path>");
+        case "status":
+          try {
+            const status = await client.getStatus();
+            if (typeof status === "string") {
+              chatLog.addSystem(status);
               break;
             }
-            try {
-              const targetPath = subArgs.trim();
-              const slug = targetPath.split("/").pop() ?? "project";
-              const entry = scaffoldProject({
-                id: slug.toLowerCase(),
-                name: slug,
-                targetPath,
-              });
-              chatLog.addSystem(
-                `scaffolded and registered project: ${entry.name} at ${entry.path}`,
-              );
-              await setProject(entry.id);
-            } catch (err) {
-              chatLog.addSystem(`project new failed: ${String(err)}`);
-            }
-            break;
-          }
-          case "add": {
-            if (!subArgs) {
-              chatLog.addSystem("usage: /project add <path>");
+            if (status && typeof status === "object") {
+              const lines = formatStatusSummary(status as GatewayStatusSummary);
+              for (const line of lines) {
+                chatLog.addSystem(line);
+              }
               break;
             }
-            try {
-              const addPath = subArgs.trim();
-              const slug = addPath.split("/").pop() ?? "project";
-              const entry = registerProject({
-                id: slug.toLowerCase(),
-                name: slug,
-                path: addPath,
-              });
-              chatLog.addSystem(`registered project: ${entry.name} (${entry.path})`);
-            } catch (err) {
-              chatLog.addSystem(`project add failed: ${String(err)}`);
-            }
+            chatLog.addSystem("status: unknown response");
+          } catch (err) {
+            chatLog.addSystem(`status failed: ${String(err)}`);
+          }
+          break;
+        case "agent":
+          if (!args) {
+            await openAgentSelector();
+          } else {
+            await setAgent(args);
+          }
+          break;
+        case "agents":
+          await openAgentSelector();
+          break;
+        case "session":
+          if (!args) {
+            await openSessionSelector();
+          } else {
+            await setSession(args);
+          }
+          break;
+        case "sessions":
+          await openSessionSelector();
+          break;
+        case "project": {
+          if (!args) {
+            openProjectSelector();
             break;
           }
-          case "sync": {
-            if (subArgs === "all") {
-              chatLog.addSystem("syncing all projects...");
-              const results = syncAllProjects();
-              for (const { project, result } of results) {
+          const projectArgs = args.trim().split(/\s+/);
+          const subCmd = projectArgs[0];
+          const subArgs = projectArgs.slice(1).join(" ");
+          switch (subCmd) {
+            case "new": {
+              if (!subArgs) {
+                chatLog.addSystem("usage: /project new <path>");
+                break;
+              }
+              try {
+                const targetPath = subArgs.trim();
+                const slug = targetPath.split("/").pop() ?? "project";
+                const entry = scaffoldProject({
+                  id: slug.toLowerCase(),
+                  name: slug,
+                  targetPath,
+                });
+                chatLog.addSystem(
+                  `scaffolded and registered project: ${entry.name} at ${entry.path}`,
+                );
+                await setProject(entry.id);
+              } catch (err) {
+                chatLog.addSystem(`project new failed: ${String(err)}`);
+              }
+              break;
+            }
+            case "add": {
+              if (!subArgs) {
+                chatLog.addSystem("usage: /project add <path>");
+                break;
+              }
+              try {
+                const addPath = subArgs.trim();
+                const slug = addPath.split("/").pop() ?? "project";
+                const entry = registerProject({
+                  id: slug.toLowerCase(),
+                  name: slug,
+                  path: addPath,
+                });
+                chatLog.addSystem(`registered project: ${entry.name} (${entry.path})`);
+              } catch (err) {
+                chatLog.addSystem(`project add failed: ${String(err)}`);
+              }
+              break;
+            }
+            case "sync": {
+              if (subArgs === "all") {
+                chatLog.addSystem("syncing all projects...");
+                const results = syncAllProjects();
+                for (const { project, result } of results) {
+                  if (result.ok) {
+                    chatLog.addSystem(`${project.name}: synced`);
+                  } else {
+                    chatLog.addSystem(
+                      `${project.name}: sync failed — ${result.error ?? "unknown"}`,
+                    );
+                  }
+                }
+              } else {
+                const pid = subArgs || state.currentProjectId;
+                if (!pid) {
+                  chatLog.addSystem("no active project — specify an id or use /project sync all");
+                  break;
+                }
+                const proj = findProject(pid);
+                if (!proj) {
+                  chatLog.addSystem(`unknown project: ${pid}`);
+                  break;
+                }
+                chatLog.addSystem(`syncing ${proj.name}...`);
+                const result = syncProject(proj);
                 if (result.ok) {
-                  chatLog.addSystem(`${project.name}: synced`);
+                  chatLog.addSystem(`${proj.name}: synced`);
                 } else {
-                  chatLog.addSystem(`${project.name}: sync failed — ${result.error ?? "unknown"}`);
+                  chatLog.addSystem(`${proj.name}: sync failed — ${result.error ?? "unknown"}`);
                 }
               }
-            } else {
-              const pid = subArgs || state.currentProjectId;
-              if (!pid) {
-                chatLog.addSystem("no active project — specify an id or use /project sync all");
-                break;
-              }
-              const proj = findProject(pid);
-              if (!proj) {
-                chatLog.addSystem(`unknown project: ${pid}`);
-                break;
-              }
-              chatLog.addSystem(`syncing ${proj.name}...`);
-              const result = syncProject(proj);
-              if (result.ok) {
-                chatLog.addSystem(`${proj.name}: synced`);
-              } else {
-                chatLog.addSystem(`${proj.name}: sync failed — ${result.error ?? "unknown"}`);
-              }
-            }
-            break;
-          }
-          case "remove": {
-            if (!subArgs) {
-              chatLog.addSystem("usage: /project remove <id>");
               break;
             }
-            if (removeProject(subArgs.trim())) {
-              if (state.currentProjectId === subArgs.trim()) {
-                state.currentProjectId = null;
-                state.currentProjectPath = null;
+            case "remove": {
+              if (!subArgs) {
+                chatLog.addSystem("usage: /project remove <id>");
+                break;
               }
-              chatLog.addSystem(`removed project: ${subArgs.trim()}`);
-            } else {
-              chatLog.addSystem(`project not found: ${subArgs.trim()}`);
+              if (removeProject(subArgs.trim())) {
+                if (state.currentProjectId === subArgs.trim()) {
+                  state.currentProjectId = null;
+                  state.currentProjectPath = null;
+                }
+                chatLog.addSystem(`removed project: ${subArgs.trim()}`);
+              } else {
+                chatLog.addSystem(`project not found: ${subArgs.trim()}`);
+              }
+              break;
             }
-            break;
+            default:
+              await setProject(subCmd);
+              break;
           }
-          default:
-            await setProject(subCmd);
-            break;
-        }
-        break;
-      }
-      case "projects":
-        openProjectSelector();
-        break;
-      case "model":
-        if (!args) {
-          await openModelSelector();
-        } else {
-          try {
-            const modelValue = args.trim().toLowerCase() === "auto" ? AUTO_MODEL : args;
-            const result = await client.patchSession({
-              key: state.currentSessionKey,
-              model: modelValue,
-              allowAnyCatalogModel: true,
-            });
-            const displayLabel = modelValue === AUTO_MODEL ? "Auto (Recommended)" : args;
-            chatLog.addSystem(`model set to ${displayLabel}`);
-            applySessionInfoFromPatch(result);
-            await refreshSessionInfo();
-          } catch (err) {
-            chatLog.addSystem(`model set failed: ${String(err)}`);
-          }
-        }
-        break;
-      case "models":
-        await openModelSelector();
-        break;
-      case "edit":
-        if (!args) {
-          chatLog.addSystem("usage: /edit <prompt-id> <new prompt text>");
           break;
         }
-        try {
-          const parsed = parseEditCommandArgs(args);
-          if (!parsed) {
+        case "projects":
+          openProjectSelector();
+          break;
+        case "model":
+          if (!args) {
+            await openModelSelector();
+          } else {
+            try {
+              const modelValue = args.trim().toLowerCase() === "auto" ? AUTO_MODEL : args;
+              const result = await client.patchSession({
+                key: state.currentSessionKey,
+                model: modelValue,
+                allowAnyCatalogModel: true,
+              });
+              const displayLabel = modelValue === AUTO_MODEL ? "Auto (Recommended)" : args;
+              chatLog.addSystem(`model set to ${displayLabel}`);
+              applySessionInfoFromPatch(result);
+              await refreshSessionInfo();
+            } catch (err) {
+              chatLog.addSystem(`model set failed: ${String(err)}`);
+            }
+          }
+          break;
+        case "models":
+          await openModelSelector();
+          break;
+        case "edit":
+          if (!args) {
             chatLog.addSystem("usage: /edit <prompt-id> <new prompt text>");
             break;
           }
-          const history = (await client.loadHistory({
-            sessionKey: state.currentSessionKey,
-            limit: 400,
-          })) as { messages?: unknown[] };
-          const messages = Array.isArray(history?.messages) ? history.messages : [];
-          const promptPivots = collectUserPromptPivots(messages);
-          const pivot = matchPromptPivotById(promptPivots, parsed.promptId);
-          if (!pivot) {
-            chatLog.addSystem(`edit failed: unknown prompt id ${parsed.promptId}`);
+          try {
+            const parsed = parseEditCommandArgs(args);
+            if (!parsed) {
+              chatLog.addSystem("usage: /edit <prompt-id> <new prompt text>");
+              break;
+            }
+            const history = (await client.loadHistory({
+              sessionKey: state.currentSessionKey,
+              limit: 400,
+            })) as { messages?: unknown[] };
+            const messages = Array.isArray(history?.messages) ? history.messages : [];
+            const promptPivots = collectUserPromptPivots(messages);
+            const pivot = matchPromptPivotById(promptPivots, parsed.promptId);
+            if (!pivot) {
+              chatLog.addSystem(`edit failed: unknown prompt id ${parsed.promptId}`);
+              break;
+            }
+            chatLog.addSystem(`editing prompt ${pivot.promptId}…`);
+            const runId = randomUUID();
+            noteLocalRunId(runId);
+            state.activeChatRunId = runId;
+            setActivityStatus("sending");
+            tui.requestRender();
+            await client.editChat({
+              sessionKey: state.currentSessionKey,
+              message: parsed.nextText,
+              runId,
+              messageId: pivot.messageId,
+              userMessageIndex: pivot.userMessageIndex,
+              thinking: opts.thinking,
+            });
+            chatLog.addUser(parsed.nextText, createLocalPromptId());
+            setActivityStatus("waiting");
+            tui.requestRender();
+          } catch (err) {
+            if (state.activeChatRunId) {
+              forgetLocalRunId?.(state.activeChatRunId);
+            }
+            state.activeChatRunId = null;
+            chatLog.addSystem(`edit failed: ${String(err)}`);
+            setActivityStatus("error");
+            tui.requestRender();
+          }
+          break;
+        case "think":
+          if (!args) {
+            const levels = formatThinkingLevels(
+              state.sessionInfo.modelProvider,
+              state.sessionInfo.model,
+              "|",
+            );
+            chatLog.addSystem(`usage: /think <auto|${levels}>`);
             break;
           }
-          chatLog.addSystem(`editing prompt ${pivot.promptId}…`);
-          const runId = randomUUID();
-          noteLocalRunId(runId);
-          state.activeChatRunId = runId;
-          setActivityStatus("sending");
-          tui.requestRender();
-          await client.editChat({
-            sessionKey: state.currentSessionKey,
-            message: parsed.nextText,
-            runId,
-            messageId: pivot.messageId,
-            userMessageIndex: pivot.userMessageIndex,
-            thinking: opts.thinking,
-          });
-          chatLog.addUser(parsed.nextText, createLocalPromptId());
-          setActivityStatus("waiting");
-          tui.requestRender();
-        } catch (err) {
-          if (state.activeChatRunId) {
-            forgetLocalRunId?.(state.activeChatRunId);
+          try {
+            const normalizedArgs = args.trim().toLowerCase();
+            const clearToAuto = normalizedArgs === "auto" || normalizedArgs === "level auto";
+            const result = await client.patchSession({
+              key: state.currentSessionKey,
+              thinkingLevel: clearToAuto ? "auto" : args,
+            });
+            chatLog.addSystem(
+              clearToAuto ? "thinking set to auto (inherit)" : `thinking set to ${args}`,
+            );
+            applySessionInfoFromPatch(result);
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`think failed: ${String(err)}`);
           }
-          state.activeChatRunId = null;
-          chatLog.addSystem(`edit failed: ${String(err)}`);
-          setActivityStatus("error");
-          tui.requestRender();
-        }
-        break;
-      case "think":
-        if (!args) {
-          const levels = formatThinkingLevels(
-            state.sessionInfo.modelProvider,
-            state.sessionInfo.model,
-            "|",
-          );
-          chatLog.addSystem(`usage: /think <auto|${levels}>`);
+          break;
+        case "verbose":
+          if (!args) {
+            chatLog.addSystem("usage: /verbose <on|off>");
+            break;
+          }
+          try {
+            const result = await client.patchSession({
+              key: state.currentSessionKey,
+              verboseLevel: args,
+            });
+            chatLog.addSystem(`verbose set to ${args}`);
+            applySessionInfoFromPatch(result);
+            await loadHistory();
+          } catch (err) {
+            chatLog.addSystem(`verbose failed: ${String(err)}`);
+          }
+          break;
+        case "reasoning":
+          if (!args) {
+            chatLog.addSystem("usage: /reasoning <on|off>");
+            break;
+          }
+          try {
+            const result = await client.patchSession({
+              key: state.currentSessionKey,
+              reasoningLevel: args,
+            });
+            chatLog.addSystem(`reasoning set to ${args}`);
+            applySessionInfoFromPatch(result);
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`reasoning failed: ${String(err)}`);
+          }
+          break;
+        case "usage": {
+          const normalized = args ? normalizeUsageDisplay(args) : undefined;
+          if (args && !normalized) {
+            chatLog.addSystem("usage: /usage <off|tokens|full>");
+            break;
+          }
+          const currentRaw = state.sessionInfo.responseUsage;
+          const current = resolveResponseUsageMode(currentRaw);
+          const next =
+            normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+          try {
+            const result = await client.patchSession({
+              key: state.currentSessionKey,
+              responseUsage: next === "off" ? null : next,
+            });
+            chatLog.addSystem(`usage footer: ${next}`);
+            applySessionInfoFromPatch(result);
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`usage failed: ${String(err)}`);
+          }
           break;
         }
-        try {
-          const normalizedArgs = args.trim().toLowerCase();
-          const clearToAuto = normalizedArgs === "auto" || normalizedArgs === "level auto";
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            thinkingLevel: clearToAuto ? "auto" : args,
-          });
-          chatLog.addSystem(
-            clearToAuto ? "thinking set to auto (inherit)" : `thinking set to ${args}`,
-          );
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`think failed: ${String(err)}`);
-        }
-        break;
-      case "verbose":
-        if (!args) {
-          chatLog.addSystem("usage: /verbose <on|off>");
+        case "elevated":
+          if (!args) {
+            chatLog.addSystem("usage: /elevated <on|off|ask|full>");
+            break;
+          }
+          if (!["on", "off", "ask", "full"].includes(args)) {
+            chatLog.addSystem("usage: /elevated <on|off|ask|full>");
+            break;
+          }
+          try {
+            const result = await client.patchSession({
+              key: state.currentSessionKey,
+              elevatedLevel: args,
+            });
+            chatLog.addSystem(`elevated set to ${args}`);
+            applySessionInfoFromPatch(result);
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`elevated failed: ${String(err)}`);
+          }
+          break;
+        case "activation":
+          if (!args) {
+            chatLog.addSystem("usage: /activation <mention|always>");
+            break;
+          }
+          try {
+            const result = await client.patchSession({
+              key: state.currentSessionKey,
+              groupActivation: args === "always" ? "always" : "mention",
+            });
+            chatLog.addSystem(`activation set to ${args}`);
+            applySessionInfoFromPatch(result);
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`activation failed: ${String(err)}`);
+          }
+          break;
+        case "new": {
+          try {
+            state.sessionInfo.inputTokens = null;
+            state.sessionInfo.outputTokens = null;
+            state.sessionInfo.totalTokens = null;
+            tui.requestRender();
+            // Unique session key so /new does not broadcast to other TUI clients (see #39217).
+            const parts = state.currentSessionKey.split(":");
+            const newKey =
+              parts.length >= 2
+                ? `${parts.slice(0, -1).join(":")}:tui-${randomUUID()}`
+                : `main:tui-${randomUUID()}`;
+            await client.resetSession(newKey, "new");
+            await setSession(newKey);
+            chatLog.addSystem(`new session ${formatSessionKey(newKey)}`);
+            await loadHistory();
+          } catch (err) {
+            chatLog.addSystem(`new session failed: ${String(err)}`);
+          }
           break;
         }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            verboseLevel: args,
-          });
-          chatLog.addSystem(`verbose set to ${args}`);
-          applySessionInfoFromPatch(result);
-          await loadHistory();
-        } catch (err) {
-          chatLog.addSystem(`verbose failed: ${String(err)}`);
-        }
-        break;
-      case "reasoning":
-        if (!args) {
-          chatLog.addSystem("usage: /reasoning <on|off>");
-          break;
-        }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            reasoningLevel: args,
-          });
-          chatLog.addSystem(`reasoning set to ${args}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`reasoning failed: ${String(err)}`);
-        }
-        break;
-      case "usage": {
-        const normalized = args ? normalizeUsageDisplay(args) : undefined;
-        if (args && !normalized) {
-          chatLog.addSystem("usage: /usage <off|tokens|full>");
-          break;
-        }
-        const currentRaw = state.sessionInfo.responseUsage;
-        const current = resolveResponseUsageMode(currentRaw);
-        const next =
-          normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            responseUsage: next === "off" ? null : next,
-          });
-          chatLog.addSystem(`usage footer: ${next}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`usage failed: ${String(err)}`);
-        }
-        break;
-      }
-      case "elevated":
-        if (!args) {
-          chatLog.addSystem("usage: /elevated <on|off|ask|full>");
-          break;
-        }
-        if (!["on", "off", "ask", "full"].includes(args)) {
-          chatLog.addSystem("usage: /elevated <on|off|ask|full>");
-          break;
-        }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            elevatedLevel: args,
-          });
-          chatLog.addSystem(`elevated set to ${args}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`elevated failed: ${String(err)}`);
-        }
-        break;
-      case "activation":
-        if (!args) {
-          chatLog.addSystem("usage: /activation <mention|always>");
-          break;
-        }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            groupActivation: args === "always" ? "always" : "mention",
-          });
-          chatLog.addSystem(`activation set to ${args}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`activation failed: ${String(err)}`);
-        }
-        break;
-      case "new": {
-        try {
-          state.sessionInfo.inputTokens = null;
-          state.sessionInfo.outputTokens = null;
-          state.sessionInfo.totalTokens = null;
-          tui.requestRender();
-          // Unique session key so /new does not broadcast to other TUI clients (see #39217).
-          const parts = state.currentSessionKey.split(":");
-          const newKey =
-            parts.length >= 2
-              ? `${parts.slice(0, -1).join(":")}:tui-${randomUUID()}`
-              : `main:tui-${randomUUID()}`;
-          await client.resetSession(newKey, "new");
-          await setSession(newKey);
-          chatLog.addSystem(`new session ${formatSessionKey(newKey)}`);
-          await loadHistory();
-        } catch (err) {
-          chatLog.addSystem(`new session failed: ${String(err)}`);
-        }
-        break;
-      }
-      case "reset":
-        try {
-          state.sessionInfo.inputTokens = null;
-          state.sessionInfo.outputTokens = null;
-          state.sessionInfo.totalTokens = null;
-          tui.requestRender();
+        case "reset":
+          try {
+            state.sessionInfo.inputTokens = null;
+            state.sessionInfo.outputTokens = null;
+            state.sessionInfo.totalTokens = null;
+            tui.requestRender();
 
-          await client.resetSession(state.currentSessionKey, name);
-          chatLog.addSystem(`session ${state.currentSessionKey} reset`);
-          await loadHistory();
-        } catch (err) {
-          chatLog.addSystem(`reset failed: ${String(err)}`);
-        }
-        break;
-      case "archive-session":
-        if (archiveSessionPending) {
-          chatLog.addSystem("archive already in progress");
+            await client.resetSession(state.currentSessionKey, name);
+            chatLog.addSystem(`session ${state.currentSessionKey} reset`);
+            await loadHistory();
+          } catch (err) {
+            chatLog.addSystem(`reset failed: ${String(err)}`);
+          }
           break;
-        }
-        archiveSessionPending = true;
-        try {
-          setActivityStatus("archiving current session...");
-          chatLog.addSystem("Archiving current session...");
-          await sendMessage("/archive-session");
-          chatLog.addSystem("Archived. Exiting now.");
+        case "archive-session":
+          if (archiveSessionPending) {
+            chatLog.addSystem("archive already in progress");
+            break;
+          }
+          archiveSessionPending = true;
+          try {
+            setActivityStatus("archiving current session...");
+            chatLog.addSystem("Archiving current session...");
+            await sendMessage("/archive-session");
+            chatLog.addSystem("Archived. Exiting now.");
+            requestExit();
+          } catch (err) {
+            archiveSessionPending = false;
+            chatLog.addSystem(`archive-session failed: ${String(err)}`);
+          }
+          break;
+        case "abort":
+          await abortActive();
+          break;
+        case "settings":
+          openSettings();
+          break;
+        case "exit":
+        case "quit":
           requestExit();
-        } catch (err) {
-          archiveSessionPending = false;
-          chatLog.addSystem(`archive-session failed: ${String(err)}`);
-        }
-        break;
-      case "abort":
-        await abortActive();
-        break;
-      case "settings":
-        openSettings();
-        break;
-      case "exit":
-      case "quit":
-        requestExit();
-        break;
-      default:
-        await sendMessage(raw);
-        break;
+          break;
+        default:
+          await sendMessage(raw);
+          break;
+      }
+    } finally {
+      tui.requestRender();
     }
-    tui.requestRender();
   };
 
   const sendMessage = async (text: string) => {

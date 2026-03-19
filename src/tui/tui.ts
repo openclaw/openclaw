@@ -573,7 +573,10 @@ export async function runTui(opts: TuiOptions) {
     [...busyStates].some((s) => text.startsWith(`${s} `) || text.startsWith(`${s}(`));
   /** If we stay in a busy state this long without an end/error event, revert to idle so the UI does not hang. */
   const ACTIVITY_STALE_MS = 5 * 60_000; // 5 minutes — allow long model runs to complete
+  /** "waiting" (for gateway to accept/start) gets a shorter cap so we don't hang if the gateway never responds. */
+  const WAITING_STALE_MS = 30_000; // 30 seconds
   let activityStaleTimeout: ReturnType<typeof setTimeout> | null = null;
+  let waitingStaleTimeout: ReturnType<typeof setTimeout> | null = null;
   let statusText: Text | null = null;
   let statusLoader: Loader | null = null;
 
@@ -626,13 +629,43 @@ export async function runTui(opts: TuiOptions) {
     return `${formatTokenCount(inVal)} in / ${formatTokenCount(outVal)} out`;
   };
 
+  const forceWaitingToIdle = () => {
+    if (activityStatus !== "waiting") {
+      return;
+    }
+    if (waitingStaleTimeout) {
+      clearTimeout(waitingStaleTimeout);
+      waitingStaleTimeout = null;
+    }
+    activityStatus = "idle";
+    if (activityStaleTimeout) {
+      clearTimeout(activityStaleTimeout);
+      activityStaleTimeout = null;
+    }
+    const runId = activeChatRunId;
+    activeChatRunId = null;
+    if (runId) {
+      forgetLocalRunId?.(runId);
+    }
+    chatLog.addSystem("response timed out (30s) — you can send another message");
+    setConnectionStatus("response timed out", 4000);
+    stopWaitingTimer();
+    renderStatus();
+    tui.requestRender();
+  };
+
   const updateBusyStatusMessage = () => {
     if (!statusLoader || !statusStartedAt) {
       return;
     }
+    const elapsedMs = Date.now() - statusStartedAt;
     const elapsed = formatElapsed(statusStartedAt);
 
     if (activityStatus === "waiting") {
+      if (elapsedMs >= WAITING_STALE_MS) {
+        forceWaitingToIdle();
+        return;
+      }
       waitingTick++;
       statusLoader.setMessage(
         buildWaitingStatusMessage({
@@ -668,7 +701,11 @@ export async function runTui(opts: TuiOptions) {
         return;
       }
       updateBusyStatusMessage();
+      tui.requestRender();
     }, 1000);
+    if (typeof statusTimer?.unref === "function") {
+      statusTimer.unref();
+    }
   };
 
   const stopStatusTimer = () => {
@@ -697,7 +734,11 @@ export async function runTui(opts: TuiOptions) {
         return;
       }
       updateBusyStatusMessage();
+      tui.requestRender();
     }, 120);
+    if (typeof waitingTimer?.unref === "function") {
+      waitingTimer.unref();
+    }
   };
 
   const stopWaitingTimer = () => {
@@ -756,6 +797,10 @@ export async function runTui(opts: TuiOptions) {
       clearTimeout(activityStaleTimeout);
       activityStaleTimeout = null;
     }
+    if (waitingStaleTimeout) {
+      clearTimeout(waitingStaleTimeout);
+      waitingStaleTimeout = null;
+    }
     activityStatus = text;
     if (isBusyStatus(text)) {
       activityStaleTimeout = setTimeout(() => {
@@ -764,6 +809,13 @@ export async function runTui(opts: TuiOptions) {
         setConnectionStatus("run timed out", 4000);
         renderStatus();
       }, ACTIVITY_STALE_MS);
+      if (text === "waiting") {
+        waitingStaleTimeout = setTimeout(() => {
+          waitingStaleTimeout = null;
+          forceWaitingToIdle();
+        }, WAITING_STALE_MS);
+        waitingStaleTimeout.unref();
+      }
     }
     renderStatus();
   };
@@ -987,6 +1039,7 @@ export async function runTui(opts: TuiOptions) {
     }
   };
 
+  const CONNECT_STARTUP_TIMEOUT_MS = 20_000;
   client.onConnected = () => {
     isConnected = true;
     pairingHintShown = false;
@@ -994,22 +1047,38 @@ export async function runTui(opts: TuiOptions) {
     wasDisconnected = false;
     setConnectionStatus("connected");
     tui.requestRender();
-    void (async () => {
-      try {
-        await refreshAgents();
-        updateHeader();
-        tui.requestRender();
-        await loadHistory();
-        setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);
-        if (!autoMessageSent && autoMessage) {
-          autoMessageSent = true;
-          await sendMessage(autoMessage);
+    // Defer startup so the connection callback returns immediately and the UI stays responsive.
+    setImmediate(() => {
+      const startup = (async () => {
+        try {
+          await refreshAgents();
+          updateHeader();
+          tui.requestRender();
+          await loadHistory();
+          setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);
+          if (!autoMessageSent && autoMessage) {
+            autoMessageSent = true;
+            await sendMessage(autoMessage);
+          }
+        } catch (err) {
+          chatLog.addSystem(`startup: ${String(err)}`);
+        } finally {
+          updateFooter();
+          tui.requestRender();
         }
-      } finally {
+      })();
+      const timeout = new Promise<void>((resolve) => {
+        const t = setTimeout(() => {
+          chatLog.addSystem("startup timed out — you can continue; history may be incomplete");
+          resolve();
+        }, CONNECT_STARTUP_TIMEOUT_MS);
+        t.unref();
+      });
+      void Promise.race([startup, timeout]).then(() => {
         updateFooter();
         tui.requestRender();
-      }
-    })();
+      });
+    });
   };
 
   client.onDisconnected = (reason) => {
