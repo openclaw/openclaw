@@ -44,6 +44,7 @@ interface OllamaChatRequest {
   stream: boolean;
   tools?: OllamaTool[];
   options?: Record<string, unknown>;
+  think?: boolean;
 }
 
 interface OllamaChatMessage {
@@ -465,6 +466,7 @@ export function createOllamaStreamFn(
           stream: true,
           ...(ollamaTools.length > 0 ? { tools: ollamaTools } : {}),
           options: ollamaOptions,
+          ...(!options?.reasoning ? { think: false } : {}),
         };
 
         const headers: Record<string, string> = {
