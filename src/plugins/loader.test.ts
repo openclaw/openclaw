@@ -312,30 +312,38 @@ function createPluginSdkAliasFixture(params?: {
   packageName?: string;
   packageExports?: Record<string, unknown>;
   trustedRootIndicators?: boolean;
+  trustedRootIndicatorMode?: "bin+marker" | "cli-entry-only" | "none";
 }) {
   const root = makeTempDir();
   const srcFile = path.join(root, "src", "plugin-sdk", params?.srcFile ?? "index.ts");
   const distFile = path.join(root, "dist", "plugin-sdk", params?.distFile ?? "index.js");
   mkdirSafe(path.dirname(srcFile));
   mkdirSafe(path.dirname(distFile));
-  const trustedRootIndicators = params?.trustedRootIndicators ?? true;
+  const trustedRootIndicatorMode =
+    params?.trustedRootIndicatorMode ??
+    (params?.trustedRootIndicators === false ? "none" : "bin+marker");
   const packageJson: Record<string, unknown> = {
     name: params?.packageName ?? "openclaw",
     type: "module",
   };
-  if (trustedRootIndicators) {
+  if (trustedRootIndicatorMode === "bin+marker") {
     packageJson.bin = {
       openclaw: "openclaw.mjs",
     };
   }
-  if (params?.packageExports) {
+  if (params?.packageExports || trustedRootIndicatorMode === "cli-entry-only") {
+    const trustedExports: Record<string, unknown> =
+      trustedRootIndicatorMode === "cli-entry-only"
+        ? { "./cli-entry": { default: "./dist/cli-entry.js" } }
+        : {};
     packageJson.exports = {
       "./plugin-sdk": { default: "./dist/plugin-sdk/index.js" },
+      ...trustedExports,
       ...params.packageExports,
     };
   }
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(packageJson, null, 2), "utf-8");
-  if (trustedRootIndicators) {
+  if (trustedRootIndicatorMode === "bin+marker") {
     fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n", "utf-8");
   }
   fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
@@ -3435,6 +3443,23 @@ module.exports = {
       }),
     );
     expect(subpaths).toEqual([]);
+  });
+
+  it("derives plugin-sdk subpaths via cwd fallback when trusted root indicator is cli-entry export", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageName: "moltbot",
+      trustedRootIndicatorMode: "cli-entry-only",
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      },
+    });
+    const subpaths = withCwd(fixture.root, () =>
+      __testing.listPluginSdkExportedSubpaths({
+        modulePath: "/tmp/tsx-cache/openclaw-loader.js",
+      }),
+    );
+    expect(subpaths).toEqual(["channel-runtime", "core"]);
   });
 
   it("does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenClaw root", () => {
