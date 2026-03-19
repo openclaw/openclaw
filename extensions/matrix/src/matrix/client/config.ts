@@ -19,6 +19,7 @@ import {
   listNormalizedMatrixAccountIds,
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-update.js";
+import { credentialsMatchConfig, loadMatrixCredentials } from "../credentials-read.js";
 import { MatrixClient } from "../sdk.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
@@ -338,13 +339,11 @@ export async function resolveMatrixAuth(params?: {
 }): Promise<MatrixAuth> {
   const { cfg, env, accountId, resolved } = resolveMatrixAuthContext(params);
   const homeserver = validateMatrixHomeserverUrl(resolved.homeserver);
-
-  const {
-    loadMatrixCredentials,
-    saveMatrixCredentials,
-    credentialsMatchConfig,
-    touchMatrixCredentials,
-  } = await import("../credentials.js");
+  let credentialsWriter: typeof import("../credentials-write.runtime.js") | undefined;
+  const loadCredentialsWriter = async () => {
+    credentialsWriter ??= await import("../credentials-write.runtime.js");
+    return credentialsWriter;
+  };
 
   const cached = loadMatrixCredentials(env, accountId);
   const cachedCredentials =
@@ -391,6 +390,7 @@ export async function resolveMatrixAuth(params?: {
       cachedCredentials.userId !== userId ||
       (cachedCredentials.deviceId || undefined) !== knownDeviceId;
     if (shouldRefreshCachedCredentials) {
+      const { saveMatrixCredentials } = await loadCredentialsWriter();
       await saveMatrixCredentials(
         {
           homeserver,
@@ -402,6 +402,7 @@ export async function resolveMatrixAuth(params?: {
         accountId,
       );
     } else if (hasMatchingCachedToken) {
+      const { touchMatrixCredentials } = await loadCredentialsWriter();
       await touchMatrixCredentials(env, accountId);
     }
     return {
@@ -418,6 +419,7 @@ export async function resolveMatrixAuth(params?: {
   }
 
   if (cachedCredentials) {
+    const { touchMatrixCredentials } = await loadCredentialsWriter();
     await touchMatrixCredentials(env, accountId);
     return {
       accountId,
@@ -474,6 +476,7 @@ export async function resolveMatrixAuth(params?: {
     encryption: resolved.encryption,
   };
 
+  const { saveMatrixCredentials } = await loadCredentialsWriter();
   await saveMatrixCredentials(
     {
       homeserver: auth.homeserver,
