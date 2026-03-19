@@ -16,7 +16,7 @@ import type {
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasInteractiveReplyBlocks, hasReplyPayloadContent } from "../../interactive/payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { hasPollCreationParams, resolveTelegramPollVisibility } from "../../poll-params.js";
+import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -477,12 +477,6 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   });
 
   const mediaUrl = readStringParam(params, "media", { trim: false });
-  if (channel === "whatsapp") {
-    message = message.replace(/^(?:[ \t]*\r?\n)+/, "");
-    if (!message.trim()) {
-      message = "";
-    }
-  }
   if (
     !hasReplyPayloadContent(
       {
@@ -638,34 +632,18 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
         throw new Error("pollOption requires at least two values");
       }
       const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
-      const pollAnonymous = readBooleanParam(params, "pollAnonymous");
-      const pollPublic = readBooleanParam(params, "pollPublic");
-      const isAnonymous = resolveTelegramPollVisibility({ pollAnonymous, pollPublic });
       const durationHours = readNumberParam(params, "pollDurationHours", {
         integer: true,
         strict: true,
       });
-      const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
-        integer: true,
-        strict: true,
-      });
-
-      if (durationSeconds !== undefined && channel !== "telegram") {
-        throw new Error("pollDurationSeconds is only supported for Telegram polls");
-      }
-      if (isAnonymous !== undefined && channel !== "telegram") {
-        throw new Error("pollAnonymous/pollPublic are only supported for Telegram polls");
-      }
 
       return {
         to,
         question,
         options,
         maxSelections: resolvePollMaxSelections(options.length, allowMultiselect),
-        durationSeconds: durationSeconds ?? undefined,
         durationHours: durationHours ?? undefined,
         threadId: resolvedThreadId ?? undefined,
-        isAnonymous,
       };
     },
   });
