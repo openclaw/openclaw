@@ -507,8 +507,7 @@ actor MacNodeRuntime {
             persistAllowlist: persistAllowlist,
             security: evaluation.security,
             agentId: evaluation.agentId,
-            command: command,
-            allowlistResolutions: evaluation.allowlistResolutions)
+            allowAlwaysPatterns: evaluation.allowAlwaysPatterns)
 
         if evaluation.security == .allowlist, !evaluation.allowlistSatisfied, !evaluation.skillAllow, !approvedByAsk {
             await self.emitExecEvent(
@@ -795,15 +794,11 @@ extension MacNodeRuntime {
         persistAllowlist: Bool,
         security: ExecSecurity,
         agentId: String?,
-        command: [String],
-        allowlistResolutions: [ExecCommandResolution])
+        allowAlwaysPatterns: [String])
     {
         guard persistAllowlist, security == .allowlist else { return }
         var seenPatterns = Set<String>()
-        for candidate in allowlistResolutions {
-            guard let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: candidate) else {
-                continue
-            }
+        for pattern in allowAlwaysPatterns {
             if seenPatterns.insert(pattern).inserted {
                 ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
             }

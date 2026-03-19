@@ -240,7 +240,7 @@ struct ExecAllowlistTests {
         #expect(resolutions[0].executableName == "touch")
     }
 
-    @Test func `resolve for allowlist unwraps env assignments inside shell segments`() {
+    @Test func `resolve for allowlist preserves env assignments inside shell segments`() {
         let command = ["/bin/sh", "-lc", "env FOO=bar /usr/bin/touch /tmp/openclaw-allowlist-test"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
@@ -248,11 +248,11 @@ struct ExecAllowlistTests {
             cwd: nil,
             env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.count == 1)
-        #expect(resolutions[0].resolvedPath == "/usr/bin/touch")
-        #expect(resolutions[0].executableName == "touch")
+        #expect(resolutions[0].resolvedPath == "/usr/bin/env")
+        #expect(resolutions[0].executableName == "env")
     }
 
-    @Test func `resolve for allowlist unwraps env to effective direct executable`() {
+    @Test func `resolve for allowlist preserves env wrapper with modifiers`() {
         let command = ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
@@ -260,8 +260,33 @@ struct ExecAllowlistTests {
             cwd: nil,
             env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.count == 1)
-        #expect(resolutions[0].resolvedPath == "/usr/bin/printf")
-        #expect(resolutions[0].executableName == "printf")
+        #expect(resolutions[0].resolvedPath == "/usr/bin/env")
+        #expect(resolutions[0].executableName == "env")
+    }
+
+    @Test func `approval evaluator resolves shell payload from canonical wrapper text`() async {
+        let command = ["/bin/sh", "-lc", "/usr/bin/printf ok"]
+        let rawCommand = "/bin/sh -lc \"/usr/bin/printf ok\""
+        let evaluation = await ExecApprovalEvaluator.evaluate(
+            command: command,
+            rawCommand: rawCommand,
+            cwd: nil,
+            envOverrides: ["PATH": "/usr/bin:/bin"],
+            agentId: nil)
+
+        #expect(evaluation.displayCommand == rawCommand)
+        #expect(evaluation.allowlistResolutions.count == 1)
+        #expect(evaluation.allowlistResolutions[0].resolvedPath == "/usr/bin/printf")
+        #expect(evaluation.allowlistResolutions[0].executableName == "printf")
+    }
+
+    @Test func `allow always patterns unwrap env wrapper modifiers to the inner executable`() {
+        let patterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
+            command: ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"],
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+
+        #expect(patterns == ["/usr/bin/printf"])
     }
 
     @Test func `match all requires every segment to match`() {
