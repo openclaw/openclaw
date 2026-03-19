@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 type RestartHealthSnapshot = {
   healthy: boolean;
   staleGatewayPids: number[];
-  runtime: { status?: string };
+  runtime: { status?: string; pid?: number };
   portUsage: { port: number; status: string; listeners: []; hints: []; errors?: string[] };
 };
 
@@ -202,6 +202,30 @@ describe("runDaemonRestart health checks", () => {
 
     expect(result).toBe(true);
     expect(terminateStaleGatewayPids).toHaveBeenCalledWith([1993]);
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not kill the current running gateway pid when stale detection includes self", async () => {
+    const unhealthy: RestartHealthSnapshot = {
+      healthy: false,
+      staleGatewayPids: [1993, 2111],
+      runtime: { status: "running", pid: 1993 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    };
+    const healthy: RestartHealthSnapshot = {
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running", pid: 1993 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    };
+    waitForGatewayHealthyRestart.mockResolvedValueOnce(unhealthy).mockResolvedValueOnce(healthy);
+    terminateStaleGatewayPids.mockResolvedValue([2111]);
+
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(terminateStaleGatewayPids).toHaveBeenCalledWith([2111]);
     expect(service.restart).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
   });
