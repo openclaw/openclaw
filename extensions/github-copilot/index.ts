@@ -7,7 +7,9 @@ import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js
 import { fetchCopilotUsage } from "./usage.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
-const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
+const CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
+const CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
+const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.2-codex"] as const;
 
 function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
   githubToken: string;
