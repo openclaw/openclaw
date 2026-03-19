@@ -1,9 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expect, vi } from "vitest";
 import {
   __testing as discordThreadBindingTesting,
   createThreadBindingManager as createDiscordThreadBindingManager,
 } from "../../../../extensions/discord/runtime-api.js";
 import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
+import { createMatrixThreadBindingManager } from "../../../../extensions/matrix/src/matrix/thread-bindings.js";
 import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/runtime-api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -126,7 +130,7 @@ type DirectoryContractEntry = {
 type SessionBindingContractEntry = {
   id: string;
   expectedCapabilities: SessionBindingCapabilities;
-  getCapabilities: () => SessionBindingCapabilities;
+  getCapabilities: () => SessionBindingCapabilities | Promise<SessionBindingCapabilities>;
   bindAndResolve: () => Promise<SessionBindingRecord>;
   unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
   cleanup: () => Promise<void> | void;
@@ -589,6 +593,28 @@ const baseSessionBindingCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
+function createMatrixSessionBindingEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    OPENCLAW_STATE_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-session-binding-")),
+  };
+}
+
+function createMatrixSessionBindingAuth() {
+  return {
+    accountId: "default",
+    homeserver: "https://matrix.example.org",
+    userId: "@codex:example.org",
+    accessToken: "token",
+  };
+}
+
+function createMatrixSessionBindingClient() {
+  return {
+    sendMessage: vi.fn(async () => "$matrix-contract-event"),
+  };
+}
+
 export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
   {
     id: "discord",
@@ -767,6 +793,80 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
         channel: "telegram",
         accountId: "default",
         conversationId: "-100200300:topic:77",
+      });
+    },
+  },
+  {
+    id: "matrix",
+    expectedCapabilities: {
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current", "child"],
+    },
+    getCapabilities: async () => {
+      await createMatrixThreadBindingManager({
+        accountId: "default",
+        auth: createMatrixSessionBindingAuth(),
+        client: createMatrixSessionBindingClient() as never,
+        env: createMatrixSessionBindingEnv(),
+        idleTimeoutMs: 60_000,
+        maxAgeMs: 0,
+        enableSweeper: false,
+      });
+      return getSessionBindingService().getCapabilities({
+        channel: "matrix",
+        accountId: "default",
+      });
+    },
+    bindAndResolve: async () => {
+      await createMatrixThreadBindingManager({
+        accountId: "default",
+        auth: createMatrixSessionBindingAuth(),
+        client: createMatrixSessionBindingClient() as never,
+        env: createMatrixSessionBindingEnv(),
+        idleTimeoutMs: 60_000,
+        maxAgeMs: 0,
+        enableSweeper: false,
+      });
+      const service = getSessionBindingService();
+      const binding = await service.bind({
+        targetSessionKey: "agent:matrix:subagent:child-1",
+        targetKind: "subagent",
+        conversation: {
+          channel: "matrix",
+          accountId: "default",
+          conversationId: "!room:example.org",
+        },
+        placement: "current",
+        metadata: {
+          label: "codex-matrix",
+        },
+      });
+      expectResolvedSessionBinding({
+        channel: "matrix",
+        accountId: "default",
+        conversationId: "!room:example.org",
+        targetSessionKey: "agent:matrix:subagent:child-1",
+      });
+      return binding;
+    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
+    cleanup: async () => {
+      const manager = await createMatrixThreadBindingManager({
+        accountId: "default",
+        auth: createMatrixSessionBindingAuth(),
+        client: createMatrixSessionBindingClient() as never,
+        env: createMatrixSessionBindingEnv(),
+        idleTimeoutMs: 60_000,
+        maxAgeMs: 0,
+        enableSweeper: false,
+      });
+      manager.stop();
+      expectClearedSessionBinding({
+        channel: "matrix",
+        accountId: "default",
+        conversationId: "!room:example.org",
       });
     },
   },

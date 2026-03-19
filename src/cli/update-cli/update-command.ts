@@ -563,6 +563,26 @@ async function maybeRestartService(params: {
   restartScriptPath?: string | null;
   invocationCwd?: string;
 }): Promise<void> {
+  async function waitForDetachedRestartHealth() {
+    let health = await waitForGatewayHealthyRestart({
+      service: resolveGatewayService(),
+      port: params.gatewayPort,
+    });
+
+    // Give the restarted gateway its normal probe window before treating
+    // Windows "unknown" listeners as stale and triggering cleanup.
+    if (!health.healthy && process.platform === "win32") {
+      health = await waitForGatewayHealthyRestart({
+        service: resolveGatewayService(),
+        port: params.gatewayPort,
+        attempts: 0,
+        includeUnknownListenersAsStale: true,
+      });
+    }
+
+    return health;
+  }
+
   if (params.shouldRestart) {
     if (!params.opts.json) {
       defaultRuntime.log("");
@@ -614,11 +634,7 @@ async function maybeRestartService(params: {
       }
 
       if (!params.opts.json && restartInitiated) {
-        const service = resolveGatewayService();
-        let health = await waitForGatewayHealthyRestart({
-          service,
-          port: params.gatewayPort,
-        });
+        let health = await waitForDetachedRestartHealth();
         if (!health.healthy && health.staleGatewayPids.length > 0) {
           if (!params.opts.json) {
             defaultRuntime.log(
@@ -629,10 +645,7 @@ async function maybeRestartService(params: {
           }
           await terminateStaleGatewayPids(health.staleGatewayPids);
           await runDaemonRestart();
-          health = await waitForGatewayHealthyRestart({
-            service,
-            port: params.gatewayPort,
-          });
+          health = await waitForDetachedRestartHealth();
         }
 
         if (health.healthy) {

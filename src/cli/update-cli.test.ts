@@ -17,6 +17,9 @@ const serviceLoaded = vi.fn();
 const prepareRestartScript = vi.fn();
 const runRestartScript = vi.fn();
 const mockedRunDaemonInstall = vi.fn();
+const waitForGatewayHealthyRestart = vi.fn();
+const terminateStaleGatewayPids = vi.fn();
+const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
 const serviceReadRuntime = vi.fn();
 const inspectPortUsage = vi.fn();
 const classifyPortListener = vi.fn();
@@ -115,6 +118,12 @@ vi.mock("../infra/ports.js", () => ({
 vi.mock("./update-cli/restart-helper.js", () => ({
   prepareRestartScript: (...args: unknown[]) => prepareRestartScript(...args),
   runRestartScript: (...args: unknown[]) => runRestartScript(...args),
+}));
+
+vi.mock("./daemon-cli/restart-health.js", () => ({
+  waitForGatewayHealthyRestart,
+  terminateStaleGatewayPids,
+  renderRestartDiagnostics,
 }));
 
 // Mock doctor (heavy module; should not run in unit tests)
@@ -340,6 +349,14 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running", pid: 4242, state: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+    terminateStaleGatewayPids.mockResolvedValue([]);
+    renderRestartDiagnostics.mockReturnValue(["diag: unhealthy runtime"]);
     prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
     runRestartScript.mockResolvedValue(undefined);
     inspectPortUsage.mockResolvedValue({
@@ -885,6 +902,107 @@ describe("update-cli", () => {
       testCase.expectedOptions(String(root), context),
     );
     testCase.assertExtra();
+  });
+
+  it("updateCommand delays Windows stale-listener fallback until detached restart retries finish", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    serviceLoaded.mockResolvedValue(true);
+    waitForGatewayHealthyRestart
+      .mockResolvedValueOnce({
+        healthy: false,
+        staleGatewayPids: [],
+        runtime: { status: "stopped" },
+        portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      })
+      .mockResolvedValueOnce({
+        healthy: false,
+        staleGatewayPids: [1993],
+        runtime: { status: "stopped" },
+        portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      })
+      .mockResolvedValueOnce({
+        healthy: false,
+        staleGatewayPids: [],
+        runtime: { status: "stopped" },
+        portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      })
+      .mockResolvedValueOnce({
+        healthy: false,
+        staleGatewayPids: [],
+        runtime: { status: "stopped" },
+        portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      });
+    terminateStaleGatewayPids.mockResolvedValue([1993]);
+    vi.mocked(defaultRuntime.log).mockClear();
+
+    try {
+      await updateCommand({});
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(runRestartScript).toHaveBeenCalled();
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(4);
+    expect(waitForGatewayHealthyRestart.mock.calls[0]?.[0]).toMatchObject({
+      port: 18789,
+    });
+    expect(waitForGatewayHealthyRestart.mock.calls[0]?.[0]).not.toHaveProperty(
+      "includeUnknownListenersAsStale",
+    );
+    expect(waitForGatewayHealthyRestart).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        port: 18789,
+        attempts: 0,
+        includeUnknownListenersAsStale: true,
+      }),
+    );
+    expect(terminateStaleGatewayPids).toHaveBeenCalledWith([1993]);
+    expect(runDaemonRestart).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyRestart.mock.calls[2]?.[0]).toMatchObject({
+      port: 18789,
+    });
+    expect(waitForGatewayHealthyRestart.mock.calls[2]?.[0]).not.toHaveProperty(
+      "includeUnknownListenersAsStale",
+    );
+    expect(waitForGatewayHealthyRestart).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({
+        port: 18789,
+        attempts: 0,
+        includeUnknownListenersAsStale: true,
+      }),
+    );
+    expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
+
+    const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(
+      logLines.some((line) =>
+        line.includes("Found stale gateway process(es) after restart: 1993. Cleaning up..."),
+      ),
+    ).toBe(true);
+    expect(
+      logLines.some((line) => line.includes("Gateway did not become healthy after restart.")),
+    ).toBe(true);
+  });
+
+  it("updateCommand falls back to restart when env refresh install fails", async () => {
+    await runRestartFallbackScenario({ daemonInstall: "fail" });
+  });
+
+  it("updateCommand falls back to restart when no detached restart script is available", async () => {
+    await runRestartFallbackScenario({ daemonInstall: "ok" });
+  });
+
+  it("updateCommand does not refresh service env when --no-restart is set", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    serviceLoaded.mockResolvedValue(true);
+
+    await updateCommand({ restart: false });
+
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
   it("updateCommand continues after doctor sub-step and clears update flag", async () => {

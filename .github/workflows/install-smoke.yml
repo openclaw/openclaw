@@ -85,7 +85,7 @@ jobs:
             node -e "
               const Module = require(\"node:module\");
               const requireFromMatrix = Module.createRequire(\"/app/extensions/matrix/package.json\");
-              requireFromMatrix.resolve(\"@vector-im/matrix-bot-sdk/package.json\");
+              requireFromMatrix.resolve(\"matrix-js-sdk/package.json\");
               requireFromMatrix.resolve(\"@matrix-org/matrix-sdk-crypto-nodejs/package.json\");
               const { spawnSync } = require(\"node:child_process\");
               const run = spawnSync(\"openclaw\", [\"plugins\", \"list\", \"--json\"], { encoding: \"utf8\" });
