@@ -3,7 +3,7 @@ name: blink-phone
 description: >
   Manage workspace phone numbers for AI calling. Buy dedicated phone numbers,
   list existing numbers, update labels, and release numbers. Each number costs
-  10 credits/month and is billed independently. Use before making AI calls to
+  25 credits/month and is billed independently. Use before making AI calls to
   ensure a number is provisioned. The oldest active number is used by default
   for blink ai call; use --from to specify others.
 metadata:
@@ -39,7 +39,7 @@ blink phone buy --label "Australia" --country AU
 # Get JSON (useful for scripting)
 NUMBER=$(blink phone buy --label "Bot" --area-code 914 --json | python3 -c "import json,sys; print(json.loads(sys.stdin.read())['phone_number'])")
 ```
-Costs 10 credits immediately (first month), then 10 credits/month recurring.
+Costs 25 credits immediately (first month), then 25 credits/month recurring.
 
 ## Update a number's label
 ```bash
@@ -88,7 +88,7 @@ Vapi suggests: `914` (NY), `826` (CA), `775` (NV) — others may be available.
 If an area code is unavailable, Vapi returns the error: "This area code is not available. Hint: Try one of 914, 826, 775."
 
 ## Billing
-- 10 credits charged immediately on buy (first month)
-- 10 credits charged monthly on anniversary date
+- 25 credits charged immediately on buy (first month)
+- 25 credits charged monthly on anniversary date
 - Numbers in grace period (payment failed) pause calls for 7 days then are released
-- 1 credit = $0.25 · 10 credits/month = $2.50/month per number
+- 1 credit = $0.25 · 25 credits/month = $2.50/month per number
