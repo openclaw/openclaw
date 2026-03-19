@@ -30,6 +30,7 @@ import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js"
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
+  isGatewayCliClient,
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
@@ -541,9 +542,12 @@ export const agentHandlers: GatewayRequestHandlers = {
         ? request.threadId.trim()
         : undefined;
     const turnSourceChannel =
-      typeof request.channel === "string" && request.channel.trim()
-        ? request.channel.trim()
-        : undefined;
+      typeof request.inputProvenance?.sourceChannel === "string" &&
+      request.inputProvenance.sourceChannel.trim()
+        ? request.inputProvenance.sourceChannel.trim()
+        : isWebchatConnect(client?.connect) || isGatewayCliClient(client?.connect?.client)
+          ? INTERNAL_MESSAGE_CHANNEL
+          : undefined;
     const turnSourceTo =
       typeof request.to === "string" && request.to.trim() ? request.to.trim() : undefined;
     const turnSourceAccountId =

@@ -737,6 +737,42 @@ describe("gateway agent handler", () => {
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
   });
 
+  it("does not treat CLI delivery override channel as turn-source channel", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "cli delivery override",
+        sessionKey: "agent:main:main",
+        channel: "discord",
+        deliver: true,
+        idempotencyKey: "test-cli-origin-vs-delivery",
+      },
+      {
+        reqId: "cli-origin-vs-delivery-1",
+        client: {
+          connect: {
+            client: { id: "cli", mode: "cli" },
+          },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      channel?: string;
+      messageChannel?: string;
+      runContext?: { messageChannel?: string };
+    };
+    expect(callArgs.channel).toBe("discord");
+    expect(callArgs.messageChannel).toBe("webchat");
+    expect(callArgs.runContext?.messageChannel).toBe("webchat");
+  });
+
   it("handles missing cliSessionIds gracefully", async () => {
     mockMainSessionEntry({});
 
