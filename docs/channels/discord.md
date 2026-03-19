@@ -786,7 +786,7 @@ Default slash command settings:
 
     ### Scope configuration
 
-    `messages.ackReactionScope` controls when the ack reaction is sent:
+    `messages.ackReactionScope` controls when the ack reaction is sent. Supports the same resolution order as `ackReaction`: `channels.discord.accounts.<id>.ackReactionScope` → `channels.discord.ackReactionScope` → `messages.ackReactionScope`.
 
     | Value | Behavior |
     |-------|----------|
@@ -794,6 +794,7 @@ Default slash command settings:
     | `group-all` | React to all messages in group channels |
     | `direct` | React only in DMs |
     | `all` | React to all messages everywhere |
+    | `off` / `none` | Disable ack reactions entirely |
 
     ### Remove after reply
 
@@ -810,7 +811,7 @@ Default slash command settings:
       },
       channels: {
         discord: {
-          // Per-channel override
+          // Discord-wide override (overrides messages.ackReaction for all Discord accounts)
           ackReaction: "🦞",
         },
       },
