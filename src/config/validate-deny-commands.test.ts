@@ -27,6 +27,19 @@ describe("validate-deny-commands", () => {
     expect(result).toEqual({ valid: true, errors: [] });
   });
 
+  it("allows exact custom command ids that contain spaces", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          allowCommands: ["my command"],
+        },
+      },
+    };
+
+    expect(looksLikeCommandPattern("my command")).toBe(false);
+    expect(validateDenyCommandEntries(["my command"], cfg)).toEqual({ valid: true, errors: [] });
+  });
+
   it("does not crash when allowCommands is malformed", () => {
     const cfg: OpenClawConfig = {
       gateway: {

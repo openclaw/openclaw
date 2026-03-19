@@ -110,7 +110,7 @@ export function looksLikeCommandPattern(value: string): boolean {
   ) {
     return true;
   }
-  return /\s/.test(value) || value.includes("group:");
+  return value.includes("group:");
 }
 
 export function validateDenyCommandEntries(

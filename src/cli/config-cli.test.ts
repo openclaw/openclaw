@@ -370,6 +370,28 @@ describe("config cli", () => {
         expect.stringContaining('Unknown command "custom.mycommand"'),
       );
     });
+
+    it("does not revalidate denyCommands for unrelated gateway.nodes edits", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          port: 18789,
+          nodes: {
+            denyCommands: ["sendd"],
+            browser: { mode: "auto" },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.nodes.browser.mode", '"manual"']);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expect(mockError).not.toHaveBeenCalledWith(
+        expect.stringContaining('Unknown command "sendd"'),
+      );
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.nodes?.browser).toEqual({ mode: "manual" });
+    });
   });
 
   describe("config get", () => {

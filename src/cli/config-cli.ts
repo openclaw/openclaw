@@ -71,6 +71,7 @@ type ConfigSetOperation = {
 const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
 const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
+const GATEWAY_NODES_ALLOW_COMMANDS_PATH: PathSegment[] = ["gateway", "nodes", "allowCommands"];
 const GATEWAY_NODES_DENY_COMMANDS_PATH: PathSegment[] = ["gateway", "nodes", "denyCommands"];
 const GATEWAY_NODES_PATH: PathSegment[] = ["gateway", "nodes"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
@@ -1034,8 +1035,10 @@ export async function runConfigSet(opts: {
       operations,
     });
     const nextConfig = next as OpenClawConfig;
-    const shouldValidateGatewayNodeCommands = operations.some((operation) =>
-      pathOverlaps(operation.setPath, GATEWAY_NODES_PATH),
+    const shouldValidateGatewayNodeCommands = operations.some(
+      (operation) =>
+        pathOverlaps(operation.setPath, GATEWAY_NODES_ALLOW_COMMANDS_PATH) ||
+        pathOverlaps(operation.setPath, GATEWAY_NODES_DENY_COMMANDS_PATH),
     );
 
     if (opts.cliOptions.dryRun) {
