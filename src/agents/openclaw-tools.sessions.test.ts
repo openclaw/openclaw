@@ -651,6 +651,13 @@ describe("sessions tools", () => {
     for (const call of followUpCalls) {
       expect((call.params as { channel?: string }).channel).not.toBe("webchat");
     }
+    const requesterReplyCalls = followUpCalls.filter(
+      (call) => (call.params as { sessionKey?: string })?.sessionKey === requesterKey,
+    );
+    expect(requesterReplyCalls.length).toBeGreaterThan(0);
+    for (const call of requesterReplyCalls) {
+      expect((call.params as { channel?: string }).channel).toBe("discord");
+    }
     expect(
       agentCalls.some(
         (call) =>
@@ -844,6 +851,13 @@ describe("sessions tools", () => {
     const followUpCalls = agentCalls.filter((call) => !initialSendCalls.includes(call));
     for (const call of followUpCalls) {
       expect((call.params as { channel?: string }).channel).not.toBe("webchat");
+    }
+    const requesterReplyCalls = followUpCalls.filter(
+      (call) => (call.params as { sessionKey?: string })?.sessionKey === requesterKey,
+    );
+    expect(requesterReplyCalls.length).toBeGreaterThan(0);
+    for (const call of requesterReplyCalls) {
+      expect((call.params as { channel?: string }).channel).toBe("discord");
     }
 
     const replySteps = calls.filter(
