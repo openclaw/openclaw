@@ -11,7 +11,12 @@ export type ExecApprovalRequestPayload = {
 
 export type ExecApprovalRequest = {
   id: string;
+  kind: "exec" | "plugin";
   request: ExecApprovalRequestPayload;
+  pluginTitle?: string;
+  pluginDescription?: string;
+  pluginSeverity?: string | null;
+  pluginId?: string | null;
   createdAtMs: number;
   expiresAtMs: number;
 };
@@ -47,6 +52,7 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
   }
   return {
     id,
+    kind: "exec",
     request: {
       command,
       cwd: typeof request.cwd === "string" ? request.cwd : null,
@@ -75,6 +81,45 @@ export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolve
     decision: typeof payload.decision === "string" ? payload.decision : null,
     resolvedBy: typeof payload.resolvedBy === "string" ? payload.resolvedBy : null,
     ts: typeof payload.ts === "number" ? payload.ts : null,
+  };
+}
+
+export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequest | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const id = typeof payload.id === "string" ? payload.id.trim() : "";
+  if (!id) {
+    return null;
+  }
+  const title = typeof payload.title === "string" ? payload.title.trim() : "";
+  if (!title) {
+    return null;
+  }
+  const createdAtMs = typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;
+  const expiresAtMs = typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : 0;
+  if (!createdAtMs || !expiresAtMs) {
+    return null;
+  }
+  const description = typeof payload.description === "string" ? payload.description : null;
+  const severity = typeof payload.severity === "string" ? payload.severity : null;
+  const pluginId = typeof payload.pluginId === "string" ? payload.pluginId : null;
+
+  const request = isRecord(payload.request) ? payload.request : {};
+  return {
+    id,
+    kind: "plugin",
+    request: {
+      command: title,
+      agentId: typeof request.agentId === "string" ? request.agentId : null,
+      sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
+    },
+    pluginTitle: title,
+    pluginDescription: description ?? undefined,
+    pluginSeverity: severity,
+    pluginId,
+    createdAtMs,
+    expiresAtMs,
   };
 }
 
