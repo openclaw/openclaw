@@ -1,3 +1,5 @@
+import { randomInt } from "node:crypto";
+
 const SLUG_ADJECTIVES = [
   "amber",
   "briny",
@@ -101,7 +103,7 @@ const SLUG_NOUNS = [
 ];
 
 function randomChoice(values: string[], fallback: string) {
-  return values[Math.floor(Math.random() * values.length)] ?? fallback;
+  return values[randomInt(values.length)] ?? fallback;
 }
 
 function createSlugBase(words = 2) {
@@ -141,6 +143,6 @@ export function createSessionSlug(isTaken?: (id: string) => boolean): string {
   if (threeWord) {
     return threeWord;
   }
-  const fallback = `${createSlugBase(3)}-${Math.random().toString(36).slice(2, 5)}`;
+  const fallback = `${createSlugBase(3)}-${randomInt(46656).toString(36).padStart(3, "0")}`;
   return isIdTaken(fallback) ? `${fallback}-${Date.now().toString(36)}` : fallback;
 }
