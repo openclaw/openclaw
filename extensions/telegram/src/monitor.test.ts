@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { tagTelegramNetworkError } from "./network-errors.js";
 
 type MonitorTelegramOpts = import("./monitor.js").MonitorTelegramOpts;
 
@@ -110,7 +109,8 @@ function makeRecoverableFetchError() {
   });
 }
 
-function makeTaggedPollingFetchError() {
+async function makeTaggedPollingFetchError() {
+  const { tagTelegramNetworkError } = await import("./network-errors.js");
   const err = makeRecoverableFetchError();
   tagTelegramNetworkError(err, {
     method: "getUpdates",
@@ -180,9 +180,14 @@ async function runMonitorAndCaptureStartupOrder(params?: { persistedOffset?: num
 
 function mockRunOnceWithStalledPollingRunner(): {
   stop: ReturnType<typeof vi.fn<() => void | Promise<void>>>;
+  waitForTaskStart: () => Promise<void>;
 } {
   let running = true;
   let releaseTask: (() => void) | undefined;
+  let signalTaskStarted: (() => void) | undefined;
+  const taskStarted = new Promise<void>((resolve) => {
+    signalTaskStarted = resolve;
+  });
   const stop = vi.fn(async () => {
     running = false;
     releaseTask?.();
@@ -191,13 +196,17 @@ function mockRunOnceWithStalledPollingRunner(): {
     makeRunnerStub({
       task: () =>
         new Promise<void>((resolve) => {
+          signalTaskStarted?.();
           releaseTask = resolve;
         }),
       stop,
       isRunning: () => running,
     }),
   );
-  return { stop };
+  return {
+    stop,
+    waitForTaskStart: () => taskStarted,
+  };
 }
 
 function expectRecoverableRetryState(
@@ -539,9 +548,9 @@ describe("monitorTelegramProvider (grammY)", () => {
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
-    emitUnhandledRejection(makeTaggedPollingFetchError());
+    expect(emitUnhandledRejection(await makeTaggedPollingFetchError())).toBe(true);
+    expect(stop).toHaveBeenCalledTimes(1);
     await monitor;
-
     expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
     expectRecoverableRetryState(2);
   });
@@ -578,16 +587,17 @@ describe("monitorTelegramProvider (grammY)", () => {
   it("aborts the active Telegram fetch when unhandled network rejection forces restart", async () => {
     const { monitorTelegramProvider } = await import("./monitor.js");
     const abort = new AbortController();
-    const { stop } = mockRunOnceWithStalledPollingRunner();
+    const { stop, waitForTaskStart } = mockRunOnceWithStalledPollingRunner();
     mockRunOnceAndAbort(abort);
 
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await vi.waitFor(() => expect(createTelegramBotCalls.length).toBeGreaterThanOrEqual(1));
+    await waitForTaskStart();
     const firstSignal = createTelegramBotCalls[0]?.fetchAbortSignal;
     expect(firstSignal).toBeInstanceOf(AbortSignal);
     expect((firstSignal as AbortSignal).aborted).toBe(false);
 
-    emitUnhandledRejection(makeTaggedPollingFetchError());
+    emitUnhandledRejection(await makeTaggedPollingFetchError());
     await monitor;
 
     expect((firstSignal as AbortSignal).aborted).toBe(true);
