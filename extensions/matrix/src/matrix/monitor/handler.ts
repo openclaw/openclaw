@@ -1,9 +1,8 @@
 import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import {
   DEFAULT_ACCOUNT_ID,
-  createScopedPairingAccess,
-  createReplyPrefixOptions,
-  createTypingCallbacks,
+  createChannelPairingController,
+  createChannelReplyPipeline,
   dispatchReplyFromConfigWithSettledDispatcher,
   evaluateGroupRouteAccessForPolicy,
   formatAllowlistMatchMeta,
@@ -153,7 +152,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     accountId,
   } = params;
   const resolvedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: "matrix",
     accountId: resolvedAccountId,
@@ -322,7 +321,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           senderId,
           senderName,
           effectiveAllowFrom,
-          upsertPairingRequest: pairing.upsertPairingRequest,
+          issuePairingChallenge: pairing.issueChallenge,
           sendPairingReply: async (text) => {
             await sendMessageMatrix(`room:${roomId}`, text, { client });
           },
@@ -680,38 +679,38 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         channel: "matrix",
         accountId: route.accountId,
       });
-      const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+      const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
         cfg,
         agentId: route.agentId,
         channel: "matrix",
         accountId: route.accountId,
+        typing: {
+          start: () => sendTypingMatrix(roomId, true, undefined, client),
+          stop: () => sendTypingMatrix(roomId, false, undefined, client),
+          onStartError: (err) => {
+            logTypingFailure({
+              log: logVerboseMessage,
+              channel: "matrix",
+              action: "start",
+              target: roomId,
+              error: err,
+            });
+          },
+          onStopError: (err) => {
+            logTypingFailure({
+              log: logVerboseMessage,
+              channel: "matrix",
+              action: "stop",
+              target: roomId,
+              error: err,
+            });
+          },
+        },
       });
       const humanDelay = core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId);
-      const typingCallbacks = createTypingCallbacks({
-        start: () => sendTypingMatrix(roomId, true, undefined, client),
-        stop: () => sendTypingMatrix(roomId, false, undefined, client),
-        onStartError: (err) => {
-          logTypingFailure({
-            log: logVerboseMessage,
-            channel: "matrix",
-            action: "start",
-            target: roomId,
-            error: err,
-          });
-        },
-        onStopError: (err) => {
-          logTypingFailure({
-            log: logVerboseMessage,
-            channel: "matrix",
-            action: "stop",
-            target: roomId,
-            error: err,
-          });
-        },
-      });
       const { dispatcher, replyOptions, markDispatchIdle } =
         core.channel.reply.createReplyDispatcherWithTyping({
-          ...prefixOptions,
+          ...replyPipeline,
           humanDelay,
           typingCallbacks,
           deliver: async (payload) => {
