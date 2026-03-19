@@ -3,6 +3,7 @@ import {
   clearAgentRunContext,
   emitAgentEvent,
   getAgentRunContext,
+  getRunIdsBySessionKey,
   onAgentEvent,
   registerAgentRunContext,
   resetAgentRunContextForTest,
@@ -120,6 +121,37 @@ describe("agent-events sequencing", () => {
     stop();
 
     expect(receivedSessionKey).toBe("session-main");
+  });
+
+  test("stores and merges ownerConnId/ownerDeviceId on run context", () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-owner", { sessionKey: "main", ownerConnId: "conn-1", ownerDeviceId: "dev-1" });
+    expect(getAgentRunContext("run-owner")).toMatchObject({ ownerConnId: "conn-1", ownerDeviceId: "dev-1" });
+    // A second registration must not overwrite an already-set owner.
+    registerAgentRunContext("run-owner", { ownerConnId: "conn-2" });
+    expect(getAgentRunContext("run-owner")?.ownerConnId).toBe("conn-1");
+  });
+
+  test("getRunIdsBySessionKey returns only runs for the given session", () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-a", { sessionKey: "session-x", ownerConnId: "conn-1" });
+    registerAgentRunContext("run-b", { sessionKey: "session-x", ownerConnId: "conn-2" });
+    registerAgentRunContext("run-c", { sessionKey: "session-y", ownerConnId: "conn-1" });
+
+    const result = getRunIdsBySessionKey("session-x");
+    expect([...result.keys()].sort()).toEqual(["run-a", "run-b"]);
+    expect(result.get("run-a")?.ownerConnId).toBe("conn-1");
+    expect(result.get("run-b")?.ownerConnId).toBe("conn-2");
+    expect(getRunIdsBySessionKey("session-y").size).toBe(1);
+    expect(getRunIdsBySessionKey("session-z").size).toBe(0);
+  });
+
+  test("getRunIdsBySessionKey excludes cleared runs", () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-live", { sessionKey: "sess", ownerConnId: "conn-1" });
+    registerAgentRunContext("run-done", { sessionKey: "sess", ownerConnId: "conn-1" });
+    clearAgentRunContext("run-done");
+    expect([...getRunIdsBySessionKey("sess").keys()]).toEqual(["run-live"]);
   });
 
   test("keeps notifying later listeners when one throws", async () => {

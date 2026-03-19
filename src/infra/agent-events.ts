@@ -17,6 +17,10 @@ export type AgentRunContext = {
   isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
+  /** WebSocket connId that initiated this run; used for late-join stream backfill. */
+  ownerConnId?: string;
+  /** Device ID that initiated this run; used for late-join stream backfill across reconnects. */
+  ownerDeviceId?: string;
 };
 
 // Keep per-run counters so streams stay strictly monotonic per runId.
@@ -45,6 +49,12 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
   }
+  if (context.ownerConnId && !existing.ownerConnId) {
+    existing.ownerConnId = context.ownerConnId;
+  }
+  if (context.ownerDeviceId && !existing.ownerDeviceId) {
+    existing.ownerDeviceId = context.ownerDeviceId;
+  }
 }
 
 export function getAgentRunContext(runId: string) {
@@ -57,6 +67,21 @@ export function clearAgentRunContext(runId: string) {
 
 export function resetAgentRunContextForTest() {
   runContextById.clear();
+}
+
+/**
+ * Returns all active run IDs whose registered sessionKey matches the given
+ * value. Used by late-join backfill logic to find in-progress runs for a
+ * session without scanning unrelated data structures.
+ */
+export function getRunIdsBySessionKey(sessionKey: string): ReadonlyMap<string, AgentRunContext> {
+  const result = new Map<string, AgentRunContext>();
+  for (const [runId, ctx] of runContextById) {
+    if (ctx.sessionKey === sessionKey) {
+      result.set(runId, ctx);
+    }
+  }
+  return result;
 }
 
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {

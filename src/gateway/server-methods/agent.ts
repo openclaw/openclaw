@@ -16,7 +16,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { getRunIdsBySessionKey, registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -513,23 +513,27 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const runId = idem;
     const connId = typeof client?.connId === "string" ? client.connId : undefined;
+    const deviceId = client?.connect?.device?.id?.trim() || undefined;
+    // Record the initiating connection on the run context so late-join backfill
+    // can verify ownership before subscribing a new connId to this run's streams.
+    if (connId || deviceId) {
+      registerAgentRunContext(runId, { ownerConnId: connId, ownerDeviceId: deviceId });
+    }
     const wantsToolEvents = hasGatewayClientCap(
       client?.connect?.caps,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
     );
     if (connId && wantsToolEvents) {
       context.registerToolEventRecipient(runId, connId);
-      // Backfill registration for other active runs in the same session
-      // (late-joining / page-refresh case). Restrict to runs owned by
-      // this connection or device so a second tab sharing requestedSessionKey
-      // cannot receive another client's tool-event stream.
-      const deviceId = client?.connect?.device?.id?.trim() || undefined;
-      for (const [activeRunId, active] of context.chatAbortControllers) {
+      // Backfill registration for other active agent runs in the same session
+      // (late-joining / page-refresh case). Use getRunIdsBySessionKey so that
+      // agent runs — which are tracked in AgentRunContext rather than
+      // chatAbortControllers — are correctly discovered. Restrict to runs
+      // owned by this connection or device to preserve per-run stream privacy.
+      for (const [activeRunId, active] of getRunIdsBySessionKey(requestedSessionKey)) {
         if (
           activeRunId !== runId &&
-          active.sessionKey === requestedSessionKey &&
-          (active.ownerConnId === connId ||
-            (deviceId && active.ownerDeviceId === deviceId))
+          (active.ownerConnId === connId || (deviceId && active.ownerDeviceId === deviceId))
         ) {
           context.registerToolEventRecipient(activeRunId, connId);
         }
@@ -541,16 +545,12 @@ export const agentHandlers: GatewayRequestHandlers = {
     );
     if (connId && wantsThinkingEvents) {
       context.registerThinkingEventRecipient(runId, connId);
-      // Backfill other active runs in the same session, but only for runs
-      // this client owns (same connId or deviceId) to preserve per-run
-      // stream privacy.
-      const deviceId = client?.connect?.device?.id?.trim() || undefined;
-      for (const [activeRunId, active] of context.chatAbortControllers) {
+      // Same backfill via AgentRunContext registry — chatAbortControllers only
+      // tracks chat.send runs and would silently miss any in-progress agent run.
+      for (const [activeRunId, active] of getRunIdsBySessionKey(requestedSessionKey)) {
         if (
           activeRunId !== runId &&
-          active.sessionKey === requestedSessionKey &&
-          (active.ownerConnId === connId ||
-            (deviceId && active.ownerDeviceId === deviceId))
+          (active.ownerConnId === connId || (deviceId && active.ownerDeviceId === deviceId))
         ) {
           context.registerThinkingEventRecipient(activeRunId, connId);
         }
