@@ -812,6 +812,14 @@ export async function startGatewayServer(
           toolEventRecipients,
           thinkingEventRecipients,
           sessionEventSubscribers,
+          getConnCaps: (connId) => {
+            for (const c of clients) {
+              if (c.connId === connId) {
+                return Array.isArray(c.connect.caps) ? c.connect.caps : undefined;
+              }
+            }
+            return undefined;
+          },
         }),
       );
 

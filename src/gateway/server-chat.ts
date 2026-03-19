@@ -10,6 +10,7 @@ import {
   persistGatewaySessionLifecycleEvent,
 } from "./session-lifecycle-state.js";
 import { loadGatewaySessionRow, loadSessionEntry } from "./session-utils.js";
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "./protocol/client-info.js";
 import { formatForLog } from "./ws-log.js";
 
 function resolveHeartbeatAckMaxChars(): number {
@@ -453,6 +454,8 @@ export type AgentEventHandlerOptions = {
   thinkingEventRecipients: EventRecipientRegistry;
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
+  /** Return the caps array for the given connId, or undefined if not found. */
+  getConnCaps: (connId: string) => string[] | undefined;
 };
 
 export function createAgentEventHandler({
@@ -466,6 +469,7 @@ export function createAgentEventHandler({
   toolEventRecipients,
   thinkingEventRecipients,
   sessionEventSubscribers,
+  getConnCaps,
 }: AgentEventHandlerOptions) {
   const buildSessionEventSnapshot = (sessionKey: string, evt?: AgentEventPayload) => {
     const row = loadGatewaySessionRow(sessionKey);
@@ -764,14 +768,24 @@ export function createAgentEventHandler({
       // Mirror thinking events onto a session-scoped event so operator UIs or
       // clients that (re-)attach mid-run can receive the in-flight reasoning
       // stream without knowing the runId in advance. This mirrors the same
-      // pattern used for tool events above. Access is gated by READ_SCOPE at
-      // the WebSocket level (see EVENT_SCOPE_GUARDS in server-broadcast.ts).
+      // pattern used for tool events above. Only subscribers that have declared
+      // the thinking-events capability receive this event; others are filtered
+      // out here to keep THINKING_EVENTS cap enforcement effective for late-join
+      // clients.
       if (sessionKey) {
-        const sessionSubscribers = sessionEventSubscribers.getAll();
-        if (sessionSubscribers.size > 0) {
-          broadcastToConnIds("session.thinking", agentPayload, sessionSubscribers, {
-            dropIfSlow: true,
-          });
+        const allSessionSubscribers = sessionEventSubscribers.getAll();
+        if (allSessionSubscribers.size > 0) {
+          const thinkingSubscribers = new Set<string>();
+          for (const connId of allSessionSubscribers) {
+            if (hasGatewayClientCap(getConnCaps(connId), GATEWAY_CLIENT_CAPS.THINKING_EVENTS)) {
+              thinkingSubscribers.add(connId);
+            }
+          }
+          if (thinkingSubscribers.size > 0) {
+            broadcastToConnIds("session.thinking", agentPayload, thinkingSubscribers, {
+              dropIfSlow: true,
+            });
+          }
         }
       }
     } else {
