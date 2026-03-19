@@ -7,7 +7,7 @@ import {
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 
-const PROVIDER_ID = "azure-foundry";
+const PROVIDER_ID = "microsoft-foundry";
 const DEFAULT_API = "openai-completions";
 const COGNITIVE_SERVICES_RESOURCE = "https://cognitiveservices.azure.com";
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000; // refresh 5 min before expiry
@@ -97,11 +97,11 @@ const entraIdAuthMethod = {
   hint: "Use your Azure login — no API key needed",
   kind: "custom" as const,
   wizard: {
-    choiceId: "azure-foundry-entra",
-    choiceLabel: "Azure AI Foundry (Entra ID / az login)",
+    choiceId: "microsoft-foundry-entra",
+    choiceLabel: "Microsoft Foundry (Entra ID / az login)",
     choiceHint: "Use your Azure login — no API key needed",
-    groupId: "azure-foundry",
-    groupLabel: "Microsoft Azure AI Foundry",
+    groupId: "microsoft-foundry",
+    groupLabel: "Microsoft Foundry",
     groupHint: "Entra ID + API key",
   },
   run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
@@ -166,7 +166,7 @@ const entraIdAuthMethod = {
     // 5. Ask endpoint URL
     const endpoint = String(
       await ctx.prompter.text({
-        message: "Azure AI Foundry endpoint URL",
+        message: "Microsoft Foundry endpoint URL",
         placeholder: "https://xxx.openai.azure.com or https://xxx.services.ai.azure.com",
         validate: (v) => {
           const val = String(v ?? "").trim();
@@ -295,10 +295,10 @@ const apiKeyAuthMethod = createProviderApiKeyAuthMethod({
   defaultModel: `${PROVIDER_ID}/gpt-4o`,
   expectedProviders: [PROVIDER_ID],
   wizard: {
-    choiceId: "azure-foundry-apikey",
-    choiceLabel: "Azure AI Foundry (API key)",
-    groupId: "azure-foundry",
-    groupLabel: "Microsoft Azure AI Foundry",
+    choiceId: "microsoft-foundry-apikey",
+    choiceLabel: "Microsoft Foundry (API key)",
+    groupId: "microsoft-foundry",
+    groupLabel: "Microsoft Foundry",
     groupHint: "Entra ID + API key",
   },
 });
@@ -324,12 +324,12 @@ function refreshEntraToken(): { apiKey: string; expiresAt: number } {
 
 export default definePluginEntry({
   id: PROVIDER_ID,
-  name: "Azure AI Foundry Provider",
-  description: "Azure AI Foundry provider with Entra ID and API key auth",
+  name: "Microsoft Foundry Provider",
+  description: "Microsoft Foundry provider with Entra ID and API key auth",
   register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
-      label: "Azure AI Foundry",
+      label: "Microsoft Foundry",
       docsPath: "/providers/azure",
       envVars: ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"],
       auth: [entraIdAuthMethod, apiKeyAuthMethod],

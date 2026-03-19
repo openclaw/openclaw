@@ -1,28 +1,28 @@
 {
-  "id": "azure-foundry",
-  "providers": ["azure-foundry"],
+  "id": "microsoft-foundry",
+  "providers": ["microsoft-foundry"],
   "providerAuthEnvVars": {
-    "azure-foundry": ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"]
+    "microsoft-foundry": ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"]
   },
   "providerAuthChoices": [
     {
-      "provider": "azure-foundry",
+      "provider": "microsoft-foundry",
       "method": "entra-id",
-      "choiceId": "azure-foundry-entra",
-      "choiceLabel": "Azure AI Foundry (Entra ID / az login)",
+      "choiceId": "microsoft-foundry-entra",
+      "choiceLabel": "Microsoft Foundry (Entra ID / az login)",
       "choiceHint": "Use your Azure login — no API key needed",
-      "groupId": "azure-foundry",
-      "groupLabel": "Microsoft Azure AI Foundry",
+      "groupId": "microsoft-foundry",
+      "groupLabel": "Microsoft Foundry",
       "groupHint": "Entra ID + API key"
     },
     {
-      "provider": "azure-foundry",
+      "provider": "microsoft-foundry",
       "method": "api-key",
-      "choiceId": "azure-foundry-apikey",
-      "choiceLabel": "Azure AI Foundry (API key)",
+      "choiceId": "microsoft-foundry-apikey",
+      "choiceLabel": "Microsoft Foundry (API key)",
       "choiceHint": "Use an Azure OpenAI API key directly",
-      "groupId": "azure-foundry",
-      "groupLabel": "Microsoft Azure AI Foundry",
+      "groupId": "microsoft-foundry",
+      "groupLabel": "Microsoft Foundry",
       "groupHint": "Entra ID + API key",
       "optionKey": "azureOpenaiApiKey",
       "cliFlag": "--azure-openai-api-key",
