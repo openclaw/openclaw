@@ -3385,6 +3385,28 @@ module.exports = {
     expect(subpaths).toEqual(["channel-runtime", "core"]);
   });
 
+  it("resolves plugin-sdk alias files via cwd fallback when module path is a transpiler cache and package is renamed", () => {
+    const fixture = createPluginSdkAliasFixture({
+      srcFile: "channel-runtime.ts",
+      distFile: "channel-runtime.js",
+      packageName: "moltbot",
+      packageExports: {
+        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      },
+    });
+    const resolved = withCwd(fixture.root, () =>
+      resolvePluginSdkAlias({
+        root: fixture.root,
+        srcFile: "channel-runtime.ts",
+        distFile: "channel-runtime.js",
+        modulePath: "/tmp/tsx-cache/openclaw-loader.js",
+        env: { NODE_ENV: undefined },
+      }),
+    );
+    expect(resolved).not.toBeNull();
+    expect(fs.realpathSync(resolved ?? "")).toBe(fs.realpathSync(fixture.srcFile));
+  });
+
   it("configures the plugin loader jiti boundary to prefer native dist modules", () => {
     const options = __testing.buildPluginLoaderJitiOptions({});
 
