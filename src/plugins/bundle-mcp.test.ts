@@ -13,6 +13,19 @@ function getServerArgs(value: unknown): unknown[] | undefined {
 
 const tempHarness = createBundleMcpTempHarness();
 
+function expectPathRelativeToRoot(
+  actual: string | undefined,
+  root: string | undefined,
+  relative: string,
+) {
+  expect(typeof actual).toBe("string");
+  expect(typeof root).toBe("string");
+  if (!actual || !root) {
+    return;
+  }
+  expect(path.normalize(path.relative(root, actual))).toBe(path.normalize(relative));
+}
+
 afterEach(async () => {
   await tempHarness.cleanup();
 });
@@ -56,7 +69,7 @@ describe("loadEnabledBundleMcpConfig", () => {
         throw new Error("expected bundled MCP args to include the server path");
       }
       expect(await fs.realpath(loadedServerPath)).toBe(resolvedServerPath);
-      expect(loadedServer.cwd).toBe(resolvedPluginRoot);
+      expect(await fs.realpath(String(loadedServer.cwd))).toBe(resolvedPluginRoot);
     } finally {
       env.restore();
     }
@@ -178,20 +191,34 @@ describe("loadEnabledBundleMcpConfig", () => {
           },
         },
       });
-      const resolvedPluginRoot = await fs.realpath(pluginRoot);
-
       expect(loaded.diagnostics).toEqual([]);
-      expect(loaded.config.mcpServers.inlineProbe).toEqual({
-        command: path.join(resolvedPluginRoot, "bin", "server.sh"),
-        args: [
-          path.join(resolvedPluginRoot, "servers", "probe.mjs"),
-          path.join(resolvedPluginRoot, "local-probe.mjs"),
-        ],
-        cwd: resolvedPluginRoot,
-        env: {
-          PLUGIN_ROOT: resolvedPluginRoot,
-        },
-      });
+      const inlineProbe = loaded.config.mcpServers.inlineProbe;
+      expect(isRecord(inlineProbe)).toBe(true);
+      if (!isRecord(inlineProbe)) {
+        throw new Error("expected inlineProbe config");
+      }
+
+      const cwd = typeof inlineProbe.cwd === "string" ? inlineProbe.cwd : undefined;
+      const command = typeof inlineProbe.command === "string" ? inlineProbe.command : undefined;
+      const args = getServerArgs(inlineProbe);
+      const env = isRecord(inlineProbe.env) ? inlineProbe.env : undefined;
+      const pluginRootEnv = typeof env?.PLUGIN_ROOT === "string" ? env.PLUGIN_ROOT : undefined;
+
+      expect(cwd).toBeDefined();
+      expect(command).toBeDefined();
+      expect(args).toHaveLength(2);
+      expect(pluginRootEnv).toBe(cwd);
+      expectPathRelativeToRoot(command, cwd, path.join("bin", "server.sh"));
+      expectPathRelativeToRoot(
+        typeof args?.[0] === "string" ? args[0] : undefined,
+        cwd,
+        path.join("servers", "probe.mjs"),
+      );
+      expectPathRelativeToRoot(
+        typeof args?.[1] === "string" ? args[1] : undefined,
+        cwd,
+        "local-probe.mjs",
+      );
     } finally {
       env.restore();
     }

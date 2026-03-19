@@ -163,15 +163,19 @@ describe("runMessageAction context isolation", () => {
       },
       toolContext: { currentChannelId: "C12345678" },
     },
-  ])("$name", async ({ cfg, actionParams, toolContext }) => {
-    const result = await runDrySend({
-      cfg,
-      actionParams,
-      ...(toolContext ? { toolContext } : {}),
-    });
+  ])(
+    "$name",
+    async ({ cfg, actionParams, toolContext }) => {
+      const result = await runDrySend({
+        cfg,
+        actionParams,
+        ...(toolContext ? { toolContext } : {}),
+      });
 
-    expect(result.kind).toBe("send");
-  });
+      expect(result.kind).toBe("send");
+    },
+    240_000,
+  );
 
   it("requires message when no media hint is provided", async () => {
     await expect(

@@ -227,7 +227,7 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof telegramSdk.buildChannelConfigSchema).toBe("function");
     expect(typeof telegramSdk.TelegramConfigSchema).toBe("object");
     expect(typeof telegramSdk.projectCredentialSnapshotFields).toBe("function");
-    expect("resolveTelegramAccount" in asExports(telegramSdk)).toBe(false);
+    expect(typeof telegramSdk.resolveTelegramAccount).toBe("function");
   });
 
   it("exports iMessage helpers", () => {

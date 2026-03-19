@@ -80,10 +80,17 @@ function loadHookFromDir(params: {
   pluginId?: string;
   nameHint?: string;
 }): Hook | null {
-  const hookMdPath = path.join(params.hookDir, "HOOK.md");
+  let baseDir = params.hookDir;
+  try {
+    baseDir = fs.realpathSync.native(params.hookDir);
+  } catch {
+    // keep the discovered path when realpath is unavailable
+  }
+
+  const hookMdPath = path.join(baseDir, "HOOK.md");
   const content = readBoundaryFileUtf8({
     absolutePath: hookMdPath,
-    rootPath: params.hookDir,
+    rootPath: baseDir,
     boundaryLabel: "hook directory",
   });
   if (content === null) {
@@ -98,10 +105,10 @@ function loadHookFromDir(params: {
     const handlerCandidates = ["handler.ts", "handler.js", "index.ts", "index.js"];
     let handlerPath: string | undefined;
     for (const candidate of handlerCandidates) {
-      const candidatePath = path.join(params.hookDir, candidate);
+      const candidatePath = path.join(baseDir, candidate);
       const safeCandidatePath = resolveBoundaryFilePath({
         absolutePath: candidatePath,
-        rootPath: params.hookDir,
+        rootPath: baseDir,
         boundaryLabel: "hook directory",
       });
       if (safeCandidatePath) {
@@ -113,13 +120,6 @@ function loadHookFromDir(params: {
     if (!handlerPath) {
       log.warn(`Hook "${name}" has HOOK.md but no handler file in ${params.hookDir}`);
       return null;
-    }
-
-    let baseDir = params.hookDir;
-    try {
-      baseDir = fs.realpathSync.native(params.hookDir);
-    } catch {
-      // keep the discovered path when realpath is unavailable
     }
 
     return {
