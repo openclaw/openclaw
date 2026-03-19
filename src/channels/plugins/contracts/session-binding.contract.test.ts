@@ -60,7 +60,7 @@ function resetMatrixSessionBindingContractStateForTests(): void {
 
 setMatrixRuntime({
   state: {
-    resolveStateDir: (env) => env[MATRIX_CONTRACT_STATE_DIR_ENV] ?? os.tmpdir(),
+    resolveStateDir: (env: NodeJS.ProcessEnv) => env[MATRIX_CONTRACT_STATE_DIR_ENV] ?? os.tmpdir(),
   },
 } as never);
 
