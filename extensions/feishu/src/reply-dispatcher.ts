@@ -87,6 +87,10 @@ export type CreateFeishuReplyDispatcherParams = {
   mentionTargets?: MentionTarget[];
   accountId?: string;
   identity?: OutboundIdentity;
+  /** Allowed local-filesystem roots for media path reads (post CVE-2026-26321).
+   *  Without this, sendMediaFeishu cannot read local image paths and falls back
+   *  to sending the raw path as plain text. */
+  mediaLocalRoots?: readonly string[];
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
@@ -106,6 +110,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     mentionTargets,
     accountId,
     identity,
+    mediaLocalRoots,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
@@ -343,6 +348,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
           accountId,
+          mediaLocalRoots,
         });
       },
     });
