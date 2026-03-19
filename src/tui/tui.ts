@@ -775,7 +775,7 @@ export async function runTui(opts: TuiOptions) {
     const footerParts = [
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
-      modelLabel,
+      `model ${modelLabel}`,
       thinkLabel,
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,

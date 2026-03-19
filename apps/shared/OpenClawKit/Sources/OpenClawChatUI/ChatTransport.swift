@@ -16,6 +16,13 @@ public protocol OpenClawChatTransport: Sendable {
         thinking: String,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    func editMessage(
+        sessionKey: String,
+        message: String,
+        messageId: String?,
+        userMessageIndex: Int?,
+        thinking: String,
+        idempotencyKey: String) async throws -> OpenClawChatSendResponse
 
     func abortRun(sessionKey: String, runId: String) async throws
     func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse
@@ -41,5 +48,19 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.list not supported by this transport"])
+    }
+
+    public func editMessage(
+        sessionKey _: String,
+        message _: String,
+        messageId _: String?,
+        userMessageIndex _: Int?,
+        thinking _: String,
+        idempotencyKey _: String) async throws -> OpenClawChatSendResponse
+    {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "chat.edit not supported by this transport"])
     }
 }

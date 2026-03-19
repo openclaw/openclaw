@@ -17,6 +17,11 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
+import {
+  collectUserPromptPivots,
+  createLocalPromptId,
+  matchPromptPivotById,
+} from "./prompt-ids.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -236,6 +241,50 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
+  const parseEditCommandArgs = (rawArgs: string): { promptId: string; nextText: string } | null => {
+    const trimmed = rawArgs.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const parts = trimmed.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) {
+      return null;
+    }
+
+    const first = parts[0]?.trim() ?? "";
+    const second = parts[1]?.trim() ?? "";
+
+    // Supports "/edit id p-abc12345 updated text" by allowing a copied "id" prefix.
+    if (first.toLowerCase() === "id") {
+      if (!second || parts.length < 3) {
+        return null;
+      }
+      const promptId = second;
+      const nextText = parts.slice(2).join(" ").trim();
+      if (!nextText) {
+        return null;
+      }
+      return { promptId, nextText };
+    }
+
+    if (first.toLowerCase().startsWith("id:")) {
+      const promptId = first.slice(3).trim();
+      const nextText = parts.slice(1).join(" ").trim();
+      if (!promptId || !nextText) {
+        return null;
+      }
+      return { promptId, nextText };
+    }
+
+    const promptId = first;
+    const nextText = parts.slice(1).join(" ").trim();
+    if (!promptId || !nextText) {
+      return null;
+    }
+    return { promptId, nextText };
+  };
+
   const handleCommand = async (raw: string) => {
     const { name, args } = parseCommand(raw);
     if (!name) {
@@ -310,6 +359,54 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "models":
         await openModelSelector();
+        break;
+      case "edit":
+        if (!args) {
+          chatLog.addSystem("usage: /edit <prompt-id> <new prompt text>");
+          break;
+        }
+        try {
+          const parsed = parseEditCommandArgs(args);
+          if (!parsed) {
+            chatLog.addSystem("usage: /edit <prompt-id> <new prompt text>");
+            break;
+          }
+          const history = (await client.loadHistory({
+            sessionKey: state.currentSessionKey,
+            limit: 400,
+          })) as { messages?: unknown[] };
+          const messages = Array.isArray(history?.messages) ? history.messages : [];
+          const promptPivots = collectUserPromptPivots(messages);
+          const pivot = matchPromptPivotById(promptPivots, parsed.promptId);
+          if (!pivot) {
+            chatLog.addSystem(`edit failed: unknown prompt id ${parsed.promptId}`);
+            break;
+          }
+          chatLog.addSystem(`editing prompt ${pivot.promptId}…`);
+          const runId = randomUUID();
+          noteLocalRunId(runId);
+          state.activeChatRunId = runId;
+          setActivityStatus("sending");
+          tui.requestRender();
+          await client.editChat({
+            sessionKey: state.currentSessionKey,
+            message: parsed.nextText,
+            runId,
+            messageId: pivot.messageId,
+            userMessageIndex: pivot.userMessageIndex,
+          });
+          chatLog.addUser(parsed.nextText, createLocalPromptId());
+          setActivityStatus("waiting");
+          tui.requestRender();
+        } catch (err) {
+          if (state.activeChatRunId) {
+            forgetLocalRunId?.(state.activeChatRunId);
+          }
+          state.activeChatRunId = null;
+          chatLog.addSystem(`edit failed: ${String(err)}`);
+          setActivityStatus("error");
+          tui.requestRender();
+        }
         break;
       case "think":
         if (!args) {
@@ -490,7 +587,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     try {
-      chatLog.addUser(text);
+      chatLog.addUser(text, createLocalPromptId());
       tui.requestRender();
       const runId = randomUUID();
       noteLocalRunId(runId);

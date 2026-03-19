@@ -22,6 +22,23 @@ struct OpenClawChatComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if self.viewModel.isEditingPrompt {
+                HStack(spacing: 8) {
+                    Image(systemName: "pencil")
+                        .font(.caption)
+                    Text("Editing previous prompt (\(self.viewModel.editingLabel))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Button("Cancel") {
+                        self.viewModel.cancelEditing()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                }
+                .padding(.horizontal, 8)
+            }
+
             if self.showsToolbar {
                 HStack(spacing: 6) {
                     if self.showsSessionSwitcher {
@@ -219,7 +236,18 @@ struct OpenClawChatComposer: View {
             Text(self.viewModel.healthOK ? "Connected" : "Connecting…")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+            if self.viewModel.pendingRunCount > 0, !self.viewModel.activityStatusLabel.isEmpty {
+                Text(self.viewModel.activityStatusLabel)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(OpenClawChatTheme.runningStatus)
+                if let start = self.viewModel.currentRunStartedAt {
+                    ChatRunningStatusElapsed(start: start)
+                }
+            }
             Text("think \(self.viewModel.thinkingStatusLabel)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text("model \(self.viewModel.currentModelLabel)")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

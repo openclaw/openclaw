@@ -36,6 +36,10 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   state.sessionKey = sessionKey;
   state.chatMessage = "";
+  state.chatSlashOpen = false;
+  state.chatSlashSelection = 0;
+  state.chatEditingMessageId = null;
+  state.chatEditingUserMessageIndex = null;
   state.chatStream = null;
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
   state.chatRunId = null;
@@ -103,6 +107,12 @@ export function renderChatControls(state: AppViewState) {
     effective: state.chatEffectiveThink,
   });
   const showRunReasoning = Boolean(state.chatRunId);
+  const activeSession = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  const modelLabel = activeSession
+    ? activeSession.modelProvider
+      ? `${activeSession.modelProvider}/${activeSession.model ?? "auto"}`
+      : (activeSession.model ?? "auto")
+    : "unknown";
   // Refresh icon
   const refreshIcon = html`
     <svg
@@ -147,6 +157,10 @@ export function renderChatControls(state: AppViewState) {
             const next = (e.target as HTMLSelectElement).value;
             state.sessionKey = next;
             state.chatMessage = "";
+            state.chatSlashOpen = false;
+            state.chatSlashSelection = 0;
+            state.chatEditingMessageId = null;
+            state.chatEditingUserMessageIndex = null;
             state.chatStream = null;
             (state as unknown as OpenClawApp).chatStreamStartedAt = null;
             state.chatRunId = null;
@@ -247,6 +261,7 @@ export function renderChatControls(state: AppViewState) {
               <span class="chat-controls__reasoning-status">Reasoning: Default</span>
             `
       }
+      <span class="chat-controls__reasoning-status">Model: ${modelLabel}</span>
     </div>
   `;
 }

@@ -19,7 +19,15 @@ public final class OpenClawChatViewModel {
     public var input: String = ""
     public var thinkingLevel: String = "off" {
         didSet {
-            self.configuredThink = Self.normalizeConfiguredThink(self.thinkingLevel)
+            let normalized = Self.normalizeConfiguredThink(self.thinkingLevel)
+            if self.thinkingLevel != normalized {
+                self.thinkingLevel = normalized
+                return
+            }
+            self.configuredThink = normalized
+            if !self.isApplyingServerThinkingLevel {
+                self.hasManualThinkingSelection = true
+            }
         }
     }
     public private(set) var configuredThink: String = "off"
@@ -33,18 +41,28 @@ public final class OpenClawChatViewModel {
     public var attachments: [OpenClawPendingAttachment] = []
     public private(set) var healthOK: Bool = false
     public private(set) var pendingRunCount: Int = 0
+    public private(set) var currentRunStartedAt: Date?
 
     public private(set) var sessionKey: String
     public private(set) var sessionId: String?
     public private(set) var streamingAssistantText: String?
     public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
     public private(set) var sessions: [OpenClawChatSessionEntry] = []
+    public private(set) var editingUserMessageIndex: Int?
+    public private(set) var editingMessageId: String?
     private let transport: any OpenClawChatTransport
 
     @ObservationIgnored
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
     private var pendingRuns = Set<String>() {
-        didSet { self.pendingRunCount = self.pendingRuns.count }
+        didSet {
+            self.pendingRunCount = self.pendingRuns.count
+            if self.pendingRuns.isEmpty {
+                self.currentRunStartedAt = nil
+            } else if self.currentRunStartedAt == nil {
+                self.currentRunStartedAt = Date()
+            }
+        }
     }
 
     @ObservationIgnored
@@ -59,6 +77,8 @@ public final class OpenClawChatViewModel {
     }
 
     private var lastHealthPollAt: Date?
+    private var hasManualThinkingSelection = false
+    private var isApplyingServerThinkingLevel = false
 
     public init(sessionKey: String, transport: any OpenClawChatTransport) {
         self.sessionKey = sessionKey
@@ -156,7 +176,50 @@ public final class OpenClawChatViewModel {
 
     public var canSend: Bool {
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !self.isSending && self.pendingRunCount == 0 && (!trimmed.isEmpty || !self.attachments.isEmpty)
+        return self.healthOK &&
+            !self.isSending &&
+            self.pendingRunCount == 0 &&
+            (!trimmed.isEmpty || !self.attachments.isEmpty)
+    }
+
+    public var isEditingPrompt: Bool {
+        self.editingUserMessageIndex != nil || self.editingMessageId != nil
+    }
+
+    public var editingLabel: String {
+        if let id = self.editingMessageId, !id.isEmpty {
+            return "editing \(id)"
+        }
+        if let index = self.editingUserMessageIndex {
+            return "editing prompt #\(index + 1)"
+        }
+        return ""
+    }
+
+    public var currentModelLabel: String {
+        let active = self.sessions.first { $0.key == self.sessionKey }?.model?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let active, !active.isEmpty {
+            return active
+        }
+        return "unknown"
+    }
+
+    public func beginEditing(
+        messageText: String,
+        messageId: String?,
+        userMessageIndex: Int)
+    {
+        let trimmedText = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+        self.input = trimmedText
+        self.editingMessageId = messageId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.editingUserMessageIndex = userMessageIndex
+    }
+
+    public func cancelEditing() {
+        self.editingMessageId = nil
+        self.editingUserMessageIndex = nil
     }
 
     public var thinkingStatusLabel: String {
@@ -170,6 +233,21 @@ public final class OpenClawChatViewModel {
             return "auto"
         }
         return self.configuredThink
+    }
+
+    /// TUI-style "running (think X)" label when agent is thinking; empty otherwise.
+    public var activityStatusLabel: String {
+        guard self.pendingRunCount > 0 else { return "" }
+        if self.configuredThink == "auto" {
+            if let current = self.effectiveThink, !current.isEmpty {
+                return "running (think auto→\(current))"
+            }
+            if let last = self.lastEffectiveThink, !last.isEmpty {
+                return "running (think auto→\(last))"
+            }
+            return "running (think auto)"
+        }
+        return "running (think \(self.configuredThink))"
     }
 
     // MARK: - Internals
@@ -195,9 +273,7 @@ public final class OpenClawChatViewModel {
                 previous: self.messages,
                 incoming: Self.decodeMessages(payload.messages ?? []))
             self.sessionId = payload.sessionId
-            if let configured = Self.firstNonEmpty([payload.configuredThink, payload.thinkingLevel]) {
-                self.thinkingLevel = configured
-            }
+            self.applyServerThinkingLevel(Self.firstNonEmpty([payload.configuredThink, payload.thinkingLevel]))
             if let effective = Self.firstNonEmpty([payload.effectiveThink]) {
                 self.effectiveThink = effective
             } else {
@@ -251,6 +327,7 @@ public final class OpenClawChatViewModel {
 
         return OpenClawChatMessage(
             id: message.id,
+            sourceMessageId: message.sourceMessageId,
             role: message.role,
             content: sanitizedContent,
             timestamp: message.timestamp,
@@ -314,6 +391,7 @@ public final class OpenClawChatViewModel {
             guard reusedId != message.id else { return message }
             return OpenClawChatMessage(
                 id: reusedId,
+                sourceMessageId: message.sourceMessageId,
                 role: message.role,
                 content: message.content,
                 timestamp: message.timestamp,
@@ -364,10 +442,16 @@ public final class OpenClawChatViewModel {
         self.errorText = nil
         let runId = UUID().uuidString
         let messageText = trimmed.isEmpty && !self.attachments.isEmpty ? "See attached." : trimmed
+        let pivotMessageId = self.editingMessageId
+        let pivotUserMessageIndex = self.editingUserMessageIndex
+        let isEditingRequest = pivotMessageId != nil || pivotUserMessageIndex != nil
         self.pendingRuns.insert(runId)
         self.armPendingRunTimeout(runId: runId)
         self.pendingToolCallsById = [:]
         self.streamingAssistantText = nil
+        if isEditingRequest {
+            self.applyLocalEditRebase(beforeUserMessageIndex: pivotUserMessageIndex)
+        }
 
         // Optimistically append user message to UI.
         var userContent: [OpenClawChatMessageContent] = [
@@ -407,6 +491,7 @@ public final class OpenClawChatViewModel {
         self.messages.append(
             OpenClawChatMessage(
                 id: UUID(),
+                sourceMessageId: nil,
                 role: "user",
                 content: userContent,
                 timestamp: Date().timeIntervalSince1970 * 1000))
@@ -414,14 +499,26 @@ public final class OpenClawChatViewModel {
         // Clear input immediately for responsive UX (before network await)
         self.input = ""
         self.attachments = []
+        self.cancelEditing()
 
         do {
-            let response = try await self.transport.sendMessage(
-                sessionKey: self.sessionKey,
-                message: messageText,
-                thinking: self.thinkingLevel,
-                idempotencyKey: runId,
-                attachments: encodedAttachments)
+            let response: OpenClawChatSendResponse
+            if isEditingRequest {
+                response = try await self.transport.editMessage(
+                    sessionKey: self.sessionKey,
+                    message: messageText,
+                    messageId: pivotMessageId,
+                    userMessageIndex: pivotUserMessageIndex,
+                    thinking: self.thinkingLevel,
+                    idempotencyKey: runId)
+            } else {
+                response = try await self.transport.sendMessage(
+                    sessionKey: self.sessionKey,
+                    message: messageText,
+                    thinking: self.thinkingLevel,
+                    idempotencyKey: runId,
+                    attachments: encodedAttachments)
+            }
             if response.runId != runId {
                 self.clearPendingRun(runId)
                 self.pendingRuns.insert(response.runId)
@@ -465,8 +562,26 @@ public final class OpenClawChatViewModel {
         let next = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !next.isEmpty else { return }
         guard next != self.sessionKey else { return }
+        self.cancelEditing()
+        self.hasManualThinkingSelection = false
         self.sessionKey = next
         await self.bootstrap()
+    }
+
+    private func applyLocalEditRebase(beforeUserMessageIndex pivotUserMessageIndex: Int?) {
+        guard let pivotUserMessageIndex else { return }
+        var nextMessages: [OpenClawChatMessage] = []
+        var userCount = 0
+        for message in self.messages {
+            if message.role.lowercased() == "user" {
+                if userCount >= pivotUserMessageIndex {
+                    break
+                }
+                userCount += 1
+            }
+            nextMessages.append(message)
+        }
+        self.messages = nextMessages
     }
 
     private func placeholderSession(key: String) -> OpenClawChatSessionEntry {
@@ -598,9 +713,7 @@ public final class OpenClawChatViewModel {
                     self.pendingRuns.insert(evt.runId)
                     self.armPendingRunTimeout(runId: evt.runId)
                 }
-                if let configuredThink {
-                    self.thinkingLevel = configuredThink
-                }
+                self.applyServerThinkingLevel(configuredThink)
                 if let eventEffectiveThink {
                     self.effectiveThink = eventEffectiveThink
                     self.lastEffectiveThink = eventEffectiveThink
@@ -646,9 +759,7 @@ public final class OpenClawChatViewModel {
                 previous: self.messages,
                 incoming: Self.decodeMessages(payload.messages ?? []))
             self.sessionId = payload.sessionId
-            if let configured = Self.firstNonEmpty([payload.configuredThink, payload.thinkingLevel]) {
-                self.thinkingLevel = configured
-            }
+            self.applyServerThinkingLevel(Self.firstNonEmpty([payload.configuredThink, payload.thinkingLevel]))
             if let effective = Self.firstNonEmpty([payload.effectiveThink]) {
                 self.effectiveThink = effective
             } else {
@@ -674,6 +785,18 @@ public final class OpenClawChatViewModel {
             return normalized
         }
         return "off"
+    }
+
+    private func applyServerThinkingLevel(_ level: String?) {
+        guard let level else { return }
+        let normalized = Self.normalizeConfiguredThink(level)
+        // Keep user-selected level sticky for this session unless they switch sessions.
+        if self.hasManualThinkingSelection && self.thinkingLevel != normalized {
+            return
+        }
+        self.isApplyingServerThinkingLevel = true
+        self.thinkingLevel = normalized
+        self.isApplyingServerThinkingLevel = false
     }
 
     private static func asString(_ value: AnyCodable?) -> String? {

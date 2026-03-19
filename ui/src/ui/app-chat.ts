@@ -3,7 +3,12 @@ import { scheduleChatScroll } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
-import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
+import {
+  abortChatRun,
+  editChatMessage,
+  loadChatHistory,
+  sendChatMessage,
+} from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
@@ -13,10 +18,14 @@ import { generateUUID } from "./uuid.ts";
 export type ChatHost = {
   connected: boolean;
   chatMessage: string;
+  chatMessages: unknown[];
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
+  chatEditingMessageId: string | null;
+  chatEditingUserMessageIndex: number | null;
+  lastError: string | null;
   sessionKey: string;
   basePath: string;
   hello: GatewayHelloOk | null;
@@ -25,6 +34,65 @@ export type ChatHost = {
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+
+function resolveMessageId(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const entry = message as Record<string, unknown>;
+  if (typeof entry.id === "string" && entry.id.trim()) {
+    return entry.id.trim();
+  }
+  if (typeof entry.messageId === "string" && entry.messageId.trim()) {
+    return entry.messageId.trim();
+  }
+  return null;
+}
+
+function isUserMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  return (message as { role?: unknown }).role === "user";
+}
+
+function applyLocalEditRebase(host: ChatHost, nextText: string) {
+  const pivotId = host.chatEditingMessageId;
+  const pivotUserIndex = host.chatEditingUserMessageIndex;
+  if (!pivotId && typeof pivotUserIndex !== "number") {
+    return;
+  }
+  let pivotIndex = -1;
+  let userCount = 0;
+  for (let i = 0; i < host.chatMessages.length; i++) {
+    const message = host.chatMessages[i];
+    if (!isUserMessage(message)) {
+      continue;
+    }
+    const id = resolveMessageId(message);
+    if (pivotId && id === pivotId) {
+      pivotIndex = i;
+      break;
+    }
+    if (typeof pivotUserIndex === "number" && userCount === pivotUserIndex) {
+      pivotIndex = i;
+      break;
+    }
+    userCount += 1;
+  }
+  if (pivotIndex < 0) {
+    return;
+  }
+  const kept = host.chatMessages.slice(0, pivotIndex);
+  host.chatMessages = [
+    ...kept,
+    {
+      role: "user",
+      content: [{ type: "text", text: nextText }],
+      timestamp: Date.now(),
+    },
+  ];
+}
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
@@ -134,6 +202,35 @@ async function sendChatMessageNow(
   return ok;
 }
 
+async function sendEditedChatMessageNow(
+  host: ChatHost,
+  message: string,
+  opts?: {
+    previousDraft?: string;
+  },
+) {
+  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+  applyLocalEditRebase(host, message);
+  const runId = await editChatMessage(host as unknown as OpenClawApp, message, {
+    messageId: host.chatEditingMessageId,
+    userMessageIndex: host.chatEditingUserMessageIndex,
+  });
+  const ok = Boolean(runId);
+  if (!ok && opts?.previousDraft != null) {
+    host.chatMessage = opts.previousDraft;
+  }
+  if (ok) {
+    host.chatEditingMessageId = null;
+    host.chatEditingUserMessageIndex = null;
+    setLastActiveSessionKey(
+      host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
+      host.sessionKey,
+    );
+  }
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  return ok;
+}
+
 async function flushChatQueue(host: ChatHost) {
   if (!host.connected || isChatBusy(host)) {
     return;
@@ -181,6 +278,8 @@ export async function handleSendChat(
   }
 
   const refreshSessions = isChatResetCommand(message);
+  const hasEditPivot =
+    host.chatEditingMessageId !== null || typeof host.chatEditingUserMessageIndex === "number";
   if (messageOverride == null) {
     host.chatMessage = "";
     // Clear attachments when sending
@@ -188,7 +287,18 @@ export async function handleSendChat(
   }
 
   if (isChatBusy(host)) {
+    if (hasEditPivot) {
+      host.lastError = "Finish the current run before submitting an edited prompt.";
+      return;
+    }
     enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
+    return;
+  }
+
+  if (hasEditPivot) {
+    await sendEditedChatMessageNow(host, message, {
+      previousDraft: messageOverride == null ? previousDraft : undefined,
+    });
     return;
   }
 

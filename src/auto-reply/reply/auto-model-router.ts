@@ -305,11 +305,31 @@ export async function resolveModelWithRouter(params: {
   const modelNorm = String(params.model ?? "")
     .trim()
     .toLowerCase();
-  if (modelNorm !== AUTO_MODEL || !isAutoRoutingEnabled(params.cfg)) {
+  if (modelNorm !== AUTO_MODEL) {
     return {
       routed: false,
       provider: params.provider,
       model: params.model,
+    };
+  }
+
+  if (!isAutoRoutingEnabled(params.cfg)) {
+    if (params.lastNonAutoProvider && params.lastNonAutoModel) {
+      return {
+        routed: false,
+        provider: params.lastNonAutoProvider,
+        model: params.lastNonAutoModel,
+      };
+    }
+    const fallback = resolveConfiguredModelRef({
+      cfg: params.cfg ?? {},
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    });
+    return {
+      routed: false,
+      provider: fallback.provider,
+      model: fallback.model,
     };
   }
 

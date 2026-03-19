@@ -186,11 +186,21 @@ public struct OpenClawChatView: View {
     @ViewBuilder
     private var messageListRows: some View {
         ForEach(self.visibleMessages) { msg in
+            let userIndex = self.userMessageIndexById[msg.id]
             ChatMessageBubble(
                 message: msg,
                 style: self.style,
                 markdownVariant: self.markdownVariant,
-                userAccent: self.userAccent)
+                userAccent: self.userAccent,
+                isEditing: userIndex != nil && userIndex == self.viewModel.editingUserMessageIndex,
+                onEditMessage: userIndex == nil ? nil : {
+                    let text = Self.userMessageText(from: msg)
+                    guard !text.isEmpty else { return }
+                    self.viewModel.beginEditing(
+                        messageText: text,
+                        messageId: msg.sourceMessageId,
+                        userMessageIndex: userIndex ?? 0)
+                })
                 .frame(
                     maxWidth: .infinity,
                     alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
@@ -198,8 +208,11 @@ public struct OpenClawChatView: View {
 
         if self.viewModel.pendingRunCount > 0 {
             HStack {
-                ChatTypingIndicatorBubble(style: self.style)
-                    .equatable()
+                ChatTypingIndicatorBubble(
+                    style: self.style,
+                    activityLabel: self.viewModel.activityStatusLabel,
+                    runStartedAt: self.viewModel.currentRunStartedAt)
+                .equatable()
                 Spacer(minLength: 0)
             }
         }
@@ -226,6 +239,26 @@ public struct OpenClawChatView: View {
             base = self.viewModel.messages
         }
         return self.mergeToolResults(in: base)
+    }
+
+    private var userMessageIndexById: [UUID: Int] {
+        var indexes: [UUID: Int] = [:]
+        var count = 0
+        for message in self.viewModel.messages {
+            guard message.role.lowercased() == "user" else { continue }
+            indexes[message.id] = count
+            count += 1
+        }
+        return indexes
+    }
+
+    private static func userMessageText(from message: OpenClawChatMessage) -> String {
+        let parts = message.content.compactMap { content -> String? in
+            let kind = (content.type ?? "text").lowercased()
+            guard kind == "text" || kind.isEmpty else { return nil }
+            return content.text
+        }
+        return parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @ViewBuilder
@@ -373,6 +406,7 @@ public struct OpenClawChatView: View {
 
             let merged = OpenClawChatMessage(
                 id: last.id,
+                sourceMessageId: last.sourceMessageId,
                 role: last.role,
                 content: content,
                 timestamp: last.timestamp,

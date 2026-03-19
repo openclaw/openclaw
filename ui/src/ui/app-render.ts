@@ -107,6 +107,49 @@ function normalizeSuggestionValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function resolveMessageId(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const entry = message as Record<string, unknown>;
+  if (typeof entry.id === "string" && entry.id.trim()) {
+    return entry.id.trim();
+  }
+  if (typeof entry.messageId === "string" && entry.messageId.trim()) {
+    return entry.messageId.trim();
+  }
+  return null;
+}
+
+function extractMessageText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const entry = message as Record<string, unknown>;
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  if (!Array.isArray(entry.content)) {
+    return "";
+  }
+  return entry.content
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const block = item as Record<string, unknown>;
+      return block.type === "text" && typeof block.text === "string" ? block.text : null;
+    })
+    .filter((part): part is string => Boolean(part))
+    .join("\n");
+}
+
+function isUserMessage(message: unknown): boolean {
+  return Boolean(
+    message && typeof message === "object" && (message as { role?: unknown }).role === "user",
+  );
+}
+
 function uniquePreserveOrder(values: string[]): string[] {
   const seen = new Set<string>();
   const output: string[] = [];
@@ -161,6 +204,12 @@ export function renderApp(state: AppViewState) {
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
+  const activeSession = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  const currentModelLabel = activeSession
+    ? activeSession.modelProvider
+      ? `${activeSession.modelProvider}/${activeSession.model ?? "auto"}`
+      : (activeSession.model ?? "auto")
+    : null;
   const runTickerReasoningLabel = formatTickerReasoningLabel({
     configured: state.chatConfiguredThink,
     effective: state.chatEffectiveThink,
@@ -989,6 +1038,10 @@ export function renderApp(state: AppViewState) {
                 onSessionKeyChange: (next) => {
                   state.sessionKey = next;
                   state.chatMessage = "";
+                  state.chatSlashOpen = false;
+                  state.chatSlashSelection = 0;
+                  state.chatEditingMessageId = null;
+                  state.chatEditingUserMessageIndex = null;
                   state.chatAttachments = [];
                   state.chatStream = null;
                   state.chatStreamStartedAt = null;
@@ -1024,7 +1077,12 @@ export function renderApp(state: AppViewState) {
                 runTickerReasoningLabel,
                 runPhaseLabel: state.chatRunId ? runPhaseLabel : undefined,
                 runPhaseSuffixLabel: state.chatRunId ? runPhaseSuffixLabel : undefined,
+                currentModelLabel,
                 draft: state.chatMessage,
+                slashOpen: state.chatSlashOpen,
+                slashSelection: state.chatSlashSelection,
+                editingMessageId: state.chatEditingMessageId,
+                editingUserMessageIndex: state.chatEditingUserMessageIndex,
                 queue: state.chatQueue,
                 connected: state.connected,
                 canSend: state.connected,
@@ -1047,13 +1105,64 @@ export function renderApp(state: AppViewState) {
                 },
                 onChatScroll: (event) => state.handleChatScroll(event),
                 onDraftChange: (next) => (state.chatMessage = next),
+                onSlashOpenChange: (open) => {
+                  state.chatSlashOpen = open;
+                },
+                onSlashSelectionChange: (index) => {
+                  state.chatSlashSelection = index;
+                },
+                onApplySlashCommand: (command, execute) => {
+                  const next = command;
+                  state.chatMessage = next;
+                  state.chatSlashOpen = false;
+                  state.chatSlashSelection = 0;
+                  if (execute) {
+                    void state.handleSendChat(next);
+                  }
+                },
+                onStartEditMessage: (message) => {
+                  const id = resolveMessageId(message);
+                  let userIndex = 0;
+                  let matchedIndex: number | null = null;
+                  for (const entry of state.chatMessages) {
+                    if (!isUserMessage(entry)) {
+                      continue;
+                    }
+                    if (id && resolveMessageId(entry) === id) {
+                      matchedIndex = userIndex;
+                      break;
+                    }
+                    if (entry === message) {
+                      matchedIndex = userIndex;
+                      break;
+                    }
+                    userIndex += 1;
+                  }
+                  state.chatEditingMessageId = id;
+                  state.chatEditingUserMessageIndex = matchedIndex;
+                  state.chatMessage = extractMessageText(message);
+                  state.chatSlashOpen = false;
+                  state.chatSlashSelection = 0;
+                },
+                onCancelEditMessage: () => {
+                  state.chatEditingMessageId = null;
+                  state.chatEditingUserMessageIndex = null;
+                },
                 attachments: state.chatAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),
-                onSend: () => state.handleSendChat(),
+                onSend: () => {
+                  state.chatSlashOpen = false;
+                  state.chatSlashSelection = 0;
+                  void state.handleSendChat();
+                },
                 canAbort: Boolean(state.chatRunId),
                 onAbort: () => void state.handleAbortChat(),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
-                onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+                onNewSession: () => {
+                  state.chatEditingMessageId = null;
+                  state.chatEditingUserMessageIndex = null;
+                  void state.handleSendChat("/new", { restoreDraft: true });
+                },
                 showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                 onScrollToBottom: () => state.scrollToBottom(),
                 // Sidebar props for tool output viewing

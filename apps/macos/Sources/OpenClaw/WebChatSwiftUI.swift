@@ -61,6 +61,23 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
             attachments: attachments)
     }
 
+    func editMessage(
+        sessionKey: String,
+        message: String,
+        messageId: String?,
+        userMessageIndex: Int?,
+        thinking: String,
+        idempotencyKey: String) async throws -> OpenClawChatSendResponse
+    {
+        try await GatewayConnection.shared.chatEdit(
+            sessionKey: sessionKey,
+            message: message,
+            messageId: messageId,
+            userMessageIndex: userMessageIndex,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey)
+    }
+
     func requestHealth(timeoutMs: Int) async throws -> Bool {
         try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
     }

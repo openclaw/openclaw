@@ -98,6 +98,7 @@ import type {
 } from "./frames.js";
 import type {
   ChatAbortParamsSchema,
+  ChatEditParamsSchema,
   ChatEventSchema,
   ChatInjectParamsSchema,
   LogsTailParamsSchema,
@@ -252,6 +253,7 @@ export type DevicePairRemoveParams = Static<typeof DevicePairRemoveParamsSchema>
 export type DeviceTokenRotateParams = Static<typeof DeviceTokenRotateParamsSchema>;
 export type DeviceTokenRevokeParams = Static<typeof DeviceTokenRevokeParamsSchema>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
+export type ChatEditParams = Static<typeof ChatEditParamsSchema>;
 export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;
 export type UpdateRunParams = Static<typeof UpdateRunParamsSchema>;

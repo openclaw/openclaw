@@ -49,8 +49,13 @@ export type ChatProps = {
   runTickerReasoningLabel?: string;
   runPhaseLabel?: string;
   runPhaseSuffixLabel?: string | null;
+  currentModelLabel?: string | null;
   assistantAvatarUrl?: string | null;
   draft: string;
+  slashOpen?: boolean;
+  slashSelection?: number;
+  editingMessageId?: string | null;
+  editingUserMessageIndex?: number | null;
   queue: ChatQueueItem[];
   connected: boolean;
   canSend: boolean;
@@ -76,6 +81,11 @@ export type ChatProps = {
   onRefresh: () => void;
   onToggleFocusMode: () => void;
   onDraftChange: (next: string) => void;
+  onSlashOpenChange?: (open: boolean) => void;
+  onSlashSelectionChange?: (index: number) => void;
+  onApplySlashCommand?: (command: string, execute?: boolean) => void;
+  onStartEditMessage?: (message: unknown) => void;
+  onCancelEditMessage?: () => void;
   onSend: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -88,10 +98,54 @@ export type ChatProps = {
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
+type SlashOption = {
+  command: string;
+  description: string;
+  execute?: boolean;
+};
+
+const GUI_SLASH_OPTIONS: SlashOption[] = [
+  {
+    command: "/model auto",
+    description: "let the system pick the best model for this prompt",
+  },
+  {
+    command: "/model ",
+    description: "explicitly select a provider/model",
+  },
+  {
+    command: "/models ",
+    description: "list available models/providers",
+    execute: true,
+  },
+  {
+    command: "/help",
+    description: "show help",
+    execute: true,
+  },
+  {
+    command: "/clear",
+    description: "clear chat/history",
+    execute: true,
+  },
+];
 
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
+}
+
+function filterSlashOptions(draft: string): SlashOption[] {
+  if (!draft.startsWith("/")) {
+    return [];
+  }
+  const prefix = draft.slice(1).trim().toLowerCase();
+  if (!prefix) {
+    return GUI_SLASH_OPTIONS;
+  }
+  return GUI_SLASH_OPTIONS.filter((option) =>
+    option.command.slice(1).toLowerCase().startsWith(prefix),
+  );
 }
 
 function renderCompactionIndicator(status: CompactionIndicatorStatus | null | undefined) {
@@ -263,6 +317,14 @@ export function renderChat(props: ChatProps) {
       ? "Add a message or paste more images..."
       : "Message (↩ to send, Shift+↩ for line breaks, paste images)"
     : "Connect to the gateway to start chatting…";
+  const filteredSlashOptions = filterSlashOptions(props.draft);
+  const showSlashDropdown =
+    Boolean(props.slashOpen) && filteredSlashOptions.length > 0 && props.connected;
+  const slashSelection = Math.max(
+    0,
+    Math.min(props.slashSelection ?? 0, Math.max(0, filteredSlashOptions.length - 1)),
+  );
+  const activeModel = props.currentModelLabel?.trim() ? props.currentModelLabel.trim() : "unknown";
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
@@ -310,6 +372,7 @@ export function renderChat(props: ChatProps) {
           if (item.kind === "group") {
             return renderMessageGroup(item, {
               onOpenSidebar: props.onOpenSidebar,
+              onEditMessage: props.onStartEditMessage,
               showReasoning,
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
@@ -355,7 +418,7 @@ export function renderChat(props: ChatProps) {
             showTicker
               ? html`
                   <div class="chat-running-ticker" role="status" aria-live="polite">
-                    Running... • Reasoning=${tickerReasoning} • ${tickerPhase}${
+                    Running... • Model=${activeModel} • Reasoning=${tickerReasoning} • ${tickerPhase}${
                       tickerSuffix ? html` • ${tickerSuffix}` : nothing
                     }
                   </div>
@@ -440,6 +503,20 @@ export function renderChat(props: ChatProps) {
       }
 
       <div class="chat-compose">
+        ${
+          props.editingMessageId !== null || typeof props.editingUserMessageIndex === "number"
+            ? html`<div class="chat-editing-banner" role="status" aria-live="polite">
+                Editing previous prompt
+                <button
+                  class="btn chat-editing-banner__cancel"
+                  type="button"
+                  @click=${() => props.onCancelEditMessage?.()}
+                >
+                  Cancel
+                </button>
+              </div>`
+            : nothing
+        }
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
           <label class="field chat-compose__field">
@@ -450,6 +527,34 @@ export function renderChat(props: ChatProps) {
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
+                if (showSlashDropdown) {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    props.onSlashSelectionChange?.(
+                      Math.min(slashSelection + 1, filteredSlashOptions.length - 1),
+                    );
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    props.onSlashSelectionChange?.(Math.max(slashSelection - 1, 0));
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    props.onSlashOpenChange?.(false);
+                    return;
+                  }
+                  if (e.key === "Tab" || e.key === "Enter") {
+                    e.preventDefault();
+                    const selected = filteredSlashOptions[slashSelection];
+                    if (selected) {
+                      props.onApplySlashCommand?.(selected.command, Boolean(selected.execute));
+                    }
+                    return;
+                  }
+                }
+
                 if (e.key !== "Enter") {
                   return;
                 }
@@ -470,11 +575,39 @@ export function renderChat(props: ChatProps) {
               @input=${(e: Event) => {
                 const target = e.target as HTMLTextAreaElement;
                 adjustTextareaHeight(target);
-                props.onDraftChange(target.value);
+                const next = target.value;
+                props.onDraftChange(next);
+                if (next.startsWith("/")) {
+                  props.onSlashOpenChange?.(true);
+                } else {
+                  props.onSlashOpenChange?.(false);
+                }
+                props.onSlashSelectionChange?.(0);
               }}
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
               placeholder=${composePlaceholder}
             ></textarea>
+            ${
+              showSlashDropdown
+                ? html`<div class="chat-slash-dropdown" role="listbox" aria-label="Slash commands">
+                    ${filteredSlashOptions.map((option, index) => {
+                      const selected = index === slashSelection;
+                      return html`<button
+                        class="chat-slash-dropdown__item ${selected ? "is-selected" : ""}"
+                        type="button"
+                        role="option"
+                        aria-selected=${selected ? "true" : "false"}
+                        @mouseenter=${() => props.onSlashSelectionChange?.(index)}
+                        @click=${() =>
+                          props.onApplySlashCommand?.(option.command, Boolean(option.execute))}
+                      >
+                        <span class="chat-slash-dropdown__command">${option.command}</span>
+                        <span class="chat-slash-dropdown__description">${option.description}</span>
+                      </button>`;
+                    })}
+                  </div>`
+                : nothing
+            }
           </label>
           <div class="chat-compose__actions">
             <button

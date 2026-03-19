@@ -94,7 +94,7 @@ describe("tui command handlers", () => {
     await handleCommand("/context");
 
     expect(addSystem).not.toHaveBeenCalled();
-    expect(addUser).toHaveBeenCalledWith("/context");
+    expect(addUser).toHaveBeenCalledWith("/context", expect.stringMatching(/^p-/));
     expect(sendChat).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:main",
@@ -181,5 +181,57 @@ describe("tui command handlers", () => {
       model: "auto",
     });
     expect(addSystem).toHaveBeenCalledWith("model set to Auto (Recommended)");
+  });
+
+  it("accepts copied 'id <prompt-id>' prefix for /edit", async () => {
+    const editChat = vi.fn().mockResolvedValue({ runId: "r-edit" });
+    const loadHistory = vi.fn().mockResolvedValue({
+      messages: [{ role: "user", content: [{ type: "text", text: "first prompt" }] }],
+    });
+    const addSystem = vi.fn();
+    const addUser = vi.fn();
+
+    const handlers = createCommandHandlers({
+      client: {
+        sendChat: vi.fn(),
+        resetSession: vi.fn(),
+        loadHistory,
+        editChat,
+      } as never,
+      chatLog: { addUser, addSystem } as never,
+      tui: { requestRender: vi.fn() } as never,
+      opts: {},
+      state: {
+        currentSessionKey: "agent:main:main",
+        activeChatRunId: null,
+        isConnected: true,
+        sessionInfo: {},
+      } as never,
+      deliverDefault: false,
+      openOverlay: vi.fn(),
+      closeOverlay: vi.fn(),
+      refreshSessionInfo: vi.fn(),
+      loadHistory: vi.fn(),
+      setSession: vi.fn(),
+      refreshAgents: vi.fn(),
+      abortActive: vi.fn(),
+      setActivityStatus: vi.fn(),
+      formatSessionKey: vi.fn(),
+      applySessionInfoFromPatch: vi.fn(),
+      noteLocalRunId: vi.fn(),
+      forgetLocalRunId: vi.fn(),
+      requestExit: vi.fn(),
+    });
+
+    await handlers.handleCommand("/edit id p-1 rewritten prompt");
+
+    expect(editChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "rewritten prompt",
+        userMessageIndex: 0,
+      }),
+    );
+    expect(addUser).toHaveBeenCalledWith("rewritten prompt", expect.stringMatching(/^p-/));
   });
 });

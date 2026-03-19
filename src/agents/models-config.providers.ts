@@ -248,7 +248,7 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
-      log.warn(`Failed to discover Ollama models: ${response.status}`);
+      log.debug(`Skipping Ollama model discovery (HTTP ${response.status})`);
       return [];
     }
     const data = (await response.json()) as OllamaTagsResponse;
@@ -271,7 +271,7 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
       };
     });
   } catch (error) {
-    log.warn(`Failed to discover Ollama models: ${String(error)}`);
+    log.debug(`Skipping Ollama model discovery (${String(error)})`);
     return [];
   }
 }

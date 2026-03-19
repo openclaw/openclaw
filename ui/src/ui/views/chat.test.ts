@@ -239,7 +239,7 @@ describe("chat view", () => {
     );
     const ticker = container.querySelector(".chat-running-ticker");
     expect(ticker).not.toBeNull();
-    expect(ticker?.textContent).toContain("Running... • Reasoning=High • planning");
+    expect(ticker?.textContent).toContain("Running... • Model=unknown • Reasoning=High • planning");
   });
 
   it("renders running ticker with manual deep reasoning", () => {
@@ -255,7 +255,7 @@ describe("chat view", () => {
       container,
     );
     expect(container.querySelector(".chat-running-ticker")?.textContent).toContain(
-      "Running... • Reasoning=Deep • reasoning",
+      "Running... • Model=unknown • Reasoning=Deep • reasoning",
     );
   });
 
@@ -272,7 +272,7 @@ describe("chat view", () => {
       container,
     );
     expect(container.querySelector(".chat-running-ticker")?.textContent).toContain(
-      "Running... • Reasoning=Default • processing",
+      "Running... • Model=unknown • Reasoning=Default • processing",
     );
   });
 });

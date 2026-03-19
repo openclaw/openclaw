@@ -137,6 +137,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
 
 public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
     public var id: UUID = .init()
+    public let sourceMessageId: String?
     public let role: String
     public let content: [OpenClawChatMessageContent]
     public let timestamp: Double?
@@ -146,6 +147,8 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
     public let stopReason: String?
 
     enum CodingKeys: String, CodingKey {
+        case id
+        case messageId
         case role
         case content
         case timestamp
@@ -159,6 +162,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
 
     public init(
         id: UUID = .init(),
+        sourceMessageId: String? = nil,
         role: String,
         content: [OpenClawChatMessageContent],
         timestamp: Double?,
@@ -168,6 +172,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         stopReason: String? = nil)
     {
         self.id = id
+        self.sourceMessageId = sourceMessageId
         self.role = role
         self.content = content
         self.timestamp = timestamp
@@ -179,6 +184,11 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Decode id/messageId as String; use try? so non-String values don't drop the message.
+        self.sourceMessageId =
+            ((try? container.decodeIfPresent(String.self, forKey: .id)) ??
+             (try? container.decodeIfPresent(String.self, forKey: .messageId)))
+            .flatMap { $0 }
         self.role = try container.decode(String.self, forKey: .role)
         self.timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
         self.toolCallId =
@@ -218,6 +228,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(self.sourceMessageId, forKey: .id)
         try container.encode(self.role, forKey: .role)
         try container.encodeIfPresent(self.timestamp, forKey: .timestamp)
         try container.encodeIfPresent(self.toolCallId, forKey: .toolCallId)

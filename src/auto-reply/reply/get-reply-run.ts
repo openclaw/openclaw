@@ -28,7 +28,6 @@ import {
   coerceThinkingLevelForModel,
   type ConfiguredThinkLevel,
   type ElevatedLevel,
-  formatThinkingLevels,
   normalizeConfiguredThinkLevel,
   normalizeThinkLevel,
   type ReasoningLevel,
@@ -46,6 +45,7 @@ import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import type { FollowupRun } from "./queue.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
@@ -57,6 +57,23 @@ import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+
+function resolveModelReasoningCapability(params: {
+  catalog?: Array<{ provider?: string; id?: string; reasoning?: boolean }>;
+  provider: string;
+  model: string;
+}): boolean | undefined {
+  if (!Array.isArray(params.catalog) || params.catalog.length === 0) {
+    return undefined;
+  }
+  const provider = params.provider.trim().toLowerCase();
+  const model = params.model.trim().toLowerCase();
+  const found = params.catalog.find(
+    (entry) =>
+      entry.provider?.trim().toLowerCase() === provider && entry.id?.trim().toLowerCase() === model,
+  );
+  return typeof found?.reasoning === "boolean" ? found.reasoning : undefined;
+}
 
 function buildResetSessionNoticeText(params: {
   provider: string;
@@ -438,6 +455,22 @@ export async function runPreparedReply(
       `[think] configured=${effectiveConfiguredThinkLevel} effective=${resolvedThinkLevel} reason=${autoReasonBucket ?? effectiveGeneratingSource}`,
     );
   }
+
+  const modelReasoningCapability = resolveModelReasoningCapability({
+    catalog: modelState.allowedModelCatalog,
+    provider,
+    model,
+  });
+  if (modelReasoningCapability === false && resolvedThinkLevel !== "off") {
+    resolvedThinkLevel = "off";
+    if (effectiveGeneratingSource === "auto-meta") {
+      effectiveGeneratingSource = "auto-fallback";
+    }
+    if (autoThinkTraceEnabled) {
+      logVerbose(`[think] forcing off (model has no reasoning): ${provider}/${model}`);
+    }
+  }
+
   const resolvedThinkingLevel = coerceThinkingLevelForModel({
     level: resolvedThinkLevel ?? "off",
     provider,
@@ -445,15 +478,14 @@ export async function runPreparedReply(
   });
   if (resolvedThinkingLevel.coerced) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
-    if (explicitThink) {
-      typing.cleanup();
-      return {
-        text: `Thinking level "${resolvedThinkLevel ?? "off"}" is not supported for ${provider}/${model}. Valid levels: ${formatThinkingLevels(provider, model)}.`,
-      };
-    }
     resolvedThinkLevel = resolvedThinkingLevel.level;
     if (effectiveGeneratingSource === "auto-meta") {
       effectiveGeneratingSource = "auto-fallback";
+    }
+    if (explicitThink && autoThinkTraceEnabled) {
+      logVerbose(
+        `[think] explicit level downgraded ${directives.thinkLevel ?? "unknown"} -> ${resolvedThinkLevel} for ${provider}/${model}`,
+      );
     }
     if (
       sessionEntry &&
@@ -548,7 +580,9 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
-  const followupRun = {
+  const configuredThinkLevelForRun: FollowupRun["run"]["configuredThinkLevel"] =
+    effectiveConfiguredThinkLevel === "auto" ? "auto" : effectiveConfiguredThinkLevel;
+  const followupRun: FollowupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
@@ -585,8 +619,7 @@ export async function runPreparedReply(
       model,
       authProfileId,
       authProfileIdSource,
-      configuredThinkLevel:
-        effectiveConfiguredThinkLevel === "auto" ? "auto" : effectiveConfiguredThinkLevel,
+      configuredThinkLevel: configuredThinkLevelForRun,
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,

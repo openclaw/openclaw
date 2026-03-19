@@ -139,6 +139,8 @@ struct ChatMessageBubble: View {
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
+    let isEditing: Bool
+    let onEditMessage: (() -> Void)?
 
     var body: some View {
         ChatMessageBody(
@@ -146,7 +148,9 @@ struct ChatMessageBubble: View {
             isUser: self.isUser,
             style: self.style,
             markdownVariant: self.markdownVariant,
-            userAccent: self.userAccent)
+            userAccent: self.userAccent,
+            isEditing: self.isEditing,
+            onEditMessage: self.onEditMessage)
             .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: self.isUser ? .trailing : .leading)
             .frame(maxWidth: .infinity, alignment: self.isUser ? .trailing : .leading)
             .padding(.horizontal, 2)
@@ -162,12 +166,26 @@ private struct ChatMessageBody: View {
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
+    let isEditing: Bool
+    let onEditMessage: (() -> Void)?
 
     var body: some View {
         let text = self.primaryText
         let textColor = self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
 
         VStack(alignment: .leading, spacing: 10) {
+            if self.isUser, let onEditMessage {
+                HStack {
+                    Spacer(minLength: 0)
+                    Button("Edit") {
+                        onEditMessage()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
             if self.isToolResultMessage {
                 if !text.isEmpty {
                     ToolResultCard(
@@ -220,6 +238,7 @@ private struct ChatMessageBody: View {
         .background(self.bubbleBackground)
         .clipShape(self.bubbleShape)
         .overlay(self.bubbleBorder)
+        .overlay(self.editingBorder)
         .shadow(color: self.bubbleShadowColor, radius: self.bubbleShadowRadius, y: self.bubbleShadowYOffset)
         .padding(.leading, self.tailPaddingLeading)
         .padding(.trailing, self.tailPaddingTrailing)
@@ -308,6 +327,12 @@ private struct ChatMessageBody: View {
 
     private var bubbleBorder: some View {
         self.bubbleShape.strokeBorder(self.bubbleBorderColor, lineWidth: self.bubbleBorderWidth)
+    }
+
+    private var editingBorder: some View {
+        self.bubbleShape.strokeBorder(
+            self.isEditing ? Color.accentColor.opacity(0.55) : Color.clear,
+            lineWidth: self.isEditing ? 1.4 : 0)
     }
 
     private var bubbleShape: ChatBubbleShape {
@@ -460,14 +485,70 @@ private struct ToolResultCard: View {
     }
 }
 
+private func formatElapsed(since start: Date) -> String {
+    let sec = Int(-start.timeIntervalSinceNow)
+    let m = sec / 60
+    let s = sec % 60
+    return m > 0 ? String(format: "%d:%02d", m, s) : String(format: "0:%02d", s)
+}
+
+@MainActor
+struct ChatRunningStatusElapsed: View {
+    let start: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1.0)) { _ in
+            Text("• \(formatElapsed(since: self.start))")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(OpenClawChatTheme.runningStatus)
+        }
+    }
+}
+
+@MainActor
+struct ChatRunningStatusView: View {
+    let activityLabel: String
+    let runStartedAt: Date?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if !self.activityLabel.isEmpty {
+                Text(self.activityLabel)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(OpenClawChatTheme.runningStatus)
+            }
+            if let start = self.runStartedAt {
+                TimelineView(.periodic(from: .now, by: 1.0)) { _ in
+                    Text(formatElapsed(since: start))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(OpenClawChatTheme.runningStatus)
+                }
+            }
+        }
+    }
+}
+
 @MainActor
 struct ChatTypingIndicatorBubble: View {
     let style: OpenClawChatView.Style
+    let activityLabel: String
+    let runStartedAt: Date?
+
+    init(style: OpenClawChatView.Style, activityLabel: String = "", runStartedAt: Date? = nil) {
+        self.style = style
+        self.activityLabel = activityLabel
+        self.runStartedAt = runStartedAt
+    }
 
     var body: some View {
-        HStack(spacing: 10) {
-            TypingDots()
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 10) {
+            if !self.activityLabel.isEmpty || self.runStartedAt != nil {
+                ChatRunningStatusView(activityLabel: self.activityLabel, runStartedAt: self.runStartedAt)
+            }
+            HStack(spacing: 10) {
+                TypingDots()
+                Spacer(minLength: 0)
+            }
         }
         .padding(.vertical, self.style == .standard ? 12 : 10)
         .padding(.horizontal, self.style == .standard ? 12 : 14)
@@ -484,7 +565,8 @@ struct ChatTypingIndicatorBubble: View {
 
 extension ChatTypingIndicatorBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.style == rhs.style
+        lhs.style == rhs.style && lhs.activityLabel == rhs.activityLabel &&
+            lhs.runStartedAt == rhs.runStartedAt
     }
 }
 

@@ -3,12 +3,15 @@
 #
 # What it does (default, one-shot):
 #   1) pnpm install
-#   2) pnpm ui:build
+#   2) pnpm ui:install
 #   3) pnpm build
-#   4) Link this repo into the active global CLI install (auto-detected: npm or pnpm)
-#   5) Verify active `openclaw` now points to this repo
-#   6) openclaw doctor
-#   7) openclaw gateway restart
+#   4) pnpm ui:build
+#   5) Build macOS app bundle (darwin only): dist/OpenClaw.app
+#   6) Install/update macOS app bundle to Applications (darwin only)
+#   7) Link this repo into the active global CLI install (auto-detected: npm or pnpm)
+#   8) Verify active `openclaw` now points to this repo
+#   9) openclaw doctor
+#  10) openclaw gateway restart
 #
 # Why:
 #   Source code lives in your local repo checkout
@@ -31,10 +34,14 @@ STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 WATCH_MODE=0
 INTERVAL=3
 SKIP_INSTALL=0
+SKIP_UI_INSTALL=0
 SKIP_UI_BUILD=0
 SKIP_BUILD=0
+SKIP_MAC_APP_BUILD=0
+SKIP_MAC_APP_INSTALL=0
 SKIP_DOCTOR=0
 RESTART_GATEWAY=1
+GATEWAY_READY_TIMEOUT_SEC=90
 SKIP_LINK=0
 VERIFY_LINK=1
 LINK_MODE="auto" # auto|npm|pnpm|both
@@ -55,8 +62,11 @@ Options:
   --watch                 Keep running and auto-sync when repo state changes.
   --interval <sec>        Poll interval for --watch mode (default: 3).
   --skip-install          Skip "pnpm install".
+  --skip-ui-install       Skip "pnpm ui:install".
   --skip-ui-build         Skip "pnpm ui:build".
   --skip-build            Skip "pnpm build".
+  --skip-mac-app-build    Skip macOS app bundle build step.
+  --skip-mac-app-install  Skip macOS app install/update step.
   --skip-link             Skip global link step.
   --link-mode <mode>      Link mode: auto|npm|pnpm|both (default: auto).
   --no-verify-link        Skip active-link verification.
@@ -81,6 +91,22 @@ fail() {
 require_cmd() {
   local cmd="$1"
   command -v "$cmd" >/dev/null 2>&1 || fail "Missing required command: $cmd"
+}
+
+wait_for_gateway_ready() {
+  local timeout_sec="${GATEWAY_READY_TIMEOUT_SEC}"
+  local deadline=$((SECONDS + timeout_sec))
+  log "Waiting for gateway health (timeout: ${timeout_sec}s)"
+
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if openclaw health --json --timeout 5000 >/dev/null 2>&1; then
+      log "Gateway health: OK"
+      return 0
+    fi
+    sleep 2
+  done
+
+  return 1
 }
 
 trim_whitespace() {
@@ -475,6 +501,31 @@ print_runtime_summary() {
   fi
 }
 
+install_mac_app_bundle() {
+  local bundle_src="${REPO_ROOT}/dist/OpenClaw.app"
+  [ -d "$bundle_src" ] || fail "Expected app bundle not found at ${bundle_src}"
+
+  local preferred_dir="/Applications"
+  local fallback_dir="${HOME}/Applications"
+  local install_dir=""
+  local install_note=""
+
+  if [ -w "$preferred_dir" ]; then
+    install_dir="$preferred_dir"
+  else
+    mkdir -p "$fallback_dir"
+    install_dir="$fallback_dir"
+    install_note=" (fallback: no write access to ${preferred_dir})"
+  fi
+
+  local bundle_dest="${install_dir}/OpenClaw.app"
+  log "Installing OpenClaw.app to ${bundle_dest}${install_note}"
+
+  rm -rf "$bundle_dest"
+  cp -R "$bundle_src" "$bundle_dest"
+  log "mac app install: OK (${bundle_dest})"
+}
+
 sync_once() {
   log "Starting sync"
   cd "$REPO_ROOT"
@@ -492,11 +543,11 @@ sync_once() {
     log "Skipping pnpm install"
   fi
 
-  if [ "$SKIP_UI_BUILD" -eq 0 ]; then
-    log "pnpm ui:build"
-    pnpm ui:build
+  if [ "$SKIP_UI_INSTALL" -eq 0 ]; then
+    log "pnpm ui:install"
+    pnpm ui:install
   else
-    log "Skipping pnpm ui:build"
+    log "Skipping pnpm ui:install"
   fi
 
   if [ "$SKIP_BUILD" -eq 0 ]; then
@@ -504,6 +555,35 @@ sync_once() {
     pnpm build
   else
     log "Skipping pnpm build"
+  fi
+
+  if [ "$SKIP_UI_BUILD" -eq 0 ]; then
+    # Build Control UI after core build because core build rewrites dist/.
+    log "pnpm ui:build"
+    pnpm ui:build
+  else
+    log "Skipping pnpm ui:build"
+  fi
+
+  if [ "$SKIP_MAC_APP_BUILD" -eq 0 ]; then
+    if [ "$(uname -s)" = "Darwin" ]; then
+      log "scripts/package-mac-app.sh (rebuild OpenClaw.app)"
+      bash "scripts/package-mac-app.sh"
+    else
+      log "Skipping mac app build (non-macOS host)"
+    fi
+  else
+    log "Skipping mac app build"
+  fi
+
+  if [ "$SKIP_MAC_APP_INSTALL" -eq 0 ]; then
+    if [ "$(uname -s)" = "Darwin" ]; then
+      install_mac_app_bundle
+    else
+      log "Skipping mac app install (non-macOS host)"
+    fi
+  else
+    log "Skipping mac app install"
   fi
 
   if [ "$SKIP_LINK" -eq 0 ]; then
@@ -526,6 +606,9 @@ sync_once() {
   if [ "$RESTART_GATEWAY" -eq 1 ]; then
     log "openclaw gateway restart"
     openclaw gateway restart
+    if ! wait_for_gateway_ready; then
+      fail "Gateway did not become healthy after restart within ${GATEWAY_READY_TIMEOUT_SEC}s."
+    fi
   else
     log "Skipping gateway restart"
   fi
@@ -547,11 +630,20 @@ while [ $# -gt 0 ]; do
     --skip-install)
       SKIP_INSTALL=1
       ;;
+    --skip-ui-install)
+      SKIP_UI_INSTALL=1
+      ;;
     --skip-ui-build)
       SKIP_UI_BUILD=1
       ;;
     --skip-build)
       SKIP_BUILD=1
+      ;;
+    --skip-mac-app-build)
+      SKIP_MAC_APP_BUILD=1
+      ;;
+    --skip-mac-app-install)
+      SKIP_MAC_APP_INSTALL=1
       ;;
     --skip-link)
       SKIP_LINK=1
