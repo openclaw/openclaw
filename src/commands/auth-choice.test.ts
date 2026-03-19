@@ -347,6 +347,41 @@ describe("applyAuthChoice", () => {
     expect((await readAuthProfile("gigachat:default"))?.keyRef).toBeUndefined();
   });
 
+  it("rejects Basic-shaped GigaChat credentials on the interactive OAuth path", async () => {
+    await setupTempState();
+
+    process.env.GIGACHAT_CREDENTIALS = "basic-user:basic-pass"; // pragma: allowlist secret
+    delete process.env.GIGACHAT_USER;
+    delete process.env.GIGACHAT_PASSWORD;
+    delete process.env.GIGACHAT_BASE_URL;
+
+    const { prompter } = createApiKeyPromptHarness({
+      confirm: vi.fn(async () => true),
+    });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit ${code}`);
+      }),
+    };
+
+    await expect(
+      applyAuthChoice({
+        authChoice: "gigachat-personal",
+        config: {},
+        prompter,
+        runtime,
+        setDefaultModel: false,
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Basic user:password credentials"),
+    );
+    await expect(readAuthProfile("gigachat:default")).rejects.toThrow();
+  });
+
   it("prompts and writes provider API key for common providers", async () => {
     const scenarios: Array<{
       authChoice:

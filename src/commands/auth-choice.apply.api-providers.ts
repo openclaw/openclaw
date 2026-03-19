@@ -1,3 +1,4 @@
+import { resolveGigachatAuthMode } from "../agents/gigachat-auth.js";
 import { resolveManifestProviderApiKeyChoice } from "../plugins/provider-auth-choices.js";
 import { ensureApiKeyFromOptionEnvOrPrompt } from "./auth-choice.apply-helpers.js";
 import {
@@ -134,8 +135,19 @@ export async function applyAuthChoiceApiProviders(
         normalize: (value) => String(value ?? "").trim(),
         validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
         prompter: params.prompter,
-        setCredential: async (apiKey, mode) =>
-          setGigachatApiKey(
+        setCredential: async (apiKey, mode) => {
+          if (typeof apiKey === "string" && resolveGigachatAuthMode({ apiKey }) === "basic") {
+            params.runtime.error(
+              [
+                "GIGACHAT_CREDENTIALS looks like Basic user:password credentials.",
+                "You selected the OAuth flow, which only supports credentials keys.",
+                'Choose "Basic auth" instead, or set GIGACHAT_CREDENTIALS to a real OAuth credentials key and retry.',
+              ].join("\n"),
+            );
+            params.runtime.exit(1);
+            return;
+          }
+          await setGigachatApiKey(
             apiKey,
             params.agentDir,
             { secretInputMode: mode ?? requestedSecretInputMode },
@@ -144,7 +156,8 @@ export async function applyAuthChoiceApiProviders(
               insecureTls: "false",
               scope: gigachatScope,
             },
-          ),
+          );
+        },
         noteMessage: [
           `GigaChat ${accountLabel} (OAuth, ${gigachatScope}).`,
           "Your credentials key will be exchanged for an access token automatically.",

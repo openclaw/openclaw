@@ -104,7 +104,7 @@ describe("whatsapp resolveTarget", () => {
     if (!result.ok) {
       throw result.error;
     }
-    expect(result.to).toBe("+5511999999999");
+    expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
   it("should resolve target in implicit mode with wildcard", () => {
@@ -118,7 +118,7 @@ describe("whatsapp resolveTarget", () => {
     if (!result.ok) {
       throw result.error;
     }
-    expect(result.to).toBe("+5511999999999");
+    expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
   it("should resolve target in implicit mode when in allowlist", () => {
@@ -132,7 +132,7 @@ describe("whatsapp resolveTarget", () => {
     if (!result.ok) {
       throw result.error;
     }
-    expect(result.to).toBe("+5511999999999");
+    expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
   it("should allow group JID regardless of allowlist", () => {

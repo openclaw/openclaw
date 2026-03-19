@@ -104,7 +104,6 @@ describe("monitorDiscordProvider", () => {
   };
 
   beforeEach(() => {
-    vi.resetModules();
     resetDiscordProviderMonitorMocks();
     vi.doMock("../accounts.js", () => ({
       resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>

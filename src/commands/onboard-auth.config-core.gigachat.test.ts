@@ -5,6 +5,7 @@ import { applyGigachatConfig, applyGigachatProviderConfig } from "./onboard-auth
 import {
   buildGigachatModelDefinition,
   GIGACHAT_BASE_URL,
+  GIGACHAT_BASIC_BASE_URL,
   GIGACHAT_DEFAULT_CONTEXT_WINDOW,
   GIGACHAT_DEFAULT_COST,
   GIGACHAT_DEFAULT_MAX_TOKENS,
@@ -73,6 +74,24 @@ describe("GigaChat provider config", () => {
       expect(result.models?.providers?.gigachat?.baseUrl).toBe(
         "https://preview.gigachat.example/api/v1",
       );
+    });
+
+    it("resets the stock Basic auth host when reapplying OAuth config", () => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            gigachat: {
+              baseUrl: GIGACHAT_BASIC_BASE_URL,
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      };
+
+      const result = applyGigachatProviderConfig(cfg);
+
+      expect(result.models?.providers?.gigachat?.baseUrl).toBe(GIGACHAT_BASE_URL);
     });
   });
 

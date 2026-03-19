@@ -70,6 +70,7 @@ import {
   buildXaiModelDefinition,
   buildModelStudioModelDefinition,
   GIGACHAT_BASE_URL,
+  GIGACHAT_BASIC_BASE_URL,
   GIGACHAT_DEFAULT_MODEL_ID,
   MISTRAL_BASE_URL,
   MISTRAL_DEFAULT_MODEL_ID,
@@ -421,10 +422,14 @@ export function applyGigachatProviderConfig(
 
   const defaultModel = buildGigachatModelDefinition();
   const existingProvider = findNormalizedProviderValue(cfg.models?.providers, "gigachat");
-  const baseUrl =
-    opts?.baseUrl?.trim() ||
-    (typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl : "") ||
-    GIGACHAT_BASE_URL;
+  const requestedBaseUrl = opts?.baseUrl?.trim();
+  const existingBaseUrl =
+    typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl : "";
+  const preservedBaseUrl =
+    normalizeGigachatBaseUrl(existingBaseUrl) === normalizeGigachatBaseUrl(GIGACHAT_BASIC_BASE_URL)
+      ? ""
+      : existingBaseUrl;
+  const baseUrl = requestedBaseUrl || preservedBaseUrl || GIGACHAT_BASE_URL;
 
   return applyProviderConfigWithDefaultModel(cfg, {
     agentModels: models,
@@ -442,6 +447,10 @@ export function applyGigachatConfig(
 ): OpenClawConfig {
   const next = applyGigachatProviderConfig(cfg, opts);
   return applyAgentDefaultModelPrimary(next, GIGACHAT_DEFAULT_MODEL_REF);
+}
+
+function normalizeGigachatBaseUrl(baseUrl: string | undefined): string {
+  return baseUrl?.trim().replace(/\/+$/, "").toLowerCase() ?? "";
 }
 
 export { KILOCODE_BASE_URL };

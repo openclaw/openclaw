@@ -48,8 +48,11 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
       return DEFAULT_CONFIG;
     },
   });
-  Object.assign(mockModule, {
-    updateLastRoute: async (params: {
+  Object.defineProperty(mockModule, "updateLastRoute", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: async (params: {
       storePath: string;
       sessionKey: string;
       deliveryContext: { channel: string; to: string; accountId?: string };
@@ -65,15 +68,30 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
       };
       await fs.writeFile(params.storePath, JSON.stringify(store));
     },
-    loadSessionStore: (storePath: string) => {
+  });
+  Object.defineProperty(mockModule, "loadSessionStore", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: (storePath: string) => {
       try {
         return JSON.parse(fsSync.readFileSync(storePath, "utf8")) as Record<string, unknown>;
       } catch {
         return {};
       }
     },
-    recordSessionMetaFromInbound: async () => undefined,
-    resolveStorePath: actual.resolveStorePath,
+  });
+  Object.defineProperty(mockModule, "recordSessionMetaFromInbound", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: async () => undefined,
+  });
+  Object.defineProperty(mockModule, "resolveStorePath", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: actual.resolveStorePath,
   });
   return mockModule;
 });
