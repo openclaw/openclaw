@@ -213,7 +213,10 @@ function parseNumericUserId(userId?: string | number): number | undefined {
   if (userId === undefined) {
     return undefined;
   }
-  const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+  // Strip channel prefix (e.g. "synology-chat:4" → "4") so peer IDs
+  // stored as "<channel>:<id>" resolve to the numeric Chat API user_id.
+  const raw = typeof userId === "number" ? userId : userId.replace(/^[^:]+:/, "");
+  const numericId = typeof raw === "number" ? raw : parseInt(raw, 10);
   return Number.isNaN(numericId) ? undefined : numericId;
 }
 

@@ -88,6 +88,20 @@ describe("sendMessage", () => {
     const callArgs = httpsRequest.mock.calls[0];
     expect(callArgs[0]).toBe("https://nas.example.com/incoming");
   });
+
+  it("strips channel prefix from peer ID and sets user_ids (fixes #49989)", async () => {
+    mockSuccessResponse();
+    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", "synology-chat:4"));
+    const httpsRequest = vi.mocked(https.request);
+    expect(httpsRequest).toHaveBeenCalled();
+    // Verify the body contains user_ids:[4]
+    const writeCall = httpsRequest.mock.results[0]?.value;
+    const writtenBody = writeCall?.write?.mock?.calls?.[0]?.[0] as string | undefined;
+    expect(writtenBody).toBeDefined();
+    const decoded = decodeURIComponent(writtenBody!.replace("payload=", ""));
+    const payload = JSON.parse(decoded);
+    expect(payload.user_ids).toEqual([4]);
+  });
 });
 
 describe("sendFileUrl", () => {
