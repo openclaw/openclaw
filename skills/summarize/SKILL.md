@@ -1,6 +1,6 @@
 ---
 name: summarize
-description: Summarize or extract text/transcripts from URLs, podcasts, and local files (great fallback for “transcribe this YouTube/video”).
+description: Summarize or extract text/transcripts from URLs, podcasts, and local files. For YouTube video analysis, use the youtube-analysis skill instead.
 homepage: https://summarize.sh
 metadata:
   {
@@ -24,34 +24,26 @@ metadata:
 
 # Summarize
 
-Fast CLI to summarize URLs, local files, and YouTube links.
+Fast CLI to summarize URLs, podcasts, and local files.
+
+**For YouTube videos:** Use the `youtube-analysis` skill instead — it provides structured analysis with chapters, key topics, quotes, and timestamps via yt-dlp.
 
 ## When to use (trigger phrases)
 
 Use this skill immediately when the user asks any of:
 
 - “use summarize.sh”
-- “what’s this link/video about?”
 - “summarize this URL/article”
-- “transcribe this YouTube/video” (best-effort transcript extraction; no `yt-dlp` needed)
+- “what’s this link about?” (non-YouTube URLs only)
+
+**Do NOT use for YouTube URLs** — route those to `youtube-analysis`.
 
 ## Quick start
 
 ```bash
-summarize "https://example.com" --model google/gemini-3-flash-preview
-summarize "/path/to/file.pdf" --model google/gemini-3-flash-preview
-summarize "https://youtu.be/dQw4w9WgXcQ" --youtube auto
+summarize “https://example.com” --model google/gemini-3-flash-preview
+summarize “/path/to/file.pdf” --model google/gemini-3-flash-preview
 ```
-
-## YouTube: summary vs transcript
-
-Best-effort transcript (URLs only):
-
-```bash
-summarize "https://youtu.be/dQw4w9WgXcQ" --youtube auto --extract-only
-```
-
-If the user asked for a transcript but it’s huge, return a tight summary first, then ask which section/time range to expand.
 
 ## Model + keys
 
@@ -71,7 +63,6 @@ Default model is `google/gemini-3-flash-preview` if none is set.
 - `--extract-only` (URLs only)
 - `--json` (machine readable)
 - `--firecrawl auto|off|always` (fallback extraction)
-- `--youtube auto` (Apify fallback if `APIFY_API_TOKEN` set)
 
 ## Config
 
@@ -84,4 +75,3 @@ Optional config file: `~/.summarize/config.json`
 Optional services:
 
 - `FIRECRAWL_API_KEY` for blocked sites
-- `APIFY_API_TOKEN` for YouTube fallback
