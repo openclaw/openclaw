@@ -14,8 +14,8 @@ describe("matrix runtime-api", () => {
     expect(typeof runtimeApi.buildSecretInputSchema).toBe("function");
   });
 
-  it("does not re-export setup entrypoints that create extension cycles", () => {
-    expect("matrixSetupWizard" in runtimeApi).toBe(false);
-    expect("matrixSetupAdapter" in runtimeApi).toBe(false);
+  it("re-exports setup entrypoints from the bundled plugin-sdk surface", () => {
+    expect(typeof runtimeApi.matrixSetupWizard).toBe("object");
+    expect(typeof runtimeApi.matrixSetupAdapter).toBe("object");
   });
 });
