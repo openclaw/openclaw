@@ -14,6 +14,7 @@ import type {
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
   PluginInteractiveTelegramHandlerContext,
+  PluginCommandContext,
 } from "../plugins/types.js";
 
 export type {
@@ -52,6 +53,7 @@ export type {
   ProviderAuthResult,
   OpenClawPluginCommandDefinition,
   OpenClawPluginDefinition,
+  PluginCommandContext,
   PluginLogger,
   PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";
