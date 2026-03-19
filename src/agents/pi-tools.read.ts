@@ -337,20 +337,20 @@ function parameterValidationError(message: string): Error {
 }
 
 export const CLAUDE_PARAM_GROUPS = {
-  read: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
+  read: [{ keys: ["path", "file_path", "filePath"], label: "path (path, file_path, or filePath)" }],
   write: [
-    { keys: ["path", "file_path"], label: "path (path or file_path)" },
+    { keys: ["path", "file_path", "filePath"], label: "path (path, file_path, or filePath)" },
     { keys: ["content"], label: "content" },
   ],
   edit: [
-    { keys: ["path", "file_path"], label: "path (path or file_path)" },
+    { keys: ["path", "file_path", "filePath"], label: "path (path, file_path, or filePath)" },
     {
-      keys: ["oldText", "old_string"],
-      label: "oldText (oldText or old_string)",
+      keys: ["oldText", "old_string", "oldString"],
+      label: "oldText (oldText, old_string, or oldString)",
     },
     {
-      keys: ["newText", "new_string"],
-      label: "newText (newText or new_string)",
+      keys: ["newText", "new_string", "newString"],
+      label: "newText (newText, new_string, or newString)",
     },
   ],
 } as const;
@@ -414,20 +414,32 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   }
   const record = params as Record<string, unknown>;
   const normalized = { ...record };
-  // file_path → path (read, write, edit)
+  // file_path/filePath → path (read, write, edit)
   if ("file_path" in normalized && !("path" in normalized)) {
     normalized.path = normalized.file_path;
     delete normalized.file_path;
   }
-  // old_string → oldText (edit)
+  if ("filePath" in normalized && !("path" in normalized)) {
+    normalized.path = normalized.filePath;
+    delete normalized.filePath;
+  }
+  // old_string/oldString → oldText (edit)
   if ("old_string" in normalized && !("oldText" in normalized)) {
     normalized.oldText = normalized.old_string;
     delete normalized.old_string;
   }
-  // new_string → newText (edit)
+  if ("oldString" in normalized && !("oldText" in normalized)) {
+    normalized.oldText = normalized.oldString;
+    delete normalized.oldString;
+  }
+  // new_string/newString → newText (edit)
   if ("new_string" in normalized && !("newText" in normalized)) {
     normalized.newText = normalized.new_string;
     delete normalized.new_string;
+  }
+  if ("newString" in normalized && !("newText" in normalized)) {
+    normalized.newText = normalized.newString;
+    delete normalized.newString;
   }
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.
@@ -455,8 +467,11 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
 
   const aliasPairs: Array<{ original: string; alias: string }> = [
     { original: "path", alias: "file_path" },
+    { original: "path", alias: "filePath" },
     { original: "oldText", alias: "old_string" },
+    { original: "oldText", alias: "oldString" },
     { original: "newText", alias: "new_string" },
+    { original: "newText", alias: "newString" },
   ];
 
   for (const { original, alias } of aliasPairs) {

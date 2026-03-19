@@ -211,7 +211,9 @@ export function resolveWriteDetail(toolKey: string, args: unknown): string | und
         ? record.newText
         : typeof record.new_string === "string"
           ? record.new_string
-          : undefined;
+          : typeof record.newString === "string"
+            ? record.newString
+            : undefined;
 
   if (content && content.length > 0) {
     return `${destinationPrefix} ${path} (${content.length} chars)`;

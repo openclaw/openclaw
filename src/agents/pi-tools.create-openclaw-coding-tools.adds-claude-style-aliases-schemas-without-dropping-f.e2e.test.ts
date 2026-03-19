@@ -121,6 +121,43 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("accepts camelCase alias variants for read/write/edit", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-camel-alias-"));
+    try {
+      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+      const readTool = tools.find((tool) => tool.name === "read");
+      const writeTool = tools.find((tool) => tool.name === "write");
+      const editTool = tools.find((tool) => tool.name === "edit");
+      expect(readTool).toBeDefined();
+      expect(writeTool).toBeDefined();
+      expect(editTool).toBeDefined();
+
+      const filePath = "camel-alias-test.txt";
+      await writeTool?.execute("tool-camel-alias-1", {
+        filePath,
+        content: "hello world",
+      });
+
+      await editTool?.execute("tool-camel-alias-2", {
+        filePath,
+        oldString: "world",
+        newString: "universe",
+      });
+
+      const result = await readTool?.execute("tool-camel-alias-3", {
+        filePath,
+      });
+
+      const textBlocks = result?.content?.filter((block) => block.type === "text") as
+        | Array<{ text?: string }>
+        | undefined;
+      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
+      expect(combinedText).toContain("hello universe");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("coerces structured content blocks for write", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-structured-write-"));
     try {
