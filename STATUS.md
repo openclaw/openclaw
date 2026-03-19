@@ -27,6 +27,21 @@ Gemini) with a single always-on gateway.
 | `ra2/` context layer | Phase 1 | Python — context engine, ledger, sigil, redact, token gate |
 | Test coverage | ~1 176 test files | 70 % line/function threshold; 55 % branch threshold |
 
+### Recent fixes (`ra2/`)
+
+- **Blocker list limit** — `context_engine.py` was slicing blockers by
+  `token_gate.MAX_TOKENS` (6 000) instead of `ledger.MAX_BLOCKERS` (10).
+  Fixed to use the correct constant.
+- **Redact-before-compress** — `build_context` now runs
+  `redact.redact_messages()` *before* `_run_compression`, preventing raw
+  credentials from being persisted to ledger/sigil files on disk. The old flow
+  only redacted the final assembled prompt, leaving at-rest secret leakage via
+  the compression pass.
+- **Ledger JSON resilience** — `ledger.load()` now catches
+  `JSONDecodeError`/`ValueError` and falls back to an empty ledger (matching
+  `sigil.load`'s existing pattern), so a corrupted file no longer permanently
+  breaks `build_context` for that stream.
+
 ---
 
 ## Installation
