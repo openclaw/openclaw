@@ -186,12 +186,20 @@ import {
   type SecretsResolveResult,
   SecretsResolveParamsSchema,
   SecretsResolveResultSchema,
+  type SessionsAbortParams,
+  SessionsAbortParamsSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
+  type SessionsCreateParams,
+  SessionsCreateParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
+  type SessionsMessagesSubscribeParams,
+  SessionsMessagesSubscribeParamsSchema,
+  type SessionsMessagesUnsubscribeParams,
+  SessionsMessagesUnsubscribeParamsSchema,
   type SessionsPatchParams,
   SessionsPatchParamsSchema,
   type SessionsPreviewParams,
@@ -200,6 +208,8 @@ import {
   SessionsResetParamsSchema,
   type SessionsResolveParams,
   SessionsResolveParamsSchema,
+  type SessionsSendParams,
+  SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
   type ShutdownEvent,
@@ -324,6 +334,17 @@ export const validateSessionsPreviewParams = ajv.compile<SessionsPreviewParams>(
 export const validateSessionsResolveParams = ajv.compile<SessionsResolveParams>(
   SessionsResolveParamsSchema,
 );
+export const validateSessionsCreateParams = ajv.compile<SessionsCreateParams>(
+  SessionsCreateParamsSchema,
+);
+export const validateSessionsSendParams = ajv.compile<SessionsSendParams>(SessionsSendParamsSchema);
+export const validateSessionsMessagesSubscribeParams = ajv.compile<SessionsMessagesSubscribeParams>(
+  SessionsMessagesSubscribeParamsSchema,
+);
+export const validateSessionsMessagesUnsubscribeParams =
+  ajv.compile<SessionsMessagesUnsubscribeParams>(SessionsMessagesUnsubscribeParamsSchema);
+export const validateSessionsAbortParams =
+  ajv.compile<SessionsAbortParams>(SessionsAbortParamsSchema);
 export const validateSessionsPatchParams =
   ajv.compile<SessionsPatchParams>(SessionsPatchParamsSchema);
 export const validateSessionsResetParams =
@@ -492,6 +513,10 @@ export {
   NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
   SessionsPreviewParamsSchema,
+  SessionsResolveParamsSchema,
+  SessionsCreateParamsSchema,
+  SessionsSendParamsSchema,
+  SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,

@@ -65,6 +65,7 @@ vi.mock("../config/sessions.js", () => {
 
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
+const emitSessionLifecycleEventMock = vi.fn();
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
@@ -74,6 +75,10 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
     hasHooks: (hookName: string) => hookName === "subagent_ended",
     runSubagentEnded: runSubagentEndedHookMock,
   })),
+}));
+
+vi.mock("../sessions/session-lifecycle-events.js", () => ({
+  emitSessionLifecycleEvent: emitSessionLifecycleEventMock,
 }));
 
 vi.mock("./subagent-registry.store.js", () => ({
@@ -218,6 +223,7 @@ describe("subagent registry steer restarts", () => {
     announceSpy.mockClear();
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockClear();
+    emitSessionLifecycleEventMock.mockClear();
     lifecycleHandler = undefined;
     mod.resetSubagentRegistryForTests({ persist: false });
   });
@@ -240,6 +246,7 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
     expect(announceSpy).not.toHaveBeenCalled();
     expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
+    expect(emitSessionLifecycleEventMock).not.toHaveBeenCalled();
 
     replaceRunAfterSteer({
       previousRunId: "run-old",
@@ -382,6 +389,12 @@ describe("subagent registry steer restarts", () => {
         runId: "run-terminal-state-new",
       }),
     );
+    expect(emitSessionLifecycleEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:subagent:terminal-state",
+        reason: "subagent-status",
+      }),
+    );
   });
 
   it("clears frozen completion fields when replacing after steer restart", () => {
@@ -410,6 +423,44 @@ describe("subagent registry steer restarts", () => {
     expect(run.frozenResultCapturedAt).toBeUndefined();
     expect(run.cleanupCompletedAt).toBeUndefined();
     expect(run.cleanupHandled).toBe(false);
+  });
+
+  it("preserves cumulative session timing across steer replacement runs", () => {
+    registerRun({
+      runId: "run-runtime-old",
+      childSessionKey: "agent:main:subagent:runtime",
+      task: "keep timing stable",
+    });
+
+    const previous = listMainRuns()[0];
+    expect(previous?.runId).toBe("run-runtime-old");
+    if (!previous) {
+      throw new Error("missing previous run");
+    }
+
+    previous.startedAt = 1_000;
+    previous.sessionStartedAt = 1_000;
+    previous.endedAt = 121_000;
+    previous.accumulatedRuntimeMs = 0;
+    previous.outcome = { status: "ok" };
+
+    const replaced = mod.replaceSubagentRunAfterSteer({
+      previousRunId: "run-runtime-old",
+      nextRunId: "run-runtime-new",
+      fallback: previous,
+    });
+    expect(replaced).toBe(true);
+
+    const next = listMainRuns().find((entry) => entry.runId === "run-runtime-new");
+    expect(next).toBeDefined();
+    expect(mod.getSubagentSessionStartedAt(next)).toBe(1_000);
+    expect(next?.accumulatedRuntimeMs).toBe(120_000);
+
+    if (!next?.startedAt) {
+      throw new Error("missing next startedAt");
+    }
+    next.endedAt = next.startedAt + 30_000;
+    expect(mod.getSubagentSessionRuntimeMs(next, next.endedAt)).toBe(150_000);
   });
 
   it("preserves frozen completion as fallback when replacing for wake continuation", () => {

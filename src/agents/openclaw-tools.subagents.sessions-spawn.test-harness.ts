@@ -54,6 +54,7 @@ export function setSessionsSpawnConfigOverride(next: SessionsSpawnTestConfig): v
 
 export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   // Dynamic import: ensure harness mocks are installed before tool modules load.
+  vi.resetModules();
   const { createSessionsSpawnTool } = await import("./tools/sessions-spawn-tool.js");
   return createSessionsSpawnTool(opts);
 }

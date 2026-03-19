@@ -196,7 +196,7 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).toContain("voice-call");
   });
 
-  it("normalizes bundled provider package ids to canonical plugin ids", async () => {
+  it("strips provider suffixes from package-derived ids", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "ollama-provider-pack");
     mkdirSafe(path.join(globalExt, "src"));

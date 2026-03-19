@@ -204,6 +204,23 @@ export function createSessionsListTool(opts?: {
           model: typeof entry.model === "string" ? entry.model : undefined,
           contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
           totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
+          estimatedCostUsd:
+            typeof entry.estimatedCostUsd === "number" ? entry.estimatedCostUsd : undefined,
+          status: typeof entry.status === "string" ? entry.status : undefined,
+          startedAt: typeof entry.startedAt === "number" ? entry.startedAt : undefined,
+          endedAt: typeof entry.endedAt === "number" ? entry.endedAt : undefined,
+          runtimeMs: typeof entry.runtimeMs === "number" ? entry.runtimeMs : undefined,
+          childSessions: Array.isArray(entry.childSessions)
+            ? entry.childSessions
+                .filter((value): value is string => typeof value === "string")
+                .map((value) =>
+                  resolveDisplaySessionKey({
+                    key: value,
+                    alias,
+                    mainKey,
+                  }),
+                )
+            : undefined,
           thinkingLevel: typeof entry.thinkingLevel === "string" ? entry.thinkingLevel : undefined,
           verboseLevel: typeof entry.verboseLevel === "string" ? entry.verboseLevel : undefined,
           systemSent: typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,

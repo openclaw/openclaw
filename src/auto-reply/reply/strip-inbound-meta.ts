@@ -7,7 +7,12 @@
  * etc.) directly to the stored user message content so the LLM can access
  * them. These blocks are AI-facing only and must never surface in user-visible
  * chat history.
+ *
+ * Also strips the timestamp prefix injected by `injectTimestamp` so UI surfaces
+ * do not show AI-facing envelope metadata as user text.
  */
+
+const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 
 /**
  * Sentinel strings that identify the start of an injected metadata block.
@@ -121,11 +126,16 @@ function stripTrailingUntrustedContextSuffix(lines: string[]): string[] {
  * (fast path — zero allocation).
  */
 export function stripInboundMetadata(text: string): string {
-  if (!text || !SENTINEL_FAST_RE.test(text)) {
+  if (!text) {
     return text;
   }
 
-  const lines = text.split("\n");
+  const withoutTimestamp = text.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
+  if (!SENTINEL_FAST_RE.test(withoutTimestamp)) {
+    return withoutTimestamp;
+  }
+
+  const lines = withoutTimestamp.split("\n");
   const result: string[] = [];
   let inMetaBlock = false;
   let inFencedJson = false;

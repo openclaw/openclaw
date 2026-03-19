@@ -346,11 +346,15 @@ function deriveIdHint(params: {
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
   const canonicalPackageId = CANONICAL_PACKAGE_ID_ALIASES[unscoped] ?? unscoped;
+  const normalizedPackageId =
+    canonicalPackageId.endsWith("-provider") && canonicalPackageId.length > "-provider".length
+      ? canonicalPackageId.slice(0, -"-provider".length)
+      : canonicalPackageId;
 
   if (!params.hasMultipleExtensions) {
-    return canonicalPackageId;
+    return normalizedPackageId;
   }
-  return `${canonicalPackageId}/${base}`;
+  return `${normalizedPackageId}/${base}`;
 }
 
 function addCandidate(params: {

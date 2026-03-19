@@ -120,6 +120,11 @@ describe("sessions tools", () => {
               updatedAt: 11,
               channel: "discord",
               displayName: "discord:g-dev",
+              status: "running",
+              startedAt: 100,
+              runtimeMs: 42,
+              estimatedCostUsd: 0.0042,
+              childSessions: ["agent:main:subagent:worker"],
             },
             {
               key: "cron:job-1",
@@ -157,6 +162,11 @@ describe("sessions tools", () => {
       sessions?: Array<{
         key?: string;
         channel?: string;
+        status?: string;
+        startedAt?: number;
+        runtimeMs?: number;
+        estimatedCostUsd?: number;
+        childSessions?: string[];
         messages?: Array<{ role?: string }>;
       }>;
     };
@@ -165,6 +175,13 @@ describe("sessions tools", () => {
     expect(main?.channel).toBe("whatsapp");
     expect(main?.messages?.length).toBe(1);
     expect(main?.messages?.[0]?.role).toBe("assistant");
+
+    const group = details.sessions?.find((s) => s.key === "discord:group:dev");
+    expect(group?.status).toBe("running");
+    expect(group?.startedAt).toBe(100);
+    expect(group?.runtimeMs).toBe(42);
+    expect(group?.estimatedCostUsd).toBe(0.0042);
+    expect(group?.childSessions).toEqual(["agent:main:subagent:worker"]);
 
     const cronOnly = await tool.execute("call2", { kinds: ["cron"] });
     const cronDetails = cronOnly.details as {
@@ -831,6 +848,16 @@ describe("sessions tools", () => {
       startedAt: now - 2 * 60_000,
     });
     addSubagentRunForTests({
+      runId: "run-child",
+      childSessionKey: "agent:main:subagent:active:subagent:child",
+      requesterSessionKey: "agent:main:subagent:active",
+      requesterDisplayKey: "subagent:active",
+      task: "child worker",
+      cleanup: "keep",
+      createdAt: now - 60_000,
+      startedAt: now - 60_000,
+    });
+    addSubagentRunForTests({
       runId: "run-recent",
       childSessionKey: "agent:main:subagent:recent",
       requesterSessionKey: "agent:main:main",
@@ -866,12 +893,16 @@ describe("sessions tools", () => {
     const result = await tool.execute("call-subagents-list", { action: "list" });
     const details = result.details as {
       status?: string;
-      active?: unknown[];
+      active?: Array<{ runId?: string; childSessions?: string[] }>;
       recent?: unknown[];
       text?: string;
     };
     expect(details.status).toBe("ok");
     expect(details.active).toHaveLength(1);
+    expect(details.active?.[0]).toMatchObject({
+      runId: "run-active",
+      childSessions: ["agent:main:subagent:active:subagent:child"],
+    });
     expect(details.recent).toHaveLength(1);
     expect(details.text).toContain("active subagents:");
     expect(details.text).toContain("recent (last 30m):");

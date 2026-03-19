@@ -29,6 +29,9 @@ import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
 import {
   clearSubagentRunSteerRestart,
   countPendingDescendantRuns,
+  getSubagentRunByChildSessionKey,
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
   listSubagentRunsForController,
   markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
@@ -73,6 +76,7 @@ export type SubagentListItem = {
   pendingDescendants: number;
   runtime: string;
   runtimeMs: number;
+  childSessions?: string[];
   model?: string;
   totalTokens?: number;
   startedAt?: number;
@@ -273,6 +277,11 @@ export function buildSubagentList(params: {
     const status = resolveRunStatus(entry, {
       pendingDescendants,
     });
+    const childSessions = Array.from(
+      new Set(
+        listSubagentRunsForController(entry.childSessionKey).map((run) => run.childSessionKey),
+      ),
+    );
     const runtime = formatDurationCompact(runtimeMs);
     const label = truncateLine(resolveSubagentLabel(entry), 48);
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
@@ -288,9 +297,10 @@ export function buildSubagentList(params: {
       pendingDescendants,
       runtime,
       runtimeMs,
+      ...(childSessions.length > 0 ? { childSessions } : {}),
       model: resolveModelRef(sessionEntry) || entry.model,
       totalTokens,
-      startedAt: entry.startedAt,
+      startedAt: getSubagentSessionStartedAt(entry),
       ...(entry.endedAt ? { endedAt: entry.endedAt } : {}),
     };
     index += 1;
@@ -298,7 +308,7 @@ export function buildSubagentList(params: {
   };
   const active = params.runs
     .filter((entry) => isActiveSubagentRun(entry, pendingDescendantCount))
-    .map((entry) => buildListEntry(entry, now - (entry.startedAt ?? entry.createdAt)));
+    .map((entry) => buildListEntry(entry, getSubagentSessionRuntimeMs(entry, now) ?? 0));
   const recent = params.runs
     .filter(
       (entry) =>
@@ -307,7 +317,7 @@ export function buildSubagentList(params: {
         (entry.endedAt ?? 0) >= recentCutoff,
     )
     .map((entry) =>
-      buildListEntry(entry, (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt)),
+      buildListEntry(entry, getSubagentSessionRuntimeMs(entry, entry.endedAt ?? now) ?? 0),
     );
   return {
     total: params.runs.length,
@@ -520,6 +530,40 @@ export async function killControlledSubagentRun(params: {
     text: stopResult.killed
       ? `killed ${resolveSubagentLabel(params.entry)}${cascadeText}.`
       : `killed ${cascade.killed} descendant${cascade.killed === 1 ? "" : "s"} of ${resolveSubagentLabel(params.entry)}.`,
+  };
+}
+
+export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessionKey: string }) {
+  const targetSessionKey = params.sessionKey.trim();
+  if (!targetSessionKey) {
+    return { found: false as const, killed: false };
+  }
+  const entry = getSubagentRunByChildSessionKey(targetSessionKey);
+  if (!entry) {
+    return { found: false as const, killed: false };
+  }
+
+  const killCache = new Map<string, Record<string, SessionEntry>>();
+  const stopResult = await killSubagentRun({
+    cfg: params.cfg,
+    entry,
+    cache: killCache,
+  });
+  const seenChildSessionKeys = new Set<string>([targetSessionKey]);
+  const cascade = await cascadeKillChildren({
+    cfg: params.cfg,
+    parentChildSessionKey: targetSessionKey,
+    cache: killCache,
+    seenChildSessionKeys,
+  });
+
+  return {
+    found: true as const,
+    killed: stopResult.killed || cascade.killed > 0,
+    runId: entry.runId,
+    sessionKey: entry.childSessionKey,
+    cascadeKilled: cascade.killed,
+    cascadeLabels: cascade.killed > 0 ? cascade.labels : undefined,
   };
 }
 

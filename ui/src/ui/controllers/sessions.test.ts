@@ -1,7 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteSession, deleteSessionAndRefresh, type SessionsState } from "./sessions.ts";
+import {
+  deleteSession,
+  deleteSessionAndRefresh,
+  subscribeSessions,
+  type SessionsState,
+} from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
+
+if (!("window" in globalThis)) {
+  Object.assign(globalThis, {
+    window: {
+      confirm: () => false,
+    },
+  });
+}
 
 function createState(request: RequestFn, overrides: Partial<SessionsState> = {}): SessionsState {
   return {
@@ -20,6 +33,18 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("subscribeSessions", () => {
+  it("registers for session change events", async () => {
+    const request = vi.fn(async () => ({ subscribed: true }));
+    const state = createState(request);
+
+    await subscribeSessions(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.subscribe", {});
+    expect(state.sessionsError).toBeNull();
+  });
 });
 
 describe("deleteSessionAndRefresh", () => {

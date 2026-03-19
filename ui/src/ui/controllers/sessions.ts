@@ -14,6 +14,17 @@ export type SessionsState = {
   sessionsIncludeUnknown: boolean;
 };
 
+export async function subscribeSessions(state: SessionsState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  try {
+    await state.client.request("sessions.subscribe", {});
+  } catch (err) {
+    state.sessionsError = String(err);
+  }
+}
+
 export async function loadSessions(
   state: SessionsState,
   overrides?: {
