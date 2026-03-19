@@ -375,6 +375,7 @@ export function createExecTool(
         ? buildSandboxEnv({
             defaultPath: DEFAULT_PATH,
             paramsEnv: params.env,
+            skillEnv: defaults?.skillEnv,
             sandboxEnv: sandbox.env,
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
           })

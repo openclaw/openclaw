@@ -337,7 +337,7 @@ export async function compactEmbeddedPiSessionDirect(
     const skillEntries = shouldLoadSkillEntries
       ? loadWorkspaceSkillEntries(effectiveWorkspace)
       : [];
-    restoreSkillEnv = params.skillsSnapshot
+    const skillEnvResult = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
@@ -346,6 +346,7 @@ export async function compactEmbeddedPiSessionDirect(
           skills: skillEntries ?? [],
           config: params.config,
         });
+    restoreSkillEnv = skillEnvResult.revert;
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,

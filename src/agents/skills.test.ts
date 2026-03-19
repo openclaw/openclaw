@@ -255,7 +255,7 @@ describe("applySkillEnvOverrides", () => {
     const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
     withClearedEnv(["ENV_KEY"], () => {
-      const restore = applySkillEnvOverrides({
+      const { revert: restore } = applySkillEnvOverrides({
         skills: entries,
         config: { skills: { entries: { "env-skill": { apiKey: "injected" } } } },
       });
@@ -285,7 +285,7 @@ describe("applySkillEnvOverrides", () => {
     });
 
     withClearedEnv(["ENV_KEY"], () => {
-      const restore = applySkillEnvOverridesFromSnapshot({
+      const { revert: restore } = applySkillEnvOverridesFromSnapshot({
         snapshot,
         config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } },
       });
@@ -313,7 +313,7 @@ describe("applySkillEnvOverrides", () => {
     const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
     withClearedEnv(["OPENAI_API_KEY", "NODE_OPTIONS"], () => {
-      const restore = applySkillEnvOverrides({
+      const { revert: restore } = applySkillEnvOverrides({
         skills: entries,
         config: {
           skills: {
@@ -353,7 +353,7 @@ describe("applySkillEnvOverrides", () => {
     const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
     withClearedEnv(["BASH_ENV", "SHELL"], () => {
-      const restore = applySkillEnvOverrides({
+      const { revert: restore } = applySkillEnvOverrides({
         skills: entries,
         config: {
           skills: {
@@ -407,7 +407,7 @@ describe("applySkillEnvOverrides", () => {
     });
 
     withClearedEnv(["OPENAI_API_KEY"], () => {
-      const restore = applySkillEnvOverridesFromSnapshot({
+      const { revert: restore } = applySkillEnvOverridesFromSnapshot({
         snapshot,
         config,
       });

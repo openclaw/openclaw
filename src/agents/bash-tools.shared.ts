@@ -18,12 +18,17 @@ export function buildSandboxEnv(params: {
   defaultPath: string;
   paramsEnv?: Record<string, string>;
   sandboxEnv?: Record<string, string>;
+  skillEnv?: Record<string, string>;
   containerWorkdir: string;
 }) {
   const env: Record<string, string> = {
     PATH: params.defaultPath,
     HOME: params.containerWorkdir,
   };
+  // Merge order: base (PATH/HOME) → skillEnv → sandboxEnv → paramsEnv (highest priority)
+  for (const [key, value] of Object.entries(params.skillEnv ?? {})) {
+    env[key] = value;
+  }
   for (const [key, value] of Object.entries(params.sandboxEnv ?? {})) {
     env[key] = value;
   }

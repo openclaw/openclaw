@@ -145,7 +145,15 @@ function createEnvReverter(updates: EnvUpdate[]) {
   };
 }
 
-export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
+export type SkillEnvOverridesResult = {
+  revert: () => void;
+  appliedEnv: Record<string, string>;
+};
+
+export function applySkillEnvOverrides(params: {
+  skills: SkillEntry[];
+  config?: OpenClawConfig;
+}): SkillEnvOverridesResult {
   const { skills, config } = params;
   const updates: EnvUpdate[] = [];
 
@@ -165,16 +173,24 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
     });
   }
 
-  return createEnvReverter(updates);
+  const appliedEnv: Record<string, string> = {};
+  for (const update of updates) {
+    const value = process.env[update.key];
+    if (value !== undefined) {
+      appliedEnv[update.key] = value;
+    }
+  }
+
+  return { revert: createEnvReverter(updates), appliedEnv };
 }
 
 export function applySkillEnvOverridesFromSnapshot(params: {
   snapshot?: SkillSnapshot;
   config?: OpenClawConfig;
-}) {
+}): SkillEnvOverridesResult {
   const { snapshot, config } = params;
   if (!snapshot) {
-    return () => {};
+    return { revert: () => {}, appliedEnv: {} };
   }
   const updates: EnvUpdate[] = [];
 
@@ -193,5 +209,13 @@ export function applySkillEnvOverridesFromSnapshot(params: {
     });
   }
 
-  return createEnvReverter(updates);
+  const appliedEnv: Record<string, string> = {};
+  for (const update of updates) {
+    const value = process.env[update.key];
+    if (value !== undefined) {
+      appliedEnv[update.key] = value;
+    }
+  }
+
+  return { revert: createEnvReverter(updates), appliedEnv };
 }
