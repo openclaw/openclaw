@@ -322,6 +322,9 @@ const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
 type DeleteConfirmSide = "left" | "right";
 type DeleteConfirmPlacement = "above" | "below";
 type RectLike = Pick<DOMRect, "left" | "right" | "top" | "bottom" | "width" | "height">;
+type DeleteConfirmPopoverElement = HTMLDivElement & {
+  _removeDeleteConfirm?: () => void;
+};
 
 function clamp(value: number, min: number, max: number): number {
   if (max <= min) {
@@ -375,12 +378,14 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
           }
           const btn = e.currentTarget as HTMLElement;
           const wrap = btn.closest(".chat-delete-wrap") as HTMLElement;
-          const existing = wrap?.querySelector(".chat-delete-confirm");
+          const existing = wrap?.querySelector(
+            ".chat-delete-confirm",
+          ) as DeleteConfirmPopoverElement | null;
           if (existing) {
-            existing.remove();
+            existing._removeDeleteConfirm ? existing._removeDeleteConfirm() : existing.remove();
             return;
           }
-          const popover = document.createElement("div");
+          const popover = document.createElement("div") as DeleteConfirmPopoverElement;
           popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
           popover.innerHTML = `
             <p class="chat-delete-confirm__text">Delete this message?</p>
@@ -432,6 +437,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
               removePopover();
             }
           };
+          popover._removeDeleteConfirm = removePopover;
           requestAnimationFrame(() => {
             document.addEventListener("click", closeOnOutside, true);
             document.addEventListener("scroll", removePopover, true);
