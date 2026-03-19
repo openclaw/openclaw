@@ -110,6 +110,7 @@ export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
+export const runStartupMatrixMigration = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
 
 function createLegacyStateMigrationDetectionResult(params?: {
   hasLegacySessions?: boolean;
@@ -299,6 +300,10 @@ vi.mock("./doctor-state-migrations.js", () => ({
   runLegacyStateMigrations,
 }));
 
+vi.mock("../gateway/server-startup-matrix-migration.js", () => ({
+  runStartupMatrixMigration,
+}));
+
 export function mockDoctorConfigSnapshot(
   params: {
     config?: Record<string, unknown>;
@@ -393,6 +398,7 @@ beforeEach(() => {
   serviceRestart.mockReset().mockResolvedValue(undefined);
   serviceUninstall.mockReset().mockResolvedValue(undefined);
   callGateway.mockReset().mockRejectedValue(new Error("gateway closed"));
+  runStartupMatrixMigration.mockReset().mockResolvedValue(undefined);
 
   originalIsTTY = process.stdin.isTTY;
   setStdinTty(true);
