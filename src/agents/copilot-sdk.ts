@@ -143,6 +143,12 @@ export async function runCopilotAgent(
       model: options.model,
       workingDirectory: options.workspaceDir,
       streaming: true,
+      // Deny tool-use permission requests by default (security: callers must
+      // opt-in to specific capabilities through session configuration).
+      onPermissionRequest: async () => ({
+        kind: "denied-interactively-by-user",
+        feedback: "Tool use is not permitted in this session.",
+      }),
     };
 
     if (options.systemPrompt) {
@@ -151,13 +157,6 @@ export async function runCopilotAgent(
         content: options.systemPrompt,
       };
     }
-
-    // Deny tool-use permission requests by default (security: callers must
-    // opt-in to specific capabilities through session configuration).
-    sessionConfig.onPermissionRequest = async () => ({
-      kind: "denied",
-      reason: "Tool use is not permitted in this session.",
-    });
 
     if (options.sessionId) {
       session = await client.resumeSession(options.sessionId, sessionConfig);

@@ -10,7 +10,6 @@
  *  - This module: auth verification + model catalogue for the REST provider pipeline
  */
 import type { ModelDefinitionConfig } from "../config/types.js";
-import { copilotModelCost } from "./github-copilot-models.js";
 
 // ---------------------------------------------------------------------------
 // Lazy SDK import — @github/copilot-sdk is ESM-only + optional dependency
@@ -169,12 +168,9 @@ export function buildCopilotModelDefinitionFromSdk(model: SdkModelInfo): ModelDe
     api,
     reasoning: supportsReasoning,
     input: supportsVision ? ["text", "image"] : ["text"],
-    cost: copilotModelCost(model.id),
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: model.capabilities?.limits?.max_context_window_tokens ?? 128_000,
-    maxTokens:
-      model.capabilities?.limits?.max_output_tokens ??
-      model.capabilities?.limits?.max_completion_tokens ??
-      8192,
+    maxTokens: model.capabilities?.limits?.max_prompt_tokens ?? 8192,
   };
 }
 
