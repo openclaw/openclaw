@@ -26,7 +26,7 @@ commons/
 │   ├── fin-dca-strategy/
 │   │   └── SKILL.md
 │   ├── fin-backtest/
-│   ├── fin-strategy-builder/
+│   ├── strategy-builder/
 │   └── ...（20 个金融 Skills）
 ├── templates/                    ← Workspace 模板
 │   └── finclaw-starter/
@@ -118,10 +118,10 @@ openfinclaw commons publish ./my-strategy --type strategy
 ### 4.2 安装流程
 
 ```
-openfinclaw commons install fin-strategy-builder
+openfinclaw commons install strategy-builder
   │
   ├─ 从 index.json 查找条目
-  ├─ 确认源路径存在（commons/skills/fin-strategy-builder/）
+  ├─ 确认源路径存在（commons/skills/strategy-builder/）
   ├─ 复制到目标目录
   │   ├─ skill → ./skills/<id>/
   │   └─ workspace → ./（直接展开模板）

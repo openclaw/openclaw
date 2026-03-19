@@ -1,9 +1,11 @@
 ---
-name: fin-strategy-builder
+name: strategy-builder
 description: "Strategy builder — turn natural language trading ideas into compliant FEP v2.0 strategy packages for Findoo Backtest (fep.yaml + scripts/strategy.py), with validation and L1/L2 routing."
 metadata:
   openclaw:
     emoji: "🏗️"
+    requires:
+      extensions: ["findoo-trader-plugin", "findoo-datahub-plugin"]
 ---
 
 # Strategy Builder (FEP v2.0)
@@ -71,8 +73,9 @@ This skill needs **read** (read files) and **exec** (run shell commands). Ensure
 ```
 <strategy-dir>/
 ├── fep.yaml           # 策略配置 (必需)
-└── scripts/
-    └── strategy.py    # 策略入口 (必需)，必须实现 compute(data) 或 select(universe)
+├── scripts/
+│   └── strategy.py    # 策略入口 (必需)，必须实现 compute(data) 或 select(universe)
+└── .created-meta.json # 本地元数据 (必需，用于跟踪本地创建的策略)
 ```
 
 **Optional:**
@@ -143,13 +146,13 @@ risk:
   dailyLossLimitPct: 5 # 日亏损限制 (%)
   maxTradesPerDay: 10 # 日最大交易笔数
 
-# ── 分类 (可选，展示用) ───────────────────────────────────────
+# ── 分类 (必填) ───────────────────────────────────────
 classification:
-  archetype: systematic # systematic | discretionary | hybrid
-  market: Crypto # Crypto | US | CN | HK | Forex | Commodity
-  assetClasses: [crypto]
-  frequency: daily # daily | weekly | monthly
-  riskProfile: medium # low | medium | high
+  archetype: systematic # 必填: systematic | discretionary | hybrid
+  market: Crypto # 必填: Crypto | US | CN | HK | Forex | Commodity
+  assetClasses: [crypto] # 必填: 资产类别数组
+  frequency: daily # 必填: daily | weekly | monthly
+  riskProfile: medium # 必填: low | medium | high
 ```
 
 ### Version Increment Rule
@@ -240,15 +243,15 @@ classification:
 | `1-5大写字母`      | 美股   | `AAPL`, `NVDA`           |
 | `字母+数字.交易所` | 期货   | `IF2503.CFX`             |
 
-### Classification (可选)
+### Classification (必填)
 
 ```yaml
 classification:
-  archetype: systematic # systematic | discretionary | hybrid
-  market: Crypto # Crypto | US | CN | HK | Forex | Commodity
-  assetClasses: [crypto]
-  frequency: weekly # daily | weekly | monthly
-  riskProfile: medium # low | medium | high
+  archetype: systematic # 必填: systematic | discretionary | hybrid
+  market: Crypto # 必填: Crypto | US | CN | HK | Forex | Commodity
+  assetClasses: [crypto] # 必填: 资产类别数组
+  frequency: daily # 必填: daily | weekly | monthly
+  riskProfile: medium # 必填: low | medium | high
 ```
 
 ### Risk (可选)
@@ -384,6 +387,48 @@ Ask clarifying questions if the idea is vague (e.g. "buy when cheap" → RSI ove
 
 Propose: strategy archetype (DCA, trend, mean-reversion, momentum, grid), indicators (RSI, EMA, MACD, etc.), entry/exit logic, position sizing, risk controls, market adaptations. **Wait for user confirmation** before generating code.
 
+### Step 2.5: Determine Target Directory
+
+**All locally created strategies MUST be saved to the standard path:**
+
+```
+~/.openfinclaw/workspace/strategies/{YYYY-MM-DD}/{slugified-name}/
+```
+
+**Path rules:**
+
+- `{YYYY-MM-DD}`: Current date (e.g., `2026-03-19`), organizes strategies by creation date
+- `{slugified-name}`: Lowercase, spaces/underscores to hyphens, max 40 chars (e.g., `btc-adaptive-dca`)
+- **ALWAYS** create the date directory if it does not exist
+- **NEVER** save strategies to arbitrary directories like `~/clawd`, `~/projects`, etc.
+
+**Directory creation sequence:**
+
+1. Compute `dateStr = formatDate(new Date())` → `"YYYY-MM-DD"`
+2. Compute `slug = slugifyName(strategyName)` → lowercase-hyphenated
+3. `rootDir = path.join(homedir(), ".openfinclaw", "workspace", "strategies")`
+4. `dateDir = path.join(rootDir, dateStr)` — create if not exists
+5. `targetDir = path.join(dateDir, slug)` — final strategy directory
+
+**Example:**
+
+```
+Strategy name: "BTC Adaptive DCA"
+Date: 2026-03-19
+Target dir: ~/.openfinclaw/workspace/strategies/2026-03-19/btc-adaptive-dca/
+```
+
+**Metadata file (.created-meta.json):** After creating the strategy files, also generate this metadata file in the strategy directory:
+
+```json
+{
+  "name": "fin-btc-adaptive-dca",
+  "displayName": "BTC Adaptive DCA",
+  "createdAt": "2026-03-19T10:30:00.000Z",
+  "version": "1.0.0"
+}
+```
+
 ### Step 3: Code Generation (FEP v2.0)
 
 Generate:
@@ -393,15 +438,15 @@ Generate:
    - **technical** (可选): language, entryPoint
    - **parameters** (可选): 策略参数数组
    - **backtest** (必填): symbol, defaultPeriod, initialCapital; 可选 timeframe, universe, rebalance
+   - **classification** (必填): archetype, market, assetClasses, frequency, riskProfile
    - **risk** (可选): 风控配置
-   - **classification** (可选): 展示用分类标签
 
    **生成规则：**
    - `fep` 版本必须是 `"2.0"`
    - `backtest.defaultPeriod.endDate` 默认使用当前日期（格式 `YYYY-MM-DD`）
    - `backtest.defaultPeriod.startDate` 根据用户描述选择合理区间（例如最近 6–12 个月）
    - `backtest.symbol` 必填，服务端自动推断市场和手续费
-   - **classification 默认值：**
+   - **classification 必填字段及默认值：**
      - `archetype`: 默认 `systematic`（除非用户明确需要主观判断）
      - `market`: 根据标的自动推断（BTC/ETH → `Crypto`，AAPL → `US` 等）
      - `assetClasses`: 根据标的自动推断（BTC/ETH → `[crypto]`，AAPL → `[equity]`）
@@ -416,20 +461,34 @@ Generate:
 
 2. **scripts/strategy.py** — Must define `compute(data)` or `compute(data, context=None)` returning signal dict, or `select(universe)` for multi-asset strategies. Use only allowed imports; no forbidden patterns.
 
-3. **Optional:** scripts/indicators.py, scripts/risk_manager.py (if design needs them; entry contract remains `compute(data)` in strategy.py).
+3. **.created-meta.json** — Metadata file for local strategy tracking (required for all locally created strategies):
+
+   ```json
+   {
+     "name": "fin-btc-adaptive-dca",
+     "displayName": "BTC Adaptive DCA",
+     "createdAt": "2026-03-19T10:30:00.000Z",
+     "version": "1.0.0"
+   }
+   ```
+
+4. **Optional:** scripts/indicators.py, scripts/risk_manager.py (if design needs them; entry contract remains `compute(data)` in strategy.py).
 
 Present the package structure and wait for confirmation before validation.
 
 ### Step 4: Self-Validation
 
-1. **Structure:** Required files exist: `fep.yaml`, `scripts/strategy.py`.
+1. **Structure:** Required files exist: `fep.yaml`, `scripts/strategy.py`, `.created-meta.json`.
 2. **fep.yaml:**
    - Valid YAML, top-level key `fep: "2.0"`
    - `identity`: id, name, type, version, style, visibility, summary, description, license, tags, author.name, changelog (全部必填)
    - `backtest`: symbol, defaultPeriod (startDate/endDate), initialCapital (全部必填)
+   - `classification`: archetype, market, assetClasses, frequency, riskProfile (全部必填)
 3. **strategy.py:** Defines `compute(data)` or `select(universe)`; return dict has required fields; no forbidden imports/calls.
-4. If **fin-backtest-remote** is available: call `backtest_remote_validate` with the strategy directory path; if `valid: false`, fix `errors` and re-validate. Do not zip/submit until validation passes.
-5. **Sanity run:** If local backtest is available (`fin_backtest_run`), run on a short period to confirm code executes.
+4. **.created-meta.json:** Valid JSON with `name`, `displayName`, `createdAt`, `version` fields.
+5. **Target directory:** Must be under `~/.openfinclaw/workspace/strategies/{YYYY-MM-DD}/`.
+6. If **fin-backtest-remote** is available: call `backtest_remote_validate` with the strategy directory path; if `valid: false`, fix `errors` and re-validate. Do not zip/submit until validation passes.
+7. **Sanity run:** If local backtest is available (`fin_backtest_run`), run on a short period to confirm code executes.
 
 Auto-fix and re-validate up to 3 iterations; if still failing, explain clearly to the user.
 

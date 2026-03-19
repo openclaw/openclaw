@@ -416,7 +416,7 @@ bundled + 不在默认列表   →  禁用
 │                                                            │
 │  用户对话: "帮我创建一个 DCA 策略"                          │
 │       ↓                                                    │
-│  LLM 匹配 Skill: fin-strategy-builder                     │
+│  LLM 匹配 Skill: strategy-builder                          │
 │       ↓                                                    │
 │  LLM 调用 Tools: fin_data_ohlcv → fin_backtest_run         │
 │       ↓                                                    │

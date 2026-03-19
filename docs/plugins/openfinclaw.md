@@ -1,6 +1,6 @@
 ---
 title: "OpenFinClaw 插件安装与配置指南"
-summary: "如何安装和配置 @openfinclaw/openfinclaw 金融工具插件"
+summary: "如何安装和配置 @openfinclaw/openfinclaw-strategy 金融工具插件"
 ---
 
 # OpenFinClaw 插件安装与配置指南
@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/cryptoSUN2049/openFinclaw/main/scri
 ### 方式二：手动安装
 
 ```bash
-openclaw plugins install @openfinclaw/openfinclaw
+openclaw plugins install @openfinclaw/openfinclaw-strategy
 ```
 
 ---
@@ -92,10 +92,10 @@ export SKILL_API_URL=https://hub.openfinclaw.ai
 
 ### 可用 Skills
 
-| Skill                  | 说明                                        |
-| ---------------------- | ------------------------------------------- |
-| `skill-publish`        | 策略发布流程：校验 → 打包 → 发布 → 轮询结果 |
-| `fin-strategy-builder` | 自然语言构建交易策略                        |
+| Skill              | 说明                                        |
+| ------------------ | ------------------------------------------- |
+| `skill-publish`    | 策略发布流程：校验 → 打包 → 发布 → 轮询结果 |
+| `strategy-builder` | 自然语言构建交易策略                        |
 
 ---
 
@@ -125,7 +125,7 @@ pnpm plugins:publish:openfinclaw
 ### 验证发布
 
 ```bash
-npm view @openfinclaw/openfinclaw version
+npm view @openfinclaw/openfinclaw-strategy version
 ```
 
 ---
@@ -160,7 +160,7 @@ pnpm plugins:sync
 openclaw --version
 
 # 手动安装
-openclaw plugins install @openfinclaw/openfinclaw --verbose
+openclaw plugins install @openfinclaw/openfinclaw-strategy --verbose
 ```
 
 ### 配置不生效

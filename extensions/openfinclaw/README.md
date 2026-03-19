@@ -1,4 +1,4 @@
-# @openfinclaw/openfinclaw
+# @openfinclaw/openfinclaw-strategy
 
 FinClaw Commons - 量化策略开发平台插件。连接 hub.openfinclaw.ai 策略网络，支持策略创建、验证、发布、Fork。
 
@@ -11,7 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/cryptoSUN2049/openFinclaw/main/scri
 或手动安装：
 
 ```bash
-openclaw plugins install @openfinclaw/openfinclaw
+openclaw plugins install @openfinclaw/openfinclaw-strategy
 ```
 
 ## 快速开始（无需 API Key）
@@ -133,7 +133,7 @@ Agent:
 5. 返回回测报告
 ```
 
-### fin-strategy-builder
+### strategy-builder
 
 自然语言生成策略：
 

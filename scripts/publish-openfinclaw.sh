@@ -10,7 +10,7 @@ set -euo pipefail
 #
 # Required: NPM_TOKEN (Granular Access Token with 2FA bypass enabled)
 
-PLUGIN_NAME="@openfinclaw/openfinclaw"
+PLUGIN_NAME="@openfinclaw/openfinclaw-strategy"
 
 echo "OpenFinClaw Plugin Publisher"
 echo "============================="

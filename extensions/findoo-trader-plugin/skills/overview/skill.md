@@ -25,7 +25,7 @@ Provide a high-level summary of the user's financial status — account balances
 
 - User wants to place a trade -- use fin-trading
 - User asks for a specific price or chart -- use fin-market-data
-- User wants to create or backtest a strategy -- use fin-strategy-builder
+- User wants to create or backtest a strategy -- use strategy-builder
 - User wants to configure exchanges or settings -- refer to /dashboard/setting
 
 ## Tools

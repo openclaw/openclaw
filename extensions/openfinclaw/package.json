@@ -1,5 +1,5 @@
 {
-  "name": "@openfinclaw/openfinclaw",
+  "name": "@openfinclaw/openfinclaw-strategy",
   "version": "0.0.11",
   "description": "OpenFinClaw - Financial tools for OpenClaw: strategy builder, remote backtest",
   "keywords": [
