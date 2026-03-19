@@ -498,3 +498,18 @@ export async function readTailscaleWhoisIdentity(
     return null;
   }
 }
+
+const OFFICIAL_TAILSCALE_CONTROL_SERVER_HOST_SUFFIXES = [".tailscale.com", ".tailscale.io"];
+
+export function isOfficialTailscaleControlServer(rawUrl: string): boolean {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    return (
+      host === "tailscale.com" ||
+      host === "tailscale.io" ||
+      OFFICIAL_TAILSCALE_CONTROL_SERVER_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))
+    );
+  } catch {
+    return false;
+  }
+}

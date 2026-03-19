@@ -29,28 +29,48 @@ describe("gateway.tailscale.controlUrl validation", () => {
     expect(result.ok).toBe(true);
   });
 
-  it.each(["serve", "funnel"] as const)("rejects controlUrl combined with mode=%s", (mode) => {
-    const result = validateConfigObjectRaw({
-      gateway: {
-        bind: "loopback",
-        auth: { mode: "token", token: "tok" },
-        tailscale: {
-          controlUrl: "https://headscale.example.com",
-          mode,
+  it.each(["serve", "funnel"] as const)(
+    "rejects custom controlUrl combined with mode=%s",
+    (mode) => {
+      const result = validateConfigObjectRaw({
+        gateway: {
+          bind: "loopback",
+          auth: { mode: "token", token: "tok" },
+          tailscale: {
+            controlUrl: "https://headscale.example.com",
+            mode,
+          },
         },
-      },
-    });
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({
-        path: "gateway.tailscale.mode",
-        message: expect.stringContaining("not supported with a custom control server"),
-      }),
-    );
-  });
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        return;
+      }
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          path: "gateway.tailscale.mode",
+          message: expect.stringContaining("not supported with a custom control server"),
+        }),
+      );
+    },
+  );
+
+  it.each(["serve", "funnel"] as const)(
+    "accepts official Tailscale controlUrl combined with mode=%s",
+    (mode) => {
+      const result = validateConfigObjectRaw({
+        gateway: {
+          bind: "loopback",
+          auth: { mode: "token", token: "tok" },
+          tailscale: {
+            controlUrl: "https://controlplane.tailscale.com",
+            mode,
+          },
+        },
+      });
+      expect(result.ok).toBe(true);
+    },
+  );
 
   it("rejects invalid controlUrl (not a URL)", () => {
     const result = validateConfigObjectRaw({

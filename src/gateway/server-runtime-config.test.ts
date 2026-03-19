@@ -4,9 +4,13 @@ const { readTailscaleStatusJsonMock } = vi.hoisted(() => ({
   readTailscaleStatusJsonMock: vi.fn<() => Promise<Record<string, unknown>>>(async () => ({})),
 }));
 
-vi.mock("../infra/tailscale.js", () => ({
-  readTailscaleStatusJson: () => readTailscaleStatusJsonMock(),
-}));
+vi.mock("../infra/tailscale.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/tailscale.js")>();
+  return {
+    ...actual,
+    readTailscaleStatusJson: () => readTailscaleStatusJsonMock(),
+  };
+});
 
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 

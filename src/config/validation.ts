@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
+import { isOfficialTailscaleControlServer } from "../infra/tailscale.js";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -203,6 +204,9 @@ function validateGatewayTailscaleControlUrl(config: OpenClawConfig): ConfigValid
   const tailscaleMode = config.gateway?.tailscale?.mode ?? "off";
   const controlUrl = config.gateway?.tailscale?.controlUrl;
   if (!controlUrl || (tailscaleMode !== "serve" && tailscaleMode !== "funnel")) {
+    return [];
+  }
+  if (isOfficialTailscaleControlServer(controlUrl)) {
     return [];
   }
   return [

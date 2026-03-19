@@ -4,7 +4,7 @@ import type {
   GatewayTailscaleConfig,
   loadConfig,
 } from "../config/config.js";
-import { readTailscaleStatusJson } from "../infra/tailscale.js";
+import { isOfficialTailscaleControlServer, readTailscaleStatusJson } from "../infra/tailscale.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
@@ -20,11 +20,6 @@ import {
 } from "./net.js";
 import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
-const OFFICIAL_TAILSCALE_CONTROL_SERVER_HOST_SUFFIXES = [
-  ".tailscale.com",
-  ".tailscale.io",
-] as const;
-
 function readNestedString(
   root: Record<string, unknown> | null,
   path: readonly string[],
@@ -37,19 +32,6 @@ function readNestedString(
     current = (current as Record<string, unknown>)[key];
   }
   return typeof current === "string" && current.trim().length > 0 ? current.trim() : undefined;
-}
-
-function isOfficialTailscaleControlServer(rawUrl: string): boolean {
-  try {
-    const host = new URL(rawUrl).hostname.toLowerCase();
-    return (
-      host === "tailscale.com" ||
-      host === "tailscale.io" ||
-      OFFICIAL_TAILSCALE_CONTROL_SERVER_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))
-    );
-  } catch {
-    return false;
-  }
 }
 
 async function readDaemonControlServerUrl(): Promise<string | undefined> {
