@@ -16,6 +16,7 @@ const LEGACY_PROVIDER_MAP = {
   gemini: "google",
   grok: "xai",
   kimi: "moonshot",
+  parallel: "parallel",
   perplexity: "perplexity",
 } as const;
 
@@ -122,7 +123,14 @@ export function normalizeLegacyWebSearchConfig<T>(raw: T): T {
     setPluginWebSearchConfig(nextRoot, LEGACY_PROVIDER_MAP.brave, braveConfig);
   }
 
-  for (const providerId of ["firecrawl", "gemini", "grok", "kimi", "perplexity"] as const) {
+  for (const providerId of [
+    "firecrawl",
+    "gemini",
+    "grok",
+    "kimi",
+    "parallel",
+    "perplexity",
+  ] as const) {
     const scoped = copyLegacyProviderConfig(search, providerId);
     if (!scoped || Object.keys(scoped).length === 0) {
       continue;

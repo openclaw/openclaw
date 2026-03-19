@@ -310,6 +310,13 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    parallel: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     perplexity: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
@@ -339,6 +346,15 @@ export const ToolsWebFetchSchema = z
         baseUrl: z.string().optional(),
         onlyMainContent: z.boolean().optional(),
         maxAgeMs: z.number().int().nonnegative().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+    parallel: z
+      .object({
+        enabled: z.boolean().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
         timeoutSeconds: z.number().int().positive().optional(),
       })
       .strict()

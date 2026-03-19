@@ -231,6 +231,17 @@ function setResolvedFirecrawlApiKey(params: {
   firecrawl.apiKey = params.value;
 }
 
+function setResolvedParallelFetchApiKey(params: {
+  resolvedConfig: OpenClawConfig;
+  value: string;
+}): void {
+  const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
+  const web = ensureObject(tools, "web");
+  const fetch = ensureObject(web, "fetch");
+  const parallel = ensureObject(fetch, "parallel");
+  parallel.apiKey = params.value;
+}
+
 function keyPathForProvider(provider: PluginWebSearchProviderEntry): string {
   return provider.credentialPath;
 }
@@ -601,6 +612,37 @@ export async function resolveRuntimeWebTools(params: {
         }
       }
     }
+  }
+
+  // Parallel fetch extract key resolution (mirrors firecrawl pattern).
+  const parallelFetch = isRecord(fetch?.parallel) ? fetch.parallel : undefined;
+  const parallelFetchEnabled = parallelFetch?.enabled === true;
+  const parallelFetchActive = Boolean(fetchEnabled && parallelFetchEnabled);
+  const parallelFetchPath = "tools.web.fetch.parallel.apiKey";
+
+  if (parallelFetchActive) {
+    const parallelFetchResolution = await resolveSecretInputWithEnvFallback({
+      sourceConfig: params.sourceConfig,
+      context: params.context,
+      defaults,
+      value: parallelFetch?.apiKey,
+      path: parallelFetchPath,
+      envVars: ["PARALLEL_API_KEY"],
+    });
+    if (parallelFetchResolution.value) {
+      setResolvedParallelFetchApiKey({
+        resolvedConfig: params.resolvedConfig,
+        value: parallelFetchResolution.value,
+      });
+    }
+  } else if (hasConfiguredSecretRef(parallelFetch?.apiKey, defaults)) {
+    pushInactiveSurfaceWarning({
+      context: params.context,
+      path: parallelFetchPath,
+      details: !fetchEnabled
+        ? "tools.web.fetch is disabled."
+        : "tools.web.fetch.parallel.enabled is false.",
+    });
   }
 
   return {

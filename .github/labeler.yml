@@ -278,6 +278,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/nvidia/**"
+"extensions: parallel":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/parallel/**"
 "extensions: phone-control":
   - changed-files:
       - any-glob-to-any-file:

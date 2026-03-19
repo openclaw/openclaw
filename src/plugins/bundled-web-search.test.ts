@@ -7,6 +7,7 @@ it("keeps bundled web search compat ids aligned with bundled manifests", () => {
     "firecrawl",
     "google",
     "moonshot",
+    "parallel",
     "perplexity",
     "xai",
   ]);
