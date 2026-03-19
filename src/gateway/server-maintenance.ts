@@ -1,7 +1,11 @@
 import type { HealthSummary } from "../commands/health.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
-import type { ChatRunEntry } from "./server-chat.js";
+import {
+  clearEffectiveChatRunState,
+  type ChatRunEntry,
+  type EffectiveChatRunStateSlice,
+} from "./server-chat.js";
 import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
@@ -11,6 +15,8 @@ import {
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+
+const FINALIZED_EFFECTIVE_RUN_TOMBSTONE_TTL_MS = 10 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -28,9 +34,10 @@ export function startGatewayMaintenanceTimers(params: {
   logHealth: { error: (msg: string) => void };
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunState: { abortedRuns: Map<string, number> };
-  chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
+  chatRunState: EffectiveChatRunStateSlice & {
+    registry: { hasClientRunId: (clientRunId: string) => boolean };
+    abortedRuns: Map<string, number>;
+  };
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -91,14 +98,18 @@ export function startGatewayMaintenanceTimers(params: {
     }
 
     if (params.agentRunSeq.size > AGENT_RUN_SEQ_MAX) {
-      const excess = params.agentRunSeq.size - AGENT_RUN_SEQ_MAX;
-      let removed = 0;
       for (const runId of params.agentRunSeq.keys()) {
-        params.agentRunSeq.delete(runId);
-        removed += 1;
-        if (removed >= excess) {
+        if (params.agentRunSeq.size <= AGENT_RUN_SEQ_MAX) {
           break;
         }
+        if (
+          params.chatAbortControllers.has(runId) ||
+          params.chatRunState.registry.hasClientRunId(runId)
+        ) {
+          continue;
+        }
+        params.agentRunSeq.delete(runId);
+        clearEffectiveChatRunState(params.chatRunState, runId);
       }
     }
 
@@ -109,9 +120,8 @@ export function startGatewayMaintenanceTimers(params: {
       abortChatRunById(
         {
           chatAbortControllers: params.chatAbortControllers,
-          chatRunBuffers: params.chatRunBuffers,
-          chatDeltaSentAt: params.chatDeltaSentAt,
           chatAbortedRuns: params.chatRunState.abortedRuns,
+          chatRunState: params.chatRunState,
           removeChatRun: params.removeChatRun,
           agentRunSeq: params.agentRunSeq,
           broadcast: params.broadcast,
@@ -127,8 +137,14 @@ export function startGatewayMaintenanceTimers(params: {
         continue;
       }
       params.chatRunState.abortedRuns.delete(runId);
-      params.chatRunBuffers.delete(runId);
-      params.chatDeltaSentAt.delete(runId);
+      clearEffectiveChatRunState(params.chatRunState, runId);
+    }
+
+    for (const [runId, finalizedAtMs] of params.chatRunState.finalizedEffectiveRunKeys) {
+      if (now - finalizedAtMs <= FINALIZED_EFFECTIVE_RUN_TOMBSTONE_TTL_MS) {
+        continue;
+      }
+      params.chatRunState.finalizedEffectiveRunKeys.delete(runId);
     }
   }, 60_000);
 

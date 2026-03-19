@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+import { createChatRunState } from "../server-chat.js";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
 
 export function createActiveRun(
@@ -26,6 +27,7 @@ export type ChatAbortTestContext = Record<string, unknown> & {
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatAbortedRuns: Map<string, number>;
+  chatRunState: ReturnType<typeof createChatRunState>;
   removeChatRun: (...args: unknown[]) => { sessionKey: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
   broadcast: (...args: unknown[]) => void;
@@ -38,11 +40,36 @@ export type ChatAbortRespondMock = Mock<RespondFn>;
 export function createChatAbortContext(
   overrides: Record<string, unknown> = {},
 ): ChatAbortTestContext {
+  const {
+    chatRunState: overrideChatRunState,
+    chatRunBuffers: overrideChatRunBuffers,
+    chatDeltaSentAt: overrideChatDeltaSentAt,
+    chatAbortedRuns: overrideChatAbortedRuns,
+    ...rest
+  } = overrides as Record<string, unknown> & {
+    chatRunState?: ReturnType<typeof createChatRunState>;
+    chatRunBuffers?: Map<string, string>;
+    chatDeltaSentAt?: Map<string, number>;
+    chatAbortedRuns?: Map<string, number>;
+  };
+  const chatRunState = overrideChatRunState ?? createChatRunState();
+
+  const seedMap = <T>(target: Map<string, T>, source?: Map<string, T>) => {
+    if (!source || source === target) {
+      return;
+    }
+    target.clear();
+    for (const [key, value] of source) {
+      target.set(key, value);
+    }
+  };
+
+  seedMap(chatRunState.buffers, overrideChatRunBuffers);
+  seedMap(chatRunState.deltaSentAt, overrideChatDeltaSentAt);
+  seedMap(chatRunState.abortedRuns, overrideChatAbortedRuns);
+
   return {
     chatAbortControllers: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatAbortedRuns: new Map<string, number>(),
     removeChatRun: vi
       .fn()
       .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),
@@ -50,7 +77,11 @@ export function createChatAbortContext(
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
     logGateway: { warn: vi.fn() },
-    ...overrides,
+    ...rest,
+    chatRunState,
+    chatRunBuffers: chatRunState.buffers,
+    chatDeltaSentAt: chatRunState.deltaSentAt,
+    chatAbortedRuns: chatRunState.abortedRuns,
   };
 }
 

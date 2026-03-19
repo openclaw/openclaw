@@ -93,6 +93,63 @@ function isSilentReplyLeadFragment(text: string): boolean {
   return SILENT_REPLY_TOKEN.startsWith(normalized);
 }
 
+/**
+ * Treat an event as a safe replacement only when `nextText` already carries the
+ * full visible assistant text for this step.
+ *
+ * Example:
+ * - ACP cumulative snapshot: previous=`Hello`, nextText=`Hello world`,
+ *   nextDelta=` world` => safe full replacement.
+ * - Ambiguous delta-only producer: nextText=``, nextDelta=` world` => not safe.
+ */
+function isFullVisibleTextEvent(params: {
+  previousText: string;
+  nextText: string;
+  nextDelta: string;
+}) {
+  const { previousText, nextText, nextDelta } = params;
+  if (!nextText) {
+    return false;
+  }
+  if (!nextDelta) {
+    return true;
+  }
+  if (!previousText) {
+    return false;
+  }
+  if (nextText === previousText) {
+    return false;
+  }
+  return nextText.startsWith(previousText);
+}
+
+function isEmptyBaseMirroredTextEvent(params: {
+  previousText: string;
+  nextText: string;
+  nextDelta: string;
+}) {
+  const { previousText, nextText, nextDelta } = params;
+  return !previousText && Boolean(nextText) && nextText === nextDelta;
+}
+
+function isDeltaOnlyAssistantEvent(params: { nextText: string; nextDelta: string }) {
+  return !params.nextText && Boolean(params.nextDelta);
+}
+
+function isCumulativeRecoverySnapshotFromEmptyBase(params: {
+  previousText: string;
+  nextText: string;
+  nextDelta: string;
+}) {
+  const { previousText, nextText, nextDelta } = params;
+  return (
+    !previousText &&
+    Boolean(nextDelta) &&
+    nextText.length > nextDelta.length &&
+    nextText.endsWith(nextDelta)
+  );
+}
+
 function appendUniqueSuffix(base: string, suffix: string): string {
   if (!suffix) {
     return base;
@@ -112,25 +169,108 @@ function appendUniqueSuffix(base: string, suffix: string): string {
   return base + suffix;
 }
 
-function resolveMergedAssistantText(params: {
+/**
+ * Run-global seq can only force assistant recovery when we skipped over an
+ * event we never observed. Already-seen tool/lifecycle events must not freeze
+ * the assistant buffer.
+ */
+function hasObservedEventSeqGap(params: {
+  hasNumericSeq: boolean;
+  previousSeenEventSeq: number;
+  nextSeq: number;
+}) {
+  return (
+    params.hasNumericSeq &&
+    params.previousSeenEventSeq > 0 &&
+    params.nextSeq > params.previousSeenEventSeq + 1
+  );
+}
+
+function hasSeenNewerRunEvent(params: {
+  hasNumericSeq: boolean;
+  previousSeenEventSeq: number;
+  nextSeq: number;
+}) {
+  return params.hasNumericSeq && params.previousSeenEventSeq > params.nextSeq;
+}
+
+/**
+ * Delta-only chunks are append-safe only when the run stayed observed in order.
+ * If we skipped an event, wait for a full replacement instead of appending.
+ */
+function canAppendDelta(params: {
+  hasNumericSeq: boolean;
+  isWaitingForRecovery: boolean;
+  hasObservedGap: boolean;
+  nextText: string;
+  nextDelta: string;
+}) {
+  return (
+    params.hasNumericSeq &&
+    !params.isWaitingForRecovery &&
+    !params.hasObservedGap &&
+    isDeltaOnlyAssistantEvent({ nextText: params.nextText, nextDelta: params.nextDelta })
+  );
+}
+
+/**
+ * Recovery may resume only from an event shape that proves `nextText` is the
+ * complete visible assistant text. ACP-style cumulative `text` + `delta`
+ * snapshots qualify; delta-only chunks must keep waiting because we cannot
+ * prove whether they replay a suffix or skip hidden text.
+ */
+function canRecoverFromFullReplacement(params: {
   previousText: string;
   nextText: string;
   nextDelta: string;
 }) {
-  const { previousText, nextText, nextDelta } = params;
-  if (nextText && previousText) {
+  return isFullVisibleTextEvent(params) || isCumulativeRecoverySnapshotFromEmptyBase(params);
+}
+
+function resolveMergedAssistantText(params: {
+  previousText: string;
+  nextText: string;
+  nextDelta: string;
+  allowDeltaAppend: boolean;
+  allowFullReplacementShrink?: boolean;
+  allowEmptyBaseRecoveryReplacement?: boolean;
+  allowEmptyBaseMirroredFirstPacket?: boolean;
+}) {
+  const {
+    previousText,
+    nextText,
+    nextDelta,
+    allowDeltaAppend,
+    allowFullReplacementShrink = false,
+    allowEmptyBaseRecoveryReplacement = false,
+    allowEmptyBaseMirroredFirstPacket = false,
+  } = params;
+  if (
+    allowEmptyBaseMirroredFirstPacket &&
+    isEmptyBaseMirroredTextEvent({ previousText, nextText, nextDelta })
+  ) {
+    return nextText;
+  }
+  if (isFullVisibleTextEvent({ previousText, nextText, nextDelta })) {
+    if (nextText === previousText) {
+      return previousText;
+    }
     if (nextText.startsWith(previousText)) {
       return nextText;
     }
-    if (previousText.startsWith(nextText) && !nextDelta) {
+    if (!allowFullReplacementShrink && !nextDelta && previousText.startsWith(nextText)) {
       return previousText;
     }
-  }
-  if (nextDelta) {
-    return appendUniqueSuffix(previousText, nextDelta);
-  }
-  if (nextText) {
     return nextText;
+  }
+  if (
+    allowEmptyBaseRecoveryReplacement &&
+    isCumulativeRecoverySnapshotFromEmptyBase({ previousText, nextText, nextDelta })
+  ) {
+    return nextText;
+  }
+  if (allowDeltaAppend) {
+    return appendUniqueSuffix(previousText, nextDelta);
   }
   return previousText;
 }
@@ -142,6 +282,7 @@ export type ChatRunEntry = {
 
 export type ChatRunRegistry = {
   add: (sessionId: string, entry: ChatRunEntry) => void;
+  hasClientRunId: (clientRunId: string) => boolean;
   peek: (sessionId: string) => ChatRunEntry | undefined;
   shift: (sessionId: string) => ChatRunEntry | undefined;
   remove: (sessionId: string, clientRunId: string, sessionKey?: string) => ChatRunEntry | undefined;
@@ -158,6 +299,15 @@ export function createChatRunRegistry(): ChatRunRegistry {
     } else {
       chatRunSessions.set(sessionId, [entry]);
     }
+  };
+
+  const hasClientRunId = (clientRunId: string) => {
+    for (const queue of chatRunSessions.values()) {
+      if (queue.some((entry) => entry.clientRunId === clientRunId)) {
+        return true;
+      }
+    }
+    return false;
   };
 
   const peek = (sessionId: string) => chatRunSessions.get(sessionId)?.[0];
@@ -197,42 +347,130 @@ export function createChatRunRegistry(): ChatRunRegistry {
     chatRunSessions.clear();
   };
 
-  return { add, peek, shift, remove, clear };
+  return { add, hasClientRunId, peek, shift, remove, clear };
 }
 
 export type ChatRunState = {
   registry: ChatRunRegistry;
   buffers: Map<string, string>;
+  /** Highest run-global seq observed for this effective run, across all streams. */
+  lastSeenEventSeq: Map<string, number>;
+  /** Highest assistant-visible seq accepted into the chat buffer. */
+  lastAcceptedSeq: Map<string, number>;
+  /** Seq gap latch: block delta-only assistant merges until a safe full replacement arrives. */
+  waitingForRecovery: Set<string>;
+  /** Last assistant text that was actually broadcast to streaming clients. */
+  deltaLastBroadcastText: Map<string, string>;
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
+  /** Ignore late events that predate an explicitly restarted client-visible run. */
+  minEventTsByEffectiveRunKey: Map<string, number>;
+  /** Run keys that have already hit a terminal lifecycle event (end/error) and are finalized. */
+  finalizedEffectiveRunKeys: Map<string, number>;
+  /** Client-visible keys reserved by chat.send for the next real run start. */
+  pendingRestartEffectiveRunKeys: Set<string>;
+  /** Source run ids authorized to consume a pending client-visible restart exactly once. */
+  pendingRestartSourceRunIdsByEffectiveRunKey: Map<string, string>;
   abortedRuns: Map<string, number>;
   clear: () => void;
 };
 
+export type EffectiveChatRunStateSlice = Pick<
+  ChatRunState,
+  | "buffers"
+  | "lastSeenEventSeq"
+  | "lastAcceptedSeq"
+  | "waitingForRecovery"
+  | "deltaLastBroadcastText"
+  | "deltaSentAt"
+  | "deltaLastBroadcastLen"
+  | "minEventTsByEffectiveRunKey"
+  | "finalizedEffectiveRunKeys"
+  | "pendingRestartEffectiveRunKeys"
+  | "pendingRestartSourceRunIdsByEffectiveRunKey"
+>;
+
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const buffers = new Map<string, string>();
+  const lastSeenEventSeq = new Map<string, number>();
+  const lastAcceptedSeq = new Map<string, number>();
+  const waitingForRecovery = new Set<string>();
+  const deltaLastBroadcastText = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
+  const minEventTsByEffectiveRunKey = new Map<string, number>();
+  const finalizedEffectiveRunKeys = new Map<string, number>();
+  const pendingRestartEffectiveRunKeys = new Set<string>();
+  const pendingRestartSourceRunIdsByEffectiveRunKey = new Map<string, string>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
+    lastSeenEventSeq.clear();
+    lastAcceptedSeq.clear();
+    waitingForRecovery.clear();
+    deltaLastBroadcastText.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
+    minEventTsByEffectiveRunKey.clear();
+    finalizedEffectiveRunKeys.clear();
+    pendingRestartEffectiveRunKeys.clear();
+    pendingRestartSourceRunIdsByEffectiveRunKey.clear();
     abortedRuns.clear();
   };
 
   return {
     registry,
     buffers,
+    lastSeenEventSeq,
+    lastAcceptedSeq,
+    waitingForRecovery,
+    deltaLastBroadcastText,
     deltaSentAt,
     deltaLastBroadcastLen,
+    minEventTsByEffectiveRunKey,
+    finalizedEffectiveRunKeys,
+    pendingRestartEffectiveRunKeys,
+    pendingRestartSourceRunIdsByEffectiveRunKey,
     abortedRuns,
     clear,
   };
+}
+
+export function clearEffectiveChatRunState(
+  chatRunState: EffectiveChatRunStateSlice,
+  effectiveRunKey: string,
+) {
+  chatRunState.buffers.delete(effectiveRunKey);
+  chatRunState.lastSeenEventSeq.delete(effectiveRunKey);
+  chatRunState.lastAcceptedSeq.delete(effectiveRunKey);
+  chatRunState.waitingForRecovery.delete(effectiveRunKey);
+  chatRunState.deltaLastBroadcastText.delete(effectiveRunKey);
+  chatRunState.deltaSentAt.delete(effectiveRunKey);
+  chatRunState.deltaLastBroadcastLen.delete(effectiveRunKey);
+  chatRunState.minEventTsByEffectiveRunKey.delete(effectiveRunKey);
+  chatRunState.finalizedEffectiveRunKeys.delete(effectiveRunKey);
+  chatRunState.pendingRestartEffectiveRunKeys.delete(effectiveRunKey);
+  chatRunState.pendingRestartSourceRunIdsByEffectiveRunKey.delete(effectiveRunKey);
+}
+
+export function markPendingEffectiveChatRunRestart(
+  chatRunState: Pick<
+    ChatRunState,
+    "pendingRestartEffectiveRunKeys" | "pendingRestartSourceRunIdsByEffectiveRunKey"
+  >,
+  effectiveRunKey: string,
+  sourceRunId?: string,
+) {
+  chatRunState.pendingRestartEffectiveRunKeys.add(effectiveRunKey);
+  if (typeof sourceRunId === "string" && sourceRunId.trim()) {
+    chatRunState.pendingRestartSourceRunIdsByEffectiveRunKey.set(effectiveRunKey, sourceRunId);
+    return;
+  }
+  chatRunState.pendingRestartSourceRunIdsByEffectiveRunKey.delete(effectiveRunKey);
 }
 
 export type ToolEventRecipientRegistry = {
@@ -452,6 +690,26 @@ export type AgentEventHandlerOptions = {
   sessionEventSubscribers: SessionEventSubscriberRegistry;
 };
 
+type EmitChatDeltaParams = {
+  sessionKey: string;
+  effectiveRunKey: string;
+  sourceRunId: string;
+  seq: number;
+  text: string;
+  previousSeenEventSeq: number;
+  delta?: unknown;
+};
+
+type ResolveChatDeltaTextParams = Pick<
+  EmitChatDeltaParams,
+  "effectiveRunKey" | "seq" | "previousSeenEventSeq"
+> & {
+  previousText: string;
+  cleanedText: string;
+  cleanedDelta: string;
+  hasNumericSeq: boolean;
+};
+
 export function createAgentEventHandler({
   broadcast,
   broadcastToConnIds,
@@ -499,45 +757,170 @@ export function createAgentEventHandler({
     };
   };
 
-  const emitChatDelta = (
-    sessionKey: string,
-    clientRunId: string,
-    sourceRunId: string,
-    seq: number,
-    text: string,
-    delta?: unknown,
-  ) => {
-    const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
-    const cleanedDelta =
-      typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
-    const previousText = chatRunState.buffers.get(clientRunId) ?? "";
+  const resolveRecoveryChatText = ({
+    effectiveRunKey,
+    previousText,
+    cleanedText,
+    cleanedDelta,
+  }: ResolveChatDeltaTextParams) => {
+    if (
+      !canRecoverFromFullReplacement({
+        previousText,
+        nextText: cleanedText,
+        nextDelta: cleanedDelta,
+      })
+    ) {
+      return undefined;
+    }
+    chatRunState.waitingForRecovery.delete(effectiveRunKey);
+    const replacementText = resolveMergedAssistantText({
+      previousText,
+      nextText: cleanedText,
+      nextDelta: cleanedDelta,
+      allowDeltaAppend: false,
+      allowFullReplacementShrink: true,
+      allowEmptyBaseRecoveryReplacement: true,
+    });
+    // Recovery can relock onto the stream without changing visible text.
+    // That should clear the recovery latch, but it must not advance accepted seq.
+    if (!replacementText || replacementText === previousText) {
+      return undefined;
+    }
+    return replacementText;
+  };
+
+  const resolveInOrderChatText = ({
+    effectiveRunKey,
+    seq,
+    previousSeenEventSeq,
+    previousText,
+    cleanedText,
+    cleanedDelta,
+    hasNumericSeq,
+  }: ResolveChatDeltaTextParams) => {
+    const hasObservedGap = hasObservedEventSeqGap({
+      hasNumericSeq,
+      previousSeenEventSeq,
+      nextSeq: seq,
+    });
+    if (hasObservedGap) {
+      if (
+        !canRecoverFromFullReplacement({
+          previousText,
+          nextText: cleanedText,
+          nextDelta: cleanedDelta,
+        })
+      ) {
+        chatRunState.waitingForRecovery.add(effectiveRunKey);
+        return undefined;
+      }
+      chatRunState.waitingForRecovery.delete(effectiveRunKey);
+    }
     const mergedText = resolveMergedAssistantText({
       previousText,
       nextText: cleanedText,
       nextDelta: cleanedDelta,
+      allowDeltaAppend: canAppendDelta({
+        hasNumericSeq,
+        isWaitingForRecovery: false,
+        hasObservedGap,
+        nextText: cleanedText,
+        nextDelta: cleanedDelta,
+      }),
+      allowFullReplacementShrink: hasObservedGap,
+      allowEmptyBaseRecoveryReplacement: hasObservedGap,
+      allowEmptyBaseMirroredFirstPacket: !hasObservedGap,
     });
+    if (!mergedText || mergedText === previousText) {
+      return undefined;
+    }
+    return mergedText;
+  };
+
+  const emitChatDelta = ({
+    sessionKey,
+    effectiveRunKey,
+    sourceRunId,
+    seq,
+    text,
+    previousSeenEventSeq,
+    delta,
+  }: EmitChatDeltaParams) => {
+    /**
+     * Effective-run merge invariants:
+     * - `lastSeenEventSeq` tracks the highest run-global seq observed on any stream for gap detection.
+     * - `lastAcceptedSeq` tracks the highest assistant seq merged into the visible buffer.
+     * - `waitingForRecovery` latches after a seq gap until a safe full-text replacement arrives.
+     * - `agentRunSeq` tracks the run-global seq we have observed for client-facing event ordering.
+     *
+     * Normal behavior merges in-order assistant events: delta-only chunks append, while full visible
+     * snapshots replace the buffer. Recovery behavior is stricter: after a gap, ignore delta-only
+     * chunks until a full visible snapshot re-establishes the complete assistant text.
+     */
+    const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
+    const cleanedDelta =
+      typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
+    const previousText = chatRunState.buffers.get(effectiveRunKey) ?? "";
+    const hasNumericSeq = Number.isFinite(seq);
+    const lastAcceptedSeq = chatRunState.lastAcceptedSeq.get(effectiveRunKey) ?? 0;
+    const isStaleOrReplay = hasNumericSeq && seq <= lastAcceptedSeq;
+    if (isStaleOrReplay) {
+      return;
+    }
+    const hasSeenNewerEvent = hasSeenNewerRunEvent({
+      hasNumericSeq,
+      previousSeenEventSeq,
+      nextSeq: seq,
+    });
+    if (hasSeenNewerEvent) {
+      chatRunState.waitingForRecovery.add(effectiveRunKey);
+      return;
+    }
+    const mergedText = chatRunState.waitingForRecovery.has(effectiveRunKey)
+      ? resolveRecoveryChatText({
+          effectiveRunKey,
+          seq,
+          previousSeenEventSeq,
+          previousText,
+          cleanedText,
+          cleanedDelta,
+          hasNumericSeq,
+        })
+      : resolveInOrderChatText({
+          effectiveRunKey,
+          seq,
+          previousSeenEventSeq,
+          previousText,
+          cleanedText,
+          cleanedDelta,
+          hasNumericSeq,
+        });
     if (!mergedText) {
       return;
     }
-    chatRunState.buffers.set(clientRunId, mergedText);
+    chatRunState.buffers.set(effectiveRunKey, mergedText);
+    if (hasNumericSeq) {
+      chatRunState.lastAcceptedSeq.set(effectiveRunKey, seq);
+    }
     if (isSilentReplyText(mergedText, SILENT_REPLY_TOKEN)) {
       return;
     }
     if (isSilentReplyLeadFragment(mergedText)) {
       return;
     }
-    if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
+    if (shouldHideHeartbeatChatOutput(effectiveRunKey, sourceRunId)) {
       return;
     }
     const now = Date.now();
-    const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
+    const last = chatRunState.deltaSentAt.get(effectiveRunKey) ?? 0;
     if (now - last < 150) {
       return;
     }
-    chatRunState.deltaSentAt.set(clientRunId, now);
-    chatRunState.deltaLastBroadcastLen.set(clientRunId, mergedText.length);
+    chatRunState.deltaSentAt.set(effectiveRunKey, now);
+    chatRunState.deltaLastBroadcastText.set(effectiveRunKey, mergedText);
+    chatRunState.deltaLastBroadcastLen.set(effectiveRunKey, mergedText.length);
     const payload = {
-      runId: clientRunId,
+      runId: effectiveRunKey,
       sessionKey,
       seq,
       state: "delta" as const,
@@ -551,12 +934,12 @@ export function createAgentEventHandler({
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
-  const resolveBufferedChatTextState = (clientRunId: string, sourceRunId: string) => {
+  const resolveBufferedChatTextState = (effectiveRunKey: string, sourceRunId: string) => {
     const bufferedText = stripInlineDirectiveTagsForDisplay(
-      chatRunState.buffers.get(clientRunId) ?? "",
+      chatRunState.buffers.get(effectiveRunKey) ?? "",
     ).text.trim();
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
-      runId: clientRunId,
+      runId: effectiveRunKey,
       sourceRunId,
       text: bufferedText,
     });
@@ -568,14 +951,17 @@ export function createAgentEventHandler({
 
   const flushBufferedChatDeltaIfNeeded = (
     sessionKey: string,
-    clientRunId: string,
+    effectiveRunKey: string,
     sourceRunId: string,
     seq: number,
   ) => {
-    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
+    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(
+      effectiveRunKey,
+      sourceRunId,
+    );
     const shouldSuppressSilentLeadFragment = isSilentReplyLeadFragment(text);
     const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
-      clientRunId,
+      effectiveRunKey,
       sourceRunId,
     );
     if (
@@ -587,14 +973,14 @@ export function createAgentEventHandler({
       return;
     }
 
-    const lastBroadcastLen = chatRunState.deltaLastBroadcastLen.get(clientRunId) ?? 0;
-    if (text.length <= lastBroadcastLen) {
+    const lastBroadcastText = chatRunState.deltaLastBroadcastText.get(effectiveRunKey) ?? "";
+    if (text === lastBroadcastText) {
       return;
     }
 
     const now = Date.now();
     const flushPayload = {
-      runId: clientRunId,
+      runId: effectiveRunKey,
       sessionKey,
       seq,
       state: "delta" as const,
@@ -606,31 +992,33 @@ export function createAgentEventHandler({
     };
     broadcast("chat", flushPayload, { dropIfSlow: true });
     nodeSendToSession(sessionKey, "chat", flushPayload);
-    chatRunState.deltaLastBroadcastLen.set(clientRunId, text.length);
-    chatRunState.deltaSentAt.set(clientRunId, now);
+    chatRunState.deltaLastBroadcastText.set(effectiveRunKey, text);
+    chatRunState.deltaLastBroadcastLen.set(effectiveRunKey, text.length);
+    chatRunState.deltaSentAt.set(effectiveRunKey, now);
   };
 
   const emitChatFinal = (
     sessionKey: string,
-    clientRunId: string,
+    effectiveRunKey: string,
     sourceRunId: string,
     seq: number,
     jobState: "done" | "error",
     error?: unknown,
     stopReason?: string,
   ) => {
-    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
+    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(
+      effectiveRunKey,
+      sourceRunId,
+    );
     // Flush any throttled delta so streaming clients receive the complete text
     // before the final event. The 150 ms throttle in emitChatDelta may have
     // suppressed the most recent chunk, leaving the client with stale text.
-    // Only flush if the buffer has grown since the last broadcast to avoid duplicates.
-    flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, sourceRunId, seq);
-    chatRunState.deltaLastBroadcastLen.delete(clientRunId);
-    chatRunState.buffers.delete(clientRunId);
-    chatRunState.deltaSentAt.delete(clientRunId);
+    // Only flush if the buffered text differs from the last broadcast to avoid duplicates.
+    flushBufferedChatDeltaIfNeeded(sessionKey, effectiveRunKey, sourceRunId, seq);
+    clearEffectiveChatRunState(chatRunState, effectiveRunKey);
     if (jobState === "done") {
       const payload = {
-        runId: clientRunId,
+        runId: effectiveRunKey,
         sessionKey,
         seq,
         state: "final" as const,
@@ -649,7 +1037,7 @@ export function createAgentEventHandler({
       return;
     }
     const payload = {
-      runId: clientRunId,
+      runId: effectiveRunKey,
       sessionKey,
       seq,
       state: "error" as const,
@@ -688,14 +1076,54 @@ export function createAgentEventHandler({
     const isControlUiVisible = getAgentRunContext(evt.runId)?.isControlUiVisible ?? true;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
-    const clientRunId = chatLink?.clientRunId ?? evt.runId;
-    const eventRunId = chatLink?.clientRunId ?? evt.runId;
+    // `effectiveRunKey` is the client-visible run identity used for chat merge
+    // state. `evt.runId` remains the upstream source run id used for agent
+    // context lookups and tool recipient routing.
+    const effectiveRunKey = chatLink?.clientRunId ?? evt.runId;
+    const eventRunId = effectiveRunKey;
     const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
+    const lifecyclePhase =
+      evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
+    const isPendingRestartStartSignal =
+      lifecyclePhase === "start" || evt.stream === "assistant" || evt.stream === "tool";
+    const isAuthorizedPendingRestart =
+      isPendingRestartStartSignal &&
+      chatRunState.pendingRestartEffectiveRunKeys.has(effectiveRunKey) &&
+      chatRunState.pendingRestartSourceRunIdsByEffectiveRunKey.get(effectiveRunKey) === evt.runId;
+    const minEventTs = chatRunState.minEventTsByEffectiveRunKey.get(effectiveRunKey);
+    if (typeof minEventTs === "number" && Number.isFinite(minEventTs)) {
+      const eventTs = Number.isFinite(evt.ts) ? evt.ts : Date.now();
+      if (eventTs < minEventTs) {
+        return;
+      }
+    }
+
+    // Prevent post-terminal state resurrection: finalized keys reopen only
+    // when chat.send has a pending restart and the new source run actually
+    // emits its first trusted client-visible event.
+    if (chatRunState.finalizedEffectiveRunKeys.has(effectiveRunKey)) {
+      if (!isAuthorizedPendingRestart) {
+        return;
+      }
+    }
+    if (isAuthorizedPendingRestart) {
+      clearEffectiveChatRunState(chatRunState, effectiveRunKey);
+    }
+
     const isAborted =
-      chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
+      chatRunState.abortedRuns.has(effectiveRunKey) || chatRunState.abortedRuns.has(evt.runId);
+    const previousSeenEventSeq = chatRunState.lastSeenEventSeq.get(effectiveRunKey) ?? 0;
+    const hasNumericSeq = Number.isFinite(evt.seq);
+    if (hasNumericSeq && evt.seq > previousSeenEventSeq) {
+      chatRunState.lastSeenEventSeq.set(effectiveRunKey, evt.seq);
+    }
     // Include sessionKey so Control UI can filter tool streams per session.
     const agentPayload = sessionKey ? { ...eventForClients, sessionKey } : eventForClients;
-    const last = agentRunSeq.get(evt.runId) ?? 0;
+    const previousAgentRunSeq = agentRunSeq.get(effectiveRunKey);
+    const last =
+      typeof previousAgentRunSeq === "number" && Number.isFinite(previousAgentRunSeq)
+        ? previousAgentRunSeq
+        : 0;
     const isToolEvent = evt.stream === "tool";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
     // Build tool payload: strip result/partialResult unless verbose=full
@@ -710,7 +1138,7 @@ export function createAgentEventHandler({
               : { ...eventForClients, data };
           })()
         : agentPayload;
-    if (last > 0 && evt.seq !== last + 1) {
+    if (hasNumericSeq && last > 0 && evt.seq !== last + 1) {
       broadcast("agent", {
         runId: eventRunId,
         stream: "error",
@@ -723,13 +1151,15 @@ export function createAgentEventHandler({
         },
       });
     }
-    agentRunSeq.set(evt.runId, evt.seq);
+    if (hasNumericSeq) {
+      agentRunSeq.set(effectiveRunKey, Math.max(last, evt.seq));
+    }
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
       // Flush pending assistant text before tool-start events so clients can
       // render complete pre-tool text above tool cards (not truncated by delta throttle).
       if (toolPhase === "start" && isControlUiVisible && sessionKey && !isAborted) {
-        flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, evt.runId, evt.seq);
+        flushBufferedChatDeltaIfNeeded(sessionKey, effectiveRunKey, evt.runId, evt.seq);
       }
       // Always broadcast tool events to registered WS recipients with
       // tool-events capability, regardless of verboseLevel. The verbose
@@ -754,9 +1184,6 @@ export function createAgentEventHandler({
       broadcast("agent", agentPayload);
     }
 
-    const lifecyclePhase =
-      evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
-
     if (isControlUiVisible && sessionKey) {
       // Send tool events to node/channel subscribers only when verbose is enabled;
       // WS clients already received the event above via broadcastToConnIds.
@@ -764,7 +1191,15 @@ export function createAgentEventHandler({
         nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
-        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
+        emitChatDelta({
+          sessionKey,
+          effectiveRunKey,
+          sourceRunId: evt.runId,
+          seq: evt.seq,
+          text: evt.data.text,
+          previousSeenEventSeq,
+          delta: evt.data.delta,
+        });
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         const evtStopReason =
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
@@ -795,12 +1230,13 @@ export function createAgentEventHandler({
           );
         }
       } else if (isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
-        chatRunState.abortedRuns.delete(clientRunId);
+        // Keep aborted-run cleanup explicit: abortedRuns may be keyed by both
+        // the source runId and the effective client-visible runId.
+        chatRunState.abortedRuns.delete(effectiveRunKey);
         chatRunState.abortedRuns.delete(evt.runId);
-        chatRunState.buffers.delete(clientRunId);
-        chatRunState.deltaSentAt.delete(clientRunId);
+        clearEffectiveChatRunState(chatRunState, effectiveRunKey);
         if (chatLink) {
-          chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
+          chatRunState.registry.remove(evt.runId, effectiveRunKey, sessionKey);
         }
       }
     }
@@ -809,7 +1245,9 @@ export function createAgentEventHandler({
       toolEventRecipients.markFinal(evt.runId);
       clearAgentRunContext(evt.runId);
       agentRunSeq.delete(evt.runId);
-      agentRunSeq.delete(clientRunId);
+      agentRunSeq.delete(effectiveRunKey);
+      clearEffectiveChatRunState(chatRunState, effectiveRunKey);
+      chatRunState.finalizedEffectiveRunKeys.set(effectiveRunKey, Date.now());
     }
 
     if (

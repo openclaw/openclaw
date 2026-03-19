@@ -1,4 +1,5 @@
 import { isAbortRequestText } from "../auto-reply/reply/abort.js";
+import { clearEffectiveChatRunState, type EffectiveChatRunStateSlice } from "./server-chat.js";
 
 export type ChatAbortControllerEntry = {
   controller: AbortController;
@@ -31,9 +32,8 @@ export function resolveChatRunExpiresAtMs(params: {
 
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
   chatAbortedRuns: Map<string, number>;
+  chatRunState: EffectiveChatRunStateSlice;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -89,18 +89,18 @@ export function abortChatRunById(
     return { aborted: false };
   }
 
-  const bufferedText = ops.chatRunBuffers.get(runId);
+  const bufferedText = ops.chatRunState.buffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatAbortedRuns.set(runId, Date.now());
   active.controller.abort();
   ops.chatAbortControllers.delete(runId);
-  ops.chatRunBuffers.delete(runId);
-  ops.chatDeltaSentAt.delete(runId);
+  clearEffectiveChatRunState(ops.chatRunState, runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   broadcastChatAborted(ops, { runId, sessionKey, stopReason, partialText });
   ops.agentRunSeq.delete(runId);
   if (removed?.clientRunId) {
     ops.agentRunSeq.delete(removed.clientRunId);
+    clearEffectiveChatRunState(ops.chatRunState, removed.clientRunId);
   }
   return { aborted: true };
 }

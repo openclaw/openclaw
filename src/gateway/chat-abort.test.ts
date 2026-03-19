@@ -5,6 +5,7 @@ import {
   type ChatAbortOps,
   type ChatAbortControllerEntry,
 } from "./chat-abort.js";
+import { createChatRunState } from "./server-chat.js";
 
 function createActiveEntry(sessionKey: string): ChatAbortControllerEntry {
   const now = Date.now();
@@ -21,21 +22,25 @@ function createOps(params: {
   runId: string;
   entry: ChatAbortControllerEntry;
   buffer?: string;
+  chatRunState?: ReturnType<typeof createChatRunState>;
 }): ChatAbortOps & {
   broadcast: ReturnType<typeof vi.fn>;
   nodeSendToSession: ReturnType<typeof vi.fn>;
   removeChatRun: ReturnType<typeof vi.fn>;
 } {
-  const { runId, entry, buffer } = params;
+  const { runId, entry, buffer, chatRunState = createChatRunState() } = params;
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
   const removeChatRun = vi.fn();
+  if (buffer !== undefined) {
+    chatRunState.buffers.set(runId, buffer);
+  }
+  chatRunState.deltaSentAt.set(runId, Date.now());
 
   return {
     chatAbortControllers: new Map([[runId, entry]]),
-    chatRunBuffers: new Map(buffer !== undefined ? [[runId, buffer]] : []),
-    chatDeltaSentAt: new Map([[runId, Date.now()]]),
-    chatAbortedRuns: new Map(),
+    chatAbortedRuns: chatRunState.abortedRuns,
+    chatRunState,
     removeChatRun,
     agentRunSeq: new Map(),
     broadcast,
@@ -76,8 +81,8 @@ describe("abortChatRunById", () => {
     expect(result).toEqual({ aborted: true });
     expect(entry.controller.signal.aborted).toBe(true);
     expect(ops.chatAbortControllers.has(runId)).toBe(false);
-    expect(ops.chatRunBuffers.has(runId)).toBe(false);
-    expect(ops.chatDeltaSentAt.has(runId)).toBe(false);
+    expect(ops.chatRunState.buffers.has(runId)).toBe(false);
+    expect(ops.chatRunState.deltaSentAt.has(runId)).toBe(false);
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
     expect(ops.agentRunSeq.has(runId)).toBe(false);
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);
@@ -124,7 +129,7 @@ describe("abortChatRunById", () => {
 
     // Simulate synchronous cleanup triggered by AbortController listeners.
     entry.controller.signal.addEventListener("abort", () => {
-      ops.chatRunBuffers.delete(runId);
+      ops.chatRunState.buffers.delete(runId);
     });
 
     const result = abortChatRunById(ops, { runId, sessionKey });
@@ -137,5 +142,29 @@ describe("abortChatRunById", () => {
         content: [{ type: "text", text: "streamed text" }],
       }),
     );
+  });
+
+  it("clears effective-run recovery state so a reused key starts fresh after abort teardown", () => {
+    const runId = "retry-run";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    const chatRunState = createChatRunState();
+    chatRunState.buffers.set(runId, "Hello");
+    chatRunState.lastSeenEventSeq.set(runId, 3);
+    chatRunState.lastAcceptedSeq.set(runId, 1);
+    chatRunState.waitingForRecovery.add(runId);
+    chatRunState.deltaSentAt.set(runId, 10);
+    chatRunState.deltaLastBroadcastLen.set(runId, 5);
+    const ops = createOps({ runId, entry, buffer: "Hello", chatRunState });
+
+    const result = abortChatRunById(ops, { runId, sessionKey });
+
+    expect(result).toEqual({ aborted: true });
+    expect(chatRunState.buffers.has(runId)).toBe(false);
+    expect(chatRunState.lastSeenEventSeq.has(runId)).toBe(false);
+    expect(chatRunState.lastAcceptedSeq.has(runId)).toBe(false);
+    expect(chatRunState.waitingForRecovery.has(runId)).toBe(false);
+    expect(chatRunState.deltaSentAt.has(runId)).toBe(false);
+    expect(chatRunState.deltaLastBroadcastLen.has(runId)).toBe(false);
   });
 });

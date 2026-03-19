@@ -7,6 +7,12 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import { ErrorCodes } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
+import {
+  createAgentEventHandler,
+  createChatRunState,
+  createSessionEventSubscriberRegistry,
+  createToolEventRecipientRegistry,
+} from "../server-chat.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
@@ -17,6 +23,8 @@ const mockState = vi.hoisted(() => ({
   triggerAgentRunStart: false,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
+  dispatchGate: null as Promise<void> | null,
+  dispatchError: null as string | null,
   lastDispatchCtx: undefined as MsgContext | undefined,
   emittedTranscriptUpdates: [] as Array<{
     sessionFile: string;
@@ -70,6 +78,12 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       };
     }) => {
       mockState.lastDispatchCtx = params.ctx;
+      if (mockState.dispatchGate) {
+        await mockState.dispatchGate;
+      }
+      if (mockState.dispatchError) {
+        throw new Error(mockState.dispatchError);
+      }
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
       }
@@ -165,19 +179,22 @@ function createChatContext(): Pick<
   | "removeChatRun"
   | "dedupe"
   | "registerToolEventRecipient"
+  | "chatRunState"
   | "logGateway"
 > {
+  const chatRunState = createChatRunState();
   return {
     broadcast: vi.fn() as unknown as GatewayRequestContext["broadcast"],
     nodeSendToSession: vi.fn() as unknown as GatewayRequestContext["nodeSendToSession"],
     agentRunSeq: new Map<string, number>(),
     chatAbortControllers: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatAbortedRuns: new Map(),
+    chatRunBuffers: chatRunState.buffers,
+    chatDeltaSentAt: chatRunState.deltaSentAt,
+    chatAbortedRuns: chatRunState.abortedRuns,
     removeChatRun: vi.fn(),
     dedupe: new Map(),
     registerToolEventRecipient: vi.fn(),
+    chatRunState,
     logGateway: {
       warn: vi.fn(),
       debug: vi.fn(),
@@ -255,6 +272,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.triggerAgentRunStart = false;
     mockState.agentRunId = "run-agent-1";
     mockState.sessionEntry = {};
+    mockState.dispatchGate = null;
+    mockState.dispatchError = null;
     mockState.lastDispatchCtx = undefined;
     mockState.emittedTranscriptUpdates = [];
   });
@@ -370,6 +389,270 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
     expect(extractFirstTextBlock(payload)).toBe("");
+  });
+
+  it("chat.send rejects keys already used by active registry-backed runs", async () => {
+    createTranscriptFixture("openclaw-chat-send-registry-in-flight-");
+    const respond = vi.fn();
+    const context = createChatContext();
+    const idempotencyKey = "idem-registry-active";
+    context.chatRunState.registry.add("run-main-active", {
+      sessionKey: "agent:main:main",
+      clientRunId: idempotencyKey,
+    });
+    context.chatRunState.buffers.set(idempotencyKey, "streaming text");
+    context.chatRunState.lastSeenEventSeq.set(idempotencyKey, 5);
+    context.chatRunState.lastAcceptedSeq.set(idempotencyKey, 4);
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey,
+      },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { runId: idempotencyKey, status: "in_flight" },
+      undefined,
+      { cached: true, runId: idempotencyKey },
+    );
+    expect(context.chatRunState.buffers.get(idempotencyKey)).toBe("streaming text");
+    expect(context.chatRunState.lastSeenEventSeq.get(idempotencyKey)).toBe(5);
+    expect(context.chatRunState.lastAcceptedSeq.get(idempotencyKey)).toBe(4);
+    expect(context.chatRunState.pendingRestartEffectiveRunKeys.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.minEventTsByEffectiveRunKey.has(idempotencyKey)).toBe(false);
+  });
+
+  it("reused key fresh run may start from first observed assistant seq 2 after pending restart", async () => {
+    createTranscriptFixture("openclaw-chat-send-reuse-clears-finalized-");
+    mockState.finalText = "ok";
+    const context = createChatContext();
+    const idempotencyKey = "idem-reuse-after-final";
+    context.chatRunState.buffers.set(idempotencyKey, "stale");
+    context.chatRunState.lastSeenEventSeq.set(idempotencyKey, 8);
+    context.chatRunState.lastAcceptedSeq.set(idempotencyKey, 7);
+    context.chatRunState.waitingForRecovery.add(idempotencyKey);
+    context.chatRunState.finalizedEffectiveRunKeys.set(idempotencyKey, Date.now() - 1_000);
+
+    await runNonStreamingChatSend({
+      context,
+      respond: vi.fn(),
+      idempotencyKey,
+      expectBroadcast: false,
+      waitForCompletion: false,
+    });
+
+    expect(context.chatRunState.pendingRestartEffectiveRunKeys.has(idempotencyKey)).toBe(true);
+    expect(context.chatRunState.finalizedEffectiveRunKeys.has(idempotencyKey)).toBe(true);
+    expect(context.chatRunState.lastSeenEventSeq.get(idempotencyKey)).toBe(8);
+    expect(context.chatRunState.lastAcceptedSeq.get(idempotencyKey)).toBe(7);
+    expect(context.chatRunState.waitingForRecovery.has(idempotencyKey)).toBe(true);
+    expect(context.chatRunState.buffers.get(idempotencyKey)).toBe("stale");
+
+    const broadcast = vi.fn();
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds: vi.fn(),
+      nodeSendToSession: vi.fn(),
+      agentRunSeq: context.agentRunSeq,
+      chatRunState: context.chatRunState,
+      resolveSessionKeyForRun: () => undefined,
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients: createToolEventRecipientRegistry(),
+      sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+    });
+
+    context.chatRunState.pendingRestartSourceRunIdsByEffectiveRunKey.set(
+      idempotencyKey,
+      "run-fresh-after-reuse",
+    );
+    context.chatRunState.registry.add("run-fresh-after-reuse", {
+      sessionKey: "main",
+      clientRunId: idempotencyKey,
+    });
+    handler({
+      runId: "run-fresh-after-reuse",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Fresh start", delta: "Fresh start" },
+    });
+
+    expect(context.chatRunState.pendingRestartEffectiveRunKeys.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.lastSeenEventSeq.get(idempotencyKey)).toBe(2);
+    expect(context.chatRunState.lastAcceptedSeq.get(idempotencyKey)).toBe(2);
+    expect(context.chatRunState.buffers.get(idempotencyKey)).toBe("Fresh start");
+    expect(
+      broadcast.mock.calls.some(
+        ([event, payload]) =>
+          event === "chat" &&
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as { runId?: string }).runId === idempotencyKey,
+      ),
+    ).toBe(true);
+  });
+
+  it("chat.send non-streaming success clears effective-run state after final broadcast", async () => {
+    createTranscriptFixture("openclaw-chat-send-success-clears-effective-state-");
+    mockState.finalText = "ok";
+    const context = createChatContext();
+    const idempotencyKey = "idem-success-clears-effective-state";
+    context.chatRunState.buffers.set(idempotencyKey, "stale");
+    context.chatRunState.lastSeenEventSeq.set(idempotencyKey, 8);
+    context.chatRunState.lastAcceptedSeq.set(idempotencyKey, 7);
+    context.chatRunState.waitingForRecovery.add(idempotencyKey);
+    context.chatRunState.finalizedEffectiveRunKeys.set(idempotencyKey, Date.now() - 1_000);
+
+    await runNonStreamingChatSend({
+      context,
+      respond: vi.fn(),
+      idempotencyKey,
+      expectBroadcast: false,
+    });
+
+    expect(context.chatRunState.minEventTsByEffectiveRunKey.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.lastSeenEventSeq.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.lastAcceptedSeq.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.waitingForRecovery.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.buffers.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.finalizedEffectiveRunKeys.has(idempotencyKey)).toBe(false);
+  });
+
+  it("chat.send non-streaming error clears effective-run state after error broadcast", async () => {
+    createTranscriptFixture("openclaw-chat-send-error-clears-effective-state-");
+    mockState.dispatchError = "dispatch failed";
+    const context = createChatContext();
+    const idempotencyKey = "idem-error-clears-effective-state";
+    context.chatRunState.buffers.set(idempotencyKey, "stale");
+    context.chatRunState.lastSeenEventSeq.set(idempotencyKey, 8);
+    context.chatRunState.lastAcceptedSeq.set(idempotencyKey, 7);
+    context.chatRunState.waitingForRecovery.add(idempotencyKey);
+    context.chatRunState.finalizedEffectiveRunKeys.set(idempotencyKey, Date.now() - 1_000);
+
+    await runNonStreamingChatSend({
+      context,
+      respond: vi.fn(),
+      idempotencyKey,
+      expectBroadcast: false,
+    });
+
+    expect(context.chatRunState.minEventTsByEffectiveRunKey.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.lastSeenEventSeq.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.lastAcceptedSeq.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.waitingForRecovery.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.buffers.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.finalizedEffectiveRunKeys.has(idempotencyKey)).toBe(false);
+  });
+
+  it("reused key ignores fresh-timestamp stale replay until new run actually starts", async () => {
+    createTranscriptFixture("openclaw-chat-send-reuse-stale-old-run-");
+    mockState.finalText = "ok";
+    let releaseDispatch = () => {};
+    mockState.dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const context = createChatContext();
+    const idempotencyKey = "idem-reuse-stale-late";
+    const runStartTs = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(runStartTs);
+    context.chatRunState.buffers.set(idempotencyKey, "old finalized text");
+    context.chatRunState.lastSeenEventSeq.set(idempotencyKey, 9);
+    context.chatRunState.lastAcceptedSeq.set(idempotencyKey, 9);
+    context.chatRunState.finalizedEffectiveRunKeys.set(idempotencyKey, runStartTs - 500);
+
+    await runNonStreamingChatSend({
+      context,
+      respond: vi.fn(),
+      idempotencyKey,
+      expectBroadcast: false,
+      waitForCompletion: false,
+    });
+
+    const broadcast = vi.fn();
+    const handler = createAgentEventHandler({
+      broadcast,
+      broadcastToConnIds: vi.fn(),
+      nodeSendToSession: vi.fn(),
+      agentRunSeq: context.agentRunSeq,
+      chatRunState: context.chatRunState,
+      resolveSessionKeyForRun: () => "main",
+      clearAgentRunContext: vi.fn(),
+      toolEventRecipients: createToolEventRecipientRegistry(),
+      sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+    });
+
+    handler({
+      runId: idempotencyKey,
+      seq: 10,
+      stream: "assistant",
+      ts: runStartTs + 100,
+      data: { text: "stale old tail", delta: "stale old tail" },
+    });
+
+    expect(context.chatRunState.finalizedEffectiveRunKeys.has(idempotencyKey)).toBe(true);
+    expect(context.chatRunState.pendingRestartEffectiveRunKeys.has(idempotencyKey)).toBe(true);
+    expect(context.chatRunState.buffers.get(idempotencyKey)).toBe("old finalized text");
+    expect(context.chatRunState.lastSeenEventSeq.get(idempotencyKey)).toBe(9);
+    expect(context.chatRunState.lastAcceptedSeq.get(idempotencyKey)).toBe(9);
+    expect(context.chatRunState.waitingForRecovery.has(idempotencyKey)).toBe(false);
+    expect(broadcast).not.toHaveBeenCalled();
+
+    context.chatRunState.pendingRestartSourceRunIdsByEffectiveRunKey.set(
+      idempotencyKey,
+      "run-fresh-after-stale-replay",
+    );
+    context.chatRunState.registry.add("run-fresh-after-stale-replay", {
+      sessionKey: "main",
+      clientRunId: idempotencyKey,
+    });
+
+    handler({
+      runId: "run-fresh-after-stale-replay",
+      seq: 1,
+      stream: "lifecycle",
+      ts: runStartTs + 200,
+      data: { phase: "start" },
+    });
+
+    expect(context.chatRunState.finalizedEffectiveRunKeys.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.buffers.has(idempotencyKey)).toBe(false);
+    expect(context.chatRunState.lastSeenEventSeq.get(idempotencyKey)).toBe(1);
+
+    handler({
+      runId: "run-fresh-after-stale-replay",
+      seq: 2,
+      stream: "assistant",
+      ts: runStartTs + 300,
+      data: { text: "Fresh start", delta: "Fresh start" },
+    });
+
+    expect(context.chatRunState.buffers.get(idempotencyKey)).toBe("Fresh start");
+    expect(context.chatRunState.lastSeenEventSeq.get(idempotencyKey)).toBe(2);
+    expect(context.chatRunState.lastAcceptedSeq.get(idempotencyKey)).toBe(2);
+    expect(context.chatRunState.waitingForRecovery.has(idempotencyKey)).toBe(false);
+    expect(
+      broadcast.mock.calls.some(
+        ([event, payload]) =>
+          event === "chat" &&
+          typeof payload === "object" &&
+          payload !== null &&
+          extractFirstTextBlock(payload) === "Fresh start",
+      ),
+    ).toBe(true);
+
+    releaseDispatch();
+    await waitForAssertion(() => {
+      expect(context.dedupe.has(`chat:${idempotencyKey}`)).toBe(true);
+    });
+    nowSpy.mockRestore();
   });
 
   it("rejects oversized chat.send session keys before dispatch", async () => {

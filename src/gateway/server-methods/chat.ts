@@ -52,6 +52,7 @@ import {
   validateChatSendParams,
 } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
+import { clearEffectiveChatRunState, markPendingEffectiveChatRunRestart } from "../server-chat.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import {
   capArrayByJsonBytes,
@@ -766,9 +767,8 @@ function persistAbortedPartials(params: {
 function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
   return {
     chatAbortControllers: context.chatAbortControllers,
-    chatRunBuffers: context.chatRunBuffers,
-    chatDeltaSentAt: context.chatDeltaSentAt,
     chatAbortedRuns: context.chatAbortedRuns,
+    chatRunState: context.chatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
     broadcast: context.broadcast,
@@ -1236,7 +1236,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const activeExisting = context.chatAbortControllers.get(clientRunId);
+    const activeExisting =
+      context.chatAbortControllers.has(clientRunId) ||
+      context.chatRunState.registry.hasClientRunId(clientRunId);
     if (activeExisting) {
       respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
         cached: true,
@@ -1244,6 +1246,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+
+    markPendingEffectiveChatRunRestart(context.chatRunState, clientRunId);
 
     try {
       const abortController = new AbortController();
@@ -1379,6 +1383,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           images: parsedImages.length > 0 ? parsedImages : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
+            if (context.chatRunState.pendingRestartEffectiveRunKeys.has(clientRunId)) {
+              markPendingEffectiveChatRunRestart(context.chatRunState, clientRunId, runId);
+            }
             emitUserTranscriptUpdate();
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
@@ -1475,6 +1482,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 message,
               });
             }
+            clearEffectiveChatRunState(context.chatRunState, clientRunId);
           }
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
@@ -1508,6 +1516,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             sessionKey: rawSessionKey,
             errorMessage: String(err),
           });
+          if (!agentRunStarted) {
+            clearEffectiveChatRunState(context.chatRunState, clientRunId);
+          }
         })
         .finally(() => {
           context.chatAbortControllers.delete(clientRunId);

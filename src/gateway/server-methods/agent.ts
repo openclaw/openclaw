@@ -46,6 +46,7 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
+import { markPendingEffectiveChatRunRestart } from "../server-chat.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
@@ -140,7 +141,8 @@ function emitSessionsChanged(
 
 function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
-  runId: string;
+  sourceRunId: string;
+  clientRunId: string;
   idempotencyKey: string;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
@@ -148,7 +150,7 @@ function dispatchAgentRunFromGateway(params: {
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
       const payload = {
-        runId: params.runId,
+        runId: params.clientRunId,
         status: "ok" as const,
         summary: "completed",
         result,
@@ -164,12 +166,12 @@ function dispatchAgentRunFromGateway(params: {
       });
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
-      params.respond(true, payload, undefined, { runId: params.runId });
+      params.respond(true, payload, undefined, { runId: params.clientRunId });
     })
     .catch((err) => {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
-        runId: params.runId,
+        runId: params.clientRunId,
         status: "error" as const,
         summary: String(err),
       };
@@ -184,7 +186,7 @@ function dispatchAgentRunFromGateway(params: {
         },
       });
       params.respond(false, payload, error, {
-        runId: params.runId,
+        runId: params.clientRunId,
         error: formatForLog(err),
       });
     });
@@ -368,6 +370,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    const clientRunId = idem;
+    let sourceRunId = idem;
     let resolvedSessionId = request.sessionId?.trim() || undefined;
     let sessionEntry: SessionEntry | undefined;
     let bestEffortDeliver = requestedBestEffortDeliver ?? false;
@@ -500,25 +504,27 @@ export const agentHandlers: GatewayRequestHandlers = {
         sessionEntry = persisted;
       }
       if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
-        context.addChatRun(idem, {
+        sourceRunId = randomUUID();
+        markPendingEffectiveChatRunRestart(context.chatRunState, clientRunId, sourceRunId);
+        context.addChatRun(sourceRunId, {
           sessionKey: canonicalSessionKey,
-          clientRunId: idem,
+          clientRunId,
         });
         if (requestedBestEffortDeliver === undefined) {
           bestEffortDeliver = true;
         }
       }
-      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+      registerAgentRunContext(sourceRunId, { sessionKey: canonicalSessionKey });
     }
 
-    const runId = idem;
+    const runId = clientRunId;
     const connId = typeof client?.connId === "string" ? client.connId : undefined;
     const wantsToolEvents = hasGatewayClientCap(
       client?.connect?.caps,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
     );
     if (connId && wantsToolEvents) {
-      context.registerToolEventRecipient(runId, connId);
+      context.registerToolEventRecipient(sourceRunId, connId);
       // Register for any other active runs *in the same session* so
       // late-joining clients (e.g. page refresh mid-response) receive
       // in-progress tool events without leaking cross-session data.
@@ -645,7 +651,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     if (resolvedSessionKey) {
       reactivateCompletedSubagentSession({
         sessionKey: resolvedSessionKey,
-        runId,
+        runId: sourceRunId,
       });
     }
 
@@ -694,7 +700,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         timeout: request.timeout?.toString(),
         bestEffortDeliver,
         messageChannel: originMessageChannel,
-        runId,
+        runId: sourceRunId,
         lane: request.lane,
         extraSystemPrompt: request.extraSystemPrompt,
         internalEvents: request.internalEvents,
@@ -707,7 +713,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         senderIsOwner,
         allowModelOverride,
       },
-      runId,
+      sourceRunId,
+      clientRunId,
       idempotencyKey: idem,
       respond,
       context,

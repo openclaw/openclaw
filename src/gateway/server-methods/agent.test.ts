@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import { createChatRunState } from "../server-chat.js";
 import { agentHandlers } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -93,7 +94,10 @@ vi.mock("../../utils/delivery-context.js", async () => {
 const makeContext = (): GatewayRequestContext =>
   ({
     dedupe: new Map(),
+    chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
+    registerToolEventRecipient: vi.fn(),
+    chatAbortControllers: new Map(),
     logGateway: { info: vi.fn(), error: vi.fn() },
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
@@ -543,6 +547,48 @@ describe("gateway agent handler", () => {
       }),
       new Set(["conn-1"]),
       { dropIfSlow: true },
+    );
+  });
+
+  it("main session agent run declares pending restart with a fresh source run id", async () => {
+    primeMainAgentRun();
+    const chatRunState = createChatRunState();
+    const addChatRun = vi.fn(
+      (runId: string, entry: { sessionKey: string; clientRunId: string }) => {
+        chatRunState.registry.add(runId, entry);
+      },
+    );
+    const context = {
+      ...makeContext(),
+      chatRunState,
+      addChatRun,
+    } as unknown as GatewayRequestContext;
+
+    await invokeAgent(
+      {
+        message: "fresh run",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-idem-reused-main",
+      },
+      { context, reqId: "test-idem-reused-main" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(addChatRun).toHaveBeenCalledTimes(1);
+    const [sourceRunId, entry] = addChatRun.mock.calls[0] as [string, { clientRunId: string }];
+    expect(sourceRunId).not.toBe("test-idem-reused-main");
+    expect(entry.clientRunId).toBe("test-idem-reused-main");
+    expect(chatRunState.pendingRestartEffectiveRunKeys.has("test-idem-reused-main")).toBe(true);
+    expect(
+      chatRunState.pendingRestartSourceRunIdsByEffectiveRunKey.get("test-idem-reused-main"),
+    ).toBe(sourceRunId);
+    expect(mocks.registerAgentRunContext).toHaveBeenCalledWith(sourceRunId, {
+      sessionKey: "agent:main:main",
+    });
+    expect(mocks.agentCommand.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        runId: sourceRunId,
+      }),
     );
   });
 
