@@ -32,6 +32,10 @@
         "reason": "Secrets runtime coverage retained the largest unit-fast heap spike in CI and is safer outside the shared lane."
       },
       {
+        "file": "src/secrets/runtime.integration.test.ts",
+        "reason": "Secrets runtime activation/write-through integration coverage is CPU-heavy and safer outside the shared unit-fast lane."
+      },
+      {
         "file": "src/memory/index.test.ts",
         "reason": "Memory index coverage retained nearly 1 GiB in unit-fast on Linux CI and is safer in its own fork."
       },
