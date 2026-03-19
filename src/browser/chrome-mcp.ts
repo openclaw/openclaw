@@ -206,7 +206,9 @@ async function closeChromeMcpSessionsForProfile(
     if (key !== keepKey && cacheKeyMatchesProfileName(key, profileName)) {
       sessions.delete(key);
       closed = true;
-      await session.client.close().catch(() => {});
+      await session.client.close().catch((closeErr) => {
+        logWarn(`chrome-mcp: client close failed (non-fatal): ${String(closeErr)}`);
+      });
     }
   }
 
@@ -245,7 +247,9 @@ async function createRealSession(
         throw new Error("Chrome MCP server did not expose the expected navigation tools.");
       }
     } catch (err) {
-      await client.close().catch(() => {});
+      await client.close().catch((closeErr) => {
+        logWarn(`chrome-mcp: client close failed (non-fatal): ${String(closeErr)}`);
+      });
       const targetLabel = userDataDir
         ? `the configured Chromium user data dir (${userDataDir})`
         : "Google Chrome's default profile";
@@ -281,7 +285,9 @@ async function getSession(profileName: string, userDataDir?: string): Promise<Ch
         if (pendingSessions.get(cacheKey) === pending) {
           sessions.set(cacheKey, created);
         } else {
-          await created.client.close().catch(() => {});
+          await created.client.close().catch((closeErr) => {
+            logWarn(`chrome-mcp: client close failed (non-fatal): ${String(closeErr)}`);
+          });
         }
         return created;
       })();
@@ -324,7 +330,9 @@ async function callTool(
   } catch (err) {
     // Transport/connection error — tear down session so it reconnects on next call
     sessions.delete(cacheKey);
-    await session.client.close().catch(() => {});
+    await session.client.close().catch((err) => {
+      logWarn(`chrome-mcp: session close failed for "${profileName}" (non-fatal): ${String(err)}`);
+    });
     throw err;
   }
   // Tool-level errors (element not found, script error, etc.) don't indicate a
@@ -341,7 +349,9 @@ async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T>
   try {
     return await fn(filePath);
   } finally {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(dir, { recursive: true, force: true }).catch((err) => {
+      logWarn(`chrome-mcp: temp dir cleanup failed (non-fatal): ${String(err)}`);
+    });
   }
 }
 
@@ -381,7 +391,9 @@ export async function closeChromeMcpSession(profileName: string): Promise<boolea
 export async function stopAllChromeMcpSessions(): Promise<void> {
   const names = [...new Set([...sessions.keys()].map((key) => JSON.parse(key)[0] as string))];
   for (const name of names) {
-    await closeChromeMcpSession(name).catch(() => {});
+    await closeChromeMcpSession(name).catch((err) => {
+      logWarn(`chrome-mcp: stop session failed for "${name}" (non-fatal): ${String(err)}`);
+    });
   }
 }
 
