@@ -23,6 +23,7 @@ import {
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
   checkBotMentioned,
+  hasAtAllMention,
   normalizeFeishuCommandProbeBody,
   normalizeMentions,
   parseMergeForwardContent,
@@ -432,7 +433,12 @@ export async function handleFeishuMessage(params: {
     // account or group is explicitly configured with respondToAtAll:true, treat
     // it as mentioning this bot.  Default is false so bots that do not opt in
     // stay silent when a user broadcasts to the whole group.
-    if (!ctx.mentionedBot && (event.message.content ?? "").includes("@_all")) {
+    //
+    // Detection uses the structured mention metadata (event.message.mentions)
+    // rather than a raw substring check on message.content to prevent spoofing
+    // (a user typing the literal text "@_all" in a normal message would otherwise
+    // bypass the requireMention gate — CWE-807).
+    if (!ctx.mentionedBot && hasAtAllMention(event)) {
       const respondToAtAll = groupConfig?.respondToAtAll ?? feishuCfg?.respondToAtAll ?? false;
       if (respondToAtAll) {
         ctx = { ...ctx, mentionedBot: true };

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { hasAtAllMention } from "./bot-content.js";
 import { parseFeishuMessageEvent } from "./bot.js";
 
 // Helper to build a minimal FeishuMessageEvent for testing
@@ -210,5 +211,44 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
     // Bot IS in the mentions array, so it should still be true via that path
     expect(ctx.mentionedBot).toBe(true);
+  });
+});
+
+// hasAtAllMention — structured @所有人 detection (CWE-807 spoofing prevention)
+describe("hasAtAllMention", () => {
+  function makeRawEvent(
+    mentions: Array<{ key: string; name: string; id: Record<string, string> }>,
+  ) {
+    return {
+      message: {
+        content: '{"text":"hello"}',
+        message_type: "text",
+        mentions,
+        chat_id: "oc_group1",
+        message_id: "om_msg1",
+      },
+      sender: { sender_id: { open_id: "ou_sender1", user_id: "u_sender1" }, sender_type: "user" },
+    };
+  }
+
+  it("returns true when mentions contains key @_all", () => {
+    const event = makeRawEvent([{ key: "@_all", name: "所有人", id: {} }]);
+    expect(hasAtAllMention(event as any)).toBe(true);
+  });
+
+  it("returns true when mentions contains id.user_id === 'all'", () => {
+    const event = makeRawEvent([{ key: "@_all", name: "所有人", id: { user_id: "all" } }]);
+    expect(hasAtAllMention(event as any)).toBe(true);
+  });
+
+  it("returns false when mentions is empty (raw @_all text does NOT trigger)", () => {
+    // A user typing the literal text "@_all" should not be detected as @所有人
+    const event = makeRawEvent([]);
+    expect(hasAtAllMention(event as any)).toBe(false);
+  });
+
+  it("returns false when mentions only contain regular user mentions", () => {
+    const event = makeRawEvent([{ key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } }]);
+    expect(hasAtAllMention(event as any)).toBe(false);
   });
 });

@@ -246,6 +246,22 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
   return false;
 }
 
+/**
+ * Returns true when the Feishu message contains a real @所有人 (@_all) mention
+ * according to the structured mention metadata in `event.message.mentions`.
+ *
+ * Using the `mentions` array (rather than a raw substring search on
+ * `message.content`) prevents spoofing: a user can type the literal text
+ * "@_all" in a normal message without triggering an @所有人 broadcast — the
+ * Feishu server only inserts a `mentions` entry with `key === "@_all"` when
+ * the sender actually used the @所有人 mention (CWE-807).
+ */
+export function hasAtAllMention(event: FeishuMessageLike): boolean {
+  return (event.message.mentions ?? []).some(
+    (m) => m.key === "@_all" || m.id?.user_id === "all" || m.id?.open_id === "all",
+  );
+}
+
 export function normalizeMentions(
   text: string,
   mentions?: FeishuMention[],
