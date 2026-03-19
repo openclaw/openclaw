@@ -519,6 +519,17 @@ export type ToolsConfig = {
         /** Timeout in seconds for Firecrawl requests. */
         timeoutSeconds?: number;
       };
+      /** Parallel extract fallback configuration. */
+      parallel?: {
+        /** Enable Parallel extract (default: false; opt-in). */
+        enabled?: boolean;
+        /** Parallel API key (defaults to PARALLEL_API_KEY env var). */
+        apiKey?: SecretInput;
+        /** Base URL for API requests (defaults to "https://api.parallel.ai"). */
+        baseUrl?: string;
+        /** Timeout in seconds for Parallel extract requests. */
+        timeoutSeconds?: number;
+      };
     };
   };
   media?: MediaToolsConfig;
