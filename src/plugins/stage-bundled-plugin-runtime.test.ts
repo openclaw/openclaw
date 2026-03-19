@@ -22,18 +22,17 @@ afterEach(() => {
 });
 
 describe("stageBundledPluginRuntime", () => {
-  it("stages bundled dist plugins as runtime wrappers and links plugin-local node_modules", () => {
+  it("stages bundled dist plugins as runtime wrappers and links staged dist node_modules", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-");
     const distPluginDir = path.join(repoRoot, "dist", "extensions", "diffs");
     fs.mkdirSync(path.join(repoRoot, "dist"), { recursive: true });
-    const sourcePluginNodeModulesDir = path.join(repoRoot, "extensions", "diffs", "node_modules");
     fs.mkdirSync(distPluginDir, { recursive: true });
-    fs.mkdirSync(path.join(sourcePluginNodeModulesDir, "@pierre", "diffs"), {
+    fs.mkdirSync(path.join(distPluginDir, "node_modules", "@pierre", "diffs"), {
       recursive: true,
     });
     fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {}\n", "utf8");
     fs.writeFileSync(
-      path.join(sourcePluginNodeModulesDir, "@pierre", "diffs", "index.js"),
+      path.join(distPluginDir, "node_modules", "@pierre", "diffs", "index.js"),
       "export default {}\n",
       "utf8",
     );
@@ -47,8 +46,9 @@ describe("stageBundledPluginRuntime", () => {
     );
     expect(fs.lstatSync(path.join(runtimePluginDir, "node_modules")).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(path.join(runtimePluginDir, "node_modules"))).toBe(
-      fs.realpathSync(sourcePluginNodeModulesDir),
+      fs.realpathSync(path.join(distPluginDir, "node_modules")),
     );
+    expect(fs.existsSync(path.join(distPluginDir, "node_modules"))).toBe(true);
   });
 
   it("writes wrappers that forward plugin entry imports into canonical dist files", async () => {

@@ -1,8 +1,5 @@
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
-import {
-  PAIRING_APPROVED_MESSAGE,
-  resolveChannelMediaMaxBytes,
-} from "openclaw/plugin-sdk/imessage";
+import { PAIRING_APPROVED_MESSAGE, resolveChannelMediaMaxBytes } from "../runtime-api.js";
 import type { ResolvedIMessageAccount } from "./accounts.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import { probeIMessage } from "./probe.js";
@@ -55,7 +52,7 @@ export async function startIMessageGatewayAccount(
   ctx: Parameters<
     NonNullable<
       NonNullable<
-        import("openclaw/plugin-sdk/imessage").ChannelPlugin<ResolvedIMessageAccount>["gateway"]
+        import("../runtime-api.js").ChannelPlugin<ResolvedIMessageAccount>["gateway"]
       >["startAccount"]
     >
   >[0],

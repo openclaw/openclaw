@@ -30,7 +30,7 @@ function runToolStreamCase(params: ToolStreamCase) {
   }).payload as Record<string, unknown>;
 }
 
-describe("extra-params: Z.AI tool_stream support", () => {
+describe("extra-params: provider tool_stream support", () => {
   it("injects tool_stream=true for zai provider by default", () => {
     const payload = runToolStreamCase({
       applyProvider: "zai",
@@ -45,7 +45,21 @@ describe("extra-params: Z.AI tool_stream support", () => {
     expect(payload.tool_stream).toBe(true);
   });
 
-  it("does not inject tool_stream for non-zai providers", () => {
+  it("injects tool_stream=true for xai provider by default", () => {
+    const payload = runToolStreamCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4-1-fast-reasoning",
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4-1-fast-reasoning",
+      } as Model<"openai-completions">,
+    });
+
+    expect(payload.tool_stream).toBe(true);
+  });
+
+  it("does not inject tool_stream for providers that do not need it", () => {
     const payload = runToolStreamCase({
       applyProvider: "openai",
       applyModelId: "gpt-5",
@@ -59,7 +73,7 @@ describe("extra-params: Z.AI tool_stream support", () => {
     expect(payload).not.toHaveProperty("tool_stream");
   });
 
-  it("allows disabling tool_stream via params", () => {
+  it("allows disabling zai tool_stream via params", () => {
     const payload = runToolStreamCase({
       applyProvider: "zai",
       applyModelId: "glm-5",
@@ -73,6 +87,33 @@ describe("extra-params: Z.AI tool_stream support", () => {
           defaults: {
             models: {
               "zai/glm-5": {
+                params: {
+                  tool_stream: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(payload).not.toHaveProperty("tool_stream");
+  });
+
+  it("allows disabling xai tool_stream via params", () => {
+    const payload = runToolStreamCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4-1-fast-reasoning",
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4-1-fast-reasoning",
+      } as Model<"openai-completions">,
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "xai/grok-4-1-fast-reasoning": {
                 params: {
                   tool_stream: false,
                 },

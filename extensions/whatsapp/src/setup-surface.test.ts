@@ -15,7 +15,7 @@ const resolveWhatsAppAuthDirMock = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../../../src/channel-web.js", () => ({
+vi.mock("./login.js", () => ({
   loginWeb: loginWebMock,
 }));
 

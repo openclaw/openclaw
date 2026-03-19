@@ -274,8 +274,8 @@ jobs:
 
       - name: Run changed extension tests
         env:
-          EXTENSION_ID: ${{ matrix.extension }}
-        run: pnpm test:extension "$EXTENSION_ID"
+          OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
+        run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
 
   # Types, lint, and format check.
   check:
@@ -304,8 +304,88 @@ jobs:
       - name: Enforce safe external URL opening policy
         run: pnpm lint:ui:no-raw-window-open
 
-  startup-memory:
-    name: "startup-memory"
+  plugin-extension-boundary:
+    name: "plugin-extension-boundary"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run plugin extension boundary guard
+        run: pnpm run lint:plugins:no-extension-imports
+
+  web-search-provider-boundary:
+    name: "web-search-provider-boundary"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run web search provider boundary guard
+        run: pnpm run lint:web-search-provider-boundaries
+
+  extension-src-outside-plugin-sdk-boundary:
+    name: "extension-src-outside-plugin-sdk-boundary"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run extension src boundary guard
+        run: pnpm run lint:extensions:no-src-outside-plugin-sdk
+
+  extension-plugin-sdk-internal-boundary:
+    name: "extension-plugin-sdk-internal-boundary"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run extension plugin-sdk-internal guard
+        run: pnpm run lint:extensions:no-plugin-sdk-internal
+
+  build-smoke:
+    name: "build-smoke"
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -330,8 +410,39 @@ jobs:
       - name: Smoke test CLI launcher status json
         run: node openclaw.mjs status --json --timeout 1
 
+      - name: Smoke test built bundled plugin singleton
+        run: pnpm test:build:singleton
+
       - name: Check CLI startup memory
         run: pnpm test:startup:memory
+
+  gateway-watch-regression:
+    name: "gateway-watch-regression"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run gateway watch regression harness
+        run: pnpm test:gateway:watch-regression
+
+      - name: Upload gateway watch regression artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gateway-watch-regression
+          path: .local/gateway-watch-regression/
+          retention-days: 7
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:

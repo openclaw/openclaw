@@ -1,15 +1,19 @@
 import {
   resolvePayloadMediaUrls,
-  sendPayloadMediaSequence,
+  sendPayloadMediaSequenceAndFinalize,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/channel-runtime";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import {
+  attachChannelToResult,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
+import type { OutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
+import {
   resolveInteractiveTextFallback,
   type InteractiveReply,
-} from "openclaw/plugin-sdk/channel-runtime";
-import type { OutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks, type SlackBlock } from "./blocks-render.js";
@@ -96,7 +100,6 @@ async function sendSlackOutboundMessage(params: {
   });
   if (hookResult.cancelled) {
     return {
-      channel: "slack" as const,
       messageId: "cancelled-by-hook",
       channelId: params.to,
       meta: { cancelled: true },
@@ -114,7 +117,7 @@ async function sendSlackOutboundMessage(params: {
     ...(params.blocks ? { blocks: params.blocks } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
   });
-  return { channel: "slack" as const, ...result };
+  return result;
 }
 
 function resolveSlackBlocks(payload: {
@@ -166,75 +169,54 @@ export const slackOutbound: ChannelOutboundAdapter = {
       });
     }
     const mediaUrls = resolvePayloadMediaUrls(payload);
-    if (mediaUrls.length === 0) {
-      return await sendSlackOutboundMessage({
-        cfg: ctx.cfg,
-        to: ctx.to,
-        text: payload.text ?? "",
-        mediaLocalRoots: ctx.mediaLocalRoots,
-        blocks,
-        accountId: ctx.accountId,
-        deps: ctx.deps,
-        replyToId: ctx.replyToId,
-        threadId: ctx.threadId,
-        identity: ctx.identity,
-      });
-    }
-    await sendPayloadMediaSequence({
-      text: "",
-      mediaUrls,
-      send: async ({ text, mediaUrl }) =>
-        await sendSlackOutboundMessage({
-          cfg: ctx.cfg,
-          to: ctx.to,
-          text,
-          mediaUrl,
-          mediaLocalRoots: ctx.mediaLocalRoots,
-          accountId: ctx.accountId,
-          deps: ctx.deps,
-          replyToId: ctx.replyToId,
-          threadId: ctx.threadId,
-          identity: ctx.identity,
-        }),
-    });
-    return await sendSlackOutboundMessage({
-      cfg: ctx.cfg,
-      to: ctx.to,
-      text: payload.text ?? "",
-      mediaLocalRoots: ctx.mediaLocalRoots,
-      blocks,
-      accountId: ctx.accountId,
-      deps: ctx.deps,
-      replyToId: ctx.replyToId,
-      threadId: ctx.threadId,
-      identity: ctx.identity,
-    });
+    return attachChannelToResult(
+      "slack",
+      await sendPayloadMediaSequenceAndFinalize({
+        text: "",
+        mediaUrls,
+        send: async ({ text, mediaUrl }) =>
+          await sendSlackOutboundMessage({
+            cfg: ctx.cfg,
+            to: ctx.to,
+            text,
+            mediaUrl,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            accountId: ctx.accountId,
+            deps: ctx.deps,
+            replyToId: ctx.replyToId,
+            threadId: ctx.threadId,
+            identity: ctx.identity,
+          }),
+        finalize: async () =>
+          await sendSlackOutboundMessage({
+            cfg: ctx.cfg,
+            to: ctx.to,
+            text: payload.text ?? "",
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            blocks,
+            accountId: ctx.accountId,
+            deps: ctx.deps,
+            replyToId: ctx.replyToId,
+            threadId: ctx.threadId,
+            identity: ctx.identity,
+          }),
+      }),
+    );
   },
-  sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity }) => {
-    return await sendSlackOutboundMessage({
-      cfg,
-      to,
-      text,
-      accountId,
-      deps,
-      replyToId,
-      threadId,
-      identity,
-    });
-  },
-  sendMedia: async ({
-    cfg,
-    to,
-    text,
-    mediaUrl,
-    mediaLocalRoots,
-    accountId,
-    deps,
-    replyToId,
-    threadId,
-    identity,
-  }) => {
-    return await sendSlackOutboundMessage({
+  ...createAttachedChannelResultAdapter({
+    channel: "slack",
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity }) =>
+      await sendSlackOutboundMessage({
+        cfg,
+        to,
+        text,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        identity,
+      }),
+    sendMedia: async ({
       cfg,
       to,
       text,
@@ -245,6 +227,18 @@ export const slackOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       identity,
-    });
-  },
+    }) =>
+      await sendSlackOutboundMessage({
+        cfg,
+        to,
+        text,
+        mediaUrl,
+        mediaLocalRoots,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        identity,
+      }),
+  }),
 };

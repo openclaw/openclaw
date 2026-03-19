@@ -1,4 +1,3 @@
-import { monitorWebChannel as monitorWebChannelImpl } from "openclaw/plugin-sdk/whatsapp";
 import { getActiveWebListener as getActiveWebListenerImpl } from "./active-listener.js";
 import {
   getWebAuthAgeMs as getWebAuthAgeMsImpl,
@@ -7,10 +6,7 @@ import {
   readWebSelfId as readWebSelfIdImpl,
   webAuthExists as webAuthExistsImpl,
 } from "./auth-store.js";
-import {
-  startWebLoginWithQr as startWebLoginWithQrImpl,
-  waitForWebLogin as waitForWebLoginImpl,
-} from "./login-qr.js";
+import { monitorWebChannel as monitorWebChannelImpl } from "./auto-reply/monitor.js";
 import { loginWeb as loginWebImpl } from "./login.js";
 import { whatsappSetupWizard as whatsappSetupWizardImpl } from "./setup-surface.js";
 
@@ -24,7 +20,14 @@ type LoginWeb = typeof import("./login.js").loginWeb;
 type StartWebLoginWithQr = typeof import("./login-qr.js").startWebLoginWithQr;
 type WaitForWebLogin = typeof import("./login-qr.js").waitForWebLogin;
 type WhatsAppSetupWizard = typeof import("./setup-surface.js").whatsappSetupWizard;
-type MonitorWebChannel = typeof import("openclaw/plugin-sdk/whatsapp").monitorWebChannel;
+type MonitorWebChannel = typeof import("./auto-reply/monitor.js").monitorWebChannel;
+
+let loginQrPromise: Promise<typeof import("./login-qr.js")> | null = null;
+
+function loadWhatsAppLoginQr() {
+  loginQrPromise ??= import("./login-qr.js");
+  return loginQrPromise;
+}
 
 export function getActiveWebListener(
   ...args: Parameters<GetActiveWebListener>
@@ -56,20 +59,24 @@ export function loginWeb(...args: Parameters<LoginWeb>): ReturnType<LoginWeb> {
   return loginWebImpl(...args);
 }
 
-export function startWebLoginWithQr(
+export async function startWebLoginWithQr(
   ...args: Parameters<StartWebLoginWithQr>
 ): ReturnType<StartWebLoginWithQr> {
-  return startWebLoginWithQrImpl(...args);
+  const { startWebLoginWithQr } = await loadWhatsAppLoginQr();
+  return await startWebLoginWithQr(...args);
 }
 
-export function waitForWebLogin(...args: Parameters<WaitForWebLogin>): ReturnType<WaitForWebLogin> {
-  return waitForWebLoginImpl(...args);
+export async function waitForWebLogin(
+  ...args: Parameters<WaitForWebLogin>
+): ReturnType<WaitForWebLogin> {
+  const { waitForWebLogin } = await loadWhatsAppLoginQr();
+  return await waitForWebLogin(...args);
 }
 
 export const whatsappSetupWizard: WhatsAppSetupWizard = { ...whatsappSetupWizardImpl };
 
-export async function monitorWebChannel(
+export function monitorWebChannel(
   ...args: Parameters<MonitorWebChannel>
 ): ReturnType<MonitorWebChannel> {
-  return await monitorWebChannelImpl(...args);
+  return monitorWebChannelImpl(...args);
 }

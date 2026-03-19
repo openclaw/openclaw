@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildProviderPluginMethodChoice,
+  resolveProviderModelPickerEntries,
+  resolveProviderPluginChoice,
+  resolveProviderWizardOptions,
+} from "../provider-wizard.js";
 import type { ProviderPlugin } from "../types.js";
 import { providerContractPluginIds, uniqueProviderContractProviders } from "./registry.js";
 
@@ -7,13 +13,6 @@ const resolvePluginProvidersMock = vi.fn();
 vi.mock("../providers.js", () => ({
   resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
 }));
-
-const {
-  buildProviderPluginMethodChoice,
-  resolveProviderModelPickerEntries,
-  resolveProviderPluginChoice,
-  resolveProviderWizardOptions,
-} = await import("../provider-wizard.js");
 
 function resolveExpectedWizardChoiceValues(providers: ProviderPlugin[]) {
   const values: string[] = [];

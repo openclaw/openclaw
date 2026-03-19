@@ -182,6 +182,22 @@ describe("loadModelCatalog", () => {
         input: ["text", "image"],
       },
       {
+        id: "gpt-5-mini",
+        provider: "openai",
+        name: "GPT-5 mini",
+        reasoning: true,
+        contextWindow: 400_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5-nano",
+        provider: "openai",
+        name: "GPT-5 nano",
+        reasoning: true,
+        contextWindow: 400_000,
+        input: ["text", "image"],
+      },
+      {
         id: "gpt-5.3-codex",
         provider: "openai-codex",
         name: "GPT-5.3 Codex",
@@ -205,6 +221,20 @@ describe("loadModelCatalog", () => {
         provider: "openai",
         id: "gpt-5.4-pro",
         name: "gpt-5.4-pro",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        name: "gpt-5.4-mini",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-nano",
+        name: "gpt-5.4-nano",
       }),
     );
     expect(result).toContainEqual(

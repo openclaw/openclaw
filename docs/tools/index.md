@@ -402,7 +402,7 @@ Notes:
 
 ### `image_generate`
 
-Generate one or more images with the configured image-generation model.
+Generate one or more images with the configured or inferred image-generation model.
 
 Core parameters:
 
@@ -416,13 +416,29 @@ Core parameters:
 
 Notes:
 
-- Only available when `agents.defaults.imageGenerationModel` is configured.
+- Available when `agents.defaults.imageGenerationModel` is configured, or when OpenClaw can infer a compatible image-generation default from your enabled providers plus available auth.
+- Explicit `agents.defaults.imageGenerationModel` still wins over any inferred default.
 - Use `action: "list"` to inspect registered providers, default models, supported model ids, sizes, resolutions, and edit support.
 - Returns local `MEDIA:<path>` lines so channels can deliver the generated files directly.
 - Uses the image-generation model directly (independent of the main chat model).
-- Google-backed flows support reference-image edits plus explicit `1K|2K|4K` resolution hints.
+- Google-backed flows, including `google/gemini-3-pro-image-preview` for the native Nano Banana-style path, support reference-image edits plus explicit `1K|2K|4K` resolution hints.
 - When editing and `resolution` is omitted, OpenClaw infers a draft/final resolution from the input image size.
-- This is the built-in replacement for the old sample `nano-banana-pro` skill workflow. Use `agents.defaults.imageGenerationModel`, not `skills.entries`, for stock image generation.
+- This is the built-in replacement for the old `nano-banana-pro` skill workflow. Use `agents.defaults.imageGenerationModel`, not `skills.entries`, for stock image generation.
+
+Native example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "google/gemini-3-pro-image-preview", // native Nano Banana path
+        fallbacks: ["fal/fal-ai/flux/dev"],
+      },
+    },
+  },
+}
+```
 
 ### `pdf`
 

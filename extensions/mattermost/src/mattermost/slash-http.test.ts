@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import { createSlashCommandHttpHandler } from "./slash-http.js";
 

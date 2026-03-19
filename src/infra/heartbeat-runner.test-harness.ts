@@ -1,10 +1,7 @@
 import { beforeEach } from "vitest";
-import { slackPlugin } from "../../extensions/slack/src/channel.js";
-import { setSlackRuntime } from "../../extensions/slack/src/runtime.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
-import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
-import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
+import { slackPlugin, setSlackRuntime } from "../../extensions/slack/index.js";
+import { telegramPlugin, setTelegramRuntime } from "../../extensions/telegram/index.js";
+import { whatsappPlugin, setWhatsAppRuntime } from "../../extensions/whatsapp/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
