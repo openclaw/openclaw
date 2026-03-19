@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
+import { buildPluginLoaderJitiOptions, shouldPreferNativeJiti } from "../plugins/sdk-alias.js";
 import { openBoundaryFileSync } from "./boundary-file-read.js";
 
 const MATRIX_PLUGIN_ID = "matrix";
@@ -94,17 +96,22 @@ export function isMatrixLegacyCryptoInspectorAvailable(params: {
   return resolveMatrixLegacyCryptoInspectorPath(params).status === "ok";
 }
 
-let jitiLoader: ReturnType<typeof createJiti> | null = null;
+const jitiLoaders = new Map<boolean, ReturnType<typeof createJiti>>();
 const inspectorCache = new Map<string, Promise<MatrixLegacyCryptoInspector>>();
 
-function getJiti() {
-  if (!jitiLoader) {
-    jitiLoader = createJiti(import.meta.url, {
-      interopDefault: false,
-      extensions: [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json"],
-    });
+function getJiti(modulePath: string) {
+  const tryNative = shouldPreferNativeJiti(modulePath);
+  const cached = jitiLoaders.get(tryNative);
+  if (cached) {
+    return cached;
   }
-  return jitiLoader;
+
+  const loader = createJiti(import.meta.url, {
+    ...buildPluginLoaderJitiOptions({}),
+    tryNative,
+  });
+  jitiLoaders.set(tryNative, loader);
+  return loader;
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -154,7 +161,9 @@ export async function loadMatrixLegacyCryptoInspector(params: {
   }
 
   const pending = (async () => {
-    const loaded: unknown = await getJiti().import(helperPath);
+    const loaded: unknown = shouldPreferNativeJiti(helperPath)
+      ? await import(pathToFileURL(helperPath).href)
+      : getJiti(helperPath)(helperPath);
     const inspectLegacyMatrixCryptoStore = resolveInspectorExport(loaded);
     if (!inspectLegacyMatrixCryptoStore) {
       throw new Error(
