@@ -10,9 +10,9 @@ import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import type {
-  ProviderDiscoveryContext,
-  ProviderAuthResult,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderAuthResult,
+  ProviderDiscoveryContext,
   ProviderNonInteractiveApiKeyResult,
 } from "./types.js";
 
