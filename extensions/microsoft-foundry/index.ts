@@ -1079,7 +1079,12 @@ export default definePluginEntry({
               : typeof metadata?.modelId === "string" && metadata.modelId.trim().length > 0
                 ? metadata.modelId.trim()
                 : ctx.modelId;
-          const modelNameHint = resolveConfiguredModelNameHint(modelId, metadata?.modelName ?? ctx.model.name);
+          const activeModelNameHint =
+            ctx.modelId === metadata?.modelId ? metadata?.modelName : undefined;
+          const modelNameHint = resolveConfiguredModelNameHint(
+            modelId,
+            ctx.model.name ?? activeModelNameHint,
+          );
           const endpoint =
             typeof metadata?.endpoint === "string" && metadata.endpoint.trim().length > 0
               ? metadata.endpoint.trim()
