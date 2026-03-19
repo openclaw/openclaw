@@ -34,7 +34,10 @@ struct GatewayEnvironmentTests {
     @Test func `gateway port defaults and respects override`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(
-            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            env: [
+                "OPENCLAW_CONFIG_PATH": configPath,
+                "OPENCLAW_APP_VARIANT": "standard",
+            ],
             defaults: ["gatewayPort": nil])
         {
             let defaultPort = GatewayEnvironment.gatewayPort()
