@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { getPresence } from "../monitor/presence-cache.js";
 import {
   type ActionGate,
   jsonResult,
@@ -6,9 +7,8 @@ import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
-} from "../../../../src/agents/tools/common.js";
-import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
-import { getPresence } from "../monitor/presence-cache.js";
+  type DiscordActionConfig,
+} from "../runtime-api.js";
 import {
   addRoleDiscord,
   createChannelDiscord,

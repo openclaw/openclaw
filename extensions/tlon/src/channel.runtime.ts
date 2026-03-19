@@ -3,10 +3,10 @@ import { configureClient } from "@tloncorp/api";
 import type {
   ChannelAccountSnapshot,
   ChannelOutboundAdapter,
-  ChannelPlugin,
-  OpenClawConfig,
-} from "../api.js";
-import { createLoggerBackedRuntime, createReplyPrefixOptions } from "../api.js";
+} from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createLoggerBackedRuntime } from "openclaw/plugin-sdk/runtime";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import {

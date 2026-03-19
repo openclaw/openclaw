@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { TopLevelComponents } from "@buape/carbon";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
@@ -16,7 +15,11 @@ import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import type {
+  ChannelId,
+  ChannelPlugin,
+  ChannelStructuredComponents,
+} from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -866,6 +869,19 @@ export type WebSearchProviderContext = {
   runtimeMetadata?: RuntimeWebSearchMetadata;
 };
 
+export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+
+export type WebSearchRuntimeMetadataContext = {
+  config?: OpenClawConfig;
+  searchConfig?: Record<string, unknown>;
+  runtimeMetadata?: RuntimeWebSearchMetadata;
+  resolvedCredential?: {
+    value?: string;
+    source: WebSearchCredentialResolutionSource;
+    fallbackEnvVar?: string;
+  };
+};
+
 export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
@@ -875,8 +891,16 @@ export type WebSearchProviderPlugin = {
   signupUrl: string;
   docsUrl?: string;
   autoDetectOrder?: number;
+  credentialPath: string;
+  inactiveSecretPaths?: string[];
   getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
   setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
+  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  resolveRuntimeMetadata?: (
+    ctx: WebSearchRuntimeMetadataContext,
+  ) => Partial<RuntimeWebSearchMetadata> | Promise<Partial<RuntimeWebSearchMetadata>>;
   createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
 };
 
@@ -1111,7 +1135,10 @@ export type PluginInteractiveDiscordHandlerContext = {
     acknowledge: () => Promise<void>;
     reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
     followUp: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
-    editMessage: (params: { text?: string; components?: TopLevelComponents[] }) => Promise<void>;
+    editMessage: (params: {
+      text?: string;
+      components?: ChannelStructuredComponents;
+    }) => Promise<void>;
     clearComponents: (params?: { text?: string }) => Promise<void>;
   };
   requestConversationBinding: (

@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/mattermost";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
+import { createChannelReplyPipeline } from "../runtime-api.js";
 const { sendMessageMattermostMock } = vi.hoisted(() => ({
   sendMessageMattermostMock: vi.fn(),
 }));
@@ -173,7 +173,7 @@ describe("mattermostPlugin", () => {
       expect(actions).toContain("send");
     });
 
-    it("respects per-account actions.reactions in listActions", () => {
+    it("respects per-account actions.reactions in message discovery", () => {
       const cfg: OpenClawConfig = {
         channels: {
           mattermost: {
@@ -431,7 +431,7 @@ describe("mattermostPlugin", () => {
         },
       };
 
-      const prefixContext = createReplyPrefixOptions({
+      const prefixContext = createChannelReplyPipeline({
         cfg,
         agentId: "main",
         channel: "mattermost",

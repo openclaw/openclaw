@@ -8,7 +8,7 @@ import {
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
-} from "../plugin-sdk/provider-models.js";
+} from "../plugins/provider-model-definitions.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -236,7 +236,7 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(cfg.auth?.profiles?.["minimax:global"]?.provider).toBe("minimax");
       expect(cfg.auth?.profiles?.["minimax:global"]?.mode).toBe("api_key");
       expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_API_BASE_URL);
-      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.7");
       await expectApiKeyProfile({
         profileId: "minimax:global",
         provider: "minimax",
@@ -255,7 +255,7 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(cfg.auth?.profiles?.["minimax:cn"]?.provider).toBe("minimax");
       expect(cfg.auth?.profiles?.["minimax:cn"]?.mode).toBe("api_key");
       expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
-      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.7");
       await expectApiKeyProfile({
         profileId: "minimax:cn",
         provider: "minimax",
