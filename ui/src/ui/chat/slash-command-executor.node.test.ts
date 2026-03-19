@@ -262,7 +262,7 @@ describe("executeSlashCommand directives", () => {
       "**Current model:** `gpt-4.1-mini`\n**Available:** `gpt-4.1-mini`, `gpt-4.1`",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", { all: true });
   });
 
   it("mirrors resolved provider-qualified model refs after /model changes", async () => {
@@ -290,6 +290,7 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
       model: "gpt-5-mini",
+      allowAnyCatalogModel: true,
     });
     expect(result.sessionPatch?.modelOverride).toEqual({
       kind: "qualified",

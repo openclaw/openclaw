@@ -133,6 +133,8 @@ export const SessionsPatchParamsSchema = Type.Object(
     groupActivation: Type.Optional(
       Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
     ),
+    /** When true with model, accept any catalog model (bypass allowlist). For user-initiated picks. */
+    allowAnyCatalogModel: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

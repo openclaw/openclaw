@@ -243,6 +243,64 @@ export async function sendChatMessage(
   }
 }
 
+export async function editChatMessage(
+  state: ChatState,
+  message: string,
+  options: {
+    messageId?: string | null;
+    userMessageIndex?: number | null;
+  },
+): Promise<string | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const msg = message.trim();
+  if (!msg) {
+    return null;
+  }
+
+  const now = Date.now();
+  state.chatSending = true;
+  state.lastError = null;
+  const runId = generateUUID();
+  state.chatRunId = runId;
+  state.chatStream = "";
+  state.chatStreamStartedAt = now;
+  state.chatRunPhase = null;
+  state.chatRunPhaseSuffix = null;
+
+  try {
+    await state.client.request("chat.edit", {
+      sessionKey: state.sessionKey,
+      message: msg,
+      idempotencyKey: runId,
+      ...(options.messageId ? { messageId: options.messageId } : {}),
+      ...(typeof options.userMessageIndex === "number"
+        ? { userMessageIndex: options.userMessageIndex }
+        : {}),
+    });
+    return runId;
+  } catch (err) {
+    const error = String(err);
+    state.chatRunId = null;
+    state.chatStream = null;
+    state.chatStreamStartedAt = null;
+    state.chatRunPhaseSuffix = "error";
+    state.lastError = error;
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Error: " + error }],
+        timestamp: Date.now(),
+      },
+    ];
+    return null;
+  } finally {
+    state.chatSending = false;
+  }
+}
+
 export async function abortChatRun(state: ChatState): Promise<boolean> {
   if (!state.client || !state.connected) {
     return false;

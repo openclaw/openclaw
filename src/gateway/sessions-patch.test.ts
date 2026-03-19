@@ -273,6 +273,44 @@ describe("gateway sessions patch", () => {
     expect(entry.modelOverride).toBe("claude-sonnet-4-6");
   });
 
+  test("accepts catalog model not in allowlist when allowAnyCatalogModel is true", async () => {
+    const catalog = [
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+      { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+    ];
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          model: "anthropic/claude-sonnet-4-5",
+          allowAnyCatalogModel: true,
+        },
+        loadGatewayModelCatalog: async () => catalog,
+      }),
+    );
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-5");
+  });
+
+  test("rejects catalog model not in allowlist when allowAnyCatalogModel is false", async () => {
+    const catalog = [
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+      { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+    ];
+    expectPatchError(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          model: "anthropic/claude-sonnet-4-5",
+        },
+        loadGatewayModelCatalog: async () => catalog,
+      }),
+      "model not allowed",
+    );
+  });
+
   test("sets spawnDepth for subagent sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({

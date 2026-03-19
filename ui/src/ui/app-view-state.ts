@@ -61,6 +61,10 @@ export type AppViewState = {
   chatLoading: boolean;
   chatSending: boolean;
   chatMessage: string;
+  chatSlashOpen: boolean;
+  chatSlashSelection: number;
+  chatEditingMessageId: string | null;
+  chatEditingUserMessageIndex: number | null;
   chatAttachments: ChatAttachment[];
   chatMessages: unknown[];
   chatToolMessages: unknown[];

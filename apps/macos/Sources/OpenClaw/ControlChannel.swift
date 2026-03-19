@@ -259,41 +259,52 @@ final class ControlChannel {
 
     private func scheduleRecovery(reason: String) {
         let now = Date()
-        if let last = self.lastRecoveryAt, now.timeIntervalSince(last) < 10 { return }
+        if let last = self.lastRecoveryAt, now.timeIntervalSince(last) < 2 { return }
         guard self.recoveryTask == nil else { return }
         self.lastRecoveryAt = now
 
         self.recoveryTask = Task { [weak self] in
             guard let self else { return }
-            let mode = await MainActor.run { AppStateStore.shared.connectionMode }
-            guard mode != .unconfigured else {
-                self.recoveryTask = nil
-                return
-            }
-
             let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
             let reasonText = trimmedReason.isEmpty ? "unknown" : trimmedReason
-            self.logger.info(
-                "control channel recovery starting " +
-                    "mode=\(String(describing: mode), privacy: .public) " +
-                    "reason=\(reasonText, privacy: .public)")
-            if mode == .local {
-                GatewayProcessManager.shared.setActive(true)
-            }
-            if mode == .remote {
-                do {
-                    let port = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
-                    self.logger.info("control channel recovery ensured SSH tunnel port=\(port, privacy: .public)")
-                } catch {
-                    self.logger.error(
-                        "control channel recovery tunnel failed \(error.localizedDescription, privacy: .public)")
+            self.logger.info("control channel recovery scheduled reason=\(reasonText, privacy: .public)")
+
+            let maxAttempts = 8
+            for attempt in 1...maxAttempts {
+                if Task.isCancelled { break }
+
+                let mode = await MainActor.run { AppStateStore.shared.connectionMode }
+                guard mode != .unconfigured else { break }
+
+                self.logger.info(
+                    "control channel recovery attempt=\(attempt, privacy: .public) " +
+                        "mode=\(String(describing: mode), privacy: .public) " +
+                        "reason=\(reasonText, privacy: .public)")
+                if mode == .local {
+                    GatewayProcessManager.shared.setActive(true)
+                }
+                if mode == .remote {
+                    do {
+                        let port = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
+                        self.logger.info("control channel recovery ensured SSH tunnel port=\(port, privacy: .public)")
+                    } catch {
+                        self.logger.error(
+                            "control channel recovery tunnel failed \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+
+                await self.refreshEndpoint(reason: "recovery:\(reasonText):attempt\(attempt)")
+                if case .connected = self.state {
+                    self.logger.info("control channel recovery finished after attempt \(attempt, privacy: .public)")
+                    break
+                }
+
+                if attempt < maxAttempts {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
                 }
             }
 
-            await self.refreshEndpoint(reason: "recovery:\(reasonText)")
-            if case .connected = self.state {
-                self.logger.info("control channel recovery finished")
-            } else if case let .degraded(message) = self.state {
+            if case let .degraded(message) = self.state {
                 self.logger.error("control channel recovery failed \(message, privacy: .public)")
             }
 

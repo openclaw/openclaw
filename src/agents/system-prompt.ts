@@ -1,4 +1,5 @@
 import { createHmac, createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
@@ -414,6 +415,8 @@ export function buildAgentSystemPrompt(params: {
     readToolName,
   });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
+  const isNemoClawSandbox =
+    !isMinimal && (existsSync("/sandbox/.openclaw") || existsSync("/sandbox/.nemoclaw"));
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
@@ -514,6 +517,9 @@ export function buildAgentSystemPrompt(params: {
     ...workspaceNotes,
     "",
     ...docsSection,
+    isNemoClawSandbox ? "## Runtime" : "",
+    isNemoClawSandbox ? "You are running inside a NemoClaw sandbox (OpenShell container)." : "",
+    isNemoClawSandbox ? "" : "",
     params.sandboxInfo?.enabled ? "## Sandbox" : "",
     params.sandboxInfo?.enabled
       ? [

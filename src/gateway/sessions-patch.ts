@@ -402,6 +402,7 @@ export async function applySessionsPatchToStore(params: {
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
         defaultModel: subagentModelHint ?? resolvedDefault.model,
+        allowAnyCatalog: patch.allowAnyCatalogModel === true,
       });
       if ("error" in resolved) {
         return invalid(resolved.error);

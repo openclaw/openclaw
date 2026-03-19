@@ -19,6 +19,7 @@ import type {
 export type {
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
+  OpenClawPluginCliContext,
   OpenClawPluginConfigSchema,
   ProviderDiscoveryContext,
   ProviderCatalogContext,
@@ -52,6 +53,8 @@ export type {
   ProviderAuthResult,
   OpenClawPluginCommandDefinition,
   OpenClawPluginDefinition,
+  PluginCommandContext,
+  PluginCommandResult,
   PluginLogger,
   PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";

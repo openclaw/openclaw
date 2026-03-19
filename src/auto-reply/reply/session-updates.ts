@@ -117,6 +117,26 @@ export async function drainFormattedSystemEvents(params: {
     .join("\n");
 }
 
+/** Prepend formatted system events to the body base; used when building reply context. */
+export async function prependSystemEvents(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  isMainSession: boolean;
+  isNewSession: boolean;
+  prefixedBodyBase: string;
+}): Promise<string> {
+  const block = await drainFormattedSystemEvents({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    isMainSession: params.isMainSession,
+    isNewSession: params.isNewSession,
+  });
+  if (!block) {
+    return params.prefixedBodyBase;
+  }
+  return `${block}\n\n${params.prefixedBodyBase}`;
+}
+
 async function persistSessionEntryUpdate(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;

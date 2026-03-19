@@ -36,6 +36,17 @@ export type ChatSendOptions = {
   runId?: string;
 };
 
+export type ChatEditOptions = {
+  sessionKey: string;
+  message: string;
+  messageId?: string;
+  userMessageIndex?: number;
+  thinking?: string;
+  deliver?: boolean;
+  timeoutMs?: number;
+  runId?: string;
+};
+
 export type GatewayEvent = {
   event: string;
   payload?: unknown;
@@ -152,6 +163,7 @@ export class GatewayChatClient {
       url: connection.url,
       token: connection.token,
       password: connection.password,
+      requestTimeoutMs: 15_000,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
@@ -216,6 +228,21 @@ export class GatewayChatClient {
     return { runId };
   }
 
+  async editChat(opts: ChatEditOptions): Promise<{ runId: string }> {
+    const runId = opts.runId ?? randomUUID();
+    await this.client.request("chat.edit", {
+      sessionKey: opts.sessionKey,
+      message: opts.message,
+      messageId: opts.messageId,
+      userMessageIndex: opts.userMessageIndex,
+      thinking: opts.thinking,
+      deliver: opts.deliver,
+      timeoutMs: opts.timeoutMs,
+      idempotencyKey: runId,
+    });
+    return { runId };
+  }
+
   async abortChat(opts: { sessionKey: string; runId: string }) {
     return await this.client.request<{ ok: boolean; aborted: boolean }>("chat.abort", {
       sessionKey: opts.sessionKey,
@@ -261,8 +288,11 @@ export class GatewayChatClient {
     return await this.client.request("status");
   }
 
-  async listModels(): Promise<GatewayModelChoice[]> {
-    const res = await this.client.request<{ models?: GatewayModelChoice[] }>("models.list");
+  async listModels(opts?: { all?: boolean }): Promise<GatewayModelChoice[]> {
+    const res = await this.client.request<{ models?: GatewayModelChoice[] }>(
+      "models.list",
+      opts?.all === true ? { all: true } : {},
+    );
     return Array.isArray(res?.models) ? res.models : [];
   }
 }

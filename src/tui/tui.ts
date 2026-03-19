@@ -8,14 +8,15 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
-import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { loadConfig } from "../config/config.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { formatTokenCount } from "../utils/usage-format.js";
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -38,6 +39,32 @@ import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.
 
 export { resolveFinalAssistantText } from "./tui-formatters.js";
 export type { TuiOptions } from "./tui-types.js";
+
+const BUSY_ACTIVITY_PREFIXES = [
+  "sending",
+  "waiting",
+  "streaming",
+  "running",
+  "routing",
+  "generating",
+];
+
+export function isBusyActivityStatus(status: string): boolean {
+  const normalized = status.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return BUSY_ACTIVITY_PREFIXES.some((prefix) => {
+    if (normalized === prefix) {
+      return true;
+    }
+    // Match dynamic status text variants such as:
+    // - "running (think auto→medium)"
+    // - "routing: expensive-model"
+    // - "generating…"
+    return normalized.startsWith(`${prefix} `) || normalized.startsWith(`${prefix}(`);
+  });
+}
 
 export function createEditorSubmitHandler(params: {
   editor: {
@@ -203,31 +230,9 @@ export function resolveTuiSessionKey(params: {
     return trimmed;
   }
   if (trimmed.startsWith("agent:")) {
-    return trimmed.toLowerCase();
+    return trimmed;
   }
-  return `agent:${params.currentAgentId}:${trimmed.toLowerCase()}`;
-}
-
-export function resolveInitialTuiAgentId(params: {
-  cfg: OpenClawConfig;
-  fallbackAgentId: string;
-  initialSessionInput?: string;
-  cwd?: string;
-}) {
-  const parsed = parseAgentSessionKey((params.initialSessionInput ?? "").trim());
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId);
-  }
-
-  const inferredFromWorkspace = resolveAgentIdByWorkspacePath(
-    params.cfg,
-    params.cwd ?? process.cwd(),
-  );
-  if (inferredFromWorkspace) {
-    return inferredFromWorkspace;
-  }
-
-  return normalizeAgentId(params.fallbackAgentId);
+  return `agent:${params.currentAgentId}:${trimmed}`;
 }
 
 export function resolveGatewayDisconnectState(reason?: string): {
@@ -268,30 +273,6 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   };
 }
 
-export function isIgnorableTuiStopError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  const err = error as { code?: unknown; syscall?: unknown; message?: unknown };
-  const code = typeof err.code === "string" ? err.code : "";
-  const syscall = typeof err.syscall === "string" ? err.syscall : "";
-  const message = typeof err.message === "string" ? err.message : "";
-  if (code === "EBADF" && syscall === "setRawMode") {
-    return true;
-  }
-  return /setRawMode/i.test(message) && /EBADF/i.test(message);
-}
-
-export function stopTuiSafely(stop: () => void): void {
-  try {
-    stop();
-  } catch (error) {
-    if (!isIgnorableTuiStopError(error)) {
-      throw error;
-    }
-  }
-}
-
 type CtrlCAction = "clear" | "warn" | "exit";
 
 export function resolveCtrlCAction(params: {
@@ -325,12 +306,7 @@ export async function runTui(opts: TuiOptions) {
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
   let agentDefaultId = resolveDefaultAgentId(config);
-  let currentAgentId = resolveInitialTuiAgentId({
-    cfg: config,
-    fallbackAgentId: agentDefaultId,
-    initialSessionInput,
-    cwd: process.cwd(),
-  });
+  let currentAgentId = agentDefaultId;
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";
@@ -344,13 +320,14 @@ export async function runTui(opts: TuiOptions) {
   let showThinking = false;
   let pairingHintShown = false;
   const localRunIds = new Set<string>();
-  const localBtwRunIds = new Set<string>();
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = {};
   let lastCtrlCAt = 0;
+  let currentProjectId: string | null = null;
+  let currentProjectPath: string | null = null;
   let exitRequested = false;
   let activityStatus = "idle";
   let connectionStatus = "connecting";
@@ -474,6 +451,18 @@ export async function runTui(opts: TuiOptions) {
     set lastCtrlCAt(value) {
       lastCtrlCAt = value;
     },
+    get currentProjectId() {
+      return currentProjectId;
+    },
+    set currentProjectId(value) {
+      currentProjectId = value;
+    },
+    get currentProjectPath() {
+      return currentProjectPath;
+    },
+    set currentProjectPath(value) {
+      currentProjectPath = value;
+    },
   };
 
   const noteLocalRunId = (runId: string) => {
@@ -499,30 +488,7 @@ export async function runTui(opts: TuiOptions) {
     localRunIds.clear();
   };
 
-  const noteLocalBtwRunId = (runId: string) => {
-    if (!runId) {
-      return;
-    }
-    localBtwRunIds.add(runId);
-    if (localBtwRunIds.size > 200) {
-      const [first] = localBtwRunIds;
-      if (first) {
-        localBtwRunIds.delete(first);
-      }
-    }
-  };
-
-  const forgetLocalBtwRunId = (runId: string) => {
-    localBtwRunIds.delete(runId);
-  };
-
-  const isLocalBtwRunId = (runId: string) => localBtwRunIds.has(runId);
-
-  const clearLocalBtwRunIds = () => {
-    localBtwRunIds.clear();
-  };
-
-  const client = await GatewayChatClient.connect({
+  const client = new GatewayChatClient({
     url: opts.url,
     token: opts.token,
     password: opts.password,
@@ -592,14 +558,25 @@ export async function runTui(opts: TuiOptions) {
   const updateHeader = () => {
     const sessionLabel = formatSessionKey(currentSessionKey);
     const agentLabel = formatAgentLabel(currentAgentId);
+    const projectSuffix = currentProjectId ? ` - project ${currentProjectId}` : "";
     header.setText(
       theme.header(
-        `openclaw tui - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`,
+        `openclaw tui - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}${projectSuffix}`,
       ),
     );
   };
 
   const busyStates = new Set(["sending", "waiting", "streaming", "running"]);
+  /** Treat status as busy if it exactly matches or starts with a busy state (e.g. "running (think auto→minimal)"). */
+  const isBusyStatus = (text: string) =>
+    busyStates.has(text) ||
+    [...busyStates].some((s) => text.startsWith(`${s} `) || text.startsWith(`${s}(`));
+  /** If we stay in a busy state this long without an end/error event, revert to idle so the UI does not hang. */
+  const ACTIVITY_STALE_MS = 5 * 60_000; // 5 minutes — allow long model runs to complete
+  /** "waiting" (for gateway to accept/start) gets a shorter cap so we don't hang if the gateway never responds. */
+  const WAITING_STALE_MS = 30_000; // 30 seconds
+  let activityStaleTimeout: ReturnType<typeof setTimeout> | null = null;
+  let waitingStaleTimeout: ReturnType<typeof setTimeout> | null = null;
   let statusText: Text | null = null;
   let statusLoader: Loader | null = null;
 
@@ -643,13 +620,52 @@ export async function runTui(opts: TuiOptions) {
   let waitingTimer: NodeJS.Timeout | null = null;
   let waitingPhrase: string | null = null;
 
+  const formatPassTokens = (pass?: { input?: number; output?: number } | null): string => {
+    if (!pass || (pass.input == null && pass.output == null)) {
+      return "";
+    }
+    const inVal = pass.input ?? 0;
+    const outVal = pass.output ?? 0;
+    return `${formatTokenCount(inVal)} in / ${formatTokenCount(outVal)} out`;
+  };
+
+  const forceWaitingToIdle = () => {
+    if (activityStatus !== "waiting") {
+      return;
+    }
+    if (waitingStaleTimeout) {
+      clearTimeout(waitingStaleTimeout);
+      waitingStaleTimeout = null;
+    }
+    activityStatus = "idle";
+    if (activityStaleTimeout) {
+      clearTimeout(activityStaleTimeout);
+      activityStaleTimeout = null;
+    }
+    const runId = activeChatRunId;
+    activeChatRunId = null;
+    if (runId) {
+      forgetLocalRunId?.(runId);
+    }
+    chatLog.addSystem("response timed out (30s) — you can send another message");
+    setConnectionStatus("response timed out", 4000);
+    stopWaitingTimer();
+    renderStatus();
+    tui.requestRender();
+  };
+
   const updateBusyStatusMessage = () => {
     if (!statusLoader || !statusStartedAt) {
       return;
     }
+    const elapsedMs = Date.now() - statusStartedAt;
     const elapsed = formatElapsed(statusStartedAt);
 
     if (activityStatus === "waiting") {
+      if (elapsedMs >= WAITING_STALE_MS) {
+        forceWaitingToIdle();
+        return;
+      }
       waitingTick++;
       statusLoader.setMessage(
         buildWaitingStatusMessage({
@@ -663,7 +679,17 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
 
-    statusLoader.setMessage(`${activityStatus} • ${elapsed} | ${connectionStatus}`);
+    const passParts: string[] = [];
+    const router = formatPassTokens(sessionInfo.routerPassTokens);
+    const gen = formatPassTokens(sessionInfo.generationPassTokens);
+    if (router) {
+      passParts.push(`router: ${router}`);
+    }
+    if (gen) {
+      passParts.push(`gen: ${gen}`);
+    }
+    const passSuffix = passParts.length > 0 ? ` | ${passParts.join(" ")}` : "";
+    statusLoader.setMessage(`${activityStatus} • ${elapsed} | ${connectionStatus}${passSuffix}`);
   };
 
   const startStatusTimer = () => {
@@ -671,11 +697,15 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
     statusTimer = setInterval(() => {
-      if (!busyStates.has(activityStatus)) {
+      if (!isBusyStatus(activityStatus)) {
         return;
       }
       updateBusyStatusMessage();
+      tui.requestRender();
     }, 1000);
+    if (typeof statusTimer?.unref === "function") {
+      statusTimer.unref();
+    }
   };
 
   const stopStatusTimer = () => {
@@ -704,7 +734,11 @@ export async function runTui(opts: TuiOptions) {
         return;
       }
       updateBusyStatusMessage();
+      tui.requestRender();
     }, 120);
+    if (typeof waitingTimer?.unref === "function") {
+      waitingTimer.unref();
+    }
   };
 
   const stopWaitingTimer = () => {
@@ -717,7 +751,7 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const renderStatus = () => {
-    const isBusy = busyStates.has(activityStatus);
+    const isBusy = isBusyStatus(activityStatus);
     if (isBusy) {
       if (!statusStartedAt || lastActivityStatus !== activityStatus) {
         statusStartedAt = Date.now();
@@ -759,7 +793,30 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const setActivityStatus = (text: string) => {
+    if (activityStaleTimeout) {
+      clearTimeout(activityStaleTimeout);
+      activityStaleTimeout = null;
+    }
+    if (waitingStaleTimeout) {
+      clearTimeout(waitingStaleTimeout);
+      waitingStaleTimeout = null;
+    }
     activityStatus = text;
+    if (isBusyStatus(text)) {
+      activityStaleTimeout = setTimeout(() => {
+        activityStaleTimeout = null;
+        activityStatus = "idle";
+        setConnectionStatus("run timed out", 4000);
+        renderStatus();
+      }, ACTIVITY_STALE_MS);
+      if (text === "waiting") {
+        waitingStaleTimeout = setTimeout(() => {
+          waitingStaleTimeout = null;
+          forceWaitingToIdle();
+        }, WAITING_STALE_MS);
+        waitingStaleTimeout.unref();
+      }
+    }
     renderStatus();
   };
 
@@ -769,24 +826,44 @@ export async function runTui(opts: TuiOptions) {
       ? `${sessionKeyLabel} (${sessionInfo.displayName})`
       : sessionKeyLabel;
     const agentLabel = formatAgentLabel(currentAgentId);
-    const modelLabel = sessionInfo.model
+    const servedModelRaw = sessionInfo.servedModel?.trim();
+    const servedProviderRaw = sessionInfo.servedModelProvider?.trim();
+    const servedModelLabel = servedModelRaw
+      ? servedProviderRaw
+        ? servedModelRaw.toLowerCase().startsWith(`${servedProviderRaw.toLowerCase()}/`)
+          ? servedModelRaw
+          : `${servedProviderRaw}/${servedModelRaw}`
+        : servedModelRaw
+      : null;
+    const configuredModelLabel = sessionInfo.model
       ? sessionInfo.modelProvider
         ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
         : sessionInfo.model
       : "unknown";
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
-    const think = sessionInfo.thinkingLevel ?? "off";
-    const fast = sessionInfo.fastMode === true;
+    const configuredThink = sessionInfo.configuredThink ?? sessionInfo.thinkingLevel ?? "auto";
+    const isRunActive =
+      Boolean(activeChatRunId) ||
+      (typeof sessionInfo.currentRunId === "string" && sessionInfo.currentRunId.trim().length > 0);
+    const effectiveThink = isRunActive
+      ? (sessionInfo.effectiveThink ?? sessionInfo.lastEffectiveThink ?? sessionInfo.thinkingLevel)
+      : (sessionInfo.lastEffectiveThink ?? sessionInfo.effectiveThink ?? sessionInfo.thinkingLevel);
+    const thinkLabel =
+      configuredThink === "auto"
+        ? effectiveThink
+          ? `think auto→${effectiveThink}`
+          : "think auto"
+        : `think ${configuredThink}`;
     const verbose = sessionInfo.verboseLevel ?? "off";
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
+    const modelLabel = isRunActive && servedModelLabel ? servedModelLabel : configuredModelLabel;
     const footerParts = [
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
-      modelLabel,
-      think !== "off" ? `think ${think}` : null,
-      fast ? "fast" : null,
+      `model ${modelLabel}`,
+      thinkLabel,
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
       tokens,
@@ -795,14 +872,6 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
-  const btw = {
-    showResult: (params: { question: string; text: string; isError?: boolean }) => {
-      chatLog.showBtw(params);
-    },
-    clear: () => {
-      chatLog.dismissBtw();
-    },
-  };
 
   const initialSessionAgentId = (() => {
     if (!initialSessionInput) {
@@ -811,6 +880,15 @@ export async function runTui(opts: TuiOptions) {
     const parsed = parseAgentSessionKey(initialSessionInput);
     return parsed ? normalizeAgentId(parsed.agentId) : null;
   })();
+
+  const btw = {
+    showResult: (params: { question: string; text: string; isError?: boolean }) => {
+      chatLog.showBtw(params);
+    },
+    clear: () => {
+      chatLog.dismissBtw();
+    },
+  };
 
   const sessionActions = createSessionActions({
     client,
@@ -838,7 +916,7 @@ export async function runTui(opts: TuiOptions) {
     abortActive,
   } = sessionActions;
 
-  const { handleChatEvent, handleAgentEvent, handleBtwEvent } = createEventHandlers({
+  const { handleChatEvent, handleAgentEvent } = createEventHandlers({
     chatLog,
     btw,
     tui,
@@ -849,9 +927,6 @@ export async function runTui(opts: TuiOptions) {
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
-    isLocalBtwRunId,
-    forgetLocalBtwRunId,
-    clearLocalBtwRunIds,
   });
 
   const requestExit = () => {
@@ -860,7 +935,7 @@ export async function runTui(opts: TuiOptions) {
     }
     exitRequested = true;
     client.stop();
-    stopTuiSafely(() => tui.stop());
+    tui.stop();
     process.exit(0);
   };
 
@@ -883,9 +958,7 @@ export async function runTui(opts: TuiOptions) {
       setActivityStatus,
       formatSessionKey,
       noteLocalRunId,
-      noteLocalBtwRunId,
       forgetLocalRunId,
-      forgetLocalBtwRunId,
       requestExit,
     });
 
@@ -908,11 +981,6 @@ export async function runTui(opts: TuiOptions) {
   });
 
   editor.onEscape = () => {
-    if (chatLog.hasVisibleBtw()) {
-      chatLog.dismissBtw();
-      tui.requestRender();
-      return;
-    }
     void abortActive();
   };
   const handleCtrlC = () => {
@@ -962,52 +1030,55 @@ export async function runTui(opts: TuiOptions) {
     void loadHistory();
   };
 
-  tui.addInputListener((data) => {
-    if (!chatLog.hasVisibleBtw()) {
-      return undefined;
-    }
-    if (editor.getText().length > 0) {
-      return undefined;
-    }
-    if (matchesKey(data, "enter")) {
-      chatLog.dismissBtw();
-      tui.requestRender();
-      return { consume: true };
-    }
-    return undefined;
-  });
-
   client.onEvent = (evt) => {
     if (evt.event === "chat") {
       handleChatEvent(evt.payload);
-    }
-    if (evt.event === "chat.side_result") {
-      handleBtwEvent(evt.payload);
     }
     if (evt.event === "agent") {
       handleAgentEvent(evt.payload);
     }
   };
 
+  const CONNECT_STARTUP_TIMEOUT_MS = 20_000;
   client.onConnected = () => {
     isConnected = true;
     pairingHintShown = false;
     const reconnected = wasDisconnected;
     wasDisconnected = false;
     setConnectionStatus("connected");
-    void (async () => {
-      await refreshAgents();
-      updateHeader();
-      await loadHistory();
-      setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);
-      tui.requestRender();
-      if (!autoMessageSent && autoMessage) {
-        autoMessageSent = true;
-        await sendMessage(autoMessage);
-      }
-      updateFooter();
-      tui.requestRender();
-    })();
+    tui.requestRender();
+    // Defer startup so the connection callback returns immediately and the UI stays responsive.
+    setImmediate(() => {
+      const startup = (async () => {
+        try {
+          await refreshAgents();
+          updateHeader();
+          tui.requestRender();
+          await loadHistory();
+          setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);
+          if (!autoMessageSent && autoMessage) {
+            autoMessageSent = true;
+            await sendMessage(autoMessage);
+          }
+        } catch (err) {
+          chatLog.addSystem(`startup: ${String(err)}`);
+        } finally {
+          updateFooter();
+          tui.requestRender();
+        }
+      })();
+      const timeout = new Promise<void>((resolve) => {
+        const t = setTimeout(() => {
+          chatLog.addSystem("startup timed out — you can continue; history may be incomplete");
+          resolve();
+        }, CONNECT_STARTUP_TIMEOUT_MS);
+        t.unref();
+      });
+      void Promise.race([startup, timeout]).then(() => {
+        updateFooter();
+        tui.requestRender();
+      });
+    });
   };
 
   client.onDisconnected = (reason) => {

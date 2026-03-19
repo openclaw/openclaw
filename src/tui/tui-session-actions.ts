@@ -7,7 +7,13 @@ import {
 } from "../routing/session-key.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import { collectUserPromptPivots } from "./prompt-ids.js";
+import {
+  asString,
+  extractTextFromMessage,
+  isCommandMessage,
+  isPluginRegistrationOutput,
+} from "./tui-formatters.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionBtwPresenter = {
@@ -306,14 +312,26 @@ export function createSessionActions(context: SessionActionContext) {
       chatLog.clearAll();
       btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
-      for (const entry of record.messages ?? []) {
+      const promptPivots = collectUserPromptPivots(record.messages ?? []);
+      const promptIdByUserIndex = new Map<number, string>();
+      for (const pivot of promptPivots) {
+        promptIdByUserIndex.set(pivot.userMessageIndex, pivot.promptId);
+      }
+      let userMessageIndex = 0;
+      const messages = record.messages ?? [];
+      const yieldEvery = 30;
+      for (let i = 0; i < messages.length; i++) {
+        if (i > 0 && i % yieldEvery === 0) {
+          await new Promise<void>((r) => setImmediate(r));
+        }
+        const entry = messages[i];
         if (!entry || typeof entry !== "object") {
           continue;
         }
         const message = entry as Record<string, unknown>;
         if (isCommandMessage(message)) {
           const text = extractTextFromMessage(message);
-          if (text) {
+          if (text && !isPluginRegistrationOutput(text)) {
             chatLog.addSystem(text);
           }
           continue;
@@ -321,8 +339,9 @@ export function createSessionActions(context: SessionActionContext) {
         if (message.role === "user") {
           const text = extractTextFromMessage(message);
           if (text) {
-            chatLog.addUser(text);
+            chatLog.addUser(text, promptIdByUserIndex.get(userMessageIndex));
           }
+          userMessageIndex += 1;
           continue;
         }
         if (message.role === "assistant") {

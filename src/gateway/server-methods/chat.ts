@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -47,6 +47,7 @@ import {
   errorShape,
   formatValidationErrors,
   validateChatAbortParams,
+  validateChatEditParams,
   validateChatHistoryParams,
   validateChatInjectParams,
   validateChatSendParams,
@@ -57,6 +58,7 @@ import {
   capArrayByJsonBytes,
   loadSessionEntry,
   readSessionMessages,
+  resolveSessionTranscriptCandidates,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -890,6 +892,97 @@ function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: strin
   return next;
 }
 
+function resolveTranscriptMessageId(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const entry = message as Record<string, unknown>;
+  if (typeof entry.id === "string" && entry.id.trim()) {
+    return entry.id.trim();
+  }
+  if (typeof entry.messageId === "string" && entry.messageId.trim()) {
+    return entry.messageId.trim();
+  }
+  return null;
+}
+
+function rewriteTranscriptBeforeUserPivot(params: {
+  transcriptPath: string;
+  sessionId: string;
+  messageId?: string;
+  userMessageIndex?: number;
+}): { ok: true } | { ok: false; error: string } {
+  const lines = fs.readFileSync(params.transcriptPath, "utf-8").split(/\r?\n/);
+  const messages: unknown[] = [];
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line) as { message?: unknown };
+      if (parsed?.message) {
+        messages.push(parsed.message);
+      }
+    } catch {
+      // Ignore malformed lines and keep scanning the transcript.
+    }
+  }
+
+  const targetId = params.messageId?.trim();
+  const userMessages = messages
+    .map((message, index) => ({ message, index }))
+    .filter((item) => {
+      const role =
+        item.message && typeof item.message === "object"
+          ? (item.message as { role?: unknown }).role
+          : undefined;
+      return role === "user";
+    });
+
+  if (userMessages.length === 0) {
+    return { ok: false, error: "no user messages in transcript" };
+  }
+
+  let pivotAbsoluteIndex = -1;
+  if (targetId) {
+    const byId = userMessages.find((item) => resolveTranscriptMessageId(item.message) === targetId);
+    if (!byId) {
+      return { ok: false, error: "pivot user message not found" };
+    }
+    pivotAbsoluteIndex = byId.index;
+  } else if (typeof params.userMessageIndex === "number") {
+    const candidate = userMessages[params.userMessageIndex];
+    if (!candidate) {
+      return { ok: false, error: "pivot user message index out of range" };
+    }
+    pivotAbsoluteIndex = candidate.index;
+  } else {
+    return { ok: false, error: "messageId or userMessageIndex is required" };
+  }
+
+  const keepMessages = messages.slice(0, pivotAbsoluteIndex);
+  const backupPath = `${params.transcriptPath}.edit-${Date.now()}.bak`;
+  fs.copyFileSync(params.transcriptPath, backupPath);
+
+  const header = {
+    type: "session",
+    version: CURRENT_SESSION_VERSION,
+    id: params.sessionId,
+    timestamp: new Date().toISOString(),
+    cwd: process.cwd(),
+  };
+  fs.writeFileSync(params.transcriptPath, `${JSON.stringify(header)}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+
+  const sessionManager = SessionManager.open(params.transcriptPath);
+  for (const message of keepMessages) {
+    sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
+  }
+  return { ok: true };
+}
+
 function broadcastChatFinal(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
   runId: string;
@@ -1102,6 +1195,111 @@ export const chatHandlers: GatewayRequestHandlers = {
       ok: true,
       aborted: res.aborted,
       runIds: res.aborted ? [runId] : [],
+    });
+  },
+  "chat.edit": async ({ params, respond, context, client, req, isWebchatConnect }) => {
+    if (!validateChatEditParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid chat.edit params: ${formatValidationErrors(validateChatEditParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as {
+      sessionKey: string;
+      message: string;
+      idempotencyKey: string;
+      messageId?: string;
+      userMessageIndex?: number;
+      thinking?: string;
+      deliver?: boolean;
+      timeoutMs?: number;
+    };
+    const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
+    if (!sanitizedMessageResult.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, sanitizedMessageResult.error),
+      );
+      return;
+    }
+    const inboundMessage = sanitizedMessageResult.message;
+    if (!inboundMessage.trim()) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "message required"));
+      return;
+    }
+
+    const { cfg, storePath, entry } = loadSessionEntry(p.sessionKey);
+    const sessionId = entry?.sessionId;
+    if (!sessionId || !storePath) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
+      return;
+    }
+    const agentId = resolveSessionAgentId({
+      sessionKey: p.sessionKey,
+      config: cfg,
+    });
+    const transcriptPath = resolveSessionTranscriptCandidates(
+      sessionId,
+      storePath,
+      entry.sessionFile,
+      agentId,
+    ).find((candidate) => fs.existsSync(candidate));
+    if (!transcriptPath) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "transcript not found"));
+      return;
+    }
+
+    // Reject edit when there is an active run for this session to avoid transcript races.
+    for (const [, active] of context.chatAbortControllers) {
+      if (active.sessionKey === p.sessionKey) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "cannot edit while a run is active for this session",
+          ),
+        );
+        return;
+      }
+    }
+
+    try {
+      const rewritten = rewriteTranscriptBeforeUserPivot({
+        transcriptPath,
+        sessionId,
+        messageId: p.messageId,
+        userMessageIndex: p.userMessageIndex,
+      });
+      if (!rewritten.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, rewritten.error));
+        return;
+      }
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
+
+    await chatHandlers["chat.send"]({
+      req,
+      params: {
+        sessionKey: p.sessionKey,
+        message: inboundMessage,
+        thinking: p.thinking,
+        deliver: p.deliver,
+        timeoutMs: p.timeoutMs,
+        idempotencyKey: p.idempotencyKey,
+      },
+      respond,
+      context,
+      client,
+      isWebchatConnect,
     });
   },
   "chat.send": async ({ params, respond, context, client }) => {

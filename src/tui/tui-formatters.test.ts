@@ -4,6 +4,7 @@ import {
   extractTextFromMessage,
   extractThinkingFromMessage,
   isCommandMessage,
+  isPluginRegistrationOutput,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
 
@@ -209,6 +210,23 @@ describe("isCommandMessage", () => {
     expect(isCommandMessage({ command: true })).toBe(true);
     expect(isCommandMessage({ command: false })).toBe(false);
     expect(isCommandMessage({})).toBe(false);
+  });
+});
+
+describe("isPluginRegistrationOutput", () => {
+  it("returns true for [plugins] lines with registered/Endpoint/Model/Commands", () => {
+    expect(isPluginRegistrationOutput("[plugins] NemoClaw registered")).toBe(true);
+    expect(
+      isPluginRegistrationOutput(
+        "[plugins]   │  Endpoint:  build.nvidia.com\n  Model:     nvidia/nemotron",
+      ),
+    ).toBe(true);
+    expect(isPluginRegistrationOutput("[plugins] Commands:  openclaw nemoclaw")).toBe(true);
+  });
+  it("returns false for normal command output", () => {
+    expect(isPluginRegistrationOutput("session agent:main:main")).toBe(false);
+    expect(isPluginRegistrationOutput("model set to Auto")).toBe(false);
+    expect(isPluginRegistrationOutput("")).toBe(false);
   });
 });
 
