@@ -277,17 +277,40 @@ function resolveNestedSkillsRoot(
   return { baseDir: dir };
 }
 
-function unwrapLoadedSkills(loaded: unknown): Skill[] {
+type SkillLoadDiagnostic = {
+  type: string;
+  message: string;
+  path: string;
+};
+
+type UnwrapResult = {
+  skills: Skill[];
+  diagnostics: SkillLoadDiagnostic[];
+};
+
+function unwrapLoadedSkills(loaded: unknown): UnwrapResult {
   if (Array.isArray(loaded)) {
-    return loaded as Skill[];
+    return { skills: loaded as Skill[], diagnostics: [] };
   }
-  if (loaded && typeof loaded === "object" && "skills" in loaded) {
-    const skills = (loaded as { skills?: unknown }).skills;
-    if (Array.isArray(skills)) {
-      return skills as Skill[];
+  if (loaded && typeof loaded === "object") {
+    const obj = loaded as Record<string, unknown>;
+    const skills = Array.isArray(obj.skills) ? (obj.skills as Skill[]) : [];
+    const diagnostics: SkillLoadDiagnostic[] = [];
+    if (Array.isArray(obj.diagnostics)) {
+      for (const diag of obj.diagnostics) {
+        if (diag && typeof diag === "object") {
+          const d = diag as Record<string, unknown>;
+          diagnostics.push({
+            type: typeof d.type === "string" ? d.type : "warning",
+            message: typeof d.message === "string" ? d.message : String(d.message ?? "unknown error"),
+            path: typeof d.path === "string" ? d.path : "unknown",
+          });
+        }
+      }
     }
+    return { skills, diagnostics };
   }
-  return [];
+  return { skills: [], diagnostics: [] };
 }
 
 function loadSkillEntries(
@@ -345,8 +368,16 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
+      const { skills, diagnostics } = unwrapLoadedSkills(loaded);
+      for (const diag of diagnostics) {
+        skillsLogger.warn("Skill parse error: skill was dropped from discovery.", {
+          path: diag.path,
+          message: diag.message,
+          source: params.source,
+        });
+      }
       return filterLoadedSkillsInsideRoot({
-        skills: unwrapLoadedSkills(loaded),
+        skills,
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
@@ -419,9 +450,17 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
+      const { skills, diagnostics } = unwrapLoadedSkills(loaded);
+      for (const diag of diagnostics) {
+        skillsLogger.warn("Skill parse error: skill was dropped from discovery.", {
+          path: diag.path,
+          message: diag.message,
+          source: params.source,
+        });
+      }
       loadedSkills.push(
         ...filterLoadedSkillsInsideRoot({
-          skills: unwrapLoadedSkills(loaded),
+          skills,
           source: params.source,
           rootDir,
           rootRealPath: baseDirRealPath,
