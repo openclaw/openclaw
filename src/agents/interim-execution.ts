@@ -10,6 +10,9 @@ const INTERIM_EXECUTION_HINTS = [
   "working on it",
   "retrying now",
   "auto-announce when done",
+  "请稍等",
+  "稍等一下",
+  "稍等我一下",
   "我继续处理",
   "我继续执行",
   "我来继续执行",
@@ -35,8 +38,8 @@ const FUTURE_PROMISE_REGEXES = [
   /(?:我|让我|我这边|我这里)(?:先|马上|立刻|这就|现在就|待会|稍后|等下|等会|一会儿|一会)(?:去)?(?:帮你)?(?:看|查|检查|确认|复现|定位|分析|执行|处理|推进|跟进|跑|同步|拉取|截图|生成|获取|取出|拿到)/,
   /我来(?:先)?(?:帮你)?(?:看|查|检查|确认|复现|定位|分析|执行|处理|推进|跟进|跑|同步|拉取|截图|生成|获取|取出|拿到)/,
   /(?:看完|查完|确认完|处理完|跑完|同步完|拉取完|截图完|生成完).*(?:再|然后).*(?:回报|同步|反馈|回复|告诉你|跟你说)/,
-  /先.*(?:再|然后).*(?:回报|同步|反馈|回复|告诉你|跟你说)/,
-  /\b(i'?ll|i will)\b.*\b(check|look|see|investigate|get|run|do|pull|gather)\b/,
+  /(?=.*(?:看一下|查一下|查看|检查|确认|复现|定位|分析|执行|处理|推进|跟进|跑|拉取|截图|生成|获取|取出|拿到|排查|修复|更新|重建|测试|回归|整理)).*先.*(?:再|然后).*(?:回报|同步|反馈|回复|告诉你|跟你说)/,
+  /\b(i[’']?ll|i will)\b.*\b(check|look|see|investigate|get|run|do|pull|gather)\b/,
   /\blet me\b.*\b(check|look|see|investigate|get|run|do|pull|gather)\b/,
   /\bgive me\b.*\b(sec|secs|second|seconds|min|mins|minute|minutes|moment)\b/,
 ] as const;
@@ -55,7 +58,18 @@ const FINAL_RESULT_HINTS = [
   "我已经看到结果",
 ] as const;
 
-const BLOCKER_HINTS = ["当前卡点", "当前阻塞", "需要你", "请你提供", "无法继续", "缺少你"] as const;
+const BLOCKER_HINTS = [
+  "当前卡点",
+  "当前阻塞",
+  "需要你先",
+  "需要你提供",
+  "需要你确认",
+  "需要你授权",
+  "需要你补充",
+  "请你提供",
+  "无法继续",
+  "缺少你",
+] as const;
 
 const MAX_INTERIM_EXECUTION_WORDS = 45;
 const MAX_INTERIM_EXECUTION_CHARS = 140;
