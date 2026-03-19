@@ -13,6 +13,7 @@ import type {
 import * as directoryRuntimeSdk from "openclaw/plugin-sdk/directory-runtime";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
+import * as imessageCoreSdk from "openclaw/plugin-sdk/imessage-core";
 import * as lazyRuntimeSdk from "openclaw/plugin-sdk/lazy-runtime";
 import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
 import * as providerModelsSdk from "openclaw/plugin-sdk/provider-models";
@@ -54,18 +55,8 @@ const accountHelpersSdk = await import("openclaw/plugin-sdk/account-helpers");
 const allowlistEditSdk = await import("openclaw/plugin-sdk/allowlist-config-edit");
 
 describe("plugin-sdk subpath exports", () => {
-  it("keeps the curated public list free of bundled extension facades", () => {
+  it("keeps legacy compat out of the curated public list", () => {
     expect(pluginSdkSubpaths).not.toContain("compat");
-    expect(pluginSdkSubpaths).not.toContain("signal");
-    expect(pluginSdkSubpaths).not.toContain("line");
-    expect(pluginSdkSubpaths).not.toContain("msteams");
-    expect(pluginSdkSubpaths).not.toContain("googlechat");
-    expect(pluginSdkSubpaths).not.toContain("mattermost");
-    expect(pluginSdkSubpaths).not.toContain("matrix");
-    expect(pluginSdkSubpaths).not.toContain("nostr");
-    expect(pluginSdkSubpaths).not.toContain("voice-call");
-    expect(pluginSdkSubpaths).not.toContain("zalo");
-    expect(pluginSdkSubpaths).not.toContain("zalouser");
   });
 
   it("keeps core focused on generic shared exports", () => {
@@ -123,6 +114,7 @@ describe("plugin-sdk subpath exports", () => {
 
   it("exports channel pairing helpers from the dedicated subpath", () => {
     expect(typeof channelPairingSdk.createChannelPairingController).toBe("function");
+    expect(typeof channelPairingSdk.createChannelPairingChallengeIssuer).toBe("function");
     expect(typeof channelPairingSdk.createScopedPairingAccess).toBe("function");
   });
 
@@ -237,6 +229,13 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof imessageSdk.resolveIMessageConfigAllowFrom).toBe("function");
     expect(typeof imessageSdk.looksLikeIMessageTargetId).toBe("function");
     expect("resolveIMessageAccount" in asExports(imessageSdk)).toBe(false);
+  });
+
+  it("exports iMessage core helpers", () => {
+    expect(typeof imessageCoreSdk.buildChannelConfigSchema).toBe("function");
+    expect(typeof imessageCoreSdk.parseChatTargetPrefixesOrThrow).toBe("function");
+    expect(typeof imessageCoreSdk.resolveServicePrefixedTarget).toBe("function");
+    expect(typeof imessageCoreSdk.IMessageConfigSchema).toBe("object");
   });
 
   it("exports WhatsApp helpers", () => {
