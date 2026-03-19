@@ -30,7 +30,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 function createTestProvider(params: {
-  id: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl" | "tavily";
+  id: "brave" | "gemini" | "grok" | "kimi" | "parallel" | "perplexity" | "firecrawl" | "tavily";
   pluginId: string;
   order: number;
 }): PluginWebSearchProviderEntry {
@@ -88,6 +88,7 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
     createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
     createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
     createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
+    createTestProvider({ id: "parallel", pluginId: "parallel", order: 45 }),
     createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
     createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
     createTestProvider({ id: "tavily", pluginId: "tavily", order: 70 }),
@@ -204,6 +205,15 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   }
   if (entry.id === "plugins.entries.firecrawl.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "firecrawl");
+  }
+  if (entry.id === "tools.web.search.parallel.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "parallel");
+  }
+  if (entry.id === "plugins.entries.parallel.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "parallel");
+  }
+  if (entry.id === "tools.web.fetch.parallel.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "fetch", "parallel", "enabled"], true);
   }
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");

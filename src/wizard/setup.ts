@@ -555,10 +555,63 @@ export async function runSetupWizard(
     await prompter.note("Skipping search setup.", "Search");
   } else {
     const { setupSearch } = await import("../commands/onboard-search.js");
+    const preSearchConfig = nextConfig;
     nextConfig = await setupSearch(nextConfig, runtime, prompter, {
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
     });
+
+    // Only mutate policy/fetch when the user actually selected a provider
+    // (not when they chose "Skip for now", which returns the original config).
+    const searchChanged = nextConfig !== preSearchConfig;
+    const selectedProvider = searchChanged ? nextConfig.tools?.web?.search?.provider : undefined;
+    if (selectedProvider) {
+      const toolsAllow = nextConfig.tools?.allow;
+      const hasExplicitAllow = Array.isArray(toolsAllow);
+      const baseList: string[] = hasExplicitAllow
+        ? [...toolsAllow, ...(nextConfig.tools?.alsoAllow ?? [])]
+        : [...(nextConfig.tools?.alsoAllow ?? [])];
+      for (const tool of ["web_search", "web_fetch"]) {
+        if (!baseList.includes(tool)) {
+          baseList.push(tool);
+        }
+      }
+
+      // When Parallel is the search provider, also enable Parallel extract for
+      // web_fetch (same API key, better extraction for JS-heavy sites).
+      // Don't disable it when switching away — fetch preference is independent.
+      const fetch = nextConfig.tools?.web?.fetch;
+      const updatedFetch = (() => {
+        if (selectedProvider !== "parallel") {
+          return fetch;
+        }
+        const searchParallel = (nextConfig.tools?.web?.search as Record<string, unknown>)
+          ?.parallel as Record<string, unknown> | undefined;
+        const searchApiKey = searchParallel?.apiKey;
+        return {
+          ...fetch,
+          parallel: {
+            ...(fetch?.parallel as Record<string, unknown>),
+            enabled: true,
+            ...(searchApiKey ? { apiKey: searchApiKey } : {}),
+          },
+        } as typeof fetch;
+      })();
+
+      nextConfig = {
+        ...nextConfig,
+        tools: {
+          ...nextConfig.tools,
+          ...(hasExplicitAllow
+            ? { allow: baseList, alsoAllow: undefined }
+            : { alsoAllow: baseList }),
+          web: {
+            ...nextConfig.tools?.web,
+            fetch: updatedFetch,
+          },
+        },
+      };
+    }
   }
 
   if (opts.skipSkills) {

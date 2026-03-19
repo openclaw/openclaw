@@ -5520,6 +5520,81 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                     additionalProperties: false,
                   },
+                  parallel: {
+                    type: "object",
+                    properties: {
+                      apiKey: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            oneOf: [
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "env",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "file",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "exec",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                      baseUrl: {
+                        type: "string",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                   perplexity: {
                     type: "object",
                     properties: {
@@ -5719,6 +5794,89 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: "integer",
                         minimum: 0,
                         maximum: 9007199254740991,
+                      },
+                      timeoutSeconds: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  parallel: {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                      },
+                      apiKey: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            oneOf: [
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "env",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "file",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "exec",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                      baseUrl: {
+                        type: "string",
                       },
                       timeoutSeconds: {
                         type: "integer",
@@ -13000,6 +13158,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Timeout in seconds for Firecrawl requests.",
       tags: ["performance", "tools"],
     },
+    "tools.web.fetch.parallel.enabled": {
+      label: "Enable Parallel Extract",
+      help: "Enable Parallel extract fallback for web_fetch (default: false; opt-in).",
+      tags: ["tools"],
+    },
+    "tools.web.fetch.parallel.apiKey": {
+      label: "Parallel Extract API Key",
+      help: "Parallel API key for extract (fallback: PARALLEL_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.fetch.parallel.baseUrl": {
+      label: "Parallel Extract Base URL",
+      help: 'Parallel base URL (defaults to "https://api.parallel.ai").',
+      tags: ["tools"],
+    },
+    "tools.web.fetch.parallel.timeoutSeconds": {
+      label: "Parallel Extract Timeout (sec)",
+      help: "Timeout in seconds for Parallel extract requests.",
+      tags: ["performance", "tools"],
+    },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
       help: "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
@@ -16170,6 +16349,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["security", "auth", "tools"],
     },
     "tools.web.search.kimi.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "tools"],
+    },
+    "tools.web.search.parallel.apiKey": {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },

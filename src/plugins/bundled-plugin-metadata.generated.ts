@@ -2582,6 +2582,53 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "parallel",
+    idHint: "parallel-plugin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/parallel-plugin",
+    packageVersion: "2026.3.14",
+    packageDescription: "OpenClaw Parallel plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "parallel",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              apiKey: {
+                type: ["string", "object"],
+              },
+              baseUrl: {
+                type: "string",
+              },
+            },
+          },
+        },
+      },
+      uiHints: {
+        "webSearch.apiKey": {
+          label: "Parallel API Key",
+          help: "Parallel API key (fallback: PARALLEL_API_KEY env var).",
+          sensitive: true,
+          placeholder: "par-...",
+        },
+        "webSearch.baseUrl": {
+          label: "Parallel Base URL",
+          help: "Base URL for API requests (defaults to https://api.parallel.ai).",
+        },
+      },
+    },
+  },
+  {
     dirName: "perplexity",
     idHint: "perplexity-plugin",
     source: {

@@ -1,5 +1,5 @@
 ---
-summary: "web_search tool -- search the web with Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily"
+summary: "web_search tool -- search the web with Brave, DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, Parallel, Perplexity, or Tavily"
 read_when:
   - You want to enable or configure web_search
   - You need to choose a search provider
@@ -67,6 +67,9 @@ returns results. Results are cached by query for 15 minutes (configurable).
   <Card title="Kimi" icon="moon" href="/tools/kimi-search">
     AI-synthesized answers with citations via Moonshot web search.
   </Card>
+  <Card title="Parallel" icon="bars-staggered" href="/tools/parallel-search">
+    LLM-optimized search excerpts from web results.
+  </Card>
   <Card title="Perplexity" icon="search" href="/tools/perplexity-search">
     Structured results with content extraction controls and domain filtering.
   </Card>
@@ -86,6 +89,7 @@ returns results. Results are cached by query for 15 minutes (configurable).
 | [Gemini](/tools/gemini-search)         | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                            |
 | [Grok](/tools/grok-search)             | AI-synthesized + citations | --                                               | `XAI_API_KEY`                               |
 | [Kimi](/tools/kimi-search)             | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| [Parallel](/tools/parallel-search)     | Structured excerpts        | --                                               | `PARALLEL_API_KEY`                          |
 | [Perplexity](/tools/perplexity-search) | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
 | [Tavily](/tools/tavily)                | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
 
@@ -101,9 +105,10 @@ the first one found:
 2. **Gemini** -- `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
 3. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
 4. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey`
-5. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey`
-6. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
-7. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
+5. **Parallel** -- `PARALLEL_API_KEY` or `plugins.entries.parallel.config.webSearch.apiKey`
+6. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey`
+7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
+8. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
 
 If no keys are found, it falls back to Brave (you will get a missing-key error
 prompting you to configure one).

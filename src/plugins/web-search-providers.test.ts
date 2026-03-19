@@ -13,6 +13,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "google:gemini",
       "xai:grok",
       "moonshot:kimi",
+      "parallel:parallel",
       "perplexity:perplexity",
       "tavily:tavily",
     ]);
@@ -24,6 +25,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "plugins.entries.google.config.webSearch.apiKey",
       "plugins.entries.xai.config.webSearch.apiKey",
       "plugins.entries.moonshot.config.webSearch.apiKey",
+      "plugins.entries.parallel.config.webSearch.apiKey",
       "plugins.entries.perplexity.config.webSearch.apiKey",
       "plugins.entries.tavily.config.webSearch.apiKey",
     ]);
@@ -53,6 +55,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "google",
       "xai",
       "moonshot",
+      "parallel",
       "perplexity",
       "tavily",
     ]);
@@ -109,6 +112,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       "google:gemini",
       "xai:grok",
       "moonshot:kimi",
+      "parallel:parallel",
       "perplexity:perplexity",
       "tavily:tavily",
     ]);

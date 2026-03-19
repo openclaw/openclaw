@@ -4,6 +4,7 @@ import exaPlugin from "../extensions/exa/index.js";
 import firecrawlPlugin from "../extensions/firecrawl/index.js";
 import googlePlugin from "../extensions/google/index.js";
 import moonshotPlugin from "../extensions/moonshot/index.js";
+import parallelPlugin from "../extensions/parallel/index.js";
 import perplexityPlugin from "../extensions/perplexity/index.js";
 import tavilyPlugin from "../extensions/tavily/index.js";
 import xaiPlugin from "../extensions/xai/index.js";
@@ -53,6 +54,12 @@ export const bundledWebSearchPluginRegistrations: ReadonlyArray<{
       return moonshotPlugin;
     },
     credentialValue: "sk-test",
+  },
+  {
+    get plugin() {
+      return parallelPlugin;
+    },
+    credentialValue: "par-test",
   },
   {
     get plugin() {

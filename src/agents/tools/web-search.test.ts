@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { __testing as braveTesting } from "../../../extensions/brave/src/brave-web-search-provider.js";
 import { __testing as moonshotTesting } from "../../../extensions/moonshot/src/kimi-web-search-provider.js";
+import { __testing as parallelTesting } from "../../../extensions/parallel/src/parallel-web-search-provider.js";
 import { __testing as perplexityTesting } from "../../../extensions/perplexity/web-search-provider.js";
 import { __testing as xaiTesting } from "../../../extensions/xai/src/grok-web-search-provider.js";
 import {
@@ -29,6 +30,7 @@ const { resolveGrokApiKey, resolveGrokModel, resolveGrokInlineCitations, extract
   xaiTesting;
 const { resolveKimiApiKey, resolveKimiModel, resolveKimiBaseUrl, extractKimiCitations } =
   moonshotTesting;
+const { resolveParallelApiKey, resolveParallelBaseUrl } = parallelTesting;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
 const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
@@ -380,5 +382,36 @@ describe("web_search grok config resolution", () => {
       text: "Result",
       annotationCitations: ["https://example.com"],
     });
+  });
+});
+
+describe("web_search parallel config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveParallelApiKey({ apiKey: "parallel-test-key" })).toBe("parallel-test-key"); // pragma: allowlist secret
+  });
+
+  it("falls back to PARALLEL_API_KEY env var", () => {
+    const key = "parallel-env-key"; // pragma: allowlist secret
+    withEnv({ PARALLEL_API_KEY: key }, () => {
+      expect(resolveParallelApiKey({})).toBe(key);
+    });
+  });
+
+  it("returns undefined when no key is available", () => {
+    withEnv({ PARALLEL_API_KEY: undefined }, () => {
+      expect(resolveParallelApiKey({})).toBeUndefined();
+      expect(resolveParallelApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("resolves default baseUrl", () => {
+    expect(resolveParallelBaseUrl({})).toBe("https://api.parallel.ai");
+    expect(resolveParallelBaseUrl(undefined)).toBe("https://api.parallel.ai");
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveParallelBaseUrl({ baseUrl: "https://custom.parallel.ai" })).toBe(
+      "https://custom.parallel.ai",
+    );
   });
 });

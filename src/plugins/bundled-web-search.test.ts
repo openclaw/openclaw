@@ -77,6 +77,7 @@ describe("bundled web search metadata", () => {
       "firecrawl",
       "google",
       "moonshot",
+      "parallel",
       "perplexity",
       "tavily",
       "xai",

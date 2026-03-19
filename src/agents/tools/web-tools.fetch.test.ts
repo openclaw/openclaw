@@ -537,4 +537,161 @@ describe("web_fetch extraction fallbacks", () => {
     expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(message).toContain("blocked");
   });
+
+  it("uses parallel extract for HTML when enabled", async () => {
+    const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
+      const url = resolveRequestUrl(input);
+      if (url.includes("api.parallel.ai")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            results: [
+              {
+                url: "https://example.com/page",
+                title: "Parallel Title",
+                full_content: "# Extracted via Parallel\n\nContent here.",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve(
+        htmlResponse("<html><body><p>raw html</p></body></html>", url),
+      ) as Promise<Response>;
+    });
+
+    const tool = createFetchTool({
+      parallel: { enabled: true, [apiKeyField]: "parallel-test-key" }, // pragma: allowlist secret
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/page" });
+    const details = result?.details as { extractor?: string; text?: string };
+    expect(details.extractor).toBe("parallel");
+    expect(details.text).toContain("Extracted via Parallel");
+    const parallelCall = fetchSpy.mock.calls.find((call) =>
+      resolveRequestUrl(call[0]).includes("api.parallel.ai"),
+    );
+    expect(parallelCall).toBeTruthy();
+  });
+
+  it("falls back to readability when parallel extract fails", async () => {
+    installMockFetch((input: RequestInfo | URL) => {
+      const url = resolveRequestUrl(input);
+      if (url.includes("api.parallel.ai")) {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          text: async () => "internal error",
+        } as Response);
+      }
+      return Promise.resolve(
+        htmlResponse(
+          "<html><head><title>Real Title</title></head><body><article><p>Article content here for readability.</p></article></body></html>",
+          url,
+        ),
+      ) as Promise<Response>;
+    });
+
+    const tool = createFetchTool({
+      parallel: { enabled: true, [apiKeyField]: "parallel-test-key" }, // pragma: allowlist secret
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/fallback" });
+    const details = result?.details as { extractor?: string };
+    expect(details.extractor).not.toBe("parallel");
+  });
+
+  it("skips parallel extract when disabled", async () => {
+    const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
+      const url = resolveRequestUrl(input);
+      return Promise.resolve(
+        htmlResponse(
+          "<html><head><title>Page</title></head><body><article><p>Content.</p></article></body></html>",
+          url,
+        ),
+      ) as Promise<Response>;
+    });
+
+    const tool = createFetchTool({
+      parallel: { enabled: false, [apiKeyField]: "parallel-test-key" }, // pragma: allowlist secret
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/no-parallel" });
+    const details = result?.details as { extractor?: string };
+    expect(details.extractor).not.toBe("parallel");
+    const parallelCall = fetchSpy.mock.calls.find((call) =>
+      resolveRequestUrl(call[0]).includes("api.parallel.ai"),
+    );
+    expect(parallelCall).toBeUndefined();
+  });
+
+  it("uses parallel extract when direct fetch returns non-ok", async () => {
+    installMockFetch((input: RequestInfo | URL) => {
+      const url = resolveRequestUrl(input);
+      if (url.includes("api.parallel.ai")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            results: [
+              {
+                url: "https://example.com/blocked",
+                title: "Parallel Fallback",
+                full_content: "Content extracted despite 403.",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 403,
+        url,
+        headers: makeFetchHeaders({ "content-type": "text/html" }),
+        text: async () => "blocked",
+      } as Response);
+    });
+
+    const tool = createFetchTool({
+      parallel: { enabled: true, [apiKeyField]: "parallel-test-key" }, // pragma: allowlist secret
+    });
+    const result = await executeFetch(tool, { url: "https://example.com/blocked" });
+    const details = result?.details as { extractor?: string; text?: string };
+    expect(details.extractor).toBe("parallel");
+    expect(details.text).toContain("Content extracted despite 403");
+  });
+
+  it("respects extractMode=text for parallel extract", async () => {
+    installMockFetch((input: RequestInfo | URL) => {
+      const url = resolveRequestUrl(input);
+      if (url.includes("api.parallel.ai")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            results: [
+              {
+                url: "https://example.com/page",
+                title: "Title",
+                full_content: "# Heading\n\n**Bold text** and [link](https://example.com).",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve(
+        htmlResponse("<html><body>html</body></html>", url),
+      ) as Promise<Response>;
+    });
+
+    const tool = createFetchTool({
+      parallel: { enabled: true, [apiKeyField]: "parallel-test-key" }, // pragma: allowlist secret
+    });
+    const result = await executeFetch(tool, {
+      url: "https://example.com/page",
+      extractMode: "text",
+    });
+    const details = result?.details as { extractMode?: string; text?: string };
+    expect(details.extractMode).toBe("text");
+    expect(details.text).not.toContain("[link](");
+    expect(details.text).not.toContain("# Heading");
+  });
 });
