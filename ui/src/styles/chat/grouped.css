@@ -405,7 +405,7 @@ img.chat-avatar {
 
 .chat-delete-confirm {
   position: absolute;
-  bottom: calc(100% + 6px);
+  top: calc(100% + 6px);
   background: var(--card, #1a1a1a);
   border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
   border-radius: var(--radius-md, 8px);
