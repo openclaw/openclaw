@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ApiKeyCredential, AuthProfileStore } from "../../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
+import { GIGACHAT_BASE_URL } from "../../onboard-auth.models.js";
 import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
+
+const loadAuthProfileStoreForSecretsRuntime = vi.hoisted(() =>
+  vi.fn<() => AuthProfileStore>(() => ({ version: 1, profiles: {} })),
+);
+vi.mock("../../../agents/auth-profiles.js", () => ({
+  loadAuthProfileStoreForSecretsRuntime,
+}));
 
 const applyAuthProfileConfig = vi.hoisted(() => vi.fn((cfg: OpenClawConfig) => cfg));
 vi.mock("../../../plugins/provider-auth-helpers.js", () => ({
@@ -28,6 +37,7 @@ vi.mock("../../onboard-auth.config-litellm.js", () => ({
 describe("applySimpleNonInteractiveApiKeyChoice", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    loadAuthProfileStoreForSecretsRuntime.mockReturnValue({ version: 1, profiles: {} });
     applyAuthProfileConfig.mockImplementation((cfg: OpenClawConfig) => cfg);
     applyGigachatConfig.mockImplementation((cfg: OpenClawConfig) => cfg);
     applyLitellmConfig.mockImplementation((cfg: OpenClawConfig) => cfg);
@@ -150,5 +160,56 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
       expect.stringContaining("Basic user:password credentials"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("resets the GigaChat provider base URL when replacing a Basic profile with OAuth", async () => {
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const basicProfile: ApiKeyCredential = {
+      type: "api_key",
+      provider: "gigachat",
+      key: "basic-user:basic-pass",
+      metadata: {
+        authMode: "basic",
+      },
+    };
+    loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
+      version: 1,
+      profiles: {
+        "gigachat:default": basicProfile,
+      },
+    });
+    const resolveApiKey = vi.fn(async () => ({
+      key: "gigachat-oauth-credentials",
+      source: "flag" as const,
+    }));
+    const maybeSetResolvedApiKey = vi.fn(async (resolved, setter) => {
+      await setter(resolved.key);
+      return true;
+    });
+
+    await applySimpleNonInteractiveApiKeyChoice({
+      authChoice: "gigachat-oauth",
+      nextConfig,
+      baseConfig: {
+        models: {
+          providers: {
+            gigachat: {
+              baseUrl: "https://preview-basic.gigachat.example/api/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      opts: { token: "gigachat-oauth-credentials" } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() } as never,
+      apiKeyStorageOptions: undefined,
+      resolveApiKey,
+      maybeSetResolvedApiKey,
+    });
+
+    expect(applyGigachatConfig).toHaveBeenCalledWith(expect.any(Object), {
+      baseUrl: GIGACHAT_BASE_URL,
+    });
   });
 });

@@ -1,3 +1,4 @@
+import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.js";
 import { resolveGigachatAuthMode } from "../agents/gigachat-auth.js";
 import { resolveManifestProviderApiKeyChoice } from "../plugins/provider-auth-choices.js";
 import { ensureApiKeyFromOptionEnvOrPrompt } from "./auth-choice.apply-helpers.js";
@@ -15,12 +16,22 @@ import {
   GIGACHAT_DEFAULT_MODEL_REF,
   setGigachatApiKey,
 } from "./onboard-auth.js";
+import { GIGACHAT_BASE_URL } from "./onboard-auth.models.js";
 import type { AuthChoice } from "./onboard-types.js";
 
 const CORE_API_KEY_TOKEN_PROVIDER_AUTH_CHOICES: Partial<Record<string, AuthChoice>> = {
   gigachat: "gigachat-oauth",
   litellm: "litellm-api-key",
 };
+
+function hadStoredGigachatBasicProfile(agentDir?: string): boolean {
+  const profile = loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["gigachat:default"];
+  return (
+    profile?.type === "api_key" &&
+    profile.provider === "gigachat" &&
+    profile.metadata?.authMode === "basic"
+  );
+}
 
 export function normalizeApiKeyTokenProviderAuthChoice(params: {
   authChoice: AuthChoice;
@@ -123,6 +134,7 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "gigachat-basic";
       gigachatBasicScope = gigachatScope;
     } else {
+      const resetGigachatBaseUrl = hadStoredGigachatBasicProfile(params.agentDir);
       await ensureApiKeyFromOptionEnvOrPrompt({
         token: params.opts?.gigachatApiKey ?? params.opts?.token,
         provider: "gigachat",
@@ -173,8 +185,16 @@ export async function applyAuthChoiceApiProviders(
       });
       await applyProviderDefaultModel({
         defaultModel: GIGACHAT_DEFAULT_MODEL_REF,
-        applyDefaultConfig: applyGigachatConfig,
-        applyProviderConfig: applyGigachatProviderConfig,
+        applyDefaultConfig: (config) =>
+          applyGigachatConfig(
+            config,
+            resetGigachatBaseUrl ? { baseUrl: GIGACHAT_BASE_URL } : undefined,
+          ),
+        applyProviderConfig: (config) =>
+          applyGigachatProviderConfig(
+            config,
+            resetGigachatBaseUrl ? { baseUrl: GIGACHAT_BASE_URL } : undefined,
+          ),
         noteDefault: GIGACHAT_DEFAULT_MODEL_REF,
       });
       return { config: nextConfig, agentModelOverride };

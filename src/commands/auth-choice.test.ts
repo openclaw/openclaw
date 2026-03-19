@@ -37,6 +37,7 @@ import { registerProviderPlugins } from "../test-utils/plugin-registration.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
+import { GIGACHAT_BASE_URL } from "./onboard-auth.models.js";
 import type { AuthChoice } from "./onboard-types.js";
 import {
   authProfilePathForAgent,
@@ -380,6 +381,56 @@ describe("applyAuthChoice", () => {
       expect.stringContaining("Basic user:password credentials"),
     );
     await expect(readAuthProfile("gigachat:default")).rejects.toThrow();
+  });
+
+  it("resets a custom Basic GigaChat base URL when switching to OAuth", async () => {
+    await setupTempState();
+
+    delete process.env.GIGACHAT_CREDENTIALS;
+    delete process.env.GIGACHAT_USER;
+    delete process.env.GIGACHAT_PASSWORD;
+    delete process.env.GIGACHAT_BASE_URL;
+
+    const basicText = vi
+      .fn()
+      .mockResolvedValueOnce("https://preview-basic.gigachat.example/api/v1")
+      .mockResolvedValueOnce("basic-user")
+      .mockResolvedValueOnce("basic-pass");
+    const basicHarness = createApiKeyPromptHarness({ text: basicText });
+
+    const basicResult = await applyAuthChoice({
+      authChoice: "gigachat-basic",
+      config: {},
+      prompter: basicHarness.prompter,
+      runtime: basicHarness.runtime,
+      setDefaultModel: true,
+    });
+
+    expect(basicResult.config.models?.providers?.gigachat?.baseUrl).toBe(
+      "https://preview-basic.gigachat.example/api/v1",
+    );
+
+    process.env.GIGACHAT_CREDENTIALS = "gigachat-oauth-credentials=="; // pragma: allowlist secret
+    const oauthHarness = createApiKeyPromptHarness();
+
+    const oauthResult = await applyAuthChoice({
+      authChoice: "gigachat-personal",
+      config: basicResult.config,
+      prompter: oauthHarness.prompter,
+      runtime: oauthHarness.runtime,
+      setDefaultModel: true,
+    });
+
+    expect(oauthResult.config.models?.providers?.gigachat?.baseUrl).toBe(GIGACHAT_BASE_URL);
+    expect(await readAuthProfile("gigachat:default")).toMatchObject({
+      type: "api_key",
+      provider: "gigachat",
+      metadata: {
+        authMode: "oauth",
+        scope: "GIGACHAT_API_PERS",
+        insecureTls: "false",
+      },
+    });
   });
 
   it("prompts and writes provider API key for common providers", async () => {

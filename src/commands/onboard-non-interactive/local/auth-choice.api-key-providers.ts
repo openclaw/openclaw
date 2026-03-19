@@ -1,3 +1,4 @@
+import { loadAuthProfileStoreForSecretsRuntime } from "../../../agents/auth-profiles.js";
 import { resolveGigachatAuthMode } from "../../../agents/gigachat-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
@@ -6,6 +7,7 @@ import { setGigachatApiKey, setLitellmApiKey } from "../../../plugins/provider-a
 import type { RuntimeEnv } from "../../../runtime.js";
 import { applyGigachatConfig } from "../../onboard-auth.config-core.js";
 import { applyLitellmConfig } from "../../onboard-auth.config-litellm.js";
+import { GIGACHAT_BASE_URL } from "../../onboard-auth.models.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 
 type ApiKeyStorageOptions = {
@@ -16,6 +18,15 @@ type ResolvedNonInteractiveApiKey = {
   key: string;
   source: "profile" | "env" | "flag";
 };
+
+function hadStoredGigachatBasicProfile(): boolean {
+  const profile = loadAuthProfileStoreForSecretsRuntime().profiles["gigachat:default"];
+  return (
+    profile?.type === "api_key" &&
+    profile.provider === "gigachat" &&
+    profile.metadata?.authMode === "basic"
+  );
+}
 
 async function applyGigachatNonInteractiveApiKeyChoice(params: {
   nextConfig: OpenClawConfig;
@@ -37,6 +48,7 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
     setter: (value: SecretInput) => Promise<void> | void,
   ) => Promise<boolean>;
 }): Promise<OpenClawConfig | null> {
+  const resetGigachatBaseUrl = hadStoredGigachatBasicProfile();
   const resolved = await params.resolveApiKey({
     provider: "gigachat",
     cfg: params.baseConfig,
@@ -79,6 +91,7 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
       provider: "gigachat",
       mode: "api_key",
     }),
+    resetGigachatBaseUrl ? { baseUrl: GIGACHAT_BASE_URL } : undefined,
   );
 }
 
