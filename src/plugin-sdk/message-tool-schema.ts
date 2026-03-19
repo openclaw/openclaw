@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { TSchema } from "@sinclair/typebox";
-import { stringEnum } from "../../agents/schema/typebox.js";
+import { stringEnum } from "../agents/schema/typebox.js";
 
 export function createMessageToolButtonsSchema(): TSchema {
   return Type.Array(
