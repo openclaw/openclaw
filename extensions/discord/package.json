@@ -7,6 +7,7 @@
     "@buape/carbon": "0.0.0-beta-20260216184201",
     "@discordjs/voice": "^0.19.2",
     "discord-api-types": "^0.38.42",
+    "https-proxy-agent": "^8.0.0",
     "opusscript": "^0.1.1"
   },
   "openclaw": {
