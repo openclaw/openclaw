@@ -166,6 +166,12 @@ function applySkillConfigEnvOverrides(params: {
     }
   }
 
+  // Allow all keys explicitly configured in skills.entries.*.env to pass sensitive-key checks.
+  // The user intentionally set these; only always-blocked patterns (host-dangerous vars) remain hard-blocked.
+  for (const envKey of Object.keys(pendingOverrides)) {
+    allowedSensitiveKeys.add(envKey);
+  }
+
   const resolvedApiKey =
     normalizeResolvedSecretInputString({
       value: skillConfig.apiKey,
