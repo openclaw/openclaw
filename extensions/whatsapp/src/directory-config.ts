@@ -1,17 +1,16 @@
 import {
-  listDirectoryGroupEntriesFromMapKeys,
-  listDirectoryUserEntriesFromAllowFrom,
+  listResolvedDirectoryGroupEntriesFromMapKeys,
+  listResolvedDirectoryUserEntriesFromAllowFrom,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../../src/whatsapp/normalize.js";
 import { resolveWhatsAppAccount } from "./accounts.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
 
 export async function listWhatsAppDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
-  return listDirectoryUserEntriesFromAllowFrom({
-    allowFrom: account.allowFrom,
-    query: params.query,
-    limit: params.limit,
+  return listResolvedDirectoryUserEntriesFromAllowFrom({
+    ...params,
+    resolveAccount: (cfg, accountId) => resolveWhatsAppAccount({ cfg, accountId }),
+    resolveAllowFrom: (account) => account.allowFrom,
     normalizeId: (entry) => {
       const normalized = normalizeWhatsAppTarget(entry);
       if (!normalized || isWhatsAppGroupJid(normalized)) {
@@ -23,10 +22,9 @@ export async function listWhatsAppDirectoryPeersFromConfig(params: DirectoryConf
 }
 
 export async function listWhatsAppDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
-  return listDirectoryGroupEntriesFromMapKeys({
-    groups: account.groups,
-    query: params.query,
-    limit: params.limit,
+  return listResolvedDirectoryGroupEntriesFromMapKeys({
+    ...params,
+    resolveAccount: (cfg, accountId) => resolveWhatsAppAccount({ cfg, accountId }),
+    resolveGroups: (account) => account.groups,
   });
 }

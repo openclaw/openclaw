@@ -26,7 +26,7 @@ type AssistantLikeMessage = {
 };
 
 function resolveLiveXaiModel() {
-  return getModel("xai", "grok-4-1-fast-reasoning") ?? getModel("xai", "grok-4");
+  return getModel("xai", "grok-4-1-fast-reasoning" as never) ?? getModel("xai", "grok-4");
 }
 
 async function collectDoneMessage(

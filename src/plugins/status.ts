@@ -2,6 +2,8 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
+import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -64,7 +66,16 @@ export type PluginInspectReport = {
   cliCommands: string[];
   services: string[];
   gatewayMethods: string[];
+  mcpServers: Array<{
+    name: string;
+    hasStdioTransport: boolean;
+  }>;
+  lspServers: Array<{
+    name: string;
+    hasStdioTransport: boolean;
+  }>;
   httpRouteCount: number;
+  bundleCapabilities: string[];
   diagnostics: PluginDiagnostic[];
   policy: {
     allowPromptInjection?: boolean;
@@ -226,6 +237,46 @@ export function buildPluginInspectReport(params: {
     httpRouteCount: plugin.httpRoutes,
   });
 
+  // Populate MCP server info for bundle-format plugins with a known rootDir.
+  let mcpServers: PluginInspectReport["mcpServers"] = [];
+  if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
+    const mcpSupport = inspectBundleMcpRuntimeSupport({
+      pluginId: plugin.id,
+      rootDir: plugin.rootDir,
+      bundleFormat: plugin.bundleFormat,
+    });
+    mcpServers = [
+      ...mcpSupport.supportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: true,
+      })),
+      ...mcpSupport.unsupportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: false,
+      })),
+    ];
+  }
+
+  // Populate LSP server info for bundle-format plugins with a known rootDir.
+  let lspServers: PluginInspectReport["lspServers"] = [];
+  if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
+    const lspSupport = inspectBundleLspRuntimeSupport({
+      pluginId: plugin.id,
+      rootDir: plugin.rootDir,
+      bundleFormat: plugin.bundleFormat,
+    });
+    lspServers = [
+      ...lspSupport.supportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: true,
+      })),
+      ...lspSupport.unsupportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: false,
+      })),
+    ];
+  }
+
   const usesLegacyBeforeAgentStart = typedHooks.some(
     (entry) => entry.name === "before_agent_start",
   );
@@ -248,7 +299,10 @@ export function buildPluginInspectReport(params: {
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
     gatewayMethods: [...plugin.gatewayMethods],
+    mcpServers,
+    lspServers,
     httpRouteCount: plugin.httpRoutes,
+    bundleCapabilities: plugin.bundleCapabilities ?? [],
     diagnostics,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,

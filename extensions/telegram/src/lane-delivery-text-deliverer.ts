@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
@@ -459,7 +460,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     allowPreviewUpdateForNonFinal = false,
   }: DeliverLaneTextParams): Promise<LaneDeliveryResult> => {
     const lane = params.lanes[laneName];
-    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    const reply = resolveSendableOutboundReplyParts(payload, { text });
+    const hasMedia = reply.hasMedia;
     const canEditViaPreview =
       !hasMedia && text.length > 0 && text.length <= params.draftMaxChars && !payload.isError;
 

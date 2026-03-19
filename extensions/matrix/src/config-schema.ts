@@ -5,16 +5,27 @@ import {
   GroupPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
-import { MarkdownConfigSchema, ToolPolicySchema } from "../runtime-api.js";
-import { buildSecretInputSchema } from "./secret-input.js";
+import { buildSecretInputSchema, MarkdownConfigSchema, ToolPolicySchema } from "./runtime-api.js";
 
 const matrixActionSchema = z
   .object({
     reactions: z.boolean().optional(),
     messages: z.boolean().optional(),
     pins: z.boolean().optional(),
+    profile: z.boolean().optional(),
     memberInfo: z.boolean().optional(),
     channelInfo: z.boolean().optional(),
+    verification: z.boolean().optional(),
+  })
+  .optional();
+
+const matrixThreadBindingsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    idleHours: z.number().nonnegative().optional(),
+    maxAgeHours: z.number().nonnegative().optional(),
+    spawnSubagentSessions: z.boolean().optional(),
+    spawnAcpSessions: z.boolean().optional(),
   })
   .optional();
 
@@ -41,7 +52,9 @@ export const MatrixConfigSchema = z.object({
   userId: z.string().optional(),
   accessToken: z.string().optional(),
   password: buildSecretInputSchema().optional(),
+  deviceId: z.string().optional(),
   deviceName: z.string().optional(),
+  avatarUrl: z.string().optional(),
   initialSyncLimit: z.number().optional(),
   encryption: z.boolean().optional(),
   allowlistOnly: z.boolean().optional(),
@@ -51,6 +64,14 @@ export const MatrixConfigSchema = z.object({
   textChunkLimit: z.number().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
   responsePrefix: z.string().optional(),
+  ackReaction: z.string().optional(),
+  ackReactionScope: z
+    .enum(["group-mentions", "group-all", "direct", "all", "none", "off"])
+    .optional(),
+  reactionNotifications: z.enum(["off", "own"]).optional(),
+  threadBindings: matrixThreadBindingsSchema,
+  startupVerification: z.enum(["off", "if-unverified"]).optional(),
+  startupVerificationCooldownHours: z.number().optional(),
   mediaMaxMb: z.number().optional(),
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
   autoJoinAllowlist: AllowFromListSchema,

@@ -25,7 +25,7 @@ describe("amazon-bedrock provider plugin", () => {
     const wrapped = provider.wrapStreamFn?.({
       provider: "amazon-bedrock",
       modelId: "amazon.nova-micro-v1:0",
-      streamFn: (_model, _context, options) => options,
+      streamFn: (_model: unknown, _context: unknown, options: Record<string, unknown>) => options,
     } as never);
 
     expect(

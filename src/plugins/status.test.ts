@@ -122,7 +122,7 @@ describe("buildPluginStatusReport", () => {
           configSchema: false,
         },
       ],
-      diagnostics: [{ level: "warn", pluginId: "google", message: "watch this seam" }],
+      diagnostics: [{ level: "warn", pluginId: "google", message: "watch this surface" }],
       channels: [],
       channelSetups: [],
       providers: [],
@@ -175,7 +175,7 @@ describe("buildPluginStatusReport", () => {
       hasAllowedModelsConfig: true,
     });
     expect(inspect?.diagnostics).toEqual([
-      { level: "warn", pluginId: "google", message: "watch this seam" },
+      { level: "warn", pluginId: "google", message: "watch this surface" },
     ]);
   });
 
@@ -491,6 +491,117 @@ describe("buildPluginStatusReport", () => {
 
     expect(buildPluginCompatibilityNotices()).toEqual([]);
     expect(buildPluginCompatibilityWarnings()).toEqual([]);
+  });
+
+  it("populates bundleCapabilities from plugin record", () => {
+    loadOpenClawPluginsMock.mockReturnValue({
+      plugins: [
+        {
+          id: "claude-bundle",
+          name: "Claude Bundle",
+          description: "A bundle plugin with skills and commands",
+          source: "/tmp/claude-bundle/.claude-plugin/plugin.json",
+          origin: "workspace",
+          enabled: true,
+          status: "loaded",
+          format: "bundle",
+          bundleFormat: "claude",
+          bundleCapabilities: ["skills", "commands", "agents", "settings"],
+          rootDir: "/tmp/claude-bundle",
+          toolNames: [],
+          hookNames: [],
+          channelIds: [],
+          providerIds: [],
+          speechProviderIds: [],
+          mediaUnderstandingProviderIds: [],
+          imageGenerationProviderIds: [],
+          webSearchProviderIds: [],
+          gatewayMethods: [],
+          cliCommands: [],
+          services: [],
+          commands: [],
+          httpRoutes: 0,
+          hookCount: 0,
+          configSchema: false,
+        },
+      ],
+      diagnostics: [],
+      channels: [],
+      channelSetups: [],
+      providers: [],
+      speechProviders: [],
+      mediaUnderstandingProviders: [],
+      imageGenerationProviders: [],
+      webSearchProviders: [],
+      tools: [],
+      hooks: [],
+      typedHooks: [],
+      httpRoutes: [],
+      gatewayHandlers: {},
+      cliRegistrars: [],
+      services: [],
+      commands: [],
+    });
+
+    const inspect = buildPluginInspectReport({ id: "claude-bundle" });
+
+    expect(inspect).not.toBeNull();
+    expect(inspect?.bundleCapabilities).toEqual(["skills", "commands", "agents", "settings"]);
+    expect(inspect?.mcpServers).toEqual([]);
+    expect(inspect?.shape).toBe("non-capability");
+  });
+
+  it("returns empty bundleCapabilities and mcpServers for non-bundle plugins", () => {
+    loadOpenClawPluginsMock.mockReturnValue({
+      plugins: [
+        {
+          id: "plain-plugin",
+          name: "Plain Plugin",
+          description: "A regular plugin",
+          source: "/tmp/plain-plugin/index.ts",
+          origin: "workspace",
+          enabled: true,
+          status: "loaded",
+          toolNames: [],
+          hookNames: [],
+          channelIds: [],
+          providerIds: ["plain"],
+          speechProviderIds: [],
+          mediaUnderstandingProviderIds: [],
+          imageGenerationProviderIds: [],
+          webSearchProviderIds: [],
+          gatewayMethods: [],
+          cliCommands: [],
+          services: [],
+          commands: [],
+          httpRoutes: 0,
+          hookCount: 0,
+          configSchema: false,
+        },
+      ],
+      diagnostics: [],
+      channels: [],
+      channelSetups: [],
+      providers: [],
+      speechProviders: [],
+      mediaUnderstandingProviders: [],
+      imageGenerationProviders: [],
+      webSearchProviders: [],
+      tools: [],
+      hooks: [],
+      typedHooks: [],
+      httpRoutes: [],
+      gatewayHandlers: {},
+      cliRegistrars: [],
+      services: [],
+      commands: [],
+    });
+
+    const inspect = buildPluginInspectReport({ id: "plain-plugin" });
+
+    expect(inspect).not.toBeNull();
+    expect(inspect?.bundleCapabilities).toEqual([]);
+    expect(inspect?.mcpServers).toEqual([]);
   });
 
   it("formats and summarizes compatibility notices", () => {
