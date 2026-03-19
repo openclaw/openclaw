@@ -124,6 +124,98 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant", "user"]);
   });
 
+  it("detects pending tools via state.pendingToolCalls Set (pi-agent-core bridge)", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+
+    // Simulate a pi-agent-core Agent that tracks pendingToolCalls as a Set on state.
+    const pendingToolCalls = new Set<string>(["call_bridge_1"]);
+    const secondIdle = deferred<void>();
+    const waitForIdle = vi
+      .fn<() => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => secondIdle.promise);
+
+    // Bridge: same pattern as withPendingToolCallsHint in attempt.ts
+    const agent = {
+      waitForIdle,
+      hasPendingToolCalls: () => pendingToolCalls.size > 0,
+    };
+
+    appendMessage(assistantToolCall("call_bridge_1"));
+
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: 5_000,
+    });
+
+    // Let microtasks settle.
+    await new Promise<void>((r) => setTimeout(r, 50));
+
+    // Simulate tool completion: clear the Set and deliver the result.
+    pendingToolCalls.delete("call_bridge_1");
+    appendMessage(toolResult("call_bridge_1", "bridged result"));
+    secondIdle.resolve();
+    await flushPromise;
+
+    const messages = getMessages(sm);
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    expect((messages[1] as { isError?: boolean }).isError).not.toBe(true);
+    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toBe(
+      "bridged result",
+    );
+  });
+
+  it("re-waits across retry gap when hasPendingToolCalls returns true", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+
+    // First idle resolves immediately, second resolves after tool completes.
+    const secondIdle = deferred<void>();
+    const waitForIdle = vi
+      .fn<() => Promise<void>>()
+      .mockResolvedValueOnce(undefined) // first call: resolves immediately (retry gap)
+      .mockImplementationOnce(() => secondIdle.promise); // second call: waits for real idle
+
+    // hasPendingToolCalls returns true on first check (tools still running after
+    // idle resolved prematurely), then false once tools finish.
+    const hasPendingToolCalls = vi
+      .fn<() => boolean>()
+      .mockReturnValueOnce(true) // first check: still pending
+      .mockReturnValueOnce(false); // second check: drained
+
+    const agent = { waitForIdle, hasPendingToolCalls };
+
+    appendMessage(assistantToolCall("call_retry_gap_1"));
+
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: 5_000,
+    });
+
+    // Let microtasks settle — first idle resolves, hasPendingToolCalls=true,
+    // flush re-waits after 10ms tick.
+    await vi.advanceTimersByTimeAsync?.(20).catch(() => {});
+    await new Promise<void>((r) => setTimeout(r, 50));
+
+    // Tool result arrives while flush is re-waiting.
+    appendMessage(toolResult("call_retry_gap_1", "arrived after retry gap"));
+    secondIdle.resolve();
+    await flushPromise;
+
+    const messages = getMessages(sm);
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    // The real tool result should be preserved, not a synthetic error.
+    expect((messages[1] as { isError?: boolean }).isError).not.toBe(true);
+    expect((messages[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toBe(
+      "arrived after retry gap",
+    );
+    expect(waitForIdle).toHaveBeenCalledTimes(2);
+    expect(hasPendingToolCalls).toHaveBeenCalled();
+  });
+
   it("clears timeout handle when waitForIdle resolves first", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
     vi.useFakeTimers();
