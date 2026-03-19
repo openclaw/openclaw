@@ -6,7 +6,7 @@ import OpenClawIPC
 import SwiftUI
 
 enum UIStrings {
-    static let welcomeTitle = "Welcome to OpenClaw"
+    static var welcomeTitle: String { "Welcome to \(AppFlavor.current.appName)" }
 }
 
 enum RemoteOnboardingProbeState: Equatable {
@@ -24,7 +24,7 @@ final class OnboardingController {
     func show() {
         if ProcessInfo.processInfo.isNixMode {
             // Nix mode is fully declarative; onboarding would suggest interactive setup that doesn't apply.
-            UserDefaults.standard.set(true, forKey: "openclaw.onboardingSeen")
+            UserDefaults.standard.set(true, forKey: onboardingSeenKey)
             UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
             AppStateStore.shared.onboardingSeen = true
             return

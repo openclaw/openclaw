@@ -31,13 +31,15 @@ extension OnboardingView {
     func welcomePage() -> some View {
         self.onboardingPage {
             VStack(spacing: 22) {
-                Text("Welcome to OpenClaw")
+                Text("Welcome to \(AppFlavor.current.appName)")
                     .font(.largeTitle.weight(.semibold))
-                Text("OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
+                Text(
+                    AppFlavor.current.isConsumer
+                        ? "Set up your AI operator on this Mac. We keep the first run simple and hide the heavy machinery unless you ask for it."
+                        : "OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .lineLimit(2)
                     .frame(maxWidth: 560)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -53,10 +55,10 @@ extension OnboardingView {
                             Text("Security notice")
                                 .font(.headline)
                             Text(
-                                "The connected AI agent (e.g. Claude) can trigger powerful actions on your Mac, " +
+                                "The connected AI agent can trigger powerful actions on your Mac, " +
                                     "including running commands, reading/writing files, and capturing screenshots — " +
                                     "depending on the permissions you grant.\n\n" +
-                                    "Only enable OpenClaw if you understand the risks and trust the prompts and " +
+                                    "Only enable \(AppFlavor.current.appName) if you understand the risks and trust the prompts and " +
                                     "integrations you use.")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
@@ -72,15 +74,15 @@ extension OnboardingView {
 
     func connectionPage() -> some View {
         self.onboardingPage {
-            Text("Choose your Gateway")
+            Text(AppFlavor.current.isConsumer ? "Choose where it runs" : "Choose your Gateway")
                 .font(.largeTitle.weight(.semibold))
             Text(
-                "OpenClaw uses a single Gateway that stays running. Pick this Mac, " +
-                    "connect to a discovered gateway nearby, or configure later.")
+                AppFlavor.current.isConsumer
+                    ? "The default is this Mac. That keeps setup fast and makes the app feel like your own operator instead of a server console."
+                    : "OpenClaw uses a single Gateway that stays running. Pick this Mac, connect to a discovered gateway nearby, or configure later.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -96,7 +98,9 @@ extension OnboardingView {
 
                     Divider().padding(.vertical, 4)
 
-                    self.gatewayDiscoverySection()
+                    if !AppFlavor.current.isConsumer || self.showAdvancedConnection {
+                        self.gatewayDiscoverySection()
+                    }
 
                     if self.shouldShowRemoteConnectionSection {
                         Divider().padding(.vertical, 4)
@@ -135,7 +139,9 @@ extension OnboardingView {
 
     private var localGatewaySubtitle: String {
         guard let probe = self.localGatewayProbe else {
-            return "Gateway starts automatically on this Mac."
+            return AppFlavor.current.isConsumer
+                ? "Your AI operator starts on this Mac."
+                : "Gateway starts automatically on this Mac."
         }
         let base = probe.expected
             ? "Existing gateway detected"
@@ -293,6 +299,8 @@ extension OnboardingView {
     }
 
     private var shouldShowRemoteConnectionSection: Bool {
+        let consumerGate = !AppFlavor.current.isConsumer || self.showAdvancedConnection
+        guard consumerGate || self.state.connectionMode == .remote else { return false }
         self.state.connectionMode == .remote ||
             self.showAdvancedConnection ||
             self.remoteProbeState != .idle ||
@@ -318,7 +326,9 @@ extension OnboardingView {
         case .direct:
             let trimmedUrl = self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmedUrl.isEmpty {
-                return "Select a nearby gateway or open Advanced to enter a gateway URL."
+                return AppFlavor.current.isConsumer
+                    ? "Open Advanced to connect to a remote runtime."
+                    : "Select a nearby gateway or open Advanced to enter a gateway URL."
             }
             if GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) == nil {
                 return "Gateway URL must use wss:// for remote hosts (ws:// only for localhost)."
@@ -327,7 +337,9 @@ extension OnboardingView {
         case .ssh:
             let trimmedTarget = self.state.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmedTarget.isEmpty {
-                return "Select a nearby gateway or open Advanced to enter an SSH target."
+                return AppFlavor.current.isConsumer
+                    ? "Open Advanced to enter an SSH target."
+                    : "Select a nearby gateway or open Advanced to enter an SSH target."
             }
             return CommandResolver.sshTargetValidationMessage(trimmedTarget)
         }
@@ -344,7 +356,9 @@ extension OnboardingView {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Remote connection")
                         .font(.callout.weight(.semibold))
-                    Text("Checks the real remote websocket and auth handshake.")
+                    Text(AppFlavor.current.isConsumer
+                        ? "Use this only when your operator runs on another machine."
+                        : "Checks the real remote websocket and auth handshake.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -592,7 +606,10 @@ extension OnboardingView {
         self.onboardingPage {
             Text("Grant permissions")
                 .font(.largeTitle.weight(.semibold))
-            Text("These macOS permissions let OpenClaw automate apps and capture context on this Mac.")
+            Text(
+                AppFlavor.current.isConsumer
+                    ? "These permissions let your AI operator help on this Mac when you ask it to."
+                    : "These macOS permissions let OpenClaw automate apps and capture context on this Mac.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -783,8 +800,9 @@ extension OnboardingView {
             Text("Meet your agent")
                 .font(.largeTitle.weight(.semibold))
             Text(
-                "This is a dedicated onboarding chat. Your agent will introduce itself, " +
-                    "learn who you are, and help you connect WhatsApp or Telegram if you want.")
+                AppFlavor.current.isConsumer
+                    ? "This is a dedicated setup chat. Your agent can introduce itself and help with the next steps without mixing into your normal conversations."
+                    : "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect WhatsApp or Telegram if you want.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -827,34 +845,40 @@ extension OnboardingView {
                 }
                 self.featureRow(
                     title: "Open the menu bar panel",
-                    subtitle: "Click the OpenClaw menu bar icon for quick chat and status.",
+                    subtitle: "Click the \(AppFlavor.current.appName) menu bar icon for quick chat and status.",
                     systemImage: "bubble.left.and.bubble.right")
-                self.featureActionRow(
-                    title: "Connect WhatsApp or Telegram",
-                    subtitle: "Open Settings → Channels to link channels and monitor status.",
-                    systemImage: "link",
-                    buttonTitle: "Open Settings → Channels")
-                {
-                    self.openSettings(tab: .channels)
+                if !AppFlavor.current.isConsumer || self.state.showAdvancedSettings {
+                    self.featureActionRow(
+                        title: "Connect channels",
+                        subtitle: "Open Settings → Channels to link channels and monitor status.",
+                        systemImage: "link",
+                        buttonTitle: "Open Settings → Channels")
+                    {
+                        self.openSettings(tab: .channels)
+                    }
+                    self.featureRow(
+                        title: "Try Voice Wake",
+                        subtitle: "Enable Voice Wake in Settings for hands-free commands with a live transcript overlay.",
+                        systemImage: "waveform.circle")
+                    self.featureRow(
+                        title: "Use the panel + Canvas",
+                        subtitle: "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas.",
+                        systemImage: "rectangle.inset.filled.and.person.filled")
+                    self.featureActionRow(
+                        title: "Give your agent more powers",
+                        subtitle: "Enable optional skills from Settings → Skills.",
+                        systemImage: "sparkles",
+                        buttonTitle: "Open Settings → Skills")
+                    {
+                        self.openSettings(tab: .skills)
+                    }
+                    self.skillsOverview
+                } else {
+                    self.featureRow(
+                        title: "Keep it simple",
+                        subtitle: "We hide the power-user controls by default. You can reveal them later from Settings → General.",
+                        systemImage: "slider.horizontal.3")
                 }
-                self.featureRow(
-                    title: "Try Voice Wake",
-                    subtitle: "Enable Voice Wake in Settings for hands-free commands with a live transcript overlay.",
-                    systemImage: "waveform.circle")
-                self.featureRow(
-                    title: "Use the panel + Canvas",
-                    subtitle: "Open the menu bar panel for quick chat; the agent can show previews " +
-                        "and richer visuals in Canvas.",
-                    systemImage: "rectangle.inset.filled.and.person.filled")
-                self.featureActionRow(
-                    title: "Give your agent more powers",
-                    subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",
-                    systemImage: "sparkles",
-                    buttonTitle: "Open Settings → Skills")
-                {
-                    self.openSettings(tab: .skills)
-                }
-                self.skillsOverview
                 Toggle("Launch at login", isOn: self.$state.launchAtLogin)
                     .onChange(of: self.state.launchAtLogin) { _, newValue in
                         AppStateStore.updateLaunchAtLogin(enabled: newValue)

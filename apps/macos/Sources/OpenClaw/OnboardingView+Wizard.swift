@@ -6,9 +6,12 @@ extension OnboardingView {
     func wizardPage() -> some View {
         self.onboardingPage {
             VStack(spacing: 16) {
-                Text("Setup Wizard")
+                Text(AppFlavor.current.isConsumer ? "Finish setup" : "Setup Wizard")
                     .font(.largeTitle.weight(.semibold))
-                Text("Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI.")
+                Text(
+                    AppFlavor.current.isConsumer
+                        ? "Finish the guided setup. We keep this in sync with the runtime so the app and CLI do not drift apart."
+                        : "Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

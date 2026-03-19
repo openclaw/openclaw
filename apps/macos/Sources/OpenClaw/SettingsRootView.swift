@@ -18,6 +18,10 @@ struct SettingsRootView: View {
         self._selectedTab = State(initialValue: initialTab ?? .general)
     }
 
+    private var showsAdvancedSettings: Bool {
+        !AppFlavor.current.isConsumer || self.state.showAdvancedSettings
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if self.isNixMode {
@@ -28,33 +32,35 @@ struct SettingsRootView: View {
                     .tabItem { Label("General", systemImage: "gearshape") }
                     .tag(SettingsTab.general)
 
-                ChannelsSettings()
-                    .tabItem { Label("Channels", systemImage: "link") }
-                    .tag(SettingsTab.channels)
+                if self.showsAdvancedSettings {
+                    ChannelsSettings()
+                        .tabItem { Label("Channels", systemImage: "link") }
+                        .tag(SettingsTab.channels)
 
-                VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
-                    .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
-                    .tag(SettingsTab.voiceWake)
+                    VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
+                        .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
+                        .tag(SettingsTab.voiceWake)
 
-                ConfigSettings()
-                    .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
-                    .tag(SettingsTab.config)
+                    ConfigSettings()
+                        .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
+                        .tag(SettingsTab.config)
 
-                InstancesSettings()
-                    .tabItem { Label("Instances", systemImage: "network") }
-                    .tag(SettingsTab.instances)
+                    InstancesSettings()
+                        .tabItem { Label("Instances", systemImage: "network") }
+                        .tag(SettingsTab.instances)
 
-                SessionsSettings()
-                    .tabItem { Label("Sessions", systemImage: "clock.arrow.circlepath") }
-                    .tag(SettingsTab.sessions)
+                    SessionsSettings()
+                        .tabItem { Label("Sessions", systemImage: "clock.arrow.circlepath") }
+                        .tag(SettingsTab.sessions)
 
-                CronSettings()
-                    .tabItem { Label("Cron", systemImage: "calendar") }
-                    .tag(SettingsTab.cron)
+                    CronSettings()
+                        .tabItem { Label("Cron", systemImage: "calendar") }
+                        .tag(SettingsTab.cron)
 
-                SkillsSettings(state: self.state)
-                    .tabItem { Label("Skills", systemImage: "sparkles") }
-                    .tag(SettingsTab.skills)
+                    SkillsSettings(state: self.state)
+                        .tabItem { Label("Skills", systemImage: "sparkles") }
+                        .tag(SettingsTab.skills)
+                }
 
                 PermissionsSettings(
                     status: self.permissionMonitor.status,
@@ -63,7 +69,7 @@ struct SettingsRootView: View {
                     .tabItem { Label("Permissions", systemImage: "lock.shield") }
                     .tag(SettingsTab.permissions)
 
-                if self.state.debugPaneEnabled {
+                if self.state.debugPaneEnabled, self.showsAdvancedSettings {
                     DebugSettings(state: self.state)
                         .tabItem { Label("Debug", systemImage: "ant") }
                         .tag(SettingsTab.debug)
@@ -145,7 +151,13 @@ struct SettingsRootView: View {
     }
 
     private func validTab(for requested: SettingsTab) -> SettingsTab {
-        if requested == .debug, !self.state.debugPaneEnabled { return .general }
+        if !Self.visibleTabs(
+            isConsumer: AppFlavor.current.isConsumer,
+            showAdvancedSettings: self.state.showAdvancedSettings,
+            debugPaneEnabled: self.state.debugPaneEnabled).contains(requested)
+        {
+            return .general
+        }
         return requested
     }
 
@@ -205,6 +217,29 @@ enum SettingsTab: CaseIterable {
         case .debug: "ant"
         case .about: "info.circle"
         }
+    }
+}
+
+extension SettingsRootView {
+    static func visibleTabs(
+        isConsumer: Bool,
+        showAdvancedSettings: Bool,
+        debugPaneEnabled: Bool) -> [SettingsTab]
+    {
+        // Consumer mode intentionally exposes only the minimum day-1 surface.
+        // We keep the deeper tabs in the binary so advanced users can reveal them
+        // without forcing a second app codebase.
+        let advancedVisible = !isConsumer || showAdvancedSettings
+        var tabs: [SettingsTab] = [.general]
+        if advancedVisible {
+            tabs += [.channels, .voiceWake, .config, .instances, .sessions, .cron, .skills]
+        }
+        tabs += [.permissions]
+        if advancedVisible, debugPaneEnabled {
+            tabs += [.debug]
+        }
+        tabs += [.about]
+        return tabs
     }
 }
 

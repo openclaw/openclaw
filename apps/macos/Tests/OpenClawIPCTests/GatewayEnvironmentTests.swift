@@ -46,6 +46,19 @@ struct GatewayEnvironmentTests {
         }
     }
 
+    @Test func `consumer flavor defaults to isolated gateway port`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: [
+                "OPENCLAW_CONFIG_PATH": configPath,
+                "OPENCLAW_APP_VARIANT": "consumer",
+            ],
+            defaults: ["gatewayPort": nil])
+        {
+            #expect(GatewayEnvironment.gatewayPort() == 19001)
+        }
+    }
+
     @Test func `expected gateway version from string uses parser`() {
         #expect(GatewayEnvironment.expectedGatewayVersion(from: "v9.1.2") == Semver(major: 9, minor: 1, patch: 2))
         #expect(GatewayEnvironment.expectedGatewayVersion(from: "2026.1.11-4") == Semver(
