@@ -568,43 +568,8 @@ class NodeRuntime(
 
     scope.launch(Dispatchers.Default) {
       gateways.collect { list ->
-        if (list.isNotEmpty()) {
-          // Security: don't let an unauthenticated discovery feed continuously steer autoconnect.
-          // UX parity with iOS: only set once when unset.
-          if (lastDiscoveredStableId.value.trim().isEmpty()) {
-            prefs.setLastDiscoveredStableId(list.first().stableId)
-          }
-        }
-
-        if (didAutoConnect) return@collect
-        if (_isConnected.value) return@collect
-
-        if (manualEnabled.value) {
-          val host = manualHost.value.trim()
-          val port = manualPort.value
-          if (host.isNotEmpty() && port in 1..65535) {
-            // Security: autoconnect only to previously trusted gateways (stored TLS pin).
-            if (!manualTls.value) return@collect
-            val stableId = GatewayEndpoint.manual(host = host, port = port).stableId
-            val storedFingerprint = prefs.loadGatewayTlsFingerprint(stableId)?.trim().orEmpty()
-            if (storedFingerprint.isEmpty()) return@collect
-
-            didAutoConnect = true
-            connect(GatewayEndpoint.manual(host = host, port = port))
-          }
-          return@collect
-        }
-
-        val targetStableId = lastDiscoveredStableId.value.trim()
-        if (targetStableId.isEmpty()) return@collect
-        val target = list.firstOrNull { it.stableId == targetStableId } ?: return@collect
-
-        // Security: autoconnect only to previously trusted gateways (stored TLS pin).
-        val storedFingerprint = prefs.loadGatewayTlsFingerprint(target.stableId)?.trim().orEmpty()
-        if (storedFingerprint.isEmpty()) return@collect
-
-        didAutoConnect = true
-        connect(target)
+        seedLastDiscoveredGateway(list)
+        autoConnectIfNeeded()
       }
     }
 
@@ -629,9 +594,51 @@ class NodeRuntime(
 
   fun setForeground(value: Boolean) {
     _isForeground.value = value
-    if (!value) {
+    if (value) {
+      reconnectPreferredGatewayOnForeground()
+    } else {
       stopActiveVoiceSession()
     }
+  }
+
+  private fun seedLastDiscoveredGateway(list: List<GatewayEndpoint>) {
+    if (list.isEmpty()) return
+    if (lastDiscoveredStableId.value.trim().isNotEmpty()) return
+    prefs.setLastDiscoveredStableId(list.first().stableId)
+  }
+
+  private fun resolvePreferredGatewayEndpoint(): GatewayEndpoint? {
+    if (manualEnabled.value) {
+      val host = manualHost.value.trim()
+      val port = manualPort.value
+      if (host.isEmpty() || port !in 1..65535) return null
+      return GatewayEndpoint.manual(host = host, port = port)
+    }
+
+    val targetStableId = lastDiscoveredStableId.value.trim()
+    if (targetStableId.isEmpty()) return null
+    val endpoint = gateways.value.firstOrNull { it.stableId == targetStableId } ?: return null
+    val storedFingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim().orEmpty()
+    if (storedFingerprint.isEmpty()) return null
+    return endpoint
+  }
+
+  private fun autoConnectIfNeeded() {
+    if (didAutoConnect) return
+    if (_isConnected.value) return
+    val endpoint = resolvePreferredGatewayEndpoint() ?: return
+    didAutoConnect = true
+    connect(endpoint)
+  }
+
+  private fun reconnectPreferredGatewayOnForeground() {
+    if (_isConnected.value) return
+    if (_pendingGatewayTrust.value != null) return
+    if (connectedEndpoint != null) {
+      refreshGatewayConnection()
+      return
+    }
+    resolvePreferredGatewayEndpoint()?.let(::connect)
   }
 
   fun setDisplayName(value: String) {
