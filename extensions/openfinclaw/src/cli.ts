@@ -21,7 +21,7 @@ export function registerStrategyCli(params: {
 
   const root = program
     .command("strategy")
-    .description("Strategy management: fork from Hub, list local, validate");
+    .description("Strategy management: fork from Hub, list local, validate (FEP v2.0)");
 
   // ── strategy leaderboard ──
   root
@@ -242,7 +242,7 @@ export function registerStrategyCli(params: {
   // ── strategy validate ──
   root
     .command("validate <path>")
-    .description("Validate a local strategy package")
+    .description("Validate a local strategy package (FEP v2.0)")
     .action(async (_path: string) => {
       console.log("验证功能请使用 skill_validate 工具");
       console.log("  调用 skill_validate 并传入目录路径");

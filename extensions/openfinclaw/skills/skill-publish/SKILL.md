@@ -1,6 +1,6 @@
 ---
 name: skill-publish
-description: "Skill Publishing Agent. Use when the user wants to publish a strategy to the server, check publish/backtest status, or view backtest report. Flow: validate → zip → publish → poll verify → get report."
+description: "Skill Publishing Agent. Use when the user wants to publish a strategy to the server, check publish/backtest status, or view backtest report. Flow: validate → zip → publish → poll verify → get report. Supports FEP v2.0 protocol."
 metadata: { "openclaw": { "requires": { "extensions": ["openfinclaw"] } } }
 ---
 
@@ -60,7 +60,7 @@ Before publishing, **always check** `identity.visibility` in the strategy's `fep
 
 | Tool                   | Purpose                                                                      |
 | ---------------------- | ---------------------------------------------------------------------------- |
-| `skill_validate`       | Validate strategy package directory locally (fep v1.2) before zipping        |
+| `skill_validate`       | Validate strategy package directory locally (FEP v2.0) before zipping        |
 | `skill_publish`        | POST ZIP to server; returns submissionId, backtestTaskId, and initial status |
 | `skill_publish_verify` | GET publish/backtest status by submissionId or backtestTaskId                |
 
@@ -109,14 +109,14 @@ Configure via:
 | `backtestReportInDb` | Full report saved to database   |
 | `backtestReport`     | Complete report when completed  |
 
-## Backtest report structure
+## Backtest report structure (FEP v2.0)
 
 When `backtestStatus === "completed"`:
 
 ```json
 {
   "alpha": null,
-  "task_id": "bt-2be0c156bfe2",
+  "taskId": "bt-2be0c156bfe2",
   "metadata": {
     "id": "tsla-simple-test",
     "name": "TSLA Simple Test Strategy",
@@ -127,22 +127,7 @@ When `backtestStatus === "completed"`:
     "market": "US",
     "license": "MIT",
     "summary": "Simple TSLA strategy for testing",
-    "version": "1.0.0",
-    "archetype": "systematic",
-    "frequency": "daily",
-    "riskLevel": "moderate",
-    "visibility": "private",
-    "description": "A simple trend following strategy for TSLA",
-    "assetClasses": ["equity"],
-    "parameters": [
-      {
-        "name": "sma_period",
-        "type": "integer",
-        "label": "SMA周期",
-        "default": 20,
-        "range": { "min": 10, "max": 50 }
-      }
-    ]
+    "version": "1.0.0"
   },
   "integrity": {
     "fepHash": "sha256:...",
@@ -153,112 +138,158 @@ When `backtestStatus === "completed"`:
     "timestampProof": "..."
   },
   "performance": {
-    "hints": ["Insufficient data: 1/435 periods (0%) had no market data."],
-    "calmar": 0.37,
-    "sharpe": 0.12,
-    "sortino": 0.13,
-    "winRate": 68.25,
-    "finalEquity": 100216.37,
-    "maxDrawdown": 0.49,
     "totalReturn": 0.22,
+    "sharpe": 0.12,
+    "maxDrawdown": -0.15,
     "totalTrades": 189,
+    "winRate": 68.25,
     "profitFactor": 1.32,
-    "maxDrawdownStart": "349",
-    "maxDrawdownEnd": "426",
-    "monthlyReturns": { "2025-01": 0, "2025-02": 0 },
+    "sortino": 0.13,
     "annualizedReturn": 0.18,
-    "recentValidation": {
-      "decay": {
-        "sharpeDecay30d": 15.17,
-        "sharpeDecay90d": 6.25,
-        "warning": "30d Sharpe decay 1517% exceeds 50% threshold"
-      },
-      "recent": [{ "period": "2026-02-10 ~ 2026-03-12", "window": "30d", "sharpe": -1.76 }],
-      "historical": { "period": "2025-01-01 ~ 2026-03-11", "sharpe": 0.12 }
-    }
+    "calmar": 0.37,
+    "returnsVolatility": 0.25,
+    "riskReturnRatio": 0.88,
+    "expectancy": 120.5,
+    "avgWinner": 350.2,
+    "avgLoser": -180.3,
+    "maxWinner": 1200.0,
+    "maxLoser": -450.0,
+    "longRatio": 0.65,
+    "pnlTotal": 22000.0,
+    "startingBalance": 100000.0,
+    "endingBalance": 122000.0,
+    "backtestStart": "2024-01-01",
+    "backtestEnd": "2024-12-31",
+    "totalOrders": 378,
+    "hints": ["Strategy performed well in trending markets."]
   },
-  "equity_curve": null,
-  "trade_journal": null
+  "equityCurve": [
+    { "date": "2024-01-02", "equity": 100500.0 },
+    { "date": "2024-01-03", "equity": 101200.0 }
+  ],
+  "drawdownCurve": [
+    { "date": "2024-01-02", "drawdown": 0.0 },
+    { "date": "2024-01-15", "drawdown": -0.05 }
+  ],
+  "monthlyReturns": [
+    { "month": "2024-01", "return": 0.05 },
+    { "month": "2024-02", "return": -0.02 }
+  ],
+  "trades": [
+    {
+      "open_date": "2024-01-15",
+      "close_date": "2024-01-20",
+      "side": "BUY",
+      "quantity": 100.0,
+      "avg_open": 250.0,
+      "avg_close": 260.0,
+      "realized_pnl": "+$1,000.00",
+      "return_pct": 0.04
+    }
+  ]
 }
 ```
 
-### Report fields
+### Top-level fields
 
-#### Top-level fields
+| Field            | Type             | Description                               |
+| ---------------- | ---------------- | ----------------------------------------- |
+| `alpha`          | `number \| null` | Alpha coefficient, strategy excess return |
+| `taskId`         | `string`         | Backtest task unique identifier           |
+| `metadata`       | `object`         | Strategy metadata                         |
+| `integrity`      | `object`         | Integrity verification info               |
+| `performance`    | `object`         | Backtest performance metrics              |
+| `equityCurve`    | `array`          | Equity curve data points                  |
+| `drawdownCurve`  | `array`          | Drawdown curve data points                |
+| `monthlyReturns` | `array`          | Monthly returns data                      |
+| `trades`         | `array`          | Complete trade records                    |
 
-| Field           | Type             | Description                               |
-| --------------- | ---------------- | ----------------------------------------- |
-| `alpha`         | `number \| null` | Alpha coefficient, strategy excess return |
-| `task_id`       | `string`         | Backtest task unique identifier           |
-| `metadata`      | `object`         | Strategy metadata (see below)             |
-| `integrity`     | `object`         | Integrity verification info (see below)   |
-| `performance`   | `object`         | Backtest performance metrics (see below)  |
-| `equity_curve`  | `array \| null`  | Equity curve data points                  |
-| `trade_journal` | `array \| null`  | Trade journal records                     |
+### Performance fields (FEP v2.0)
 
-#### metadata fields
+#### Core Metrics
 
-| Field          | Type       | Description                          |
-| -------------- | ---------- | ------------------------------------ |
-| `id`           | `string`   | Strategy unique identifier           |
-| `name`         | `string`   | Strategy name                        |
-| `tags`         | `string[]` | Strategy tags                        |
-| `type`         | `string`   | Strategy type (strategy/indicator)   |
-| `style`        | `string`   | Strategy style                       |
-| `author`       | `object`   | Author info `{ name: string }`       |
-| `market`       | `string`   | Target market (US/CN/HK etc.)        |
-| `license`      | `string`   | License type                         |
-| `summary`      | `string`   | Strategy summary                     |
-| `version`      | `string`   | Version number                       |
-| `archetype`    | `string`   | Architecture type                    |
-| `frequency`    | `string`   | Trading frequency                    |
-| `riskLevel`    | `string`   | Risk level                           |
-| `visibility`   | `string`   | Visibility (public/private/unlisted) |
-| `description`  | `string`   | Detailed description                 |
-| `assetClasses` | `string[]` | Asset classes                        |
-| `parameters`   | `object[]` | Strategy parameter definitions       |
+| Field          | Type     | Description                    |
+| -------------- | -------- | ------------------------------ |
+| `totalReturn`  | `number` | Total return (decimal)         |
+| `sharpe`       | `number` | Sharpe ratio (252-day annual)  |
+| `maxDrawdown`  | `number` | Maximum drawdown (negative)    |
+| `totalTrades`  | `int`    | Number of complete trade round |
+| `winRate`      | `number` | Win rate (percentage)          |
+| `profitFactor` | `number` | Profit factor                  |
 
-#### integrity fields
+#### Return Analysis
 
-| Field            | Type     | Description                           |
-| ---------------- | -------- | ------------------------------------- |
-| `fepHash`        | `string` | FEP file SHA256 hash                  |
-| `codeHash`       | `string` | Code file SHA256 hash                 |
-| `contentCID`     | `string` | IPFS content CID                      |
-| `contentHash`    | `string` | Full content SHA256 hash              |
-| `publishedAt`    | `string` | Publish timestamp (ISO 8601)          |
-| `timestampProof` | `string` | Timestamp proof (blockchain anchored) |
+| Field               | Type     | Description                 |
+| ------------------- | -------- | --------------------------- |
+| `sortino`           | `number` | Sortino ratio               |
+| `annualizedReturn`  | `number` | CAGR annualized return      |
+| `calmar`            | `number` | Calmar ratio (CAGR / MaxDD) |
+| `returnsVolatility` | `number` | Returns volatility          |
+| `riskReturnRatio`   | `number` | Risk-return ratio           |
 
-#### performance fields
+#### Trade Analysis
 
-| Field              | Type       | Description                                     |
-| ------------------ | ---------- | ----------------------------------------------- |
-| `hints`            | `string[]` | Backtest hints/warnings                         |
-| `calmar`           | `number`   | Calmar ratio (annualized return / max drawdown) |
-| `sharpe`           | `number`   | Sharpe ratio                                    |
-| `sortino`          | `number`   | Sortino ratio                                   |
-| `winRate`          | `number`   | Win rate (percentage)                           |
-| `finalEquity`      | `number`   | Final equity                                    |
-| `maxDrawdown`      | `number`   | Maximum drawdown (decimal)                      |
-| `totalReturn`      | `number`   | Total return (decimal)                          |
-| `totalTrades`      | `number`   | Total number of trades                          |
-| `profitFactor`     | `number`   | Profit factor                                   |
-| `maxDrawdownStart` | `string`   | Max drawdown start position (bar index)         |
-| `maxDrawdownEnd`   | `string`   | Max drawdown end position (bar index)           |
-| `monthlyReturns`   | `object`   | Monthly returns `{ "YYYY-MM": number }`         |
-| `annualizedReturn` | `number`   | Annualized return                               |
-| `recentValidation` | `object`   | Recent validation analysis (see below)          |
+| Field        | Type     | Description               |
+| ------------ | -------- | ------------------------- |
+| `expectancy` | `number` | Expected profit per trade |
+| `avgWinner`  | `number` | Average winning trade     |
+| `avgLoser`   | `number` | Average losing trade      |
+| `maxWinner`  | `number` | Largest winning trade     |
+| `maxLoser`   | `number` | Largest losing trade      |
+| `longRatio`  | `number` | Long position ratio       |
 
-#### recentValidation fields
+#### Extended Metrics
 
-| Field                  | Type       | Description                              |
-| ---------------------- | ---------- | ---------------------------------------- |
-| `decay`                | `object`   | Strategy decay analysis                  |
-| `decay.sharpeDecay30d` | `number`   | 30-day Sharpe decay percentage           |
-| `decay.sharpeDecay90d` | `number`   | 90-day Sharpe decay percentage           |
-| `decay.warning`        | `string`   | Decay warning message                    |
-| `recent`               | `object[]` | Recent window backtest results (30d/90d) |
-| `historical`           | `object`   | Historical full backtest results         |
+| Field             | Type     | Description              |
+| ----------------- | -------- | ------------------------ |
+| `pnlTotal`        | `number` | Total profit/loss amount |
+| `startingBalance` | `number` | Initial capital          |
+| `endingBalance`   | `number` | Final capital            |
+| `backtestStart`   | `string` | Backtest start date      |
+| `backtestEnd`     | `string` | Backtest end date        |
+| `totalOrders`     | `int`    | Total number of orders   |
+
+### Time Series Data
+
+#### equityCurve format
+
+```json
+[
+  { "date": "2024-01-02", "equity": 100500.0 },
+  { "date": "2024-01-03", "equity": 101200.0 }
+]
+```
+
+#### drawdownCurve format
+
+```json
+[
+  { "date": "2024-01-02", "drawdown": 0.0 },
+  { "date": "2024-01-15", "drawdown": -0.05 }
+]
+```
+
+#### monthlyReturns format
+
+```json
+[
+  { "month": "2024-01", "return": 0.05 },
+  { "month": "2024-02", "return": -0.02 }
+]
+```
+
+#### trades format
+
+| Field          | Type     | Description                |
+| -------------- | -------- | -------------------------- |
+| `open_date`    | `string` | Position open date         |
+| `close_date`   | `string` | Position close date        |
+| `side`         | `string` | Trade direction (BUY)      |
+| `quantity`     | `number` | Position size              |
+| `avg_open`     | `number` | Average open price         |
+| `avg_close`    | `number` | Average close price        |
+| `realized_pnl` | `string` | Realized P&L with currency |
+| `return_pct`   | `number` | Return percentage          |
 
 ## Post-publish guidance
 

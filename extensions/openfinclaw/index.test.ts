@@ -15,9 +15,15 @@ type Tool = {
 };
 
 function parseResult(result: unknown): Record<string, unknown> {
+  const details = (result as { details?: Record<string, unknown> }).details;
+  if (details) return details;
   const content = (result as { content: Array<{ text: string }> }).content?.[0]?.text;
   if (!content) return {};
-  return JSON.parse(content) as Record<string, unknown>;
+  try {
+    return JSON.parse(content) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
 
 function createFakeApi(pluginConfig: Record<string, unknown>): {
@@ -68,7 +74,7 @@ describe("openfinclaw plugin", () => {
     const { api, tools } = createFakeApi({});
     plugin.register(api);
 
-    expect(tools.size).toBe(3);
+    expect(tools.size).toBe(7);
     expect(tools.has("skill_publish")).toBe(true);
     expect(tools.has("skill_publish_verify")).toBe(true);
     expect(tools.has("skill_validate")).toBe(true);

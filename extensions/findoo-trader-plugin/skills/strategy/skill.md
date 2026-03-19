@@ -23,7 +23,7 @@ Create, backtest, rank, and promote trading strategies through the L0-L3 pipelin
 
 **DON'T use this skill when:**
 
-- User wants to turn a natural language idea into a full FEP package -- use fin-strategy-builder
+- User wants to turn a natural language idea into a full FEP package -- use strategy-builder
 - User wants to place a live trade directly -- use fin-trading
 - User asks about portfolio balances without strategy context -- use fin-portfolio
 - User asks for market data or prices -- use fin-market-data

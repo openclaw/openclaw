@@ -161,5 +161,5 @@ Agent:
 ## 相关文档
 
 - [策略 Fork 模块设计文档](/finance/strategy-fork-module-design)
-- [FEP v1.2 规范](/finance/fep-v1.2-reference.yaml)
+- [FEP v2.0 协议说明](/finance/FEP-v2.0-协议说明)
 - [策略发布指南](/skills/skill-publish/SKILL.md)

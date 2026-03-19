@@ -61,9 +61,9 @@ openclaw --version
 **OpenClaw (推荐):**
 
 ```bash
-openclaw plugins install @openfinclaw/openfinclaw
+openclaw plugins install @openfinclaw/openfinclaw-strategy
 
-openclaw plugins enable @openfinclaw/openfinclaw
+openclaw plugins enable @openfinclaw/openfinclaw-strategy
 ```
 
 安装成功后会显示插件路径，如 `~/.openclaw/extensions/openfinclaw`。
@@ -123,7 +123,7 @@ Agent 可直接调用的函数：
 | ---------------------- | -------------------------------------- | ------------ |
 | `skill_leaderboard`    | 查询排行榜（综合/收益/风控/人气/新星） | 否           |
 | `skill_get_info`       | 获取 Hub 策略公开详情                  | 否           |
-| `skill_validate`       | 本地验证策略包格式（FEP v1.2）         | 否           |
+| `skill_validate`       | 本地验证策略包格式（FEP v2.0）         | 否           |
 | `skill_list_local`     | 列出本地已下载的策略                   | 否           |
 | `skill_fork`           | 从 Hub 下载公开策略到本地              | **是**       |
 | `skill_publish`        | 发布策略 ZIP 到 Hub，自动触发回测      | **是**       |
@@ -133,19 +133,19 @@ Agent 可直接调用的函数：
 
 定义 Agent 在特定场景下的行为规范，位于 `skills/` 目录：
 
-| Skill                  | 触发场景                 | 说明                          |
-| ---------------------- | ------------------------ | ----------------------------- |
-| `fin-strategy-builder` | 创建新策略、生成策略代码 | 自然语言 → FEP v1.2 策略包    |
-| `skill-publish`        | 发布策略到服务器         | 验证 → 打包 → 发布 → 查询回测 |
-| `strategy-fork`        | 下载/克隆 Hub 策略       | Fork → 本地编辑 → 发布新版本  |
-| `strategy-pack`        | 创建回测策略包           | 生成 fep.yaml + strategy.py   |
+| Skill              | 触发场景                 | 说明                          |
+| ------------------ | ------------------------ | ----------------------------- |
+| `strategy-builder` | 创建新策略、生成策略代码 | 自然语言 → FEP v2.0 策略包    |
+| `skill-publish`    | 发布策略到服务器         | 验证 → 打包 → 发布 → 查询回测 |
+| `strategy-fork`    | 下载/克隆 Hub 策略       | Fork → 本地编辑 → 发布新版本  |
+| `strategy-pack`    | 创建回测策略包           | 生成 fep.yaml + strategy.py   |
 
 ### 典型工作流
 
 ```
 创建策略 → 验证 → 发布 → Fork → 优化 → 再次发布
     ↓         ↓        ↓        ↓
- fin-strategy-builder  skill_publish  skill_fork
+ strategy-builder  skill_publish  skill_fork
                skill_validate  skill_publish_verify
 ```
 
@@ -253,12 +253,12 @@ openclaw strategy remove btc-adaptive-dca-34a5792f --force
 
 当用户提到以下内容时，应引导阅读对应的 Skill：
 
-| 触发关键词                     | Skill 目录             | 说明                                    |
-| ------------------------------ | ---------------------- | --------------------------------------- |
-| 创建策略、写策略、生成策略包   | `fin-strategy-builder` | 自然语言 → FEP v1.2 策略包              |
-| 发布策略、上传策略、提交策略   | `skill-publish`        | 验证 → 打包 → 发布到 Hub → 查询回测报告 |
-| Fork 策略、下载策略、克隆策略  | `strategy-fork`        | 从 Hub Fork 策略到本地，支持二次开发    |
-| 策略包格式、FEP 规范、打包回测 | `strategy-pack`        | FEP v1.2 规范详解，打包和校验指南       |
+| 触发关键词                     | Skill 目录         | 说明                                    |
+| ------------------------------ | ------------------ | --------------------------------------- |
+| 创建策略、写策略、生成策略包   | `strategy-builder` | 自然语言 → FEP v2.0 策略包              |
+| 发布策略、上传策略、提交策略   | `skill-publish`    | 验证 → 打包 → 发布到 Hub → 查询回测报告 |
+| Fork 策略、下载策略、克隆策略  | `strategy-fork`    | 从 Hub Fork 策略到本地，支持二次开发    |
+| 策略包格式、FEP 规范、打包回测 | `strategy-pack`    | FEP v2.0 规范详解，打包和校验指南       |
 
 ## 配置选项
 
