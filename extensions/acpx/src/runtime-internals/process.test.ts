@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createWindowsCmdShimFixture } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createWindowsCmdShimFixture } from "../../../shared/windows-cmd-shim-test-fixtures.js";
 import {
   resolveSpawnCommand,
   spawnAndCollect,

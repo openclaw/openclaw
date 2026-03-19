@@ -19,8 +19,8 @@ import {
   listResolvedDirectoryGroupEntriesFromMapKeys,
   listResolvedDirectoryUserEntriesFromAllowFrom,
 } from "openclaw/plugin-sdk/directory-runtime";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,

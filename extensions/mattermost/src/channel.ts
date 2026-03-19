@@ -12,7 +12,7 @@ import {
   createScopedAccountReplyToModeResolver,
   type ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-runtime";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {

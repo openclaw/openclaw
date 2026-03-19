@@ -6,7 +6,7 @@ import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import {
   buildPassiveChannelStatusSummary,
   buildTrafficStatusSummary,
-} from "../../shared/channel-status-summary.js";
+} from "openclaw/plugin-sdk/extension-shared";
 import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,

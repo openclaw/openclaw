@@ -16,8 +16,8 @@ import {
   resolveTargetsWithOptionalToken,
 } from "openclaw/plugin-sdk/channel-runtime";
 import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw/plugin-sdk/core";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   listEnabledSlackAccounts,
   resolveSlackAccount,
