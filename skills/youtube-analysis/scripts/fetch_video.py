@@ -25,6 +25,7 @@ def parse_args():
     parser.add_argument("--download-video", action="store_true", help="Download full video file")
     parser.add_argument("--subtitle-lang", default="en", help="Subtitle language (default: en)")
     parser.add_argument("--playlist-limit", type=int, default=10, help="Max videos from playlist (default: 10)")
+    parser.add_argument("--cookies-from-browser", default=None, help="Browser to extract cookies from (chrome, firefox, safari, etc.)")
     return parser.parse_args()
 
 
@@ -35,10 +36,16 @@ def get_output_dir(video_id):
     return out
 
 
-def fetch_single(url, subtitle_lang="en", download_video=False):
+def fetch_single(url, subtitle_lang="en", download_video=False, cookies_from_browser=None):
     """Extract metadata and subtitles for a single video."""
     # First pass: extract metadata without downloading
-    info_opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    info_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+    }
+    if cookies_from_browser:
+        info_opts["cookiesfrombrowser"] = (cookies_from_browser,)
     with yt_dlp.YoutubeDL(info_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
@@ -77,6 +84,8 @@ def fetch_single(url, subtitle_lang="en", download_video=False):
         "subtitlesformat": "vtt",
         "skip_download": not download_video,
     }
+    if cookies_from_browser:
+        dl_opts["cookiesfrombrowser"] = (cookies_from_browser,)
 
     if download_video:
         dl_opts["format"] = "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
@@ -105,7 +114,7 @@ def fetch_single(url, subtitle_lang="en", download_video=False):
     return metadata
 
 
-def fetch_playlist(url, subtitle_lang="en", download_video=False, playlist_limit=10):
+def fetch_playlist(url, subtitle_lang="en", download_video=False, playlist_limit=10, cookies_from_browser=None):
     """Resolve a playlist/channel and fetch each video."""
     opts = {
         "quiet": True,
@@ -114,6 +123,8 @@ def fetch_playlist(url, subtitle_lang="en", download_video=False, playlist_limit
         "extract_flat": True,
         "playlistend": playlist_limit,
     }
+    if cookies_from_browser:
+        opts["cookiesfrombrowser"] = (cookies_from_browser,)
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -134,7 +145,7 @@ def fetch_playlist(url, subtitle_lang="en", download_video=False, playlist_limit
         if not entry_url:
             continue
         try:
-            video = fetch_single(entry_url, subtitle_lang, download_video)
+            video = fetch_single(entry_url, subtitle_lang, download_video, cookies_from_browser)
             videos.append(video)
             print(f"[OK] Fetched {len(videos)}/{min(len(entries), playlist_limit)}: {video.get('title', 'unknown')}", file=sys.stderr)
         except Exception as e:
@@ -159,11 +170,11 @@ def main():
 
     result = None
     if looks_like_playlist(args.url):
-        result = fetch_playlist(args.url, args.subtitle_lang, args.download_video, args.playlist_limit)
+        result = fetch_playlist(args.url, args.subtitle_lang, args.download_video, args.playlist_limit, args.cookies_from_browser)
 
     if result is None:
         # Single video (or playlist heuristic didn't match)
-        result = fetch_single(args.url, args.subtitle_lang, args.download_video)
+        result = fetch_single(args.url, args.subtitle_lang, args.download_video, args.cookies_from_browser)
 
     json.dump(result, sys.stdout, indent=2)
     print()  # trailing newline

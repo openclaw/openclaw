@@ -34,6 +34,16 @@ Analyze videos from YouTube and 1000+ other platforms supported by yt-dlp. Extra
 
 **Disambiguation:** Use this skill when the user wants structured video analysis (chapters, topics, quotes, batch research). Use `summarize` when yt-dlp is unavailable or the user just wants a quick summary.
 
+## Anti-Bot Detection
+
+If yt-dlp fails with a "Sign in to confirm you're not a bot" or similar error, retry with browser cookies:
+
+```bash
+python3 {baseDir}/scripts/fetch_video.py "<url>" --cookies-from-browser chrome
+```
+
+Supported browsers: `chrome`, `firefox`, `safari`, `edge`. Use whichever browser the user is logged into YouTube with.
+
 ## Mode 1: Single Video Analysis (default)
 
 When the user provides a video URL and wants analysis:
@@ -44,6 +54,7 @@ When the user provides a video URL and wants analysis:
    python3 {baseDir}/scripts/fetch_video.py "<url>"
    ```
 
+   If this fails due to bot detection, retry with `--cookies-from-browser chrome`.
    Output: JSON with video metadata and path to downloaded subtitle file.
 
 2. **Parse transcript:**
