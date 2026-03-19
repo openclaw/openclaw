@@ -153,9 +153,11 @@ describe("channelsAddCommand", () => {
         })),
       },
     };
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-      createTestRegistry([{ pluginId: "msteams", plugin: scopedMSTeamsPlugin, source: "test" }]),
-    );
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel)
+      .mockReturnValueOnce(createTestRegistry())
+      .mockReturnValueOnce(
+        createTestRegistry([{ pluginId: "msteams", plugin: scopedMSTeamsPlugin, source: "test" }]),
+      );
 
     await channelsAddCommand(
       {
@@ -292,33 +294,35 @@ describe("channelsAddCommand", () => {
       installed: true,
       pluginId: "@vendor/teams-runtime",
     }));
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-      createTestRegistry([
-        {
-          pluginId: "@vendor/teams-runtime",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "msteams",
-              label: "Microsoft Teams",
-              docsPath: "/channels/msteams",
-            }),
-            setup: {
-              applyAccountConfig: vi.fn(({ cfg, input }) => ({
-                ...cfg,
-                channels: {
-                  ...cfg.channels,
-                  msteams: {
-                    enabled: true,
-                    tenantId: input.token,
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel)
+      .mockReturnValueOnce(createTestRegistry())
+      .mockReturnValueOnce(
+        createTestRegistry([
+          {
+            pluginId: "@vendor/teams-runtime",
+            plugin: {
+              ...createChannelTestPluginBase({
+                id: "msteams",
+                label: "Microsoft Teams",
+                docsPath: "/channels/msteams",
+              }),
+              setup: {
+                applyAccountConfig: vi.fn(({ cfg, input }) => ({
+                  ...cfg,
+                  channels: {
+                    ...cfg.channels,
+                    msteams: {
+                      enabled: true,
+                      tenantId: input.token,
+                    },
                   },
-                },
-              })),
+                })),
+              },
             },
+            source: "test",
           },
-          source: "test",
-        },
-      ]),
-    );
+        ]),
+      );
 
     await channelsAddCommand(
       {
