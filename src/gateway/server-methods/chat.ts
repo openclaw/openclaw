@@ -34,6 +34,7 @@ import {
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
@@ -1184,6 +1185,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
         return;
+      }
+    }
+    // Persist webchat inbound images to disk (parity with WhatsApp/Telegram handlers).
+    // Fire-and-forget: don't block chat.send on disk I/O; log failures but proceed.
+    if (parsedImages.length > 0) {
+      for (const img of parsedImages) {
+        saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound").catch((err) => {
+          context.logGateway.warn(
+            `webchat: failed to persist inbound image (${img.mimeType}): ${err}`,
+          );
+        });
       }
     }
     const rawSessionKey = p.sessionKey;
