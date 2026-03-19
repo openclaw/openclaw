@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractToolResultMediaPaths,
+  extractToolResultMediaPathsWithStartArgs,
   isToolResultMediaTrusted,
 } from "./pi-embedded-subscribe.tools.js";
 
@@ -73,6 +74,27 @@ describe("extractToolResultMediaPaths", () => {
       ],
     };
     expect(extractToolResultMediaPaths(result)).toEqual([]);
+  });
+
+  it("falls back to startArgs.path when image content exists and details.path is missing", () => {
+    const result = {
+      content: [
+        { type: "text", text: "Read image file [image/png]" },
+        { type: "image", data: "base64data", mimeType: "image/png" },
+      ],
+    };
+    expect(extractToolResultMediaPathsWithStartArgs(result, { path: "/tmp/from-args.png" })).toEqual(
+      ["/tmp/from-args.png"],
+    );
+  });
+
+  it("falls back to startArgs.file_path when image content exists and details.path is missing", () => {
+    const result = {
+      content: [{ type: "image", data: "base64data", mimeType: "image/png" }],
+    };
+    expect(
+      extractToolResultMediaPathsWithStartArgs(result, { file_path: "  /tmp/from-file-path.png  " }),
+    ).toEqual(["/tmp/from-file-path.png"]);
   });
 
   it("does not fall back to details.path when MEDIA: paths are found", () => {

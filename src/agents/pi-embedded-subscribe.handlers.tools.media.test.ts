@@ -252,4 +252,33 @@ describe("handleToolExecutionEnd media emission", () => {
       mediaUrls: ["/tmp/canvas-output.png"],
     });
   });
+
+  it("emits media from read start args when image content exists but details.path is missing", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tc-read-1",
+      args: { file_path: "/tmp/read-image.png" },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "read",
+      toolCallId: "tc-read-1",
+      isError: false,
+      result: {
+        content: [
+          { type: "text", text: "Read image file [image/png]" },
+          { type: "image", data: "base64", mimeType: "image/png" },
+        ],
+      },
+    });
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/read-image.png"],
+    });
+  });
 });
