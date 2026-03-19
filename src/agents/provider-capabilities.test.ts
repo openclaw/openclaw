@@ -17,6 +17,12 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
         geminiThoughtSignatureSanitization: true,
         geminiThoughtSignatureModelHints: ["gemini"],
       };
+    case "deepinfra":
+      return {
+        openAiCompatTurnValidation: false,
+        geminiThoughtSignatureSanitization: true,
+        geminiThoughtSignatureModelHints: ["gemini"],
+      };
     case "openai-codex":
       return {
         providerFamily: "openai",
