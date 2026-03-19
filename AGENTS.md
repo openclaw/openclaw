@@ -96,7 +96,8 @@
 
 ## Release / Advisory Workflows
 
-- Use `$openclaw-release-maintainer` at `.agents/skills/openclaw-release-maintainer/SKILL.md` for release naming, version bump coordination, GHSA patch/publish flow, release auth, and changelog-backed release-note workflows.
+- Use `$openclaw-release-maintainer` at `.agents/skills/openclaw-release-maintainer/SKILL.md` for release naming, version coordination, release auth, and changelog-backed release-note workflows.
+- Use `$openclaw-ghsa-maintainer` at `.agents/skills/openclaw-ghsa-maintainer/SKILL.md` for GHSA advisory inspection, patch/publish flow, private-fork checks, and GHSA API validation.
 - Release and publish remain explicit-approval actions even when using the skill.
 
 ## Testing Guidelines
