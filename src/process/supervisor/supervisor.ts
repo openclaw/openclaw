@@ -206,12 +206,6 @@ export function createProcessSupervisor(): ProcessSupervisor {
         }
         settled = true;
         clearTimers();
-        // Kill PTY synchronously before disposal only when the exit was forced
-        // (e.g. timeout, manual cancel) — not on natural exits where the process
-        // already terminated and PID may have been recycled by a different session.
-        if (forcedReason != null) {
-          adapter.kill("SIGKILL");
-        }
         adapter.dispose();
         active.delete(runId);
 
