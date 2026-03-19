@@ -1,45 +1,5 @@
 [
   {
-    "file": "extensions/acpx/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/acpx.js",
-    "resolvedPath": "src/plugin-sdk/acpx.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/copilot-proxy/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/copilot-proxy.js",
-    "resolvedPath": "src/plugin-sdk/copilot-proxy.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/feishu/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/feishu.js",
-    "resolvedPath": "src/plugin-sdk/feishu.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/google/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/google.js",
-    "resolvedPath": "src/plugin-sdk/google.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/googlechat/runtime-api.ts",
-    "line": 4,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/googlechat.js",
-    "resolvedPath": "src/plugin-sdk/googlechat.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
     "file": "extensions/googlechat/src/channel.ts",
     "line": 23,
     "kind": "import",
@@ -80,52 +40,12 @@
     "reason": "imports another extension via relative path outside the extension package"
   },
   {
-    "file": "extensions/irc/src/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../../src/plugin-sdk/irc.js",
-    "resolvedPath": "src/plugin-sdk/irc.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/line/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/line-core.js",
-    "resolvedPath": "src/plugin-sdk/line-core.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/lobster/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/lobster.js",
-    "resolvedPath": "src/plugin-sdk/lobster.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/matrix/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/matrix.js",
-    "resolvedPath": "src/plugin-sdk/matrix.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
     "file": "extensions/matrix/src/channel.ts",
     "line": 19,
     "kind": "import",
     "specifier": "../../shared/channel-status-summary.js",
     "resolvedPath": "extensions/shared/channel-status-summary.js",
     "reason": "imports another extension via relative path outside the extension package"
-  },
-  {
-    "file": "extensions/mattermost/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/mattermost.js",
-    "resolvedPath": "src/plugin-sdk/mattermost.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
   },
   {
     "file": "extensions/mattermost/src/channel.ts",
@@ -142,22 +62,6 @@
     "specifier": "../../shared/config-schema-helpers.js",
     "resolvedPath": "extensions/shared/config-schema-helpers.js",
     "reason": "imports another extension via relative path outside the extension package"
-  },
-  {
-    "file": "extensions/msteams/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/msteams.js",
-    "resolvedPath": "src/plugin-sdk/msteams.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/nextcloud-talk/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/nextcloud-talk.js",
-    "resolvedPath": "src/plugin-sdk/nextcloud-talk.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
   },
   {
     "file": "extensions/nextcloud-talk/src/channel.ts",
@@ -184,52 +88,12 @@
     "reason": "imports another extension via relative path outside the extension package"
   },
   {
-    "file": "extensions/nostr/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/nostr.js",
-    "resolvedPath": "src/plugin-sdk/nostr.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
     "file": "extensions/nostr/src/channel.ts",
     "line": 9,
     "kind": "import",
     "specifier": "../../shared/channel-status-summary.js",
     "resolvedPath": "extensions/shared/channel-status-summary.js",
     "reason": "imports another extension via relative path outside the extension package"
-  },
-  {
-    "file": "extensions/open-prose/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/open-prose.js",
-    "resolvedPath": "src/plugin-sdk/open-prose.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/phone-control/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/phone-control.js",
-    "resolvedPath": "src/plugin-sdk/phone-control.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/qwen-portal-auth/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/qwen-portal-auth.js",
-    "resolvedPath": "src/plugin-sdk/qwen-portal-auth.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/signal/src/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../../src/plugin-sdk/signal.js",
-    "resolvedPath": "src/plugin-sdk/signal.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
   },
   {
     "file": "extensions/slack/src/channel.ts",
@@ -240,14 +104,6 @@
     "reason": "imports another extension via relative path outside the extension package"
   },
   {
-    "file": "extensions/twitch/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/twitch.js",
-    "resolvedPath": "src/plugin-sdk/twitch.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
     "file": "extensions/twitch/src/plugin.ts",
     "line": 8,
     "kind": "import",
@@ -256,36 +112,12 @@
     "reason": "imports another extension via relative path outside the extension package"
   },
   {
-    "file": "extensions/zai/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/zai.js",
-    "resolvedPath": "src/plugin-sdk/zai.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/zalo/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/zalo.js",
-    "resolvedPath": "src/plugin-sdk/zalo.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
     "file": "extensions/zalo/src/status-issues.ts",
     "line": 1,
     "kind": "import",
     "specifier": "../../shared/status-issues.js",
     "resolvedPath": "extensions/shared/status-issues.js",
     "reason": "imports another extension via relative path outside the extension package"
-  },
-  {
-    "file": "extensions/zalouser/runtime-api.ts",
-    "line": 1,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/zalouser.js",
-    "resolvedPath": "src/plugin-sdk/zalouser.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
   },
   {
     "file": "extensions/zalouser/src/channel.ts",

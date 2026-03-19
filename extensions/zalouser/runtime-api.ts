@@ -1,1 +1,1 @@
-export * from "../../src/plugin-sdk/zalouser.js";
+export * from "openclaw/plugin-sdk/zalouser";
