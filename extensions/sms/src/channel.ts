@@ -142,6 +142,7 @@ export function createSmsPlugin() {
       textChunkLimit: 1600,
 
       sendText: async ({ text }: any) => {
+        console.log(`[sms] outbound.sendText called: ${String(text).slice(0, 100)}`);
         await sendSms(text);
         return { channel: CHANNEL_ID, messageId: `sms-${Date.now()}`, chatId: "sms" };
       },
@@ -202,8 +203,18 @@ export function createSmsPlugin() {
               dispatcherOptions: {
                 deliver: async (payload: { text?: string; body?: string }) => {
                   const text = payload?.text ?? payload?.body;
-                  if (text) {
+                  if (!text) {
+                    log?.warn?.(`SMS deliver called with empty text for ${msg.from}, payload keys: ${Object.keys(payload ?? {}).join(", ")}`);
+                    return;
+                  }
+                  log?.info?.(`Sending SMS to ${msg.from}: ${text.slice(0, 100)}${text.length > 100 ? "..." : ""}`);
+                  try {
                     await sendSms(text);
+                    log?.info?.(`SMS sent successfully to ${msg.from}`);
+                  } catch (err) {
+                    const errMsg = err instanceof Error ? err.message : String(err);
+                    log?.error?.(`SMS send failed for ${msg.from}: ${errMsg}`);
+                    throw err;
                   }
                 },
                 onReplyStart: () => {

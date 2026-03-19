@@ -21,8 +21,11 @@ function getGatewayToken(): string {
 export async function sendSms(content: string): Promise<Record<string, unknown>> {
   const hubUrl = getHubUrl();
   const token = getGatewayToken();
+  const url = `${hubUrl}/api/sms/send`;
 
-  const res = await fetch(`${hubUrl}/api/sms/send`, {
+  console.log(`[sms] POST ${url} (${content.length} chars)`);
+
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -33,8 +36,11 @@ export async function sendSms(content: string): Promise<Record<string, unknown>>
 
   if (!res.ok) {
     const body = await res.text();
+    console.error(`[sms] Hub returned ${res.status}: ${body}`);
     throw new Error(`SMS send failed (${res.status}): ${body}`);
   }
 
-  return (await res.json()) as Record<string, unknown>;
+  const data = (await res.json()) as Record<string, unknown>;
+  console.log(`[sms] SMS sent successfully via hub`);
+  return data;
 }
