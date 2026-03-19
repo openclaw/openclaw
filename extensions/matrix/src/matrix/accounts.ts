@@ -1,7 +1,14 @@
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-resolution";
-import { hasConfiguredSecretInput } from "../secret-input.js";
+import {
+  resolveConfiguredMatrixAccountIds,
+  resolveMatrixDefaultOrOnlyAccountId,
+} from "../account-selection.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  hasConfiguredSecretInput,
+  normalizeAccountId,
+} from "../runtime-api.js";
 import type { CoreConfig, MatrixConfig } from "../types.js";
+import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
 import { resolveMatrixConfigForAccount } from "./client.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials.js";
 
@@ -18,7 +25,6 @@ function mergeAccountConfig(base: MatrixConfig, account: MatrixConfig): MatrixCo
   }
   // Don't propagate the accounts map into the merged per-account config
   delete (merged as Record<string, unknown>).accounts;
-  delete (merged as Record<string, unknown>).defaultAccount;
   return merged;
 }
 
@@ -32,29 +38,13 @@ export type ResolvedMatrixAccount = {
   config: MatrixConfig;
 };
 
-const {
-  listAccountIds: listMatrixAccountIds,
-  resolveDefaultAccountId: resolveDefaultMatrixAccountId,
-} = createAccountListHelpers("matrix", { normalizeAccountId });
-export { listMatrixAccountIds, resolveDefaultMatrixAccountId };
+export function listMatrixAccountIds(cfg: CoreConfig): string[] {
+  const ids = resolveConfiguredMatrixAccountIds(cfg, process.env);
+  return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
+}
 
-function resolveAccountConfig(cfg: CoreConfig, accountId: string): MatrixConfig | undefined {
-  const accounts = cfg.channels?.matrix?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  // Direct lookup first (fast path for already-normalized keys)
-  if (accounts[accountId]) {
-    return accounts[accountId] as MatrixConfig;
-  }
-  // Fall back to case-insensitive match (user may have mixed-case keys in config)
-  const normalized = normalizeAccountId(accountId);
-  for (const key of Object.keys(accounts)) {
-    if (normalizeAccountId(key) === normalized) {
-      return accounts[key] as MatrixConfig;
-    }
-  }
-  return undefined;
+export function resolveDefaultMatrixAccountId(cfg: CoreConfig): string {
+  return normalizeAccountId(resolveMatrixDefaultOrOnlyAccountId(cfg));
 }
 
 export function resolveMatrixAccount(params: {
@@ -62,7 +52,7 @@ export function resolveMatrixAccount(params: {
   accountId?: string | null;
 }): ResolvedMatrixAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const matrixBase = params.cfg.channels?.matrix ?? {};
+  const matrixBase = resolveMatrixBaseConfig(params.cfg);
   const base = resolveMatrixAccountConfig({ cfg: params.cfg, accountId });
   const enabled = base.enabled !== false && matrixBase.enabled !== false;
 
@@ -97,18 +87,12 @@ export function resolveMatrixAccountConfig(params: {
   accountId?: string | null;
 }): MatrixConfig {
   const accountId = normalizeAccountId(params.accountId);
-  const matrixBase = params.cfg.channels?.matrix ?? {};
-  const accountConfig = resolveAccountConfig(params.cfg, accountId);
+  const matrixBase = resolveMatrixBaseConfig(params.cfg);
+  const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
   if (!accountConfig) {
     return matrixBase;
   }
   // Merge account-specific config with top-level defaults so settings like
   // groupPolicy and blockStreaming inherit when not overridden.
   return mergeAccountConfig(matrixBase, accountConfig);
-}
-
-export function listEnabledMatrixAccounts(cfg: CoreConfig): ResolvedMatrixAccount[] {
-  return listMatrixAccountIds(cfg)
-    .map((accountId) => resolveMatrixAccount({ cfg, accountId }))
-    .filter((account) => account.enabled);
 }
