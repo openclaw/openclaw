@@ -23,8 +23,8 @@ function expandPath(filePath: string): string {
   if (normalized === "~") {
     return os.homedir();
   }
-  if (normalized.startsWith("~/")) {
-    return os.homedir() + normalized.slice(1);
+  if (normalized.startsWith("~/") || normalized.startsWith("~\\")) {
+    return path.join(os.homedir(), normalized.slice(2));
   }
   return normalized;
 }

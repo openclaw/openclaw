@@ -170,6 +170,34 @@ describe("applyPatch", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "uses pinned writes for workspaceOnly add-file operations",
+    async () => {
+      await withTempDir(async (dir) => {
+        const allowedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-apply-patch-pinned-"));
+        const target = path.join(allowedDir, "nested", "shared.txt");
+        const mkdirSpy = vi.spyOn(fs, "mkdir");
+        const patch = `*** Begin Patch
+*** Add File: ${target}
++shared
+*** End Patch`;
+
+        try {
+          await applyPatch(patch, {
+            cwd: dir,
+            workspaceOnly: true,
+            allowedRoots: [allowedDir],
+          });
+          await expect(fs.readFile(target, "utf8")).resolves.toBe("shared\n");
+          expect(mkdirSpy).not.toHaveBeenCalled();
+        } finally {
+          mkdirSpy.mockRestore();
+          await fs.rm(allowedDir, { recursive: true, force: true });
+        }
+      });
+    },
+  );
+
   it("resolves delete targets before calling fs.rm", async () => {
     await withTempDir(async (dir) => {
       const target = path.join(dir, "delete-me.txt");

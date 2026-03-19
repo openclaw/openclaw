@@ -331,6 +331,19 @@ describe("resolveSandboxPath with additionalRoots", () => {
     expect(result.matchedRoot).toBe(path.resolve(homeDir, "notes"));
   });
 
+  it("applies tilde expansion for Windows-style additionalRoots entries", () => {
+    const homeDir = os.homedir();
+    const result = resolveSandboxPath({
+      filePath: path.join(homeDir, "notes", "file.txt"),
+      cwd: "/workspace",
+      root: "/workspace",
+      additionalRoots: ["~\\notes"],
+    });
+    expect(result.resolved).toBe(path.join(homeDir, "notes", "file.txt"));
+    expect(result.relative).toBe("file.txt");
+    expect(result.matchedRoot).toBe(path.resolve(homeDir, "notes"));
+  });
+
   it("empty additionalRoots behaves same as no additionalRoots (backward compat)", () => {
     // Path inside root works
     const result = resolveSandboxPath({

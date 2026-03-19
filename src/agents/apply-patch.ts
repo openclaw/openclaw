@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary-file-read.js";
+import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { resolvePathFromInput } from "./path-policy.js";
@@ -286,8 +287,13 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
       if (!sandboxResult.relative) {
         throw new Error(`Cannot write to root directory itself: ${filePath}`);
       }
-      await fs.mkdir(path.dirname(sandboxResult.resolved), { recursive: true });
-      await fs.writeFile(sandboxResult.resolved, content, "utf8");
+      await writeFileWithinRoot({
+        rootDir: sandboxResult.matchedRoot,
+        relativePath: sandboxResult.relative,
+        data: content,
+        encoding: "utf8",
+        mkdir: true,
+      });
     },
     remove: async (filePath) => {
       if (workspaceOnly) {
@@ -306,13 +312,12 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     },
     mkdirp: async (dir) => {
       if (workspaceOnly) {
-        const sandboxResult = await assertSandboxPath({
+        await assertSandboxPath({
           filePath: dir,
           cwd: options.cwd,
           root: options.cwd,
           additionalRoots: allowedRoots,
         });
-        await fs.mkdir(sandboxResult.resolved, { recursive: true });
         return;
       }
       await fs.mkdir(dir, { recursive: true });
