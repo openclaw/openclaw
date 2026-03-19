@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { configureClient } from "@tloncorp/api";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
 import type {
   ChannelAccountSnapshot,
   ChannelOutboundAdapter,
