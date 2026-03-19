@@ -8,6 +8,7 @@ import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { jidToE164, resolveJidToE164 } from "openclaw/plugin-sdk/text-runtime";
+import type { ReconnectPolicy } from "../reconnect.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
@@ -41,6 +42,8 @@ export async function monitorWebInbox(options: {
   socketRef?: { current: WASocket | null };
   /** Whether disconnect-class send errors should retry for a reconnect gap. */
   shouldRetryDisconnect?: () => boolean;
+  /** Reconnect timing used to size disconnect retry windows for in-flight replies. */
+  disconnectRetryPolicy?: Pick<ReconnectPolicy, "initialMs" | "maxMs" | "factor">;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -402,6 +405,7 @@ export async function monitorWebInbox(options: {
       reply,
       sendMedia,
       shouldRetryDisconnect: options.shouldRetryDisconnect,
+      disconnectRetryPolicy: options.disconnectRetryPolicy,
       mediaPath: enriched.mediaPath,
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,

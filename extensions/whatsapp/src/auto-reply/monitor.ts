@@ -208,6 +208,7 @@ export async function monitorWebChannel(
       shouldDebounce,
       socketRef,
       shouldRetryDisconnect: () => shouldRetryDisconnect,
+      disconnectRetryPolicy: reconnectPolicy,
       onMessage: async (msg: WebInboundMsg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();

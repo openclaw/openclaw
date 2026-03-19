@@ -184,8 +184,8 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenCalledTimes(5);
     expect(sleep).toHaveBeenNthCalledWith(1, 500);
     expect(sleep).toHaveBeenNthCalledWith(2, 2000);
-    expect(sleep).toHaveBeenNthCalledWith(3, 4000);
-    expect(sleep).toHaveBeenNthCalledWith(4, 8000);
+    expect(sleep).toHaveBeenNthCalledWith(3, 3600);
+    expect(sleep).toHaveBeenNthCalledWith(4, 6480);
   });
 
   it("caps retries after extended disconnect budget", async () => {
@@ -205,14 +205,15 @@ describe("deliverWebReply", () => {
       }),
     ).rejects.toThrow("socket disconnected");
 
-    expect(msg.reply).toHaveBeenCalledTimes(7);
-    expect(sleep).toHaveBeenCalledTimes(6);
+    expect(msg.reply).toHaveBeenCalledTimes(8);
+    expect(sleep).toHaveBeenCalledTimes(7);
     expect(sleep).toHaveBeenNthCalledWith(1, 500);
     expect(sleep).toHaveBeenNthCalledWith(2, 2000);
-    expect(sleep).toHaveBeenNthCalledWith(3, 4000);
-    expect(sleep).toHaveBeenNthCalledWith(4, 8000);
-    expect(sleep).toHaveBeenNthCalledWith(5, 16000);
-    expect(sleep).toHaveBeenNthCalledWith(6, 32000);
+    expect(sleep).toHaveBeenNthCalledWith(3, 3600);
+    expect(sleep).toHaveBeenNthCalledWith(4, 6480);
+    expect(sleep).toHaveBeenNthCalledWith(5, 11664);
+    expect(sleep).toHaveBeenNthCalledWith(6, 20995);
+    expect(sleep).toHaveBeenNthCalledWith(7, 30000);
   });
 
   it("does not retry disconnect errors when reconnect is not expected", async () => {
@@ -235,6 +236,38 @@ describe("deliverWebReply", () => {
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("extends disconnect retries when reconnect config is slower", async () => {
+    const msg = makeMsg();
+    msg.disconnectRetryPolicy = {
+      initialMs: 5_000,
+      maxMs: 60_000,
+      factor: 2,
+    };
+    (msg.reply as unknown as { mockRejectedValue: (v: unknown) => void }).mockRejectedValue(
+      new Error("socket disconnected"),
+    );
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }),
+    ).rejects.toThrow("socket disconnected");
+
+    expect(msg.reply).toHaveBeenCalledTimes(7);
+    expect(sleep).toHaveBeenCalledTimes(6);
+    expect(sleep).toHaveBeenNthCalledWith(1, 500);
+    expect(sleep).toHaveBeenNthCalledWith(2, 5000);
+    expect(sleep).toHaveBeenNthCalledWith(3, 10000);
+    expect(sleep).toHaveBeenNthCalledWith(4, 20000);
+    expect(sleep).toHaveBeenNthCalledWith(5, 40000);
+    expect(sleep).toHaveBeenNthCalledWith(6, 60000);
   });
 
   it("sends image media with caption and then remaining text", async () => {

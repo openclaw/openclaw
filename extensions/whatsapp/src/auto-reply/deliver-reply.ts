@@ -10,13 +10,54 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
 import { sleep } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "../media.js";
-import { newConnectionId } from "../reconnect.js";
+import { DEFAULT_RECONNECT_POLICY, newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
 import { whatsappOutboundLog } from "./loggers.js";
 import type { WebInboundMsg } from "./types.js";
 import { elide } from "./util.js";
 
 const REASONING_PREFIX = "reasoning:";
+type RetryStrategy = {
+  maxAttempts: number;
+  baseMs: number;
+  factor: number;
+  maxMs?: number;
+};
+
+const STANDARD_RETRY: RetryStrategy = { maxAttempts: 3, baseMs: 500, factor: 1 };
+const MIN_DISCONNECT_RETRY_BUDGET_MS = 62_000;
+const MIN_DISCONNECT_BASE_MS = 2_000;
+
+function resolveDisconnectRetryStrategy(msg: WebInboundMsg): RetryStrategy {
+  const reconnectInitialMs =
+    msg.disconnectRetryPolicy?.initialMs ?? DEFAULT_RECONNECT_POLICY.initialMs;
+  const reconnectMaxMs = msg.disconnectRetryPolicy?.maxMs ?? DEFAULT_RECONNECT_POLICY.maxMs;
+  const reconnectFactor = msg.disconnectRetryPolicy?.factor ?? DEFAULT_RECONNECT_POLICY.factor;
+
+  const baseMs = Math.max(MIN_DISCONNECT_BASE_MS, reconnectInitialMs);
+  const maxMs = Math.max(baseMs, reconnectMaxMs);
+  const factor = Math.max(1.1, reconnectFactor);
+  const retryBudgetMs = Math.max(
+    MIN_DISCONNECT_RETRY_BUDGET_MS,
+    reconnectMaxMs * 2 + reconnectInitialMs,
+  );
+
+  let sleepBudgetMs = 0;
+  let sleepCount = 0;
+  let backoffMs = baseMs;
+  while (sleepBudgetMs < retryBudgetMs) {
+    sleepBudgetMs += backoffMs;
+    sleepCount += 1;
+    backoffMs = Math.min(maxMs, Math.round(backoffMs * factor));
+  }
+
+  return {
+    maxAttempts: 2 + sleepCount,
+    baseMs,
+    factor,
+    maxMs,
+  };
+}
 
 function shouldSuppressReasoningReply(payload: ReplyPayload): boolean {
   if (payload.isReasoning === true) {
@@ -59,10 +100,10 @@ export async function deliverWebReply(params: {
   const mediaList = resolveOutboundMediaUrls(replyResult);
 
   // Standard retry: 3 attempts with short linear backoff.
-  // If disconnect-class errors appear, escalate to longer retries so reconnect
-  // has enough time to provide a live socket.
-  const STANDARD = { maxAttempts: 3, baseMs: 500, factor: 1 };
-  const DISCONNECT = { maxAttempts: 7, baseMs: 2_000, factor: 2 };
+  // If disconnect-class errors appear, escalate to a reconnect-aware retry
+  // window sized from the active reconnect policy.
+  const STANDARD = STANDARD_RETRY;
+  const DISCONNECT = resolveDisconnectRetryStrategy(msg);
 
   const sendWithRetry = async (fn: () => Promise<unknown>, label: string) => {
     let lastErr: unknown;
@@ -88,7 +129,10 @@ export async function deliverWebReply(params: {
         const backoffMs =
           strategy.factor === 1
             ? strategy.baseMs * attempt
-            : strategy.baseMs * Math.pow(strategy.factor, attempt - 2);
+            : Math.min(
+                strategy.maxMs ?? Number.POSITIVE_INFINITY,
+                Math.round(strategy.baseMs * Math.pow(strategy.factor, attempt - 2)),
+              );
 
         if (strategy === STANDARD) {
           strategy = DISCONNECT;
