@@ -9,15 +9,15 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
   };
 });
 
-// Mock @tloncorp/api
-vi.mock("@tloncorp/api", () => ({
+// Mock the local Tlon upload seam.
+vi.mock("../tlon-api.js", () => ({
   uploadFile: vi.fn(),
 }));
 
 describe("uploadImageFromUrl", () => {
   async function loadUploadMocks() {
     const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/infra-runtime");
-    const { uploadFile } = await import("@tloncorp/api");
+    const { uploadFile } = await import("../tlon-api.js");
     const { uploadImageFromUrl } = await import("./upload.js");
     return {
       mockFetch: vi.mocked(fetchWithSsrFGuard),
