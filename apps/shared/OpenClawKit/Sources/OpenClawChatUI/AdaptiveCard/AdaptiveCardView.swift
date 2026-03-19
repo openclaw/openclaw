@@ -39,6 +39,16 @@ struct AdaptiveCardView: View {
             self.renderContainer(c)
         case .image(let img):
             self.renderImage(img)
+        case .table(let t):
+            self.renderTable(t)
+        case .richTextBlock(let rtb):
+            self.renderRichTextBlock(rtb)
+        case .codeBlock(let cb):
+            self.renderCodeBlock(cb)
+        case .imageSet(let imgSet):
+            self.renderImageSet(imgSet)
+        case .actionSet(let actSet):
+            self.renderActions(actSet.actions)
         case .unknown:
             EmptyView()
         }
@@ -58,7 +68,7 @@ struct AdaptiveCardView: View {
 
     private func textBlockFont(_ tb: CardElement.TextBlock) -> Font {
         switch tb.size?.lowercased() {
-        case "extralarge", "extraLarge":
+        case "extralarge":
             return .title
         case "large":
             return .title2
@@ -142,6 +152,93 @@ struct AdaptiveCardView: View {
         }
     }
 
+    @ViewBuilder
+    private func renderTable(_ table: CardElement.Table) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(table.rows.indices, id: \.self) { rowIdx in
+                if let cells = table.rows[rowIdx].cells {
+                    HStack(alignment: .top, spacing: 4) {
+                        ForEach(cells.indices, id: \.self) { cellIdx in
+                            VStack(alignment: .leading, spacing: 2) {
+                                if let items = cells[cellIdx].items {
+                                    ForEach(items.indices, id: \.self) { itemIdx in
+                                        self.renderElement(items[itemIdx])
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(4)
+                        }
+                    }
+                    // Bold the first row as header
+                    .fontWeight(rowIdx == 0 ? .semibold : .regular)
+                    if rowIdx == 0 {
+                        Divider()
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func renderRichTextBlock(_ rtb: CardElement.RichTextBlock) -> some View {
+        // Build an attributed text from inlines
+        let combined = rtb.inlines.reduce(Text("")) { result, run in
+            var segment = Text(run.text)
+            if run.weight?.lowercased() == "bolder" {
+                segment = segment.bold()
+            }
+            if run.italic == true {
+                segment = segment.italic()
+            }
+            if run.strikethrough == true {
+                segment = segment.strikethrough()
+            }
+            if let size = run.size?.lowercased() {
+                switch size {
+                case "small":
+                    segment = segment.font(.caption)
+                case "large":
+                    segment = segment.font(.title2)
+                case "extralarge":
+                    segment = segment.font(.title)
+                default:
+                    break
+                }
+            }
+            return result + segment
+        }
+        combined
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func renderCodeBlock(_ cb: CardElement.CodeBlock) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let lang = cb.language, !lang.isEmpty {
+                Text(lang)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Text(cb.codeSnippet)
+                .font(.system(.caption, design: .monospaced))
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(self.codeBlockBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+    }
+
+    @ViewBuilder
+    private func renderImageSet(_ imgSet: CardElement.ImageSet) -> some View {
+        let size = imgSet.imageSize ?? "medium"
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: self.imageMaxHeight(size)))], spacing: 6) {
+            ForEach(imgSet.images.indices, id: \.self) { i in
+                self.renderImage(imgSet.images[i])
+            }
+        }
+    }
+
     private func imageMaxHeight(_ size: String?) -> CGFloat {
         switch size?.lowercased() {
         case "small": return 60
@@ -178,14 +275,26 @@ struct AdaptiveCardView: View {
             }
         case .submit(let a):
             Button {
-                // Submit action tap (logged for debugging)
-                print("[AdaptiveCard] Action.Submit tapped: \(a.title ?? "untitled")")
+                // No-op: submit actions require server-side routing
             } label: {
                 Text(a.title ?? "Submit")
                     .font(.caption)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .disabled(true)
+            .help("Submit actions require server-side routing and are not supported in this view.")
+        case .execute(let a):
+            Button {
+                // No-op: execute actions require server-side routing
+            } label: {
+                Text(a.title ?? "Execute")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(true)
+            .help("Execute actions require server-side routing and are not supported in this view.")
         case .unknown:
             EmptyView()
         }
@@ -209,5 +318,11 @@ struct AdaptiveCardView: View {
         self.colorScheme == .dark
             ? Color.white
             : Color.black
+    }
+
+    private var codeBlockBackground: Color {
+        self.colorScheme == .dark
+            ? Color.white.opacity(0.08)
+            : Color.black.opacity(0.05)
     }
 }
