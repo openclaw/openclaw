@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: add an expand-to-canvas button on assistant chat bubbles and in-app session navigation from Sessions and Cron views. Thanks @BunsDev.
 - Plugins/context engines: expose `delegateCompactionToRuntime(...)` on the public plugin SDK, refactor the legacy engine to use the shared helper, and clarify `ownsCompaction` delegation semantics for non-owning engines. (#49061) Thanks @jalehman.
 - Plugins/MiniMax: add MiniMax-M2.7 and MiniMax-M2.7-highspeed models and update the default model from M2.5 to M2.7. (#49691) Thanks @liyuan97.
+- Contracts/Matrix: validate Matrix session binding coverage through the real manager, expose the manager on the Matrix runtime API, and let tests pass an explicit state directory for isolated contract setup. (#50369) thanks @ChroniCat.
 
 ### Fixes
 
@@ -161,6 +162,7 @@ Docs: https://docs.openclaw.ai
 - Matrix: make onboarding status runtime-safe (#49995) Thanks @joshavant.
 - Channels: stabilize lane harness and monitor tests (#50167) Thanks @joshavant.
 - WhatsApp/active-listener: pin the active listener registry to a `globalThis` singleton so split WhatsApp bundle chunks share one listener map and outbound sends stop missing the registered session. (#47433) Thanks @clawdia67.
+- Plugins/WhatsApp: share split-load singleton state for plugin command registration and active WhatsApp listeners so duplicate module graphs no longer lose native plugin commands or outbound listener state. (#50418) Thanks @huntharo.
 
 ### Breaking
 
