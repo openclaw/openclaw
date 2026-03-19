@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { access } from "node:fs/promises";
 import module from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -59,7 +60,11 @@ const isDirectModuleNotFoundError = (err, specifier) => {
   }
 
   const message = "message" in err && typeof err.message === "string" ? err.message : "";
-  return message.includes(fileURLToPath(expectedUrl));
+  const expectedPath = fileURLToPath(expectedUrl);
+  return (
+    message.includes(`Cannot find module '${expectedPath}'`) ||
+    message.includes(`Cannot find module "${expectedPath}"`)
+  );
 };
 
 const installProcessWarningFilter = async () => {
@@ -95,10 +100,36 @@ const tryImport = async (specifier) => {
   }
 };
 
+const exists = async (specifier) => {
+  try {
+    await access(new URL(specifier, import.meta.url));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const buildMissingEntryErrorMessage = async () => {
+  const lines = ["openclaw: missing dist/entry.(m)js (build output)."];
+  if (!(await exists("./src/entry.ts"))) {
+    return lines.join("\n");
+  }
+
+  lines.push("This install looks like an unbuilt source tree or GitHub source archive.");
+  lines.push(
+    "Build locally with `pnpm install && pnpm build`, or install a built package instead.",
+  );
+  lines.push(
+    "For pinned GitHub installs, use `npm install -g github:openclaw/openclaw#<ref>` instead of a raw `/archive/<ref>.tar.gz` URL.",
+  );
+  lines.push("For releases, use `npm install -g openclaw@latest`.");
+  return lines.join("\n");
+};
+
 if (await tryImport("./dist/entry.js")) {
   // OK
 } else if (await tryImport("./dist/entry.mjs")) {
   // OK
 } else {
-  throw new Error("openclaw: missing dist/entry.(m)js (build output).");
+  throw new Error(await buildMissingEntryErrorMessage());
 }
