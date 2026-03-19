@@ -18,14 +18,6 @@ class SmsHandler(
   }
 
   suspend fun handleSmsSearch(paramsJson: String?): GatewaySession.InvokeResult {
-    // Check permissions first
-    if (!sms.hasReadSmsPermission()) {
-      return GatewaySession.InvokeResult.error(
-        code = "SMS_PERMISSION_REQUIRED",
-        message = "SMS_PERMISSION_REQUIRED: grant SMS permission",
-      )
-    }
-
     val res = sms.search(paramsJson)
     if (res.ok) {
       return GatewaySession.InvokeResult.ok(res.payloadJson)

@@ -254,6 +254,10 @@ class SmsManager(private val context: Context) {
         return hasSmsPermission() && hasTelephonyFeature()
     }
 
+    fun canReadSms(): Boolean {
+        return hasReadSmsPermission() && hasTelephonyFeature()
+    }
+
     fun hasTelephonyFeature(): Boolean {
         return context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
