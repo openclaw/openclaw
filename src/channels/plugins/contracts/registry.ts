@@ -1,9 +1,13 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { expect, vi } from "vitest";
 import {
   __testing as discordThreadBindingTesting,
   createThreadBindingManager as createDiscordThreadBindingManager,
 } from "../../../../extensions/discord/runtime-api.js";
 import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
+import { createMatrixThreadBindingManager } from "../../../../extensions/matrix/api.js";
 import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/runtime-api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -126,7 +130,7 @@ type DirectoryContractEntry = {
 type SessionBindingContractEntry = {
   id: string;
   expectedCapabilities: SessionBindingCapabilities;
-  getCapabilities: () => SessionBindingCapabilities;
+  getCapabilities: () => SessionBindingCapabilities | Promise<SessionBindingCapabilities>;
   bindAndResolve: () => Promise<SessionBindingRecord>;
   unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
   cleanup: () => Promise<void> | void;
@@ -136,6 +140,7 @@ function expectResolvedSessionBinding(params: {
   channel: string;
   accountId: string;
   conversationId: string;
+  parentConversationId?: string;
   targetSessionKey: string;
 }) {
   expect(
@@ -143,6 +148,7 @@ function expectResolvedSessionBinding(params: {
       channel: params.channel,
       accountId: params.accountId,
       conversationId: params.conversationId,
+      parentConversationId: params.parentConversationId,
     }),
   )?.toMatchObject({
     targetSessionKey: params.targetSessionKey,
@@ -589,6 +595,24 @@ const baseSessionBindingCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
+async function createContractMatrixThreadBindingManager() {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "matrix-contract-thread-bindings-"));
+  return await createMatrixThreadBindingManager({
+    accountId: "ops",
+    auth: {
+      accountId: "ops",
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "token",
+    },
+    client: {} as never,
+    stateDir,
+    idleTimeoutMs: 24 * 60 * 60 * 1000,
+    maxAgeMs: 0,
+    enableSweeper: false,
+  });
+}
+
 export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
   {
     id: "discord",
@@ -706,6 +730,61 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
         accountId: "default",
         conversationId: "oc_group_chat:topic:om_topic_root",
       });
+    },
+  },
+  {
+    id: "matrix",
+    expectedCapabilities: {
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current", "child"],
+    },
+    getCapabilities: async () => {
+      await createContractMatrixThreadBindingManager();
+      return getSessionBindingService().getCapabilities({
+        channel: "matrix",
+        accountId: "ops",
+      });
+    },
+    bindAndResolve: async () => {
+      await createContractMatrixThreadBindingManager();
+      const service = getSessionBindingService();
+      const binding = await service.bind({
+        targetSessionKey: "agent:matrix:subagent:child-1",
+        targetKind: "subagent",
+        conversation: {
+          channel: "matrix",
+          accountId: "ops",
+          conversationId: "!room:example",
+        },
+        placement: "child",
+        metadata: {
+          label: "codex-matrix",
+          introText: "intro root",
+        },
+      });
+      expectResolvedSessionBinding({
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$root",
+        parentConversationId: "!room:example",
+        targetSessionKey: "agent:matrix:subagent:child-1",
+      });
+      return binding;
+    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
+    cleanup: async () => {
+      const manager = await createContractMatrixThreadBindingManager();
+      manager.stop();
+      expect(
+        getSessionBindingService().resolveByConversation({
+          channel: "matrix",
+          accountId: "ops",
+          conversationId: "$root",
+          parentConversationId: "!room:example",
+        }),
+      ).toBeNull();
     },
   },
   {
