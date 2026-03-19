@@ -98,7 +98,7 @@ Text + native (when enabled):
 - `/plugins list|show|get|enable|disable` (inspect discovered plugins and toggle enablement, owner-only for writes; requires `commands.plugins: true`)
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
 - `/usage off|tokens|full|cost` (per-response usage footer or local cost summary)
-- `/tts off|always|inbound|tagged|status|provider|limit|summary|audio` (control TTS; see [/tts](/tts))
+- `/tts off|always|inbound|tagged|status|provider|limit|summary|audio` (control TTS; see [/tts](/tools/tts))
   - Discord: native command is `/voice` (Discord reserves `/tts`); text `/tts` still works.
 - `/stop`
 - `/restart`

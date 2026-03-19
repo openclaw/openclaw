@@ -13,7 +13,7 @@ Search API or Perplexity Sonar via OpenRouter.
 
 <Note>
 This page covers the Perplexity **provider** setup. For the Perplexity
-**tool** (how the agent uses it), see [Perplexity tool](/perplexity).
+**tool** (how the agent uses it), see [Perplexity tool](/tools/perplexity-search).
 </Note>
 
 - Type: web search provider (not a model provider)
