@@ -1633,7 +1633,7 @@ fix_npm_permissions() {
         return 0
     fi
 
-    ui_warn "npm global prefix not writable; using ~/.npm-global (saved to ~/.npmrc)"
+    ui_warn "npm global prefix not writable; configuring ~/.npm-global as prefix (will be saved to ~/.npmrc)"
     mkdir -p "$HOME/.npm-global"
     npm config set prefix "$HOME/.npm-global"
 
