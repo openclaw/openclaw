@@ -79,8 +79,8 @@ export async function queryOllamaContextWindow(
     });
     
     if (!response.ok) {
-      // Fallback to older method
-      return await queryOllamaContextWindowLegacy(apiBase, modelName);
+      // No redundant legacy fallback - if /api/show fails, use estimation
+      return estimateContextWindow(modelName);
     }
     
     const data = (await response.json()) as { model_info?: Record<string, unknown> };
@@ -135,37 +135,6 @@ export async function queryOllamaContextWindow(
       });
     }
     return estimated;
-  }
-}
-
-/**
- * Legacy method for context window detection
- */
-async function queryOllamaContextWindowLegacy(
-  apiBase: string,
-  modelName: string,
-): Promise<number | undefined> {
-  try {
-    // Try to get model parameters through config
-    const configResponse = await fetch(`${apiBase}/api/show`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
-        name: modelName,
-        verbose: true
-      }),
-      signal: AbortSignal.timeout(3000),
-    });
-    
-    if (!configResponse.ok) {
-      return undefined;
-    }
-    
-    const configData = await configResponse.json();
-    // Estimate based on model family and size
-    return estimateContextWindow(modelName, configData);
-  } catch {
-    return undefined;
   }
 }
 
@@ -351,6 +320,12 @@ export function buildOllamaModelDefinition(
       OLLAMA_EXTENDED_MAX_TOKENS : 
       OLLAMA_DEFAULT_MAX_TOKENS);
   
+  // Use sensible default output token limits, NOT a percentage of context window
+  // No model can realistically output 1M tokens in a single turn
+  const maxOutputTokens = effectiveContextWindow >= OLLAMA_MEGA_CONTEXT_WINDOW 
+    ? OLLAMA_EXTENDED_MAX_TOKENS  // 32K for mega context models
+    : OLLAMA_DEFAULT_MAX_TOKENS;   // 8K for standard models
+  
   return {
     id: modelId,
     name: modelId,
@@ -358,8 +333,7 @@ export function buildOllamaModelDefinition(
     input: ["text"],
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: Math.min(effectiveContextWindow, OLLAMA_MEGA_CONTEXT_WINDOW),
-    maxTokens: Math.min(effectiveMaxTokens, 
-      Math.floor(Math.min(effectiveContextWindow, OLLAMA_MEGA_CONTEXT_WINDOW) * 0.5)),
+    maxTokens: Math.min(effectiveMaxTokens, maxOutputTokens),
   };
 }
 

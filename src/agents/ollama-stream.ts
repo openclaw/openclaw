@@ -592,6 +592,13 @@ export function extractMarkdownToolCalls(
           continue;
         }
         
+        // Guard: only promote to a tool call when the name matches a configured tool.
+        // This check must be applied to ALL patterns, not just the primary one.
+        if (allowedToolNames && !allowedToolNames.has(name)) {
+          log.debug(`[manusilized] Skipping additional pattern match: '${name}' is not a configured tool`);
+          continue;
+        }
+        
         const args =
           parsed.arguments != null && typeof parsed.arguments === "object"
             ? (parsed.arguments as Record<string, unknown>)
@@ -626,40 +633,31 @@ export async function* parseNdjsonStream(
     }
     buffer += decoder.decode(value, { stream: true });
     
-    // Accumulate buffer for smoother processing
+    // Process each line immediately as it arrives (original NDJSON streaming behavior)
+    // Accumulate only incomplete lines for the next iteration
     accumulatedBuffer += buffer;
     
-    // Only process when we have enough data or stream is ending
-    if (accumulatedBuffer.length >= bufferSize || done) {
-      const lines = accumulatedBuffer.split("\n");
-      accumulatedBuffer = lines.pop() ?? "";
+    const lines = accumulatedBuffer.split("\n");
+    // Keep the last (potentially incomplete) line in the buffer
+    accumulatedBuffer = lines.pop() ?? "";
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          continue;
-        }
-        try {
-          yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
-        } catch {
-          log.warn(`Skipping malformed NDJSON line: ${trimmed.slice(0, 120)}`);
-        }
+    // Process all complete lines immediately
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
       }
-      
-      // Reset buffer if we're done
-      if (done && accumulatedBuffer.trim()) {
-        try {
-          yield parseJsonPreservingUnsafeIntegers(accumulatedBuffer.trim()) as OllamaChatResponse;
-        } catch {
-          log.warn(`Skipping malformed trailing data: ${accumulatedBuffer.trim().slice(0, 120)`);
-        }
+      try {
+        yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
+      } catch {
+        log.warn(`Skipping malformed NDJSON line: ${trimmed.slice(0, 120)}`);
       }
     }
     
     buffer = ""; // Reset buffer for next iteration
   }
 
-  // Handle any remaining data
+  // Handle any remaining data after stream ends
   if (accumulatedBuffer.trim()) {
     try {
       yield parseJsonPreservingUnsafeIntegers(accumulatedBuffer.trim()) as OllamaChatResponse;
@@ -821,15 +819,32 @@ export function createOllamaStreamFn(
           }),
         });
 
-// Retry mechanism for stream parsing
+        // Retry mechanism with fresh stream on each attempt
         let retryCount = 0;
         const maxRetries = 3;
-        let connectionHealthy = true;
-        const connectionCheckInterval = 30000; // 30 seconds
-        let lastConnectionCheck = Date.now();
-        
+
         while (retryCount <= maxRetries) {
           try {
+            // Re-issue HTTP request on each retry to get a fresh stream
+            // (ReadableStreamDefaultReader is single-pass and non-rewindable)
+            if (retryCount > 0) {
+              const retryResponse = await fetch(chatUrl, {
+                method: "POST",
+                headers,
+                body: JSON.stringify(ollamaBody),
+                signal: options?.signal,
+              });
+
+              if (!retryResponse.ok) {
+                throw new Error(`Ollama API error: ${retryResponse.status} ${retryResponse.statusText}`);
+              }
+
+              reader = retryResponse.body?.getReader();
+              if (!reader) {
+                throw new Error("Failed to get stream reader on retry");
+              }
+            }
+
             for await (const chunk of parseNdjsonStream(reader, config.bufferSize)) {
               const currentTime = Date.now();
               
@@ -837,9 +852,9 @@ export function createOllamaStreamFn(
               // Emit each content fragment immediately so the UI can render a
               // live typewriter effect instead of waiting for the full response.
               if (chunk.message?.content) {
-                // Apply privacy filter to content before processing
-                const filteredDelta = filterSensitiveInformation(chunk.message.content);
-                const delta = filteredDelta;
+                // DO NOT apply privacy filter to model output - it corrupts legitimate technical content
+                // Privacy filtering should be applied to user INPUT before sending to model
+                const delta = chunk.message.content;
                 accumulatedContent += delta;
                 // Throttle streaming to reduce UI updates while still accumulating content
                 if (currentTime - lastStreamTime >= config.throttleDelay) {
@@ -901,7 +916,7 @@ export function createOllamaStreamFn(
         }
 
         // Apply privacy filter to final content
-        finalResponse.message.content = filterSensitiveInformation(accumulatedContent);
+        finalResponse.message.content = accumulatedContent;
 
         // Emit text_end event to indicate completion of text streaming
         stream.push({
@@ -943,7 +958,7 @@ export function createOllamaStreamFn(
               .trim();
             
             // Apply privacy filter to cleaned content
-            finalResponse.message.content = filterSensitiveInformation(cleanedContent);
+            finalResponse.message.content = cleanedContent;
           }
         }
 
