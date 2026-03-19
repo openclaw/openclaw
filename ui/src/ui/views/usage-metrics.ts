@@ -258,8 +258,16 @@ function renderUsageMosaic(
   `;
 }
 
-function formatCost(n: number, decimals = 2): string {
-  return `$${n.toFixed(decimals)}`;
+function formatCost(n: number, decimals?: number): string {
+  // Cost is in USD. For very small values, rounding to 2 decimals can hide non-zero costs
+  // (e.g. 0.004 -> $0.00). Keep extra precision for small totals.
+  if (decimals !== undefined) {
+    return `$${n.toFixed(decimals)}`;
+  }
+  if (n === 0) {
+    return "$0.00";
+  }
+  return `$${n < 0.01 ? n.toFixed(4) : n.toFixed(2)}`;
 }
 
 function formatIsoDate(date: Date): string {
