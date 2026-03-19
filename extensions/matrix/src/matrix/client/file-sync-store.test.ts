@@ -12,7 +12,7 @@ function createSyncResponse(nextBatch: string): ISyncResponse {
     rooms: {
       join: {
         "!room:example.org": {
-          summary: {},
+          summary: { "m.heroes": [] },
           state: { events: [] },
           timeline: {
             events: [
@@ -34,6 +34,9 @@ function createSyncResponse(nextBatch: string): ISyncResponse {
           unread_notifications: {},
         },
       },
+      invite: {},
+      leave: {},
+      knock: {},
     },
     account_data: {
       events: [

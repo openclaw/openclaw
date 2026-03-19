@@ -62,7 +62,7 @@ function createHarness(params?: {
   const ensureVerificationDmTracked = vi.fn(
     params?.ensureVerificationDmTracked ?? (async () => null),
   );
-  const sendMessage = vi.fn(async () => "$notice");
+  const sendMessage = vi.fn(async (_roomId: string, _payload: { body?: string }) => "$notice");
   const invalidateRoom = vi.fn();
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const formatNativeDependencyHint = vi.fn(() => "install hint");

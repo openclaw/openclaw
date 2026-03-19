@@ -115,6 +115,7 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
       mediaMaxBytes: 5 * 1024 * 1024,
       startupMs: Date.now() - 120_000,
       startupGraceMs: 60_000,
+      dropPreStartupMessages: false,
       directTracker: {
         isDirectMessage: vi.fn().mockResolvedValue(true),
       },

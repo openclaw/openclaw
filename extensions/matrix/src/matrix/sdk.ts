@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import {
   ClientEvent,
   MatrixEventEvent,
+  Preset,
   createClient as createMatrixJsClient,
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
@@ -547,7 +548,7 @@ export class MatrixClient {
     const result = await this.client.createRoom({
       invite: [remoteUserId],
       is_direct: true,
-      preset: "trusted_private_chat",
+      preset: Preset.TrustedPrivateChat,
       initial_state: initialState,
     });
     return result.room_id;
