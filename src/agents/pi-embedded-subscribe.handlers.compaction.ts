@@ -1,6 +1,7 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { hasRealConversationContent } from "./pi-embedded-runner/compact.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
@@ -27,6 +28,7 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
           messageCount: ctx.params.session.messages?.length ?? 0,
           messages: ctx.params.session.messages,
           sessionFile: ctx.params.session.sessionFile,
+          hasRealMessages: ctx.params.session.messages?.some(hasRealConversationContent) ?? false,
         },
         {
           sessionKey: ctx.params.sessionKey,

@@ -634,6 +634,8 @@ export type PluginHookAgentEndEvent = {
 export type PluginHookBeforeCompactionEvent = {
   /** Total messages in the session before any truncation or compaction */
   messageCount: number;
+  /** Whether the session has real user/assistant messages (false = safeguard will cancel) */
+  hasRealMessages?: boolean;
   /** Messages being fed to the compaction LLM (after history-limit truncation) */
   compactingCount?: number;
   tokenCount?: number;

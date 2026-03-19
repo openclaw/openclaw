@@ -435,7 +435,7 @@ export class GraphService {
             content:
               (c.summary as string) ||
               (c.name as string) ||
-              (typeof c === "string" ? c : JSON.stringify(c)),
+              (cText ?? (typeof c === "string" ? c : JSON.stringify(c))),
             timestamp: c.created_at as string,
             _sourceQuery: `Graph Nodes (${query})`,
             _boosted: true,
@@ -542,7 +542,7 @@ export class GraphService {
             content:
               (c.content as string) ||
               (c.fact as string) ||
-              (typeof c === "string" ? c : JSON.stringify(c)),
+              (cText ?? (typeof c === "string" ? c : JSON.stringify(c))),
             fallbackTs: String(c.created_at),
           });
         } catch {

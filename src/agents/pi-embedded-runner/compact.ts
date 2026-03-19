@@ -155,7 +155,7 @@ type CompactionMessageMetrics = {
   contributors: Array<{ role: string; chars: number; tool?: string }>;
 };
 
-function hasRealConversationContent(msg: AgentMessage): boolean {
+export function hasRealConversationContent(msg: AgentMessage): boolean {
   return msg.role === "user" || msg.role === "assistant" || msg.role === "toolResult";
 }
 
@@ -959,6 +959,7 @@ export async function compactEmbeddedPiSessionDirect(
               {
                 messageCount: messageCountBefore,
                 tokenCount: tokenCountBefore,
+                hasRealMessages: session.messages.some(hasRealConversationContent),
               },
               {
                 sessionId: params.sessionId,

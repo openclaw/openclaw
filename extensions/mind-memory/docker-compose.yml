@@ -1,17 +1,18 @@
 services:
   graphiti:
-    build:
-      context: ../../../graphiti/mcp_server
-      dockerfile: docker/Dockerfile
+    image: juliopx/graphiti-mcp:latest
     container_name: graphiti
     ports:
       - "8001:8000"
       - "6379:6379"
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
-      - MODEL_NAME=${LLM_MODEL:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-local}
+      - OPENAI_API_URL=${OPENAI_API_URL:-http://192.168.1.250:8081/v1}
+      - LLM_MODEL=${LLM_MODEL:-Qwen-3.5-4B}
+      - EMBEDDER_MODEL=${EMBEDDER_MODEL:-Qwen-3.5-4B}
+      - EMBEDDER_DIMENSIONS=${EMBEDDER_DIMENSIONS:-2560}
       - FALKORDB_URL=redis://localhost:6379
+      - SEMAPHORE_LIMIT=1
     volumes:
       - falkordb_data:/var/lib/falkordb/data
     restart: unless-stopped

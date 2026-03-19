@@ -22,7 +22,7 @@ export default {
     const graphURL = process.env.GRAPHITI_MCP_URL || "http://localhost:8001";
     const graph = new GraphService(graphURL);
     // Use a stable global ID for the user's memory, ignoring the ephemeral sessionKey
-    const sessionId = "global-user-memory";
+    const sessionId = "global_user_memory";
 
     if (event === "message:new") {
       await graph.addEpisode(sessionId, `human: ${payload.message?.text || ""}`);

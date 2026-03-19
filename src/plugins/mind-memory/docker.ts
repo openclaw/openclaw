@@ -23,12 +23,16 @@ export async function installDocker(): Promise<boolean> {
 }
 
 export interface GraphitiLlmConfig {
-  /** OpenAI-compatible base URL (e.g. "http://192.168.1.250:8081/v1"). Omit to use OpenAI. */
-  baseUrl?: string;
+  /** OpenAI-compatible API URL (e.g. "http://192.168.1.250:8081/v1"). Omit to use OpenAI. */
+  apiUrl?: string;
   /** API key for the LLM provider. */
   apiKey?: string;
-  /** Model name to use inside the container (e.g. "Qwen-3.5-4B"). */
+  /** LLM model name to use inside the container (e.g. "Qwen-3.5-4B"). */
   modelName?: string;
+  /** Embedding model name (defaults to same as modelName if omitted). */
+  embedderModel?: string;
+  /** Embedding vector dimensions (must match the model). */
+  embedderDimensions?: number;
 }
 
 /**
@@ -85,14 +89,20 @@ export async function ensureGraphitiDocker(
       `🐳 [DOCKER] Starting Graphiti via: docker compose -f ${composePath} up -d\n`,
     );
     const childEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
-    if (llmConfig?.baseUrl) {
-      childEnv.OPENAI_BASE_URL = llmConfig.baseUrl;
+    if (llmConfig?.apiUrl) {
+      childEnv.OPENAI_API_URL = llmConfig.apiUrl;
     }
     if (llmConfig?.apiKey) {
       childEnv.OPENAI_API_KEY = llmConfig.apiKey;
     }
     if (llmConfig?.modelName) {
       childEnv.LLM_MODEL = llmConfig.modelName;
+    }
+    if (llmConfig?.embedderModel) {
+      childEnv.EMBEDDER_MODEL = llmConfig.embedderModel;
+    }
+    if (llmConfig?.embedderDimensions) {
+      childEnv.EMBEDDER_DIMENSIONS = String(llmConfig.embedderDimensions);
     }
     await execAsync(`docker compose -f ${composePath} up -d`, { env: childEnv });
     process.stderr.write("✅ [DOCKER] Graphiti started successfully.\n");

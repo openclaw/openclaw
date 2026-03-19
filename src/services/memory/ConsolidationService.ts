@@ -48,6 +48,7 @@ function extractTextFromUnknown(value: unknown): string {
  * funnel through updateNarrativeStory which acquires this lock.
  * The lock file is created at `<storyPath>.lock`.
  */
+/** Query FalkorDB directly for the current count of Episodic nodes. */
 const STORY_LOCK_OPTIONS: FileLockOptions = {
   retries: { retries: 10, factor: 2, minTimeout: 200, maxTimeout: 15_000, randomize: true },
   stale: 120_000, // 2 min stale detection
@@ -145,7 +146,7 @@ export class ConsolidationService {
 
         const dateString = episodeTimestamp || file.substring(0, 10);
         await this.graph.addEpisode(
-          "global-user-memory", // FORCE GLOBAL ID for historical files
+          "global_user_memory", // FORCE GLOBAL ID for historical files
           `FECHA: ${dateString} | system: Historical memory from ${file}\n\n${content}`,
           episodeTimestamp,
           { source: "historical-file" },
@@ -197,7 +198,7 @@ export class ConsolidationService {
           const earliestIso = earliestDate.toISOString();
           const transcriptBody = `FECHA: ${earliestIso} | [TRANSCRIPCIÓN DE SESIÓN]\n${transcriptLines.join("\n")}`;
 
-          await this.graph.addEpisode("global-user-memory", transcriptBody, earliestIso, {
+          await this.graph.addEpisode("global_user_memory", transcriptBody, earliestIso, {
             source: "message",
           });
           await fs.appendFile(bootstrapProgressPath, `__session_messages__\n`);

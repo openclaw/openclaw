@@ -119,9 +119,10 @@ export default function register(api: PluginApi) {
           ? smallModelRaw.split("/").slice(1).join("/")
           : undefined;
         await ensureGraphitiDocker(pluginDir, {
-          baseUrl: providerCfg?.baseUrl,
+          apiUrl: providerCfg?.baseUrl,
           apiKey: providerCfg?.apiKey,
           modelName: smModelName,
+          embedderModel: smModelName,
         });
       }
     },
@@ -151,7 +152,7 @@ export default function register(api: PluginApi) {
 
             if (options.bootstrap) {
               api.logger.info("📖 Generating historical autobiography...");
-              const sessionId = "global-user-memory";
+              const sessionId = "global_user_memory";
               const agentId = resolveDefaultAgentId(api.config);
               const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
               const memoryDir = config.memoryDir || path.join(workspaceDir, "memory");
@@ -236,7 +237,7 @@ export default function register(api: PluginApi) {
     };
 
     // Use stable global ID to ensure memory persists across chat sessions
-    const sessionId = "global-user-memory";
+    const sessionId = "global_user_memory";
     try {
       // Skip flashbacks in hyperfocus/intensive mode — no resonance during focused work.
       const modeAgentId = resolveDefaultAgentId(api.config);
@@ -328,7 +329,7 @@ export default function register(api: PluginApi) {
 
   api.registerGatewayMethod("narrative.addEpisode", async ({ params, respond }) => {
     const { text } = params as { text: string };
-    const sessionId = "global-user-memory";
+    const sessionId = "global_user_memory";
     try {
       await graphService.addEpisode(sessionId, text);
       respond(true, { ok: true });
@@ -339,7 +340,7 @@ export default function register(api: PluginApi) {
 
   api.registerGatewayMethod("narrative.searchNodes", async ({ params, respond }) => {
     const { query } = params as { query: string };
-    const sessionId = "global-user-memory";
+    const sessionId = "global_user_memory";
     try {
       const nodes = await graphService.searchNodes(sessionId, query);
       respond(true, { nodes });
@@ -350,7 +351,7 @@ export default function register(api: PluginApi) {
 
   api.registerGatewayMethod("narrative.searchFacts", async ({ params, respond }) => {
     const { query } = params as { query: string };
-    const sessionId = "global-user-memory";
+    const sessionId = "global_user_memory";
     try {
       const facts = await graphService.searchFacts(sessionId, query);
       respond(true, { facts });
@@ -377,7 +378,7 @@ export default function register(api: PluginApi) {
     },
     execute: async (_toolCallId: string, params: { query: string }) => {
       const { query } = params;
-      const sessionId = "global-user-memory";
+      const sessionId = "global_user_memory";
 
       try {
         const [nodes, facts] = await Promise.all([
@@ -616,7 +617,7 @@ export default function register(api: PluginApi) {
         // so the focused work is not lost from long-term memory.
         // Prefer Mind's own summary; fall back to goal+duration if not provided.
         if (config.graphiti?.enabled !== false) {
-          const sessionId = "global-user-memory";
+          const sessionId = "global_user_memory";
           const durationMs = current.activatedAt
             ? Date.now() - new Date(current.activatedAt).getTime()
             : 0;
@@ -960,7 +961,7 @@ export default function register(api: PluginApi) {
     }
     const { narrativeAgent, observerAgent } = agents;
 
-    const sessionId = "global-user-memory";
+    const sessionId = "global_user_memory";
     const skipResonance = process.env.MIND_SKIP_RESONANCE === "1";
 
     // Run memory pipeline in parallel:
@@ -970,7 +971,10 @@ export default function register(api: PluginApi) {
     // [3] Get flashback resonance for injection
     const [, , , flashbackResult] = await Promise.allSettled([
       config.graphiti?.enabled !== false
-        ? consolidator.bootstrapHistoricalEpisodes(sessionId, memoryDir)
+        ? (consolidator
+            .bootstrapHistoricalEpisodes(sessionId, memoryDir)
+            .catch((e) => process.stderr.write(`⚠️ [MIND] Bootstrap error: ${e}\n`)),
+          Promise.resolve())
         : Promise.resolve(),
       sessionsDir && config.narrative?.enabled !== false
         ? consolidator
@@ -1066,6 +1070,10 @@ export default function register(api: PluginApi) {
   api.on("before_compaction", (event, _ctx) => {
     const { messages, sessionFile } = event;
     if (!messages || messages.length === 0 || config.narrative?.enabled === false) {
+      return;
+    }
+    // Skip if the compaction safeguard will cancel (no real user/assistant messages)
+    if (event.hasRealMessages === false) {
       return;
     }
 
