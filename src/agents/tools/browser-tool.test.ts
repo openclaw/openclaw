@@ -64,12 +64,7 @@ const browserConfigMocks = vi.hoisted(() => ({
     if (!profile) {
       return null;
     }
-    const driver =
-      profile.driver === "extension"
-        ? "extension"
-        : profile.driver === "existing-session"
-          ? "existing-session"
-          : "openclaw";
+    const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
     if (driver === "existing-session") {
       return {
         name,
@@ -285,29 +280,6 @@ describe("browser tool snapshot maxChars", () => {
       | { mode?: string }
       | undefined;
     expect(opts?.mode).toBeUndefined();
-  });
-
-  it("defaults to host when using an explicit extension relay profile (even in sandboxed sessions)", async () => {
-    setResolvedBrowserProfiles({
-      relay: {
-        driver: "extension",
-        cdpUrl: "http://127.0.0.1:18792",
-        color: "#0066CC",
-      },
-    });
-    const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
-    await tool.execute?.("call-1", {
-      action: "snapshot",
-      profile: "relay",
-      snapshotFormat: "ai",
-    });
-
-    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      undefined,
-      expect.objectContaining({
-        profile: "relay",
-      }),
-    );
   });
 
   it("defaults to host when using profile=user (even in sandboxed sessions)", async () => {

@@ -7,19 +7,15 @@ export {
   monitorWebChannel,
   resolveHeartbeatRecipients,
   runWebHeartbeatOnce,
-  type WebChannelStatus,
-  type WebMonitorTuning,
-} from "../extensions/whatsapp/src/auto-reply.js";
+} from "openclaw/plugin-sdk/whatsapp";
 export {
   extractMediaPlaceholder,
   extractText,
   monitorWebInbox,
-  type WebInboundMessage,
-  type WebListenerCloseReason,
-} from "../extensions/whatsapp/src/inbound.js";
-export { loginWeb } from "../extensions/whatsapp/src/login.js";
-export { loadWebMedia, optimizeImageToJpeg } from "../extensions/whatsapp/src/media.js";
-export { sendMessageWhatsApp } from "../extensions/whatsapp/src/send.js";
+} from "openclaw/plugin-sdk/whatsapp";
+export { loginWeb } from "openclaw/plugin-sdk/whatsapp";
+export { loadWebMedia, optimizeImageToJpeg } from "./media/web-media.js";
+export { sendMessageWhatsApp } from "openclaw/plugin-sdk/whatsapp";
 export {
   createWaSocket,
   formatError,
@@ -30,4 +26,4 @@ export {
   WA_WEB_AUTH_DIR,
   waitForWaConnection,
   webAuthExists,
-} from "../extensions/whatsapp/src/session.js";
+} from "openclaw/plugin-sdk/whatsapp";

@@ -1,7 +1,7 @@
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
-} from "../../../extensions/telegram/src/exec-approvals.js";
+} from "openclaw/plugin-sdk/telegram";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";

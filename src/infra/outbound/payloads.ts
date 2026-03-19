@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   formatBtwTextForExternalDelivery,
@@ -5,10 +6,17 @@ import {
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import {
+  hasInteractiveReplyBlocks,
+  hasReplyChannelData,
+  hasReplyPayloadContent,
+  type InteractiveReply,
+} from "../../interactive/payload.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
+  interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
 };
 
@@ -16,6 +24,7 @@ export type OutboundPayloadJson = {
   text: string;
   mediaUrl: string | null;
   mediaUrls?: string[];
+  interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
 };
 
@@ -88,16 +97,21 @@ export function normalizeOutboundPayloads(
 ): NormalizedOutboundPayload[] {
   const normalizedPayloads: NormalizedOutboundPayload[] = [];
   for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
-    const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const parts = resolveSendableOutboundReplyParts(payload);
+    const interactive = payload.interactive;
     const channelData = payload.channelData;
-    const hasChannelData = Boolean(channelData && Object.keys(channelData).length > 0);
-    const text = payload.text ?? "";
-    if (!text && mediaUrls.length === 0 && !hasChannelData) {
+    const hasChannelData = hasReplyChannelData(channelData);
+    const hasInteractive = hasInteractiveReplyBlocks(interactive);
+    const text = parts.text;
+    if (
+      !hasReplyPayloadContent({ ...payload, text, mediaUrls: parts.mediaUrls }, { hasChannelData })
+    ) {
       continue;
     }
     normalizedPayloads.push({
       text,
-      mediaUrls,
+      mediaUrls: parts.mediaUrls,
+      ...(hasInteractive ? { interactive } : {}),
       ...(hasChannelData ? { channelData } : {}),
     });
   }
@@ -109,10 +123,12 @@ export function normalizeOutboundPayloadsForJson(
 ): OutboundPayloadJson[] {
   const normalized: OutboundPayloadJson[] = [];
   for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
+    const parts = resolveSendableOutboundReplyParts(payload);
     normalized.push({
-      text: payload.text ?? "",
+      text: parts.text,
       mediaUrl: payload.mediaUrl ?? null,
-      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
+      mediaUrls: parts.mediaUrls.length ? parts.mediaUrls : undefined,
+      interactive: payload.interactive,
       channelData: payload.channelData,
     });
   }

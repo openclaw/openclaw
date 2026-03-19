@@ -51,7 +51,7 @@ From repo root:
 This script:
 
 - builds the gateway image locally (or pulls a remote image if `OPENCLAW_IMAGE` is set)
-- runs the onboarding wizard
+- runs onboarding
 - prints optional provider setup hints
 - starts the gateway via Docker Compose
 - generates a gateway token and writes it to `.env`
@@ -713,6 +713,7 @@ an optional noVNC observer (headful via Xvfb).
 
 Notes:
 
+- Docker and other headless/container browser flows stay on raw CDP. Chrome MCP `existing-session` is for host-local Chrome, not container takeover.
 - Headful (Xvfb) reduces bot blocking vs headless.
 - Headless can still be used by setting `agents.defaults.sandbox.browser.headless=true`.
 - No full desktop environment (GNOME) is needed; Xvfb provides the display.

@@ -1,15 +1,16 @@
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DiscordAccountConfig } from "../../../src/config/types.discord.js";
-import {
-  hasConfiguredSecretInput,
-  normalizeSecretInputString,
-} from "../../../src/config/types.secrets.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
 import {
   mergeDiscordAccountConfig,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccountConfig,
 } from "./accounts.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  hasConfiguredSecretInput,
+  normalizeSecretInputString,
+  type OpenClawConfig,
+  type DiscordAccountConfig,
+} from "./runtime-api.js";
 
 export type DiscordCredentialStatus = "available" | "configured_unavailable" | "missing";
 
