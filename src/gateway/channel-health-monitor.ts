@@ -82,9 +82,15 @@ function resolveTimingPolicy(
   };
 }
 
+/** How long before run activity is considered stale / not belonging to any live run. */
+const STALE_RUN_ACTIVITY_MS = 25 * 60_000;
+
 /**
  * Wait up to {@link DRAIN_WINDOW_MS} for active agent runs on a channel/account
  * to finish so in-flight text replies are not silently aborted.
+ *
+ * Returns immediately (without waiting) when the busy state is determined to be
+ * stale — i.e. inherited from a prior lifecycle with no real in-flight runs.
  */
 async function drainActiveRuns(
   channelManager: ChannelManager,
@@ -94,6 +100,7 @@ async function drainActiveRuns(
 ): Promise<void> {
   const deadline = Date.now() + DRAIN_WINDOW_MS;
   let warned = false;
+  let checkedStaleness = false;
   while (!isStopped() && Date.now() < deadline) {
     const snap = channelManager.getRuntimeSnapshot();
     const accountSnap = snap.channelAccounts[channelId]?.[accountId];
@@ -103,6 +110,31 @@ async function drainActiveRuns(
         : 0;
     if (activeRuns === 0) {
       return;
+    }
+    // On the first iteration with active runs, check whether the busy state is stale
+    // (e.g. inherited from a prior lifecycle). If so, there are no real in-flight runs
+    // to protect — return immediately to avoid burning the full drain window.
+    if (!checkedStaleness) {
+      checkedStaleness = true;
+      const lastStartAt =
+        typeof accountSnap?.lastStartAt === "number" && Number.isFinite(accountSnap.lastStartAt)
+          ? accountSnap.lastStartAt
+          : null;
+      const lastRunActivityAt =
+        typeof accountSnap?.lastRunActivityAt === "number" &&
+        Number.isFinite(accountSnap.lastRunActivityAt)
+          ? accountSnap.lastRunActivityAt
+          : null;
+      const isStale =
+        lastRunActivityAt == null ||
+        (lastStartAt != null && lastRunActivityAt < lastStartAt) ||
+        Date.now() - lastRunActivityAt > STALE_RUN_ACTIVITY_MS;
+      if (isStale) {
+        log.info?.(
+          `[${channelId}:${accountId}] health-monitor: skipping drain — busy state is stale (inherited from prior lifecycle)`,
+        );
+        return;
+      }
     }
     if (!warned) {
       log.info?.(
@@ -213,6 +245,26 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
                 accountId,
                 () => stopped,
               );
+              // If the monitor was stopped during the drain window, abort the restart.
+              if (stopped) {
+                break;
+              }
+              // Re-evaluate channel health after drain: the channel may have recovered
+              // or reconnected while we were waiting. Only proceed if still unhealthy.
+              const postDrainSnap = channelManager.getRuntimeSnapshot();
+              const postDrainStatus = postDrainSnap.channelAccounts[channelId]?.[accountId];
+              if (postDrainStatus) {
+                const postDrainHealth = evaluateChannelHealth(postDrainStatus, {
+                  ...healthPolicy,
+                  now: Date.now(),
+                });
+                if (postDrainHealth.healthy) {
+                  log.info?.(
+                    `[${channelId}:${accountId}] health-monitor: channel recovered during drain, skipping restart`,
+                  );
+                  continue;
+                }
+              }
               await channelManager.stopChannel(channelId as ChannelId, accountId);
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
