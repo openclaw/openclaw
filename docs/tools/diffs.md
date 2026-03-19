@@ -1,7 +1,6 @@
 ---
 title: "Diffs"
 summary: "Read-only diff viewer and file renderer for agents (optional plugin tool)"
-description: "Use the optional Diffs plugin to render before and after text or unified patches as a gateway-hosted diff view, a file (PNG or PDF), or both."
 read_when:
   - You want agents to show code or markdown edits as diffs
   - You want a canvas-ready viewer URL or a rendered diff file
