@@ -28,6 +28,50 @@
         "reason": "Builds the full bundled config schema graph and is safer outside the shared unit-fast heap."
       },
       {
+        "file": "src/secrets/runtime.test.ts",
+        "reason": "Secrets runtime coverage retained the largest unit-fast heap spike in CI and is safer outside the shared lane."
+      },
+      {
+        "file": "src/memory/index.test.ts",
+        "reason": "Memory index coverage retained nearly 1 GiB in unit-fast on Linux CI and is safer in its own fork."
+      },
+      {
+        "file": "src/plugins/http-registry.test.ts",
+        "reason": "Plugin HTTP registry coverage retained a broad plugin graph in unit-fast and is safer outside the shared lane."
+      },
+      {
+        "file": "src/infra/channel-summary.test.ts",
+        "reason": "Channel summary coverage retained a large channel/plugin graph in unit-fast on Linux CI."
+      },
+      {
+        "file": "src/config/redact-snapshot.test.ts",
+        "reason": "Snapshot redaction coverage produced a large retained heap jump in unit-fast on Linux CI."
+      },
+      {
+        "file": "src/infra/outbound/message-action-runner.media.test.ts",
+        "reason": "Outbound media action coverage retained a large media/plugin graph in unit-fast."
+      },
+      {
+        "file": "src/media-understanding/apply.echo-transcript.test.ts",
+        "reason": "Media understanding echo transcript coverage retained a large processing graph in unit-fast."
+      },
+      {
+        "file": "src/plugin-sdk/index.test.ts",
+        "reason": "Plugin SDK index coverage retained a broad export graph in unit-fast and is safer outside the shared lane."
+      },
+      {
+        "file": "src/config/sessions.cache.test.ts",
+        "reason": "Session cache coverage retained a large config/session graph in unit-fast on Linux CI."
+      },
+      {
+        "file": "src/secrets/runtime.coverage.test.ts",
+        "reason": "Secrets runtime coverage tests retained substantial heap in unit-fast and are safer isolated."
+      },
+      {
+        "file": "src/channels/plugins/contracts/registry.contract.test.ts",
+        "reason": "Plugin contract registry coverage retained a large cross-plugin graph in both failing unit-fast shards."
+      },
+      {
         "file": "src/memory/manager.get-concurrency.test.ts",
         "reason": "Memory manager cache concurrency coverage can spike shared unit-fast heap on Linux Node 24."
       },
