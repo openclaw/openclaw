@@ -176,7 +176,19 @@ export async function downloadMessageResourceFeishu(params: {
     tmpDirPrefix: "openclaw-feishu-resource-",
     errorPrefix: "Feishu message resource download failed",
   });
-  return { buffer };
+
+  // Extract metadata from response headers
+  const contentType = response.headers?.["content-type"] as string | undefined;
+  const contentDisposition = response.headers?.["content-disposition"] as string | undefined;
+  let extractedFileName: string | undefined;
+  if (contentDisposition) {
+    const match = contentDisposition.match(/filename="?([^"]+)"?/);
+    if (match) {
+      extractedFileName = match[1];
+    }
+  }
+
+  return { buffer, contentType, fileName: extractedFileName };
 }
 
 export type UploadImageResult = {
