@@ -510,7 +510,8 @@ export function attachGatewayWsMessageHandler(params: {
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
         const isWebchat = isWebchatConnect(connectParams);
         const requiresOriginCheck = endpointSecurity.requireOrigin || isControlUi || isWebchat;
-        if (enforceOriginCheckForAnyClient || requiresOriginCheck) {
+        const enforceForAllClients = securityConfig.enforceOriginCheckForAllClients === true;
+        if (enforceForAllClients || enforceOriginCheckForAnyClient || requiresOriginCheck) {
           const hostHeaderOriginFallbackEnabled =
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true ||
             configSnapshot.gateway?.security?.dangerouslyAllowHostHeaderOriginFallback === true;

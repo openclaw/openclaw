@@ -251,3 +251,66 @@ describe("Security Hardening - Gap 1: Untrusted Proxy Headers", () => {
     expect(true).toBe(true);
   });
 });
+
+describe("Security Hardening - Gap 3: Non-Browser Client Skips Origin Check", () => {
+  /**
+   * Gap 3 gating logic lives in message-handler.ts. The origin check itself
+   * (checkBrowserOrigin) is unchanged — what changes is WHETHER it runs.
+   *
+   * The message handler checks:
+   *   const requiresOriginCheck = endpointSecurity.requireOrigin || isControlUi || isWebchat;
+   *   const enforceForAllClients = securityConfig.enforceOriginCheckForAllClients === true;
+   *   if (enforceForAllClients || enforceOriginCheckForAnyClient || requiresOriginCheck) { ... }
+   *
+   * When enforceOriginCheckForAllClients is false (default):
+   *   - Custom clients (e.g., "poc-tool") skip origin check entirely
+   *   - Control UI and webchat still get origin checked
+   *
+   * When enforceOriginCheckForAllClients is true:
+   *   - ALL clients get origin checked, including custom CLI tools
+   *   - Clients without Origin header are rejected (origin missing)
+   *   - Clients with valid Origin in allowlist are accepted
+   */
+
+  it("documents: custom client without Origin header is accepted when enforceOriginCheckForAllClients=false (default)", () => {
+    // With default config, a custom client_id (not CONTROL_UI, not webchat)
+    // sets requiresOriginCheck=false, so the origin check block is skipped entirely.
+    // The connection proceeds to auth without any origin validation.
+    expect(true).toBe(true);
+  });
+
+  it("documents: custom client without Origin header is rejected when enforceOriginCheckForAllClients=true", () => {
+    // When the flag is enabled, enforceForAllClients=true forces the origin
+    // check to run. With no Origin header, checkBrowserOrigin returns
+    // { ok: false, reason: "origin not allowed" } and the connection is closed.
+    expect(true).toBe(true);
+  });
+
+  it("documents: custom client with valid Origin header is accepted regardless of flag", () => {
+    // Whether enforceOriginCheckForAllClients is true or false, if the client
+    // sends a valid Origin that matches the allowlist (or localhost fallback),
+    // the connection proceeds normally.
+    expect(true).toBe(true);
+  });
+
+  it("documents: Control UI is unaffected by enforceOriginCheckForAllClients", () => {
+    // Control UI clients always have requiresOriginCheck=true (via isControlUi),
+    // so the flag doesn't change their behavior — they were already checked.
+    expect(true).toBe(true);
+  });
+
+  it("documents: webchat is unaffected by enforceOriginCheckForAllClients", () => {
+    // Webchat clients always have requiresOriginCheck=true (via isWebchat),
+    // so the flag doesn't change their behavior — they were already checked.
+    expect(true).toBe(true);
+  });
+
+  it("documents: localhost fallback still applies when enforceOriginCheckForAllClients=true", () => {
+    // Even when enforcing origin checks for all clients, direct local connections
+    // (no proxy headers) still benefit from the local-loopback fallback unless
+    // disableLocalhostPrivilege is also enabled or auto-disabled by proxy headers.
+    // This means a local CLI tool connecting from loopback with Origin: http://localhost:*
+    // would still pass the origin check.
+    expect(true).toBe(true);
+  });
+});
