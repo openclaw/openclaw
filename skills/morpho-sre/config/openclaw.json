@@ -449,6 +449,11 @@
           ],
           "systemPrompt": "__START_GATEWAY_MONITORING_PROMPT__"
         },
+        "#router-investigator": {
+          "enabled": true,
+          "requireMention": true,
+          "allowBots": true
+        },
         "#staging-infra-monitoring": {
           "enabled": true,
           "requireMention": false,
