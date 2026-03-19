@@ -206,6 +206,9 @@ export function createProcessSupervisor(): ProcessSupervisor {
         }
         settled = true;
         clearTimers();
+        // Kill PTY synchronously before disposal to prevent zombie PTY sessions
+        // that could accept routed commands after the run is marked done
+        adapter.kill("SIGKILL");
         adapter.dispose();
         active.delete(runId);
 
