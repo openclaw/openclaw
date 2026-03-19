@@ -403,6 +403,11 @@ async function handleSessionSend(params: {
   let sendPayload: unknown;
   let sendCached = false;
   let startedRunId: string | undefined;
+  const rawIdempotencyKey = (p as { idempotencyKey?: string }).idempotencyKey;
+  const idempotencyKey =
+    typeof rawIdempotencyKey === "string" && rawIdempotencyKey.trim()
+      ? rawIdempotencyKey.trim()
+      : randomUUID();
   await chatHandlers["chat.send"]({
     req: params.req,
     params: {
@@ -411,11 +416,7 @@ async function handleSessionSend(params: {
       thinking: (p as { thinking?: string }).thinking,
       attachments: (p as { attachments?: unknown[] }).attachments,
       timeoutMs: (p as { timeoutMs?: number }).timeoutMs,
-      idempotencyKey:
-        typeof (p as { idempotencyKey?: string }).idempotencyKey === "string" &&
-        (p as { idempotencyKey?: string }).idempotencyKey?.trim()
-          ? (p as { idempotencyKey?: string }).idempotencyKey.trim()
-          : randomUUID(),
+      idempotencyKey,
     },
     respond: (ok, payload, error, meta) => {
       sendAcked = ok;
