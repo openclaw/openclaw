@@ -171,7 +171,7 @@ export function installSignalToolResultTestHooks() {
     replyMock.mockReset();
     updateLastRouteMock.mockReset();
     streamMock.mockReset();
-    signalCheckMock.mockReset().mockResolvedValue({});
+    signalCheckMock.mockReset().mockResolvedValue({ ok: true });
     signalRpcRequestMock.mockReset().mockResolvedValue({});
     spawnSignalDaemonMock.mockReset().mockReturnValue(createMockSignalDaemonHandle());
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);
