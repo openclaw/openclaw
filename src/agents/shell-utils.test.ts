@@ -152,6 +152,13 @@ describe("getShellConfig", () => {
     expect(shell).toBe("/usr/bin/cmd");
     expect(args).toEqual(["/c"]);
   });
+
+  it("normalizes SHELL with extension for nushell detection", () => {
+    // normalizeShellName strips .cmd/.exe so "nu.cmd" is detected as "nu"
+    process.env.SHELL = "/usr/bin/nu.cmd";
+    const { args } = getShellConfig();
+    expect(args).toEqual(["-c"]);
+  });
 });
 
 describe("resolveShellFromPath", () => {

@@ -61,11 +61,11 @@ export function getShellConfig(): { shell: string; args: string[] } {
       if (name === "fish") {
         const bash = resolveShellFromPath("bash");
         if (bash) {
-          return { shell: bash, args: ["-c"] };
+          return wrapCmdShim(bash, ["-c"]);
         }
         const sh = resolveShellFromPath("sh");
         if (sh) {
-          return { shell: sh, args: ["-c"] };
+          return wrapCmdShim(sh, ["-c"]);
         }
       }
 
@@ -108,15 +108,15 @@ export function getShellConfig(): { shell: string; args: string[] } {
             }
           }
         }
-        return { shell: psShell, args: ["-NoProfile", "-NonInteractive", "-Command"] };
+        return wrapCmdShim(psShell, ["-NoProfile", "-NonInteractive", "-Command"]);
       }
 
-      // cmd.exe uses /c, not -c.
+      // cmd.exe uses /c, not -c. No wrapping needed — cmd IS the wrapper.
       if (name === "cmd") {
         return { shell: shellPath, args: ["/c"] };
       }
 
-      return { shell: shellPath, args: ["-c"] };
+      return wrapCmdShim(shellPath, ["-c"]);
     }
   }
 
@@ -126,26 +126,26 @@ export function getShellConfig(): { shell: string; args: string[] } {
     // directly to the console via WriteConsole API, bypassing stdout pipes.
     // When Node.js spawns cmd.exe with piped stdio, these utilities produce no output.
     // PowerShell properly captures and redirects their output to stdout.
-    return {
-      shell: resolvePowerShellPath(),
-      args: ["-NoProfile", "-NonInteractive", "-Command"],
-    };
+    const psPath = resolvePowerShellPath();
+    return wrapCmdShim(psPath, ["-NoProfile", "-NonInteractive", "-Command"]);
   }
 
   const envShell = process.env.SHELL?.trim();
-  const shellName = envShell ? path.basename(envShell) : "";
+  // normalizeShellName strips path and extensions (.exe/.cmd/.bat) so
+  // $SHELL="/path/to/nu.cmd" correctly yields "nu", not "nu.cmd".
+  const shellName = envShell ? normalizeShellName(envShell) : "";
 
   // Nushell: use directly — structured data output is the point.
   // Check both $SHELL and env vars (NU_VERSION/NUSHELL_VERSION) because nu is
   // commonly launched from a bash/zsh login shell, leaving $SHELL as /bin/bash
   // while detectRuntimeShell() reports "nu" to the agent via the env vars.
   if (shellName === "nu") {
-    return { shell: envShell!, args: ["-c"] };
+    return wrapCmdShim(envShell!, ["-c"]);
   }
   if (shellName !== "nu" && (process.env.NU_VERSION || process.env.NUSHELL_VERSION)) {
     const nu = resolveShellFromPath("nu");
     if (nu) {
-      return { shell: nu, args: ["-c"] };
+      return wrapCmdShim(nu, ["-c"]);
     }
   }
 
@@ -153,15 +153,15 @@ export function getShellConfig(): { shell: string; args: string[] } {
   if (shellName === "fish") {
     const bash = resolveShellFromPath("bash");
     if (bash) {
-      return { shell: bash, args: ["-c"] };
+      return wrapCmdShim(bash, ["-c"]);
     }
     const sh = resolveShellFromPath("sh");
     if (sh) {
-      return { shell: sh, args: ["-c"] };
+      return wrapCmdShim(sh, ["-c"]);
     }
   }
   const shell = envShell && envShell.length > 0 ? envShell : "sh";
-  return { shell, args: ["-c"] };
+  return wrapCmdShim(shell, ["-c"]);
 }
 
 export function resolveShellFromPath(name: string): string | undefined {
@@ -170,13 +170,18 @@ export function resolveShellFromPath(name: string): string | undefined {
     return undefined;
   }
   const entries = envPath.split(path.delimiter).filter(Boolean);
+  // On Windows, executables may have .exe/.cmd/.bat extensions not included
+  // in the bare name. Try the bare name first, then common extensions.
+  const suffixes = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
   for (const entry of entries) {
-    const candidate = path.join(entry, name);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      // ignore missing or non-executable entries
+    for (const suffix of suffixes) {
+      const candidate = path.join(entry, name + suffix);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch {
+        // ignore missing or non-executable entries
+      }
     }
   }
   return undefined;
@@ -191,6 +196,18 @@ function normalizeShellName(value: string): string {
     .basename(trimmed)
     .replace(/\.(exe|cmd|bat)$/i, "")
     .replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+/**
+ * On Windows, .cmd/.bat shim files (e.g. Scoop's pwsh.cmd, nu.cmd) cannot be
+ * spawned directly by Node's child_process.spawn(). They must go through
+ * cmd.exe /c. On non-Windows platforms this is a no-op passthrough.
+ */
+function wrapCmdShim(shellPath: string, args: string[]): { shell: string; args: string[] } {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(shellPath)) {
+    return { shell: "cmd.exe", args: ["/c", shellPath, ...args] };
+  }
+  return { shell: shellPath, args };
 }
 
 export function detectRuntimeShell(): string | undefined {
