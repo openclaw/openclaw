@@ -1377,6 +1377,17 @@ export const FIELD_HELP: Record<string, string> = {
     "Removes the acknowledgment reaction after final reply delivery when enabled. Keep enabled for cleaner UX in channels where persistent ack reactions create clutter.",
   "messages.tts":
     "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
+  "messages.tts.xai":
+    "xAI TTS configuration for text-to-speech using the xAI API (api.x.ai). Requires an xAI API key with TTS access.",
+  "messages.tts.xai.apiKey":
+    "xAI API key for TTS synthesis. Falls back to XAI_API_KEY environment variable.",
+  "messages.tts.xai.baseUrl": "Override the xAI TTS base URL. Defaults to https://api.x.ai/v1.",
+  "messages.tts.xai.model":
+    "xAI TTS model ID used for synthesis requests. Omit to use the default model for the xAI TTS endpoint.",
+  "messages.tts.xai.voice":
+    "xAI voice ID used for synthesis (for example eve, ara, rex, sal, leo). Defaults to eve when unset.",
+  "messages.tts.xai.speed":
+    "Playback speed multiplier for xAI TTS synthesis (0.25–4.0, default 1.0).",
   channels:
     "Channel provider configurations plus shared defaults that control access policies, heartbeat visibility, and per-surface behavior. Keep defaults centralized and override per provider only where required.",
   "channels.telegram":

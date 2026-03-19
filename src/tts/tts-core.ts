@@ -190,6 +190,17 @@ export function parseTtsDirectives(
               warnings.push(`invalid ElevenLabs voiceId "${rawValue}"`);
             }
             break;
+          case "xai_voice":
+          case "xaivoice":
+            if (!policy.allowVoice) {
+              break;
+            }
+            if (isValidXaiVoice(rawValue)) {
+              overrides.xai = { ...overrides.xai, voice: rawValue };
+            } else {
+              warnings.push(`invalid xAI voice "${rawValue}"`);
+            }
+            break;
           case "model":
           case "modelid":
           case "model_id":
@@ -380,6 +391,12 @@ export const OPENAI_TTS_VOICES = [
   "shimmer",
   "verse",
 ] as const;
+
+export const XAI_TTS_VOICES = ["eve", "ara", "rex", "sal", "leo"] as const;
+
+export function isValidXaiVoice(voice: string): voice is (typeof XAI_TTS_VOICES)[number] {
+  return XAI_TTS_VOICES.includes(voice as (typeof XAI_TTS_VOICES)[number]);
+}
 
 type OpenAiTtsVoice = (typeof OPENAI_TTS_VOICES)[number];
 

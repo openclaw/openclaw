@@ -117,6 +117,13 @@ export type ResolvedTtsConfig = {
     speed?: number;
     instructions?: string;
   };
+  xai: {
+    apiKey?: string;
+    baseUrl: string;
+    model: string;
+    voice: string;
+    speed?: number;
+  };
   edge: {
     enabled: boolean;
     voice: string;
@@ -170,6 +177,10 @@ export type TtsDirectiveOverrides = {
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  xai?: {
+    voice?: string;
+    model?: string;
   };
 };
 
@@ -306,6 +317,20 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
       speed: raw.openai?.speed,
       instructions: raw.openai?.instructions?.trim() || undefined,
+    },
+    xai: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.xai?.apiKey,
+        path: "messages.tts.xai.apiKey",
+      }),
+      baseUrl: (
+        raw.xai?.baseUrl?.trim() ||
+        process.env.XAI_TTS_BASE_URL?.trim() ||
+        "https://api.x.ai/v1"
+      ).replace(/\/+$/, ""),
+      model: raw.xai?.model ?? "",
+      voice: raw.xai?.voice ?? "eve",
+      speed: raw.xai?.speed,
     },
     edge: {
       enabled: rawMicrosoft.enabled ?? true,
@@ -456,6 +481,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "openai")) {
     return "openai";
   }
+  if (resolveTtsApiKey(config, "xai")) {
+    return "xai";
+  }
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
@@ -527,10 +555,13 @@ export function resolveTtsApiKey(
   if (normalizedProvider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (normalizedProvider === "xai") {
+    return config.xai.apiKey || process.env.XAI_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "microsoft"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "xai", "microsoft"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
   const normalizedPrimary = normalizeSpeechProviderId(primary) ?? primary;

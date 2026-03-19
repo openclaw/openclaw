@@ -34,3 +34,48 @@ describe("TtsConfigSchema openai speed and instructions", () => {
     ).toThrow();
   });
 });
+
+describe("TtsConfigSchema xai", () => {
+  it("accepts xai section with all fields", () => {
+    expect(() =>
+      TtsConfigSchema.parse({
+        xai: {
+          voice: "alloy",
+          speed: 1.5,
+          baseUrl: "https://api.x.ai/v1",
+          model: "gpt-4o-mini-tts",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts xai section with only voice", () => {
+    expect(() =>
+      TtsConfigSchema.parse({
+        xai: {
+          voice: "zephyr",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects out-of-range xai speed", () => {
+    expect(() =>
+      TtsConfigSchema.parse({
+        xai: {
+          speed: 5.0,
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects xai speed below minimum", () => {
+    expect(() =>
+      TtsConfigSchema.parse({
+        xai: {
+          speed: 0.1,
+        },
+      }),
+    ).toThrow();
+  });
+});

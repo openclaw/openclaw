@@ -647,6 +647,32 @@ describe("tts", () => {
     });
   });
 
+  describe("resolveTtsConfig – xai", () => {
+    const baseCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "xai/grok-4" } } },
+      messages: { tts: {} },
+    };
+
+    it("resolves xai defaults", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(config.xai.baseUrl).toBe("https://api.x.ai/v1");
+      expect(config.xai.model).toBe("");
+      expect(config.xai.voice).toBe("eve");
+    });
+
+    it("resolves xai from config with slash trimming", () => {
+      const config = resolveTtsConfig({
+        ...baseCfg,
+        messages: {
+          tts: { xai: { voice: "rex", speed: 1.5, baseUrl: "https://api.x.ai/v1///" } },
+        },
+      } as OpenClawConfig);
+      expect(config.xai.baseUrl).toBe("https://api.x.ai/v1");
+      expect(config.xai.voice).toBe("rex");
+      expect(config.xai.speed).toBe(1.5);
+    });
+  });
+
   describe("textToSpeechTelephony – openai instructions", () => {
     const withMockedTelephonyFetch = async (
       run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,

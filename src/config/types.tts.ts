@@ -66,6 +66,15 @@ export type TtsConfig = {
     /** System-level instructions for the TTS model (gpt-4o-mini-tts only). */
     instructions?: string;
   };
+  /** xAI TTS configuration. */
+  xai?: {
+    apiKey?: SecretInput;
+    baseUrl?: string;
+    model?: string;
+    voice?: string;
+    /** Playback speed (0.25–4.0, default 1.0). */
+    speed?: number;
+  };
   /** Legacy alias for Microsoft speech configuration. */
   edge?: {
     /** Explicitly allow Microsoft speech usage (no API key required). */
