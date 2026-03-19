@@ -249,7 +249,7 @@ vi /data/workspace/bita-cs/knowledge/platforms.md
 
 ## 待辦事項
 
-1. [ ] 寫 bita-cs 的 SOUL.md（LINE 客服專用人格）
+1. [x] 寫 bita-cs 的 SOUL.md（LINE 客服專用人格）— done 2026-03-02
 2. [ ] 準備 Fly.io 的 openclaw.json 完整配置
 3. [ ] LINE Developers 建 channel，拿 credentials
 4. [ ] 建 Telegram 客服後台群
