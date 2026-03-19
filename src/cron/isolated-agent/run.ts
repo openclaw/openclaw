@@ -365,14 +365,16 @@ export async function runCronIsolatedAgentTurn(params: {
     const sessionModelOverride = cronSession.sessionEntry.modelOverride?.trim();
     if (sessionModelOverride) {
       const sessionProviderOverride = cronSession.sessionEntry.providerOverride?.trim();
-      // Always prepend the session provider when one is set, even when it
-      // matches resolvedDefault.provider. Model IDs can themselves contain
-      // slashes (e.g. OpenRouter's "anthropic/claude-sonnet-4-5"), so passing
-      // the raw override without a provider prefix causes parseModelRef to
-      // split on the wrong delimiter and route to the wrong provider.  #18556
+      // When a provider override is set, always prepend it.  When absent,
+      // prefix the default provider only when the model ID contains slashes
+      // (e.g. "@cf/openai/gpt-oss-20b") so parseModelRef doesn't split on
+      // the wrong delimiter.  Slash-free strings are left bare so alias
+      // resolution in resolveAllowedModelRef still works.  #18556
       const raw = sessionProviderOverride
         ? `${sessionProviderOverride}/${sessionModelOverride}`
-        : sessionModelOverride;
+        : sessionModelOverride.includes("/")
+          ? `${resolvedDefault.provider}/${sessionModelOverride}`
+          : sessionModelOverride;
       const resolvedSessionOverride = resolveAllowedModelRef({
         cfg: cfgWithAgentDefaults,
         catalog: await loadCatalog(),

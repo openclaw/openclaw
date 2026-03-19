@@ -353,4 +353,46 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.model).toBe("gpt-4o");
     expect(cronSession.sessionEntry.modelProvider).toBe("openai");
   });
+
+  it("prefixes default provider for slash-containing model without providerOverride (#18556)", async () => {
+    // No cron payload model — the job has no model field
+    const jobWithoutModel = makeJob({
+      payload: { kind: "agentTurn", message: "run daily digest" },
+    });
+
+    // Session-level /model override with slashes but no provider override
+    // (e.g. Cloudflare Workers AI model IDs like "@cf/openai/gpt-oss-20b")
+    cronSession.sessionEntry = makeFreshSessionEntry({
+      modelOverride: "@cf/openai/gpt-oss-20b",
+      providerOverride: undefined,
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+
+    // Without the default-provider prefix, parseModelRef would split on the
+    // first "/" and misinterpret "@cf" as the provider.  With the fix, the
+    // resolver receives "anthropic/@cf/openai/gpt-oss-20b" so the default
+    // provider is correctly preserved.
+    resolveAllowedModelRefMock.mockImplementation(
+      (params: { raw: string; defaultProvider: string }) => {
+        if (
+          params.raw === "anthropic/@cf/openai/gpt-oss-20b" &&
+          params.defaultProvider === "anthropic"
+        ) {
+          return {
+            ref: { provider: "anthropic", model: "@cf/openai/gpt-oss-20b" },
+            key: "anthropic/@cf/openai/gpt-oss-20b",
+          };
+        }
+        return { error: `model not allowed: ${params.raw}` };
+      },
+    );
+
+    runWithModelFallbackMock.mockRejectedValueOnce(new Error("LLM provider timeout"));
+
+    const result = await runCronIsolatedAgentTurn(makeParams({ job: jobWithoutModel }));
+
+    expect(result.status).toBe("error");
+    expect(cronSession.sessionEntry.model).toBe("@cf/openai/gpt-oss-20b");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
+  });
 });
