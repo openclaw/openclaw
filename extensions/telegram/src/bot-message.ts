@@ -1,7 +1,8 @@
-import type { ReplyToMode } from "../../../src/config/config.js";
-import type { TelegramAccountConfig } from "../../../src/config/types.telegram.js";
-import { danger } from "../../../src/globals.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
@@ -21,6 +22,7 @@ type TelegramMessageProcessorDeps = Omit<
   replyToMode: ReplyToMode;
   streamMode: TelegramStreamMode;
   textLimit: number;
+  telegramDeps: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token">;
 };
 
@@ -45,6 +47,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     replyToMode,
     streamMode,
     textLimit,
+    telegramDeps,
     opts,
   } = deps;
 
@@ -89,6 +92,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         streamMode,
         textLimit,
         telegramCfg,
+        telegramDeps,
         opts,
       });
     } catch (err) {

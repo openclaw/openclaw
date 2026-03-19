@@ -387,6 +387,61 @@ describe("doctor config flow", () => {
     }
   });
 
+  it("warns and continues when Telegram account inspection hits inactive SecretRef surfaces", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const result = await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          channels: {
+            telegram: {
+              accounts: {
+                inactive: {
+                  enabled: false,
+                  botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+                  allowFrom: ["@testuser"],
+                },
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const cfg = result.cfg as {
+        channels?: {
+          telegram?: {
+            accounts?: Record<string, { allowFrom?: string[] }>;
+          };
+        };
+      };
+      expect(cfg.channels?.telegram?.accounts?.inactive?.allowFrom).toEqual(["@testuser"]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(
+        noteSpy.mock.calls.some((call) =>
+          String(call[0]).includes("Telegram account inactive: failed to inspect bot token"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some((call) =>
+          String(call[0]).includes(
+            "Telegram allowFrom contains @username entries, but no Telegram bot token is configured",
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("converts numeric discord ids to strings on repair", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");

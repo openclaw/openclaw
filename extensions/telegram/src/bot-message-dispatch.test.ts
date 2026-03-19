@@ -27,11 +27,18 @@ vi.mock("./bot/delivery.js", () => ({
 }));
 
 vi.mock("./send.js", () => ({
+  createForumTopicTelegram: vi.fn(),
+  deleteMessageTelegram: vi.fn(),
+  editForumTopicTelegram: vi.fn(),
   editMessageTelegram,
+  reactMessageTelegram: vi.fn(),
+  sendMessageTelegram: vi.fn(),
+  sendPollTelegram: vi.fn(),
+  sendStickerTelegram: vi.fn(),
 }));
 
-vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadSessionStore,
@@ -41,6 +48,10 @@ vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
 
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
+  getCachedSticker: () => null,
+  getCacheStats: () => ({ count: 0 }),
+  searchStickers: () => [],
+  getAllCachedStickers: () => [],
   describeStickerImage: vi.fn(),
 }));
 
@@ -294,6 +305,66 @@ describe("dispatchTelegramMessage draft streaming", () => {
           disableBlockStreaming: false,
           onPartialReply: undefined,
         }),
+      }),
+    );
+  });
+
+  it("sends error replies silently when silentErrorReplies is enabled", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "oops", isError: true }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { silentErrorReplies: true },
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        silent: true,
+        replies: [expect.objectContaining({ isError: true })],
+      }),
+    );
+  });
+
+  it("keeps error replies notifying by default", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "oops", isError: true }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        silent: false,
+        replies: [expect.objectContaining({ isError: true })],
+      }),
+    );
+  });
+
+  it("keeps fallback replies silent after an error reply is skipped", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.(
+        { text: "oops", isError: true },
+        { kind: "final", reason: "empty" },
+      );
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { silentErrorReplies: true },
+    });
+
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        silent: true,
+        replies: [expect.objectContaining({ text: expect.any(String) })],
       }),
     );
   });

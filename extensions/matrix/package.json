@@ -4,7 +4,7 @@
   "description": "OpenClaw Matrix channel plugin",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-agent-core": "0.58.0",
+    "@mariozechner/pi-agent-core": "0.60.0",
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "@vector-im/matrix-bot-sdk": "0.8.0-element.3",
     "markdown-it": "14.1.1",
@@ -31,12 +31,8 @@
       "localPath": "extensions/matrix",
       "defaultChoice": "npm"
     },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        "@vector-im/matrix-bot-sdk",
-        "music-metadata"
-      ]
+    "release": {
+      "publishToNpm": true
     }
   }
 }

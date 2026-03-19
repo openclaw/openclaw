@@ -29,13 +29,13 @@ Railway will either:
 
 Then open:
 
-- `https://<your-railway-domain>/setup` — setup wizard (password protected)
+- `https://<your-railway-domain>/setup` — web setup (password protected)
 - `https://<your-railway-domain>/openclaw` — Control UI
 
 ## What you get
 
 - Hosted OpenClaw Gateway + Control UI
-- Web setup wizard at `/setup` (no terminal commands)
+- Web setup at `/setup` (no terminal commands)
 - Persistent storage via Railway Volume (`/data`) so config/credentials/workspace survive redeploys
 - Backup export at `/setup/export` to migrate off Railway later
 
@@ -70,7 +70,7 @@ Set these variables on the service:
 3. (Optional) Add Telegram/Discord/Slack tokens.
 4. Click **Run setup**.
 
-If Telegram DMs are set to pairing, the setup wizard can approve the pairing code.
+If Telegram DMs are set to pairing, web setup can approve the pairing code.
 
 ## Getting chat tokens
 

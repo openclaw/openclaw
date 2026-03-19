@@ -43,11 +43,12 @@ import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
-class NodeRuntime(context: Context) {
+class NodeRuntime(
+  context: Context,
+  val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
+) {
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-  val prefs = SecurePrefs(appContext)
   private val deviceAuthStore = DeviceAuthStore(prefs)
   val canvas = CanvasController()
   val camera = CameraCaptureManager(appContext)
@@ -136,7 +137,8 @@ class NodeRuntime(context: Context) {
     voiceWakeMode = { VoiceWakeMode.Off },
     motionActivityAvailable = { motionHandler.isActivityAvailable() },
     motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
-    smsAvailable = { sms.canSendSms() },
+    sendSmsAvailable = { sms.canSendSms() },
+    readSmsAvailable = { sms.canReadSms() },
     hasRecordAudioPermission = { hasRecordAudioPermission() },
     manualTls = { manualTls.value },
   )
@@ -159,7 +161,8 @@ class NodeRuntime(context: Context) {
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },
-    smsAvailable = { sms.canSendSms() },
+    sendSmsAvailable = { sms.canSendSms() },
+    readSmsAvailable = { sms.canReadSms() },
     debugBuild = { BuildConfig.DEBUG },
     refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
     onCanvasA2uiPush = {

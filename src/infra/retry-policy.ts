@@ -1,16 +1,8 @@
-import { RateLimitError } from "@buape/carbon";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
 
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
-
-export const DISCORD_RETRY_DEFAULTS = {
-  attempts: 3,
-  minDelayMs: 500,
-  maxDelayMs: 30_000,
-  jitter: 0.1,
-};
 
 export const TELEGRAM_RETRY_DEFAULTS = {
   attempts: 3,
@@ -58,12 +50,16 @@ function getTelegramRetryAfterMs(err: unknown): number | undefined {
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate * 1000 : undefined;
 }
 
-export function createDiscordRetryRunner(params: {
+export function createRateLimitRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;
   verbose?: boolean;
+  defaults: Required<RetryConfig>;
+  logLabel: string;
+  shouldRetry: (err: unknown) => boolean;
+  retryAfterMs?: (err: unknown) => number | undefined;
 }): RetryRunner {
-  const retryConfig = resolveRetryConfig(DISCORD_RETRY_DEFAULTS, {
+  const retryConfig = resolveRetryConfig(params.defaults, {
     ...params.configRetry,
     ...params.retry,
   });
@@ -71,14 +67,14 @@ export function createDiscordRetryRunner(params: {
     retryAsync(fn, {
       ...retryConfig,
       label,
-      shouldRetry: (err) => err instanceof RateLimitError,
-      retryAfterMs: (err) => (err instanceof RateLimitError ? err.retryAfter * 1000 : undefined),
+      shouldRetry: params.shouldRetry,
+      retryAfterMs: params.retryAfterMs,
       onRetry: params.verbose
         ? (info) => {
             const labelText = info.label ?? "request";
             const maxRetries = Math.max(1, info.maxAttempts - 1);
             log.warn(
-              `discord ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
+              `${params.logLabel} ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
             );
           }
         : undefined,

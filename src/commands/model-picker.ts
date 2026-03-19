@@ -11,9 +11,13 @@ import {
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
+
+export { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 
 const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
@@ -45,6 +49,11 @@ type PromptModelAllowlistResult = { models?: string[] };
 async function loadModelPickerRuntime() {
   return import("./model-picker.runtime.js");
 }
+
+const loadResolvedModelPickerRuntime = createLazyRuntimeSurface(
+  loadModelPickerRuntime,
+  ({ modelPickerRuntime }) => modelPickerRuntime,
+);
 
 function hasAuthForProvider(
   provider: string,
@@ -281,7 +290,7 @@ export async function promptDefaultModel(
     options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
   }
   if (includeProviderPluginSetups && agentDir) {
-    const { resolveProviderModelPickerEntries } = await loadModelPickerRuntime();
+    const { resolveProviderModelPickerEntries } = await loadResolvedModelPickerRuntime();
     options.push(
       ...resolveProviderModelPickerEntries({
         config: cfg,
@@ -340,7 +349,7 @@ export async function promptDefaultModel(
   if (selection.startsWith("provider-plugin:")) {
     pluginResolution = selection;
   } else if (!selection.includes("/")) {
-    const { resolvePluginProviders } = await loadModelPickerRuntime();
+    const { resolvePluginProviders } = await loadResolvedModelPickerRuntime();
     pluginProviders = resolvePluginProviders({
       config: cfg,
       workspaceDir: params.workspaceDir,
@@ -365,7 +374,7 @@ export async function promptDefaultModel(
       resolveProviderPluginChoice,
       runProviderModelSelectedHook,
       runProviderPluginAuthMethod,
-    } = await loadModelPickerRuntime();
+    } = await loadResolvedModelPickerRuntime();
     if (pluginProviders.length === 0) {
       pluginProviders = resolvePluginProviders({
         config: cfg,
@@ -401,7 +410,7 @@ export async function promptDefaultModel(
     return { model: applied.defaultModel, config: applied.config };
   }
   const model = String(selection);
-  const { runProviderModelSelectedHook } = await loadModelPickerRuntime();
+  const { runProviderModelSelectedHook } = await loadResolvedModelPickerRuntime();
   await runProviderModelSelectedHook({
     config: cfg,
     model,
@@ -514,33 +523,6 @@ export async function promptModelAllowlist(params: {
     return {};
   }
   return { models: [] };
-}
-
-export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
-  const defaults = cfg.agents?.defaults;
-  const existingModel = defaults?.model;
-  const existingModels = defaults?.models;
-  const fallbacks =
-    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks
-      : undefined;
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        model: {
-          ...(fallbacks ? { fallbacks } : undefined),
-          primary: model,
-        },
-        models: {
-          ...existingModels,
-          [model]: existingModels?.[model] ?? {},
-        },
-      },
-    },
-  };
 }
 
 export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): OpenClawConfig {

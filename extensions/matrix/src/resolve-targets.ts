@@ -1,10 +1,10 @@
-import { mapAllowlistResolutionInputs } from "openclaw/plugin-sdk/compat";
+import { mapAllowlistResolutionInputs } from "openclaw/plugin-sdk/allowlist-resolution";
 import type {
   ChannelDirectoryEntry,
   ChannelResolveKind,
   ChannelResolveResult,
   RuntimeEnv,
-} from "openclaw/plugin-sdk/matrix";
+} from "../runtime-api.js";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
 
 function findExactDirectoryMatches(

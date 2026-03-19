@@ -14,11 +14,15 @@ vi.mock("./safe-open-sync.js", () => ({
   openVerifiedFileSync: (...args: unknown[]) => openVerifiedFileSyncMock(...args),
 }));
 
-const { canUseBoundaryFileOpen, openBoundaryFile, openBoundaryFileSync } =
-  await import("./boundary-file-read.js");
+let canUseBoundaryFileOpen: typeof import("./boundary-file-read.js").canUseBoundaryFileOpen;
+let openBoundaryFile: typeof import("./boundary-file-read.js").openBoundaryFile;
+let openBoundaryFileSync: typeof import("./boundary-file-read.js").openBoundaryFileSync;
 
 describe("boundary-file-read", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ canUseBoundaryFileOpen, openBoundaryFile, openBoundaryFileSync } =
+      await import("./boundary-file-read.js"));
     resolveBoundaryPathSyncMock.mockReset();
     resolveBoundaryPathMock.mockReset();
     openVerifiedFileSyncMock.mockReset();

@@ -56,7 +56,7 @@ const coreEntries: CoreCliEntry[] = [
     commands: [
       {
         name: "onboard",
-        description: "Interactive setup wizard for gateway, workspace, and skills",
+        description: "Interactive onboarding for gateway, workspace, and skills",
         hasSubcommands: false,
       },
     ],
@@ -70,7 +70,7 @@ const coreEntries: CoreCliEntry[] = [
       {
         name: "configure",
         description:
-          "Interactive setup wizard for credentials, channels, gateway, and agent defaults",
+          "Interactive configuration for credentials, channels, gateway, and agent defaults",
         hasSubcommands: false,
       },
     ],
@@ -84,7 +84,7 @@ const coreEntries: CoreCliEntry[] = [
       {
         name: "config",
         description:
-          "Non-interactive config helpers (get/set/unset/file/validate). Default: starts setup wizard.",
+          "Non-interactive config helpers (get/set/unset/file/validate). Default: starts guided setup.",
         hasSubcommands: true,
       },
     ],
@@ -158,6 +158,19 @@ const coreEntries: CoreCliEntry[] = [
     register: async ({ program }) => {
       const mod = await import("../memory-cli.js");
       mod.registerMemoryCli(program);
+    },
+  },
+  {
+    commands: [
+      {
+        name: "mcp",
+        description: "Manage embedded Pi MCP servers",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("../mcp-cli.js");
+      mod.registerMcpCli(program);
     },
   },
   {

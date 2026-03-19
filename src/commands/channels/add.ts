@@ -1,16 +1,18 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
-import type { ChannelId, ChannelPlugin, ChannelSetupInput } from "../../channels/plugins/types.js";
-import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
+import type { ChannelSetupInput } from "../../channels/plugins/types.js";
+import { writeConfigFile } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
-import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
+import {
+  resolveCatalogChannelEntry,
+  resolveInstallableChannelPlugin,
+} from "../channel-setup/channel-plugin-resolution.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
 import { channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
@@ -22,21 +24,6 @@ export type ChannelsAddOptions = {
   groupChannels?: string;
   dmAllowlist?: string;
 } & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
-
-function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
-  const trimmed = raw.trim().toLowerCase();
-  if (!trimmed) {
-    return undefined;
-  }
-  const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
-  return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
-    if (entry.id.toLowerCase() === trimmed) {
-      return true;
-    }
-    return (entry.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === trimmed);
-  });
-}
-
 export async function channelsAddCommand(
   opts: ChannelsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -177,62 +164,17 @@ export async function channelsAddCommand(
   const rawChannel = String(opts.channel ?? "");
   let channel = normalizeChannelId(rawChannel);
   let catalogEntry = channel ? undefined : resolveCatalogChannelEntry(rawChannel, nextConfig);
-  const resolveWorkspaceDir = () =>
-    resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
-  // May trigger loadOpenClawPlugins on cache miss (disk scan + jiti import)
-  const loadScopedPlugin = async (
-    channelId: ChannelId,
-    pluginId?: string,
-  ): Promise<ChannelPlugin | undefined> => {
-    const existing = getChannelPlugin(channelId);
-    if (existing) {
-      return existing;
-    }
-    const { loadChannelSetupPluginRegistrySnapshotForChannel } =
-      await import("../channel-setup/plugin-install.js");
-    const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
-      cfg: nextConfig,
-      runtime,
-      channel: channelId,
-      ...(pluginId ? { pluginId } : {}),
-      workspaceDir: resolveWorkspaceDir(),
-    });
-    return (
-      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
-      snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin
-    );
-  };
-
-  if (!channel && catalogEntry) {
-    const workspaceDir = resolveWorkspaceDir();
-    if (
-      !isCatalogChannelInstalled({
-        cfg: nextConfig,
-        entry: catalogEntry,
-        workspaceDir,
-      })
-    ) {
-      const { ensureChannelSetupPluginInstalled } =
-        await import("../channel-setup/plugin-install.js");
-      const prompter = createClackPrompter();
-      const result = await ensureChannelSetupPluginInstalled({
-        cfg: nextConfig,
-        entry: catalogEntry,
-        prompter,
-        runtime,
-        workspaceDir,
-      });
-      nextConfig = result.cfg;
-      if (!result.installed) {
-        return;
-      }
-      catalogEntry = {
-        ...catalogEntry,
-        ...(result.pluginId ? { pluginId: result.pluginId } : {}),
-      };
-    }
-    channel = normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
-  }
+  const resolvedPluginState = await resolveInstallableChannelPlugin({
+    cfg: nextConfig,
+    runtime,
+    rawChannel,
+    allowInstall: true,
+    prompter: createClackPrompter(),
+    supports: (plugin) => Boolean(plugin.setup?.applyAccountConfig),
+  });
+  nextConfig = resolvedPluginState.cfg;
+  channel = resolvedPluginState.channelId ?? channel;
+  catalogEntry = resolvedPluginState.catalogEntry ?? catalogEntry;
 
   if (!channel) {
     const hint = catalogEntry
@@ -243,7 +185,7 @@ export async function channelsAddCommand(
     return;
   }
 
-  const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
+  const plugin = resolvedPluginState.plugin ?? (channel ? getChannelPlugin(channel) : undefined);
   if (!plugin?.setup?.applyAccountConfig) {
     runtime.error(`Channel ${channel} does not support add.`);
     runtime.exit(1);

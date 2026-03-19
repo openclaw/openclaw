@@ -1,12 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramMessageActions, telegramMessageActionRuntime } from "./channel-actions.js";
 
 const handleTelegramActionMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../../src/agents/tools/telegram-actions.js", () => ({
-  handleTelegramAction: (...args: unknown[]) => handleTelegramActionMock(...args),
-}));
-
-import { telegramMessageActions } from "./channel-actions.js";
+const originalHandleTelegramAction = telegramMessageActionRuntime.handleTelegramAction;
 
 describe("telegramMessageActions", () => {
   beforeEach(() => {
@@ -15,6 +11,12 @@ describe("telegramMessageActions", () => {
       content: [],
       details: {},
     });
+    telegramMessageActionRuntime.handleTelegramAction = (...args) =>
+      handleTelegramActionMock(...args);
+  });
+
+  afterEach(() => {
+    telegramMessageActionRuntime.handleTelegramAction = originalHandleTelegramAction;
   });
 
   it("allows interactive-only sends", async () => {
@@ -40,8 +42,14 @@ describe("telegramMessageActions", () => {
       expect.objectContaining({
         action: "sendMessage",
         to: "123456",
-        content: "",
-        buttons: [[{ text: "Approve", callback_data: "approve", style: "success" }]],
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Approve", value: "approve", style: "success" }],
+            },
+          ],
+        },
         accountId: "default",
       }),
       expect.anything(),
