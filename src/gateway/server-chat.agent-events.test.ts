@@ -18,6 +18,7 @@ import {
   createAgentEventHandler,
   createChatRunState,
   createSessionEventSubscriberRegistry,
+  createThinkingEventRecipientRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
 
@@ -61,6 +62,7 @@ describe("agent event handler", () => {
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
+    const thinkingEventRecipients = createThinkingEventRecipientRegistry();
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
 
     const handler = createAgentEventHandler({
@@ -72,6 +74,7 @@ describe("agent event handler", () => {
       resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
       clearAgentRunContext: vi.fn(),
       toolEventRecipients,
+      thinkingEventRecipients,
       sessionEventSubscribers,
     });
 
@@ -83,6 +86,7 @@ describe("agent event handler", () => {
       agentRunSeq,
       chatRunState,
       toolEventRecipients,
+      thinkingEventRecipients,
       sessionEventSubscribers,
       handler,
     };

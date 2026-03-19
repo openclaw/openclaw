@@ -45,7 +45,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     reasoningMode,
     includeReasoning: reasoningMode === "on",
     shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
-    streamReasoning: reasoningMode === "stream" && typeof params.onReasoningStream === "function",
+    // streamReasoning drives both emitAgentEvent (WebSocket broadcast) and the
+    // onReasoningStream callback.  Decouple the flag from the callback so that
+    // gateway runs without a callback still emit thinking agent-events.
+    streamReasoning: reasoningMode === "stream",
     deltaBuffer: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
@@ -55,6 +58,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastStreamedAssistantCleaned: undefined,
     emittedAssistantUpdate: false,
     lastStreamedReasoning: undefined,
+    lastStreamedReasoningRaw: undefined,
     lastBlockReplyText: undefined,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
@@ -131,6 +135,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.emittedAssistantUpdate = false;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
+    state.lastStreamedReasoningRaw = undefined;
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
@@ -554,35 +559,53 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const emitReasoningStream = (text: string) => {
-    if (!state.streamReasoning || !params.onReasoningStream) {
+    if (!state.streamReasoning) {
       return;
     }
-    const formatted = formatReasoningMessage(text);
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return;
+    }
+    // Delta computation uses the RAW (unformatted) accumulated text to avoid
+    // false-negative prefix failures caused by markdown wrapping.  For example,
+    // "_Checking files_" is NOT a prefix of "_Checking files done_" even though
+    // "Checking files" IS a prefix of "Checking files done".
+    const rawPrior = state.lastStreamedReasoningRaw ?? "";
+    const isRawAccumulated = trimmed.startsWith(rawPrior);
+    // rawDelta: new incremental raw content
+    const rawDelta = isRawAccumulated ? trimmed.slice(rawPrior.length) : trimmed;
+    // rawAccumulated: monotonically growing raw text
+    const rawAccumulated = isRawAccumulated ? trimmed : rawPrior + trimmed;
+    state.lastStreamedReasoningRaw = rawAccumulated;
+
+    const formatted = formatReasoningMessage(rawAccumulated);
     if (!formatted) {
       return;
     }
     if (formatted === state.lastStreamedReasoning) {
       return;
     }
-    // Compute delta: new text since the last emitted reasoning.
-    // Guard against non-prefix changes (e.g. trim/format altering earlier content).
-    const prior = state.lastStreamedReasoning ?? "";
-    const delta = formatted.startsWith(prior) ? formatted.slice(prior.length) : formatted;
     state.lastStreamedReasoning = formatted;
 
-    // Broadcast thinking event to WebSocket clients in real-time
+    // Broadcast thinking event to WebSocket clients in real-time.
+    // This runs unconditionally (even without onReasoningStream) so that
+    // gateway WebSocket subscribers with the thinking-events cap receive tokens.
+    // delta carries the raw incremental content; text carries the full formatted thinking.
     emitAgentEvent({
       runId: params.runId,
       stream: "thinking",
       data: {
         text: formatted,
-        delta,
+        delta: rawDelta,
       },
     });
 
-    void params.onReasoningStream({
-      text: formatted,
-    });
+    // Optional callback for typing-signal integrations (e.g. Telegram typing loop).
+    if (params.onReasoningStream) {
+      void params.onReasoningStream({
+        text: formatted,
+      });
+    }
   };
 
   const resetForCompactionRetry = () => {
