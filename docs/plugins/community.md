@@ -45,6 +45,10 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **MAX Messenger** — MAX Messenger channel plugin with long polling, outbound delivery, file attachments, typing indicators, and access control.
+  npm: `@biguxuzz/max`
+  repo: `https://github.com/biguxuzz/openclaw-max-plugin`
+  install: `openclaw plugins install @biguxuzz/max`
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
