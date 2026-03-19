@@ -68,7 +68,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     });
 
     expect(resolved.chunking.flushOnParagraph).toBe(true);
-    expect(resolved.coalescing.flushOnEnqueue).toBe(true);
+    expect(resolved.coalescing.flushOnEnqueue).toBeUndefined();
     expect(resolved.coalescing.joiner).toBe("\n\n");
   });
 
