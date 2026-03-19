@@ -1,0 +1,9 @@
+{
+  "id": "sms",
+  "channels": ["sms"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
