@@ -108,6 +108,16 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(false);
   });
 
+  it("returns mentionedBot=false when @_all is used in a group chat (regression #49761)", () => {
+    const event = makeEvent(
+      "group",
+      [{ key: "@_all", name: "所有人", id: { open_id: "all" } }],
+      "@_all hey everyone",
+    );
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
   it("treats mention.name regex metacharacters as literals when stripping", () => {
     const event = makeEvent(
       "group",
