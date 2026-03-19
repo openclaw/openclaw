@@ -92,20 +92,21 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
   if (!id) {
     return null;
   }
-  const title = typeof payload.title === "string" ? payload.title.trim() : "";
-  if (!title) {
-    return null;
-  }
   const createdAtMs = typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;
   const expiresAtMs = typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : 0;
   if (!createdAtMs || !expiresAtMs) {
     return null;
   }
-  const description = typeof payload.description === "string" ? payload.description : null;
-  const severity = typeof payload.severity === "string" ? payload.severity : null;
-  const pluginId = typeof payload.pluginId === "string" ? payload.pluginId : null;
-
+  // title, description, severity, pluginId, agentId, sessionKey live inside payload.request
   const request = isRecord(payload.request) ? payload.request : {};
+  const title = typeof request.title === "string" ? request.title.trim() : "";
+  if (!title) {
+    return null;
+  }
+  const description = typeof request.description === "string" ? request.description : null;
+  const severity = typeof request.severity === "string" ? request.severity : null;
+  const pluginId = typeof request.pluginId === "string" ? request.pluginId : null;
+
   return {
     id,
     kind: "plugin",

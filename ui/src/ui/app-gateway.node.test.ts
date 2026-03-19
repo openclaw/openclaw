@@ -503,13 +503,16 @@ describe("connectGateway", () => {
       event: "plugin.approval.requested",
       payload: {
         id: "plugin-approval-1",
-        title: "Dangerous command detected",
-        description: "chmod 777 script.sh",
-        severity: "high",
-        pluginId: "sage",
         createdAtMs: Date.now(),
         expiresAtMs: Date.now() + 120_000,
-        request: { agentId: "agent-1", sessionKey: "main" },
+        request: {
+          title: "Dangerous command detected",
+          description: "chmod 777 script.sh",
+          severity: "high",
+          pluginId: "sage",
+          agentId: "agent-1",
+          sessionKey: "main",
+        },
       },
     });
 
@@ -530,9 +533,9 @@ describe("connectGateway", () => {
       event: "plugin.approval.requested",
       payload: {
         id: "plugin-approval-2",
-        title: "Alert",
         createdAtMs: Date.now(),
         expiresAtMs: Date.now() + 120_000,
+        request: { title: "Alert" },
       },
     });
     expect(host.execApprovalQueue).toHaveLength(1);
