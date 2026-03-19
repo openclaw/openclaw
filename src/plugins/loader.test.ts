@@ -339,7 +339,7 @@ function createPluginSdkAliasFixture(params?: {
     packageJson.exports = {
       "./plugin-sdk": { default: "./dist/plugin-sdk/index.js" },
       ...trustedExports,
-      ...params.packageExports,
+      ...params?.packageExports,
     };
   }
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(packageJson, null, 2), "utf-8");
