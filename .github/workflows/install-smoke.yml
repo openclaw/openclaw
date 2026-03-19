@@ -62,9 +62,9 @@ jobs:
         run: |
           docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
 
-      # This smoke validates that the build-arg path preinstalls selected
-      # extension deps and that matrix plugin discovery stays healthy in the
-      # final runtime image.
+      # This smoke validates that the build-arg path preinstalls the matrix
+      # runtime deps declared by the plugin and that matrix discovery stays
+      # healthy in the final runtime image.
       - name: Build extension Dockerfile smoke image
         uses: useblacksmith/build-push-action@v2
         with:
@@ -84,9 +84,17 @@ jobs:
             openclaw --version &&
             node -e "
               const Module = require(\"node:module\");
+              const matrixPackage = require(\"/app/extensions/matrix/package.json\");
               const requireFromMatrix = Module.createRequire(\"/app/extensions/matrix/package.json\");
-              requireFromMatrix.resolve(\"@vector-im/matrix-bot-sdk/package.json\");
-              requireFromMatrix.resolve(\"@matrix-org/matrix-sdk-crypto-nodejs/package.json\");
+              const runtimeDeps = Object.keys(matrixPackage.dependencies ?? {});
+              if (runtimeDeps.length === 0) {
+                throw new Error(
+                  \"matrix package has no declared runtime dependencies; smoke cannot validate install mirroring\",
+                );
+              }
+              for (const dep of runtimeDeps) {
+                requireFromMatrix.resolve(dep);
+              }
               const { spawnSync } = require(\"node:child_process\");
               const run = spawnSync(\"openclaw\", [\"plugins\", \"list\", \"--json\"], { encoding: \"utf8\" });
               if (run.status !== 0) {
