@@ -332,7 +332,7 @@ export class GraphService {
             episode_body: text,
             source: source,
             group_id: sessionId,
-            created_at: timestamp,
+            reference_time: timestamp,
           },
           10000, // 10s timeout
         );
