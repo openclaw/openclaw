@@ -429,9 +429,23 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       requireMentionOverride: opts.requireMention,
       overrideOrder: "after-config",
     });
+  const loadFreshTelegramAccountConfig = () => {
+    try {
+      return resolveTelegramAccount({
+        cfg: telegramDeps.loadConfig(),
+        accountId: account.accountId,
+      }).config;
+    } catch (error) {
+      logVerbose(
+        `telegram: failed to load fresh config for account ${account.accountId}; using startup snapshot: ${String(error)}`,
+      );
+      return telegramCfg;
+    }
+  };
   const resolveTelegramGroupConfig = (chatId: string | number, messageThreadId?: number) => {
-    const groups = telegramCfg.groups;
-    const direct = telegramCfg.direct;
+    const freshTelegramCfg = loadFreshTelegramAccountConfig();
+    const groups = freshTelegramCfg.groups;
+    const direct = freshTelegramCfg.direct;
     const chatIdStr = String(chatId);
     const isDm = !chatIdStr.startsWith("-");
 
@@ -484,6 +498,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     resolveGroupActivation,
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
+    loadFreshConfig: () => telegramDeps.loadConfig(),
     sendChatActionHandler,
     runtime,
     replyToMode,

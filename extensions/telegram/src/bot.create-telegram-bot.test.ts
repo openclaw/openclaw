@@ -13,7 +13,6 @@ const {
   commandSpy,
   dispatchReplyWithBufferedBlockDispatcher,
   getLoadConfigMock,
-  getLoadWebMediaMock,
   getOnHandler,
   getReadChannelAllowFromStoreMock,
   getUpsertChannelPairingRequestMock,
@@ -51,7 +50,6 @@ const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
   });
 
 const loadConfig = getLoadConfigMock();
-const loadWebMedia = getLoadWebMediaMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const upsertChannelPairingRequest = getUpsertChannelPairingRequestMock();
 
@@ -160,6 +158,59 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expect(payload.Body).toContain("cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+  });
+  it("reloads callback model routing bindings without recreating the bot", async () => {
+    const buildModelsProviderDataMock =
+      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+    let boundAgentId = "agent-a";
+    loadConfig.mockImplementation(() => ({
+      agents: {
+        defaults: {
+          model: "openai/gpt-4.1",
+        },
+        list: [{ id: "agent-a" }, { id: "agent-b" }],
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+      bindings: [
+        {
+          agentId: boundAgentId,
+          match: { channel: "telegram", accountId: "default" },
+        },
+      ],
+    }));
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    const sendModelCallback = async (id: number) => {
+      await callbackHandler({
+        callbackQuery: {
+          id: `cbq-model-${id}`,
+          data: "mdl_prov",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800 + id,
+            message_id: id,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+    };
+
+    buildModelsProviderDataMock.mockClear();
+    await sendModelCallback(1);
+    expect(buildModelsProviderDataMock).toHaveBeenCalled();
+    expect(buildModelsProviderDataMock.mock.calls.at(-1)?.[1]).toBe("agent-a");
+
+    boundAgentId = "agent-b";
+    await sendModelCallback(2);
+    expect(buildModelsProviderDataMock.mock.calls.at(-1)?.[1]).toBe("agent-b");
   });
   it("wraps inbound message with Telegram envelope", async () => {
     await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
@@ -840,6 +891,111 @@ describe("createTelegramBot", () => {
     expect(payload.SessionKey).toBe("agent:opie:main");
   });
 
+  it("reloads DM routing bindings between messages without recreating the bot", async () => {
+    let boundAgentId = "agent-a";
+    const configForAgent = (agentId: string) => ({
+      channels: {
+        telegram: {
+          accounts: {
+            opie: {
+              botToken: "tok-opie",
+              dmPolicy: "open",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "agent-a" }, { id: "agent-b" }],
+      },
+      bindings: [
+        {
+          agentId,
+          match: { channel: "telegram", accountId: "opie" },
+        },
+      ],
+    });
+    loadConfig.mockImplementation(() => configForAgent(boundAgentId));
+
+    createTelegramBot({ token: "tok", accountId: "opie" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    const sendDm = async (messageId: number, text: string) => {
+      await handler({
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 999, username: "testuser" },
+          text,
+          date: 1736380800 + messageId,
+          message_id: messageId,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+    };
+
+    await sendDm(42, "hello one");
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls[0]?.[0].AccountId).toBe("opie");
+    expect(replySpy.mock.calls[0]?.[0].SessionKey).toContain("agent:agent-a:");
+
+    boundAgentId = "agent-b";
+    await sendDm(43, "hello two");
+    expect(replySpy).toHaveBeenCalledTimes(2);
+    expect(replySpy.mock.calls[1]?.[0].AccountId).toBe("opie");
+    expect(replySpy.mock.calls[1]?.[0].SessionKey).toContain("agent:agent-b:");
+  });
+
+  it("reloads topic agent overrides between messages without recreating the bot", async () => {
+    let topicAgentId = "topic-a";
+    loadConfig.mockImplementation(() => ({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-1001234567890": {
+              requireMention: false,
+              topics: {
+                "99": {
+                  agentId: topicAgentId,
+                },
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "topic-a" }, { id: "topic-b" }],
+      },
+    }));
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    const sendTopicMessage = async (messageId: number) => {
+      await handler({
+        message: {
+          chat: { id: -1001234567890, type: "supergroup", title: "Forum Group", is_forum: true },
+          from: { id: 12345, username: "testuser" },
+          text: "hello",
+          date: 1736380800 + messageId,
+          message_id: messageId,
+          message_thread_id: 99,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+    };
+
+    await sendTopicMessage(301);
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls[0]?.[0].SessionKey).toContain("agent:topic-a:");
+
+    topicAgentId = "topic-b";
+    await sendTopicMessage(302);
+    expect(replySpy).toHaveBeenCalledTimes(2);
+    expect(replySpy.mock.calls[1]?.[0].SessionKey).toContain("agent:topic-b:");
+  });
+
   it("routes non-default account DMs to the per-account fallback session without explicit bindings", async () => {
     loadConfig.mockReturnValue({
       channels: {
@@ -1064,35 +1220,40 @@ describe("createTelegramBot", () => {
       text: "caption",
       mediaUrl: "https://example.com/fun",
     });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(Buffer.from("GIF89a"), {
+        status: 200,
+        headers: {
+          "content-type": "image/gif",
+        },
+      }),
+    );
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
-    loadWebMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("GIF89a"),
-      contentType: "image/gif",
-      fileName: "fun.gif",
-    });
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          text: "hello world",
+          date: 1736380800,
+          message_id: 5,
+          from: { first_name: "Ada" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
 
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: 1234, type: "private" },
-        text: "hello world",
-        date: 1736380800,
-        message_id: 5,
-        from: { first_name: "Ada" },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(sendAnimationSpy).toHaveBeenCalledTimes(1);
-    expect(sendAnimationSpy).toHaveBeenCalledWith("1234", expect.anything(), {
-      caption: "caption",
-      parse_mode: "HTML",
-      reply_to_message_id: undefined,
-    });
-    expect(sendPhotoSpy).not.toHaveBeenCalled();
+      expect(sendAnimationSpy).toHaveBeenCalledTimes(1);
+      expect(sendAnimationSpy).toHaveBeenCalledWith("1234", expect.anything(), {
+        caption: "caption",
+        parse_mode: "HTML",
+        reply_to_message_id: undefined,
+      });
+      expect(sendPhotoSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   function resetHarnessSpies() {
@@ -1860,6 +2021,60 @@ describe("createTelegramBot", () => {
       expect.any(String),
       expect.objectContaining({ message_thread_id: 99 }),
     );
+  });
+  it("reloads native command routing bindings between invocations without recreating the bot", async () => {
+    commandSpy.mockClear();
+    replySpy.mockClear();
+
+    let boundAgentId = "agent-a";
+    loadConfig.mockImplementation(() => ({
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+      agents: {
+        list: [{ id: "agent-a" }, { id: "agent-b" }],
+      },
+      bindings: [
+        {
+          agentId: boundAgentId,
+          match: { channel: "telegram", accountId: "default" },
+        },
+      ],
+    }));
+
+    createTelegramBot({ token: "tok" });
+    const statusHandler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
+      | ((ctx: Record<string, unknown>) => Promise<void>)
+      | undefined;
+    if (!statusHandler) {
+      throw new Error("status command handler missing");
+    }
+
+    const invokeStatus = async (messageId: number) => {
+      await statusHandler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          from: { id: 9, username: "ada_bot" },
+          text: "/status",
+          date: 1736380800 + messageId,
+          message_id: messageId,
+        },
+        match: "",
+      });
+    };
+
+    await invokeStatus(401);
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls[0]?.[0].SessionKey).toContain("agent:agent-a:");
+
+    boundAgentId = "agent-b";
+    await invokeStatus(402);
+    expect(replySpy).toHaveBeenCalledTimes(2);
+    expect(replySpy.mock.calls[1]?.[0].SessionKey).toContain("agent:agent-b:");
   });
   it("skips tool summaries for native slash commands", async () => {
     commandSpy.mockClear();
