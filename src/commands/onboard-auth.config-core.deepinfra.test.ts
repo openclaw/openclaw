@@ -16,12 +16,10 @@ import {
   DEEPINFRA_DEFAULT_MODEL_ID,
   DEEPINFRA_DEFAULT_MODEL_REF,
   DEEPINFRA_DEFAULT_MAX_TOKENS,
-  DEEPINFRA_MODEL_CATALOG,
 } from "../providers/deepinfra-shared.js";
 import { captureEnv } from "../test-utils/env.js";
 
 const emptyCfg: OpenClawConfig = {};
-const DEEPINFRA_MODEL_IDS = DEEPINFRA_MODEL_CATALOG.map((m) => m.id);
 
 describe("DeepInfra provider config", () => {
   describe("constants", () => {
@@ -56,48 +54,9 @@ describe("DeepInfra provider config", () => {
   });
 
   describe("applyDeepInfraProviderConfig", () => {
-    it("registers deepinfra provider with correct baseUrl and api", () => {
+    it("does not persist a provider block (discovery populates models at runtime)", () => {
       const result = applyDeepInfraProviderConfig(emptyCfg);
-      const provider = result.models?.providers?.deepinfra;
-      expect(provider).toBeDefined();
-      expect(provider?.baseUrl).toBe(DEEPINFRA_BASE_URL);
-      expect(provider?.api).toBe("openai-completions");
-    });
-
-    it("includes the default model in the provider model list", () => {
-      const result = applyDeepInfraProviderConfig(emptyCfg);
-      const provider = result.models?.providers?.deepinfra;
-      const models = provider?.models;
-      expect(Array.isArray(models)).toBe(true);
-      const modelIds = models?.map((m) => m.id) ?? [];
-      expect(modelIds).toContain(DEEPINFRA_DEFAULT_MODEL_ID);
-    });
-
-    it("surfaces the full DeepInfra model catalog", () => {
-      const result = applyDeepInfraProviderConfig(emptyCfg);
-      const provider = result.models?.providers?.deepinfra;
-      const modelIds = provider?.models?.map((m) => m.id) ?? [];
-      for (const modelId of DEEPINFRA_MODEL_IDS) {
-        expect(modelIds).toContain(modelId);
-      }
-    });
-
-    it("appends missing catalog models to existing DeepInfra provider config", () => {
-      const result = applyDeepInfraProviderConfig({
-        models: {
-          providers: {
-            deepinfra: {
-              baseUrl: DEEPINFRA_BASE_URL,
-              api: "openai-completions",
-              models: [{ ...DEEPINFRA_MODEL_CATALOG[0], cost: DEEPINFRA_DEFAULT_COST }],
-            },
-          },
-        },
-      });
-      const modelIds = result.models?.providers?.deepinfra?.models?.map((m) => m.id) ?? [];
-      for (const modelId of DEEPINFRA_MODEL_IDS) {
-        expect(modelIds).toContain(modelId);
-      }
+      expect(result.models?.providers?.deepinfra).toBeUndefined();
     });
 
     it("sets DeepInfra alias in agent default models", () => {
@@ -143,11 +102,9 @@ describe("DeepInfra provider config", () => {
       );
     });
 
-    it("also registers the provider", () => {
+    it("does not persist a provider block (discovery populates models at runtime)", () => {
       const result = applyDeepInfraConfig(emptyCfg);
-      const provider = result.models?.providers?.deepinfra;
-      expect(provider).toBeDefined();
-      expect(provider?.baseUrl).toBe(DEEPINFRA_BASE_URL);
+      expect(result.models?.providers?.deepinfra).toBeUndefined();
     });
   });
 

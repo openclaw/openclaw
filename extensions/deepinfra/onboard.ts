@@ -4,10 +4,8 @@ import {
 } from "openclaw/plugin-sdk/provider-models";
 import {
   applyAgentDefaultModelPrimary,
-  applyProviderConfigWithModelCatalog,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import { buildDeepInfraStaticProvider } from "./provider-catalog.js";
 
 export { DEEPINFRA_BASE_URL, DEEPINFRA_DEFAULT_MODEL_REF };
 
@@ -18,13 +16,16 @@ export function applyDeepInfraProviderConfig(cfg: OpenClawConfig): OpenClawConfi
     alias: models[DEEPINFRA_DEFAULT_MODEL_REF]?.alias ?? "DeepInfra",
   };
 
-  return applyProviderConfigWithModelCatalog(cfg, {
-    agentModels: models,
-    providerId: "deepinfra",
-    api: "openai-completions",
-    baseUrl: DEEPINFRA_BASE_URL,
-    catalogModels: buildDeepInfraStaticProvider().models ?? [],
-  });
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+  };
 }
 
 export function applyDeepInfraConfig(cfg: OpenClawConfig): OpenClawConfig {
