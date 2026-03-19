@@ -97,6 +97,27 @@ function readRawParam(params: Record<string, unknown>, key: string): unknown {
   return undefined;
 }
 
+function readStringAliasParam(
+  params: Record<string, unknown>,
+  keys: string[],
+  options: { required?: boolean } = {},
+): string | undefined {
+  for (const key of keys) {
+    const raw = readRawParam(params, key);
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const trimmed = raw.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (options.required) {
+    throw new Error(`${keys[0]} required`);
+  }
+  return undefined;
+}
+
 function readNumericArrayParam(
   params: Record<string, unknown>,
   key: string,
@@ -169,7 +190,10 @@ export async function handleMatrixAction(
 
   if (pollActions.has(action)) {
     const roomId = readRoomId(params);
-    const pollId = readStringParam(params, "pollId", { required: true });
+    const pollId = readStringAliasParam(params, ["pollId", "messageId"], { required: true });
+    if (!pollId) {
+      throw new Error("pollId required");
+    }
     const optionId = readStringParam(params, "pollOptionId");
     const optionIndex = readNumberParam(params, "pollOptionIndex", { integer: true });
     const optionIds = [

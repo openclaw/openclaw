@@ -119,6 +119,25 @@ describe("handleMatrixAction pollVote", () => {
     ).rejects.toThrow("pollId required");
   });
 
+  it("accepts messageId as a pollId alias for poll votes", async () => {
+    const cfg = {} as CoreConfig;
+    await handleMatrixAction(
+      {
+        action: "pollVote",
+        roomId: "!room:example",
+        messageId: "$poll",
+        pollOptionIndex: 1,
+      },
+      cfg,
+    );
+
+    expect(mocks.voteMatrixPoll).toHaveBeenCalledWith("!room:example", "$poll", {
+      cfg,
+      optionIds: [],
+      optionIndexes: [1],
+    });
+  });
+
   it("passes account-scoped opts to add reactions", async () => {
     const cfg = { channels: { matrix: { actions: { reactions: true } } } } as CoreConfig;
     await handleMatrixAction(
