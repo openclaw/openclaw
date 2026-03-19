@@ -17,8 +17,8 @@ import {
   resolveMatrixAuth,
   resolveMatrixAuthContext,
   resolveSharedMatrixClient,
-  stopSharedClientInstance,
 } from "../client.js";
+import { releaseSharedClientInstance } from "../client/shared.js";
 import { createMatrixThreadBindingManager } from "../thread-bindings.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { resolveMatrixMonitorConfig } from "./config.js";
@@ -131,7 +131,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   setActiveMatrixClient(client, auth.accountId);
   let cleanedUp = false;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
-  const cleanup = () => {
+  const cleanup = async () => {
     if (cleanedUp) {
       return;
     }
@@ -139,7 +139,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     try {
       threadBindingManager?.stop();
     } finally {
-      stopSharedClientInstance(client);
+      await releaseSharedClientInstance(client, "persist");
       setActiveMatrixClient(null, auth.accountId);
     }
   };
@@ -273,19 +273,32 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     });
 
     await new Promise<void>((resolve) => {
-      const onAbort = () => {
-        logVerboseMessage("matrix: stopping client");
-        cleanup();
-        resolve();
+      const stopAndResolve = async () => {
+        try {
+          logVerboseMessage("matrix: stopping client");
+          await cleanup();
+        } catch (err) {
+          logger.warn("matrix: failed during monitor shutdown cleanup", {
+            error: String(err),
+          });
+        } finally {
+          resolve();
+        }
       };
       if (opts.abortSignal?.aborted) {
-        onAbort();
+        void stopAndResolve();
         return;
       }
-      opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
+      opts.abortSignal?.addEventListener(
+        "abort",
+        () => {
+          void stopAndResolve();
+        },
+        { once: true },
+      );
     });
   } catch (err) {
-    cleanup();
+    await cleanup();
     throw err;
   }
 }

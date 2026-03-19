@@ -17,6 +17,7 @@ type PersistedMatrixSyncStore = {
   version: number;
   savedSync: ISyncData | null;
   clientOptions?: IStoredClientOpts;
+  cleanShutdown?: boolean;
 };
 
 function createAsyncLock() {
@@ -76,6 +77,7 @@ function readPersistedStore(raw: string): PersistedMatrixSyncStore | null {
       version?: unknown;
       savedSync?: unknown;
       clientOptions?: unknown;
+      cleanShutdown?: unknown;
     };
     const savedSync = toPersistedSyncData(parsed.savedSync);
     if (parsed.version === STORE_VERSION) {
@@ -85,6 +87,7 @@ function readPersistedStore(raw: string): PersistedMatrixSyncStore | null {
         clientOptions: isRecord(parsed.clientOptions)
           ? (parsed.clientOptions as IStoredClientOpts)
           : undefined,
+        cleanShutdown: parsed.cleanShutdown === true,
       };
     }
 
@@ -93,6 +96,7 @@ function readPersistedStore(raw: string): PersistedMatrixSyncStore | null {
     return {
       version: STORE_VERSION,
       savedSync: toPersistedSyncData(parsed),
+      cleanShutdown: false,
     };
   } catch {
     return null;
@@ -119,6 +123,8 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
   private savedSync: ISyncData | null = null;
   private savedClientOptions: IStoredClientOpts | undefined;
   private readonly hadSavedSyncOnLoad: boolean;
+  private readonly hadCleanShutdownOnLoad: boolean;
+  private cleanShutdown = false;
   private dirty = false;
   private persistTimer: NodeJS.Timeout | null = null;
   private persistPromise: Promise<void> | null = null;
@@ -128,11 +134,13 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
 
     let restoredSavedSync: ISyncData | null = null;
     let restoredClientOptions: IStoredClientOpts | undefined;
+    let restoredCleanShutdown = false;
     try {
       const raw = readFileSync(this.storagePath, "utf8");
       const persisted = readPersistedStore(raw);
       restoredSavedSync = persisted?.savedSync ?? null;
       restoredClientOptions = persisted?.clientOptions;
+      restoredCleanShutdown = persisted?.cleanShutdown === true;
     } catch {
       // Missing or unreadable sync cache should not block startup.
     }
@@ -140,6 +148,8 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     this.savedSync = restoredSavedSync;
     this.savedClientOptions = restoredClientOptions;
     this.hadSavedSyncOnLoad = restoredSavedSync !== null;
+    this.hadCleanShutdownOnLoad = this.hadSavedSyncOnLoad && restoredCleanShutdown;
+    this.cleanShutdown = this.hadCleanShutdownOnLoad;
 
     if (this.savedSync) {
       this.accumulator.accumulate(syncDataToSyncResponse(this.savedSync), true);
@@ -152,6 +162,10 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
 
   hasSavedSync(): boolean {
     return this.hadSavedSyncOnLoad;
+  }
+
+  hasSavedSyncFromCleanShutdown(): boolean {
+    return this.hadCleanShutdownOnLoad;
   }
 
   override getSavedSync(): Promise<ISyncData | null> {
@@ -205,7 +219,13 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     await super.deleteAllData();
     this.savedSync = null;
     this.savedClientOptions = undefined;
+    this.cleanShutdown = false;
     await fs.rm(this.storagePath, { force: true }).catch(() => undefined);
+  }
+
+  markCleanShutdown(): void {
+    this.cleanShutdown = true;
+    this.dirty = true;
   }
 
   async flush(): Promise<void> {
@@ -224,6 +244,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
   }
 
   private markDirtyAndSchedulePersist(): void {
+    this.cleanShutdown = false;
     this.dirty = true;
     if (this.persistTimer) {
       return;
@@ -242,6 +263,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     const payload: PersistedMatrixSyncStore = {
       version: STORE_VERSION,
       savedSync: this.savedSync ? cloneJson(this.savedSync) : null,
+      cleanShutdown: this.cleanShutdown === true,
       ...(this.savedClientOptions ? { clientOptions: cloneJson(this.savedClientOptions) } : {}),
     };
     try {
