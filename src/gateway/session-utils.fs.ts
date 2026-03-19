@@ -109,12 +109,23 @@ export function readSessionMessages(
         // uninitialized memory into the UTF-8 / JSON pipeline.
         const bytesRead = fs.readSync(fd, buf, 0, buf.length, start);
         content = buf.toString("utf-8", 0, bytesRead);
+
         // If we started mid-line, drop the partial first line.
-        // Note: messages before the 2 MB boundary are intentionally omitted to keep
+        // Note: messages before the MAX_TAIL_BYTES boundary are intentionally omitted to keep
         // this RPC fast; the UI will show the most recent history only.
-        const firstNewline = content.indexOf("\n");
-        if (firstNewline >= 0 && start > 0) {
-          content = content.slice(firstNewline + 1);
+        if (start > 0) {
+          // Only drop the first line if we actually started in the middle of a record.
+          // If the byte before `start` is a newline, `content` begins at a record boundary
+          // and we must not discard the first complete record.
+          const prev = Buffer.allocUnsafe(1);
+          const prevRead = fs.readSync(fd, prev, 0, 1, start - 1);
+          const prevChar = prevRead == 1 ? prev.toString("utf-8", 0, 1) : "";
+          if (prevChar !== "\n") {
+            const firstNewline = content.indexOf("\n");
+            if (firstNewline >= 0) {
+              content = content.slice(firstNewline + 1);
+            }
+          }
         }
       } finally {
         fs.closeSync(fd);
@@ -134,10 +145,20 @@ export function readSessionMessages(
       continue;
     }
     if (trimmed.length > MAX_LINE_CHARS) {
-      // Skip lines that are too large to safely parse on the RPC path.
+      // Preserve history semantics: emit a placeholder entry instead of dropping the line entirely.
+      // (chat.history will still apply response-byte caps downstream.)
       console.warn(
-        `[session-utils] skipping oversized line in session ${sessionId}: ${trimmed.length} chars (max ${MAX_LINE_CHARS})`,
+        `[session-utils] oversized transcript line in session ${sessionId}: ${trimmed.length} chars (max ${MAX_LINE_CHARS}); emitting placeholder`,
       );
+      messages.push({
+        role: "system",
+        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        timestamp: Date.now(),
+        __openclaw: {
+          kind: "oversized_transcript_line",
+          sizeChars: trimmed.length,
+        },
+      });
       continue;
     }
     try {
