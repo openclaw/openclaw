@@ -4,7 +4,6 @@ import {
 } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import {
   type OpenClawConfig,
   type DiscordAccountConfig,
   type DiscordActionConfig,

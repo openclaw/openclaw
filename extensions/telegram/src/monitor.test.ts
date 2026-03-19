@@ -184,13 +184,18 @@ function mockRunOnceWithStalledPollingRunner(): {
 } {
   let running = true;
   let releaseTask: (() => void) | undefined;
+  let releaseBeforeTaskStart = false;
   let signalTaskStarted: (() => void) | undefined;
   const taskStarted = new Promise<void>((resolve) => {
     signalTaskStarted = resolve;
   });
   const stop = vi.fn(async () => {
     running = false;
-    releaseTask?.();
+    if (releaseTask) {
+      releaseTask();
+      return;
+    }
+    releaseBeforeTaskStart = true;
   });
   runSpy.mockImplementationOnce(() =>
     makeRunnerStub({
@@ -198,6 +203,9 @@ function mockRunOnceWithStalledPollingRunner(): {
         new Promise<void>((resolve) => {
           signalTaskStarted?.();
           releaseTask = resolve;
+          if (releaseBeforeTaskStart) {
+            resolve();
+          }
         }),
       stop,
       isRunning: () => running,
@@ -542,16 +550,17 @@ describe("monitorTelegramProvider (grammY)", () => {
   it("force-restarts polling when unhandled network rejection stalls runner", async () => {
     const { monitorTelegramProvider } = await import("./monitor.js");
     const abort = new AbortController();
-    const { stop } = mockRunOnceWithStalledPollingRunner();
-    mockRunOnceAndAbort(abort);
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+    mockRunOnceWithStalledPollingRunner();
 
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
     expect(emitUnhandledRejection(await makeTaggedPollingFetchError())).toBe(true);
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(firstCycle.stop).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(2));
+    abort.abort();
     await monitor;
-    expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
     expectRecoverableRetryState(2);
   });
 

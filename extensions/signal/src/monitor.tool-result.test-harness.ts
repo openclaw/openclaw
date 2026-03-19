@@ -1,7 +1,5 @@
 import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
-import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
-import { resetSystemEventsForTest } from "../../../src/infra/system-events.js";
 import type { SignalDaemonExitEvent, SignalDaemonHandle } from "./daemon.js";
 
 type SignalToolResultTestMocks = {
@@ -156,7 +154,11 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
 });
 
 export function installSignalToolResultTestHooks() {
-  beforeEach(() => {
+  beforeEach(async () => {
+    const [{ resetInboundDedupe }, { resetSystemEventsForTest }] = await Promise.all([
+      import("openclaw/plugin-sdk/reply-runtime"),
+      import("openclaw/plugin-sdk/infra-runtime"),
+    ]);
     resetInboundDedupe();
     config = {
       messages: { responsePrefix: "PFX" },
