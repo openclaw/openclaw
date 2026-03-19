@@ -130,14 +130,11 @@ describe("lookupContextTokens", () => {
   });
 
   it("prefers configured bare-id overrides over discovered provider-qualified windows", async () => {
-    mockDiscoveryDeps(
-      [{ provider: "customprovider", id: "llama-3.1-8b", contextWindow: 8_192 }],
-      {
-        customprovider: {
-          models: [{ id: "llama-3.1-8b", contextWindow: 131_072 }],
-        },
+    mockDiscoveryDeps([{ provider: "customprovider", id: "llama-3.1-8b", contextWindow: 8_192 }], {
+      customprovider: {
+        models: [{ id: "llama-3.1-8b", contextWindow: 131_072 }],
       },
-    );
+    });
 
     const resolveContextTokensForModel = await importResolveContextTokensForModel();
     expect(
