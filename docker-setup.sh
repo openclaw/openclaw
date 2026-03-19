@@ -2,6 +2,41 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Load .env if present so variables like OPENCLAW_DOCKER_APT_PACKAGES are available.
+# Only sets variables not already in the environment so explicit CLI overrides
+# (e.g. OPENCLAW_IMAGE=foo ./docker-setup.sh) take precedence over .env defaults.
+# Parses the file manually to avoid executing unquoted words as shell commands.
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  while IFS= read -r _env_line || [[ -n "$_env_line" ]]; do
+    _env_line="${_env_line%$'\r'}"
+    [[ -z "$_env_line" || "$_env_line" == '#'* ]] && continue
+    _env_key="${_env_line%%=*}"
+    [[ "$_env_line" != *'='* ]] && continue
+    _env_val="${_env_line#*=}"
+    # Strip unquoted inline comments BEFORE removing surrounding quotes.
+    # A comment marker outside quotes (KEY=val # note) is removed here.
+    # A marker inside quotes (KEY="val # not-a-comment") is protected.
+    if [[ "$_env_val" != '"'*'"' && "$_env_val" != "'"*"'" ]]; then
+      _env_val="${_env_val%%' #'*}"
+      _env_val="${_env_val%"${_env_val##*[! ]}"}"
+    fi
+    # Strip surrounding quotes and unescape any escaped double-quotes.
+    if [[ "$_env_val" == '"'*'"' ]]; then
+      _env_val="${_env_val%'"'}"
+      _env_val="${_env_val#'"'}"
+      _env_val="${_env_val//\\"/"}"
+      _env_val="${_env_val//\\\\/\\}"
+    elif [[ "$_env_val" == "'"*"'" ]]; then
+      _env_val="${_env_val%"'"}"
+      _env_val="${_env_val#"'"}"
+    fi
+    # Skip invalid bash identifiers (indented comments, "export KEY=val", hyphens, etc.)
+    if [[ "$_env_key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ && -z "${!_env_key+x}" ]]; then
+      export "$_env_key=$_env_val"
+    fi
+  done < "$ROOT_DIR/.env"
+  unset _env_line _env_key _env_val
+fi
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
@@ -373,6 +408,15 @@ for compose_file in "${COMPOSE_FILES[@]}"; do
 done
 
 ENV_FILE="$ROOT_DIR/.env"
+_write_kv() {
+  local _k="$1" _v="$2" _file="$3"
+  if [[ "$_v" == *' '* || "$_v" == *$'\t'* || "$_v" == *'"'* ]]; then
+    _v="${_v//\\/\\\\}"
+    printf '%s="%s"\n' "$_k" "${_v//"/\\"}" >>"$_file"
+  else
+    printf '%s=%s\n' "$_k" "$_v" >>"$_file"
+  fi
+}
 upsert_env() {
   local file="$1"
   shift
@@ -383,13 +427,14 @@ upsert_env() {
   # works with Bash 3.2 (macOS default) which lacks `declare -A`.
   local seen=" "
 
+
   if [[ -f "$file" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
       local key="${line%%=*}"
       local replaced=false
       for k in "${keys[@]}"; do
         if [[ "$key" == "$k" ]]; then
-          printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
+          _write_kv "$k" "${!k-}" "$tmp"
           seen="$seen$k "
           replaced=true
           break
@@ -403,7 +448,7 @@ upsert_env() {
 
   for k in "${keys[@]}"; do
     if [[ "$seen" != *" $k "* ]]; then
-      printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
+      _write_kv "$k" "${!k-}" "$tmp"
     fi
   done
 
