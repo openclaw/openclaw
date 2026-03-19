@@ -2,8 +2,8 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -70,19 +70,10 @@ function createMockSock(): MockSock {
   };
 }
 
-function getPairingStoreMocks() {
-  const readChannelAllowFromStore = (...args: unknown[]) => readAllowFromStoreMock(...args);
-  const upsertChannelPairingRequest = (...args: unknown[]) => upsertPairingRequestMock(...args);
-  return {
-    readChannelAllowFromStore,
-    upsertChannelPairingRequest,
-  };
-}
-
 const sock: MockSock = createMockSock();
 
-vi.mock("../../../src/media/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/media/store.js")>();
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   return {
     ...actual,
     saveMediaBuffer: vi.fn().mockResolvedValue({
@@ -94,15 +85,36 @@ vi.mock("../../../src/media/store.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig: () => mockLoadConfig(),
   };
 });
 
-vi.mock("../../../src/pairing/pairing-store.js", () => getPairingStoreMocks());
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: async (
+      params: Parameters<typeof actual.readStoreAllowFromForDmPolicy>[0],
+    ) =>
+      await actual.readStoreAllowFromForDmPolicy({
+        ...params,
+        readStore: async (provider, accountId) =>
+          (await readAllowFromStoreMock(provider, accountId)) as string[],
+      }),
+  };
+});
 
 vi.mock("./session.js", () => ({
   createWaSocket: vi.fn().mockResolvedValue(sock),

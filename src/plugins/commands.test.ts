@@ -7,6 +7,7 @@ import {
   executePluginCommand,
   getPluginCommandSpecs,
   listPluginCommands,
+  matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
 import { setActivePluginRegistry } from "./runtime.js";
@@ -107,6 +108,73 @@ describe("registerPluginCommand", () => {
     expect(getPluginCommandSpecs("slack")).toEqual([]);
   });
 
+  it("matches provider-specific native aliases back to the canonical command", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "voice",
+      nativeNames: {
+        default: "talkvoice",
+        discord: "discordvoice",
+      },
+      description: "Demo command",
+      acceptsArgs: true,
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(matchPluginCommand("/talkvoice now")).toMatchObject({
+      command: expect.objectContaining({ name: "voice", pluginId: "demo-plugin" }),
+      args: "now",
+    });
+    expect(matchPluginCommand("/discordvoice now")).toMatchObject({
+      command: expect.objectContaining({ name: "voice", pluginId: "demo-plugin" }),
+      args: "now",
+    });
+  });
+
+  it("rejects provider aliases that collide with another registered command", () => {
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "voice",
+        nativeNames: {
+          telegram: "pair_device",
+        },
+        description: "Voice command",
+        handler: async () => ({ text: "ok" }),
+      }),
+    ).toEqual({ ok: true });
+
+    expect(
+      registerPluginCommand("other-plugin", {
+        name: "pair",
+        nativeNames: {
+          telegram: "pair_device",
+        },
+        description: "Pair command",
+        handler: async () => ({ text: "ok" }),
+      }),
+    ).toEqual({
+      ok: false,
+      error: 'Command "pair_device" already registered by plugin "demo-plugin"',
+    });
+  });
+
+  it("rejects reserved provider aliases", () => {
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "voice",
+        nativeNames: {
+          telegram: "help",
+        },
+        description: "Voice command",
+        handler: async () => ({ text: "ok" }),
+      }),
+    ).toEqual({
+      ok: false,
+      error:
+        'Native command alias "telegram" invalid: Command name "help" is reserved by a built-in command',
+    });
+  });
+
   it("resolves Discord DM command bindings with the user target prefix intact", () => {
     expect(
       __testing.resolveBindingConversationFromCommand({
@@ -133,6 +201,22 @@ describe("registerPluginCommand", () => {
       channel: "discord",
       accountId: "default",
       conversationId: "channel:1480554272859881494",
+    });
+  });
+
+  it("resolves Telegram topic command bindings without a Telegram registry entry", () => {
+    expect(
+      __testing.resolveBindingConversationFromCommand({
+        channel: "telegram",
+        from: "telegram:group:-100123",
+        to: "telegram:group:-100123:topic:77",
+        accountId: "default",
+      }),
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-100123",
+      threadId: 77,
     });
   });
 

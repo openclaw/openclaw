@@ -116,9 +116,13 @@ function formatBrowserConnectionSummary(params: {
   isRemote?: boolean;
   cdpPort?: number | null;
   cdpUrl?: string | null;
+  userDataDir?: string | null;
 }): string {
   if (usesChromeMcpTransport(params)) {
-    return "transport: chrome-mcp";
+    const userDataDir = params.userDataDir ? shortenHomePath(params.userDataDir) : null;
+    return userDataDir
+      ? `transport: chrome-mcp, userDataDir: ${userDataDir}`
+      : "transport: chrome-mcp";
   }
   if (params.isRemote) {
     return `cdpUrl: ${params.cdpUrl ?? "(unset)"}`;
@@ -155,7 +159,9 @@ export function registerBrowserManageCommands(
                   `cdpPort: ${status.cdpPort ?? "(unset)"}`,
                   `cdpUrl: ${redactCdpUrl(status.cdpUrl ?? `http://127.0.0.1:${status.cdpPort}`)}`,
                 ]
-              : []),
+              : status.userDataDir
+                ? [`userDataDir: ${shortenHomePath(status.userDataDir)}`]
+                : []),
             `browser: ${status.chosenBrowser ?? "unknown"}`,
             `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
             `detectedPath: ${detectedDisplay}`,
@@ -455,9 +461,19 @@ export function registerBrowserManageCommands(
     .requiredOption("--name <name>", "Profile name (lowercase, numbers, hyphens)")
     .option("--color <hex>", "Profile color (hex format, e.g. #0066CC)")
     .option("--cdp-url <url>", "CDP URL for remote Chrome (http/https)")
+    .option("--user-data-dir <path>", "User data dir for existing-session Chromium attach")
     .option("--driver <driver>", "Profile driver (openclaw|existing-session). Default: openclaw")
     .action(
-      async (opts: { name: string; color?: string; cdpUrl?: string; driver?: string }, cmd) => {
+      async (
+        opts: {
+          name: string;
+          color?: string;
+          cdpUrl?: string;
+          userDataDir?: string;
+          driver?: string;
+        },
+        cmd,
+      ) => {
         const parent = parentOpts(cmd);
         await runBrowserCommand(async () => {
           const result = await callBrowserRequest<BrowserCreateProfileResult>(
@@ -469,6 +485,7 @@ export function registerBrowserManageCommands(
                 name: opts.name,
                 color: opts.color,
                 cdpUrl: opts.cdpUrl,
+                userDataDir: opts.userDataDir,
                 driver: opts.driver === "existing-session" ? "existing-session" : undefined,
               },
             },
@@ -481,8 +498,8 @@ export function registerBrowserManageCommands(
           defaultRuntime.log(
             info(
               `🦞 Created profile "${result.profile}"\n${loc}\n  color: ${result.color}${
-                opts.driver === "existing-session" ? "\n  driver: existing-session" : ""
-              }`,
+                result.userDataDir ? `\n  userDataDir: ${shortenHomePath(result.userDataDir)}` : ""
+              }${opts.driver === "existing-session" ? "\n  driver: existing-session" : ""}`,
             ),
           );
         });

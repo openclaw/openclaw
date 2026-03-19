@@ -3,6 +3,7 @@ import path from "node:path";
 import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
 import {
@@ -26,6 +27,7 @@ export type CreateProfileParams = {
   name: string;
   color?: string;
   cdpUrl?: string;
+  userDataDir?: string;
   driver?: "openclaw" | "existing-session";
 };
 
@@ -35,6 +37,7 @@ export type CreateProfileResult = {
   transport: "cdp" | "chrome-mcp";
   cdpPort: number | null;
   cdpUrl: string | null;
+  userDataDir: string | null;
   color: string;
   isRemote: boolean;
 };
@@ -79,6 +82,8 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();
     const rawCdpUrl = params.cdpUrl?.trim() || undefined;
+    const rawUserDataDir = params.userDataDir?.trim() || undefined;
+    const normalizedUserDataDir = rawUserDataDir ? resolveUserPath(rawUserDataDir) : undefined;
     const driver = params.driver === "existing-session" ? "existing-session" : undefined;
 
     if (!isValidProfileName(name)) {
@@ -104,6 +109,17 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       params.color && HEX_COLOR_RE.test(params.color) ? params.color : allocateColor(usedColors);
 
     let profileConfig: BrowserProfileConfig;
+    if (normalizedUserDataDir && driver !== "existing-session") {
+      throw new BrowserValidationError(
+        "driver=existing-session is required when userDataDir is provided",
+      );
+    }
+    if (normalizedUserDataDir && !fs.existsSync(normalizedUserDataDir)) {
+      throw new BrowserValidationError(
+        `browser user data directory not found: ${normalizedUserDataDir}`,
+      );
+    }
+
     if (rawCdpUrl) {
       let parsed: ReturnType<typeof parseHttpUrl>;
       try {
@@ -127,6 +143,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
         profileConfig = {
           driver,
           attachOnly: true,
+          ...(normalizedUserDataDir ? { userDataDir: normalizedUserDataDir } : {}),
           color: profileColor,
         };
       } else {
@@ -170,6 +187,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
       cdpPort: capabilities.usesChromeMcp ? null : resolved.cdpPort,
       cdpUrl: capabilities.usesChromeMcp ? null : resolved.cdpUrl,
+      userDataDir: resolved.userDataDir ?? null,
       color: resolved.color,
       isRemote: !resolved.cdpIsLoopback,
     };

@@ -9,23 +9,36 @@ vi.mock("./jsonl-socket.js", () => ({
   requestJsonlSocket: (...args: unknown[]) => requestJsonlSocketMock(...args),
 }));
 
-import {
-  addAllowlistEntry,
-  ensureExecApprovals,
-  mergeExecApprovalsSocketDefaults,
-  normalizeExecApprovals,
-  readExecApprovalsSnapshot,
-  recordAllowlistUse,
-  requestExecApprovalViaSocket,
-  resolveExecApprovalsPath,
-  resolveExecApprovalsSocketPath,
-  type ExecApprovalsFile,
-} from "./exec-approvals.js";
+import type { ExecApprovalsFile } from "./exec-approvals.js";
+
+type ExecApprovalsModule = typeof import("./exec-approvals.js");
+
+let addAllowlistEntry: ExecApprovalsModule["addAllowlistEntry"];
+let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
+let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
+let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
+let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
+let recordAllowlistUse: ExecApprovalsModule["recordAllowlistUse"];
+let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
+let resolveExecApprovalsPath: ExecApprovalsModule["resolveExecApprovalsPath"];
+let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSocketPath"];
 
 const tempDirs: string[] = [];
 const originalOpenClawHome = process.env.OPENCLAW_HOME;
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  ({
+    addAllowlistEntry,
+    ensureExecApprovals,
+    mergeExecApprovalsSocketDefaults,
+    normalizeExecApprovals,
+    readExecApprovalsSnapshot,
+    recordAllowlistUse,
+    requestExecApprovalViaSocket,
+    resolveExecApprovalsPath,
+    resolveExecApprovalsSocketPath,
+  } = await import("./exec-approvals.js"));
   requestJsonlSocketMock.mockReset();
 });
 

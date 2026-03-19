@@ -1,5 +1,5 @@
-import { issuePairingChallenge } from "../../../../src/pairing/pairing-challenge.js";
-import { upsertChannelPairingRequest } from "../../../../src/pairing/pairing-store.js";
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import type { DiscordDmCommandAccess } from "./dm-command-auth.js";
 
 export async function handleDiscordDmCommandDecision(params: {
@@ -20,14 +20,8 @@ export async function handleDiscordDmCommandDecision(params: {
 
   if (params.dmAccess.decision === "pairing") {
     const upsertPairingRequest = params.upsertPairingRequest ?? upsertChannelPairingRequest;
-    const result = await issuePairingChallenge({
+    const result = await createChannelPairingChallengeIssuer({
       channel: "discord",
-      senderId: params.sender.id,
-      senderIdLine: `Your Discord user id: ${params.sender.id}`,
-      meta: {
-        tag: params.sender.tag,
-        name: params.sender.name,
-      },
       upsertPairingRequest: async ({ id, meta }) =>
         await upsertPairingRequest({
           channel: "discord",
@@ -35,6 +29,13 @@ export async function handleDiscordDmCommandDecision(params: {
           accountId: params.accountId,
           meta,
         }),
+    })({
+      senderId: params.sender.id,
+      senderIdLine: `Your Discord user id: ${params.sender.id}`,
+      meta: {
+        tag: params.sender.tag,
+        name: params.sender.name,
+      },
       sendPairingReply: async () => {},
     });
     if (result.created && result.code) {

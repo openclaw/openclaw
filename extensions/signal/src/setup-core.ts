@@ -1,22 +1,24 @@
 import {
-  applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import {
+  createCliPathTextInput,
+  createDelegatedSetupWizardProxy,
+  createDelegatedTextInputShouldPrompt,
+  createPatchedAccountSetupAdapter,
+  normalizeE164,
   parseSetupEntriesAllowingWildcard,
-  promptParsedAllowFromForScopedChannel,
+  promptParsedAllowFromForAccount,
+  setAccountAllowFromForChannel,
   setChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import { normalizeE164 } from "../../../src/utils.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+  type OpenClawConfig,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/setup";
+import type {
+  ChannelSetupAdapter,
+  ChannelSetupDmPolicy,
+  ChannelSetupWizard,
+  ChannelSetupWizardTextInput,
+} from "openclaw/plugin-sdk/setup";
+import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -86,14 +88,13 @@ function buildSignalSetupPatch(input: {
   };
 }
 
-async function promptSignalAllowFrom(params: {
+export async function promptSignalAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId?: string;
 }): Promise<OpenClawConfig> {
-  return promptParsedAllowFromForScopedChannel({
+  return promptParsedAllowFromForAccount({
     cfg: params.cfg,
-    channel,
     accountId: params.accountId,
     defaultAccountId: resolveDefaultSignalAccountId(params.cfg),
     prompter: params.prompter,
@@ -111,18 +112,85 @@ async function promptSignalAllowFrom(params: {
     parseEntries: parseSignalAllowFromEntries,
     getExistingAllowFrom: ({ cfg, accountId }) =>
       resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? [],
+    applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
+      setAccountAllowFromForChannel({
+        cfg,
+        channel,
+        accountId,
+        allowFrom,
+      }),
   });
 }
 
-export const signalSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
+export const signalDmPolicy: ChannelSetupDmPolicy = {
+  label: "Signal",
+  channel,
+  policyKey: "channels.signal.dmPolicy",
+  allowFromKey: "channels.signal.allowFrom",
+  getCurrent: (cfg: OpenClawConfig) => cfg.channels?.signal?.dmPolicy ?? "pairing",
+  setPolicy: (cfg: OpenClawConfig, policy) =>
+    setChannelDmPolicyWithAllowFrom({
       cfg,
-      channelKey: channel,
-      accountId,
-      name,
+      channel,
+      dmPolicy: policy,
     }),
+  promptAllowFrom: promptSignalAllowFrom,
+};
+
+function resolveSignalCliPath(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  credentialValues: Record<string, unknown>;
+}) {
+  return (
+    (typeof params.credentialValues.cliPath === "string"
+      ? params.credentialValues.cliPath
+      : undefined) ??
+    resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId }).config.cliPath ??
+    "signal-cli"
+  );
+}
+
+export function createSignalCliPathTextInput(
+  shouldPrompt: NonNullable<ChannelSetupWizardTextInput["shouldPrompt"]>,
+): ChannelSetupWizardTextInput {
+  return createCliPathTextInput({
+    inputKey: "cliPath",
+    message: "signal-cli path",
+    resolvePath: ({ cfg, accountId, credentialValues }) =>
+      resolveSignalCliPath({ cfg, accountId, credentialValues }),
+    shouldPrompt,
+    helpTitle: "Signal",
+    helpLines: [
+      "signal-cli not found. Install it, then rerun this step or set channels.signal.cliPath.",
+    ],
+  });
+}
+
+export const signalNumberTextInput: ChannelSetupWizardTextInput = {
+  inputKey: "signalNumber",
+  message: "Signal bot number (E.164)",
+  currentValue: ({ cfg, accountId }) =>
+    normalizeSignalAccountInput(resolveSignalAccount({ cfg, accountId }).config.account) ??
+    undefined,
+  keepPrompt: (value) => `Signal account set (${value}). Keep it?`,
+  validate: ({ value }) =>
+    normalizeSignalAccountInput(value) ? undefined : INVALID_SIGNAL_ACCOUNT_ERROR,
+  normalizeValue: ({ value }) => normalizeSignalAccountInput(value) ?? value,
+};
+
+export const signalCompletionNote = {
+  title: "Signal next steps",
+  lines: [
+    'Link device with: signal-cli link -n "OpenClaw"',
+    "Scan QR in Signal -> Linked Devices",
+    `Then run: ${formatCliCommand("openclaw gateway call channels.status --params '{\"probe\":true}'")}`,
+    `Docs: ${formatDocsLink("/signal", "signal")}`,
+  ],
+};
+
+export const signalSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
+  channelKey: channel,
   validateInput: ({ input }) => {
     if (
       !input.signalNumber &&
@@ -135,74 +203,13 @@ export const signalSetupAdapter: ChannelSetupAdapter = {
     }
     return null;
   },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          signal: {
-            ...next.channels?.signal,
-            enabled: true,
-            ...buildSignalSetupPatch(input),
-          },
-        },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        signal: {
-          ...next.channels?.signal,
-          enabled: true,
-          accounts: {
-            ...next.channels?.signal?.accounts,
-            [accountId]: {
-              ...next.channels?.signal?.accounts?.[accountId],
-              enabled: true,
-              ...buildSignalSetupPatch(input),
-            },
-          },
-        },
-      },
-    };
-  },
-};
+  buildPatch: (input) => buildSignalSetupPatch(input),
+});
 
-export function createSignalSetupWizardProxy(
-  loadWizard: () => Promise<{ signalSetupWizard: ChannelSetupWizard }>,
-) {
-  const signalDmPolicy: ChannelSetupDmPolicy = {
-    label: "Signal",
+export function createSignalSetupWizardProxy(loadWizard: () => Promise<ChannelSetupWizard>) {
+  return createDelegatedSetupWizardProxy({
     channel,
-    policyKey: "channels.signal.dmPolicy",
-    allowFromKey: "channels.signal.allowFrom",
-    getCurrent: (cfg: OpenClawConfig) => cfg.channels?.signal?.dmPolicy ?? "pairing",
-    setPolicy: (cfg: OpenClawConfig, policy) =>
-      setChannelDmPolicyWithAllowFrom({
-        cfg,
-        channel,
-        dmPolicy: policy,
-      }),
-    promptAllowFrom: promptSignalAllowFrom,
-  };
-
-  return {
-    channel,
+    loadWizard,
     status: {
       configuredLabel: "configured",
       unconfiguredLabel: "needs setup",
@@ -210,66 +217,20 @@ export function createSignalSetupWizardProxy(
       unconfiguredHint: "signal-cli missing",
       configuredScore: 1,
       unconfiguredScore: 0,
-      resolveConfigured: ({ cfg }) =>
-        listSignalAccountIds(cfg).some(
-          (accountId) => resolveSignalAccount({ cfg, accountId }).configured,
-        ),
-      resolveStatusLines: async (params) =>
-        (await loadWizard()).signalSetupWizard.status.resolveStatusLines?.(params) ?? [],
-      resolveSelectionHint: async (params) =>
-        await (await loadWizard()).signalSetupWizard.status.resolveSelectionHint?.(params),
-      resolveQuickstartScore: async (params) =>
-        await (await loadWizard()).signalSetupWizard.status.resolveQuickstartScore?.(params),
     },
-    prepare: async (params) => await (await loadWizard()).signalSetupWizard.prepare?.(params),
+    delegatePrepare: true,
     credentials: [],
     textInputs: [
-      {
-        inputKey: "cliPath",
-        message: "signal-cli path",
-        currentValue: ({ cfg, accountId, credentialValues }) =>
-          (typeof credentialValues.cliPath === "string" ? credentialValues.cliPath : undefined) ??
-          resolveSignalAccount({ cfg, accountId }).config.cliPath ??
-          "signal-cli",
-        initialValue: ({ cfg, accountId, credentialValues }) =>
-          (typeof credentialValues.cliPath === "string" ? credentialValues.cliPath : undefined) ??
-          resolveSignalAccount({ cfg, accountId }).config.cliPath ??
-          "signal-cli",
-        shouldPrompt: async (params) => {
-          const input = (await loadWizard()).signalSetupWizard.textInputs?.find(
-            (entry) => entry.inputKey === "cliPath",
-          );
-          return (await input?.shouldPrompt?.(params)) ?? false;
-        },
-        confirmCurrentValue: false,
-        applyCurrentValue: true,
-        helpTitle: "Signal",
-        helpLines: [
-          "signal-cli not found. Install it, then rerun this step or set channels.signal.cliPath.",
-        ],
-      },
-      {
-        inputKey: "signalNumber",
-        message: "Signal bot number (E.164)",
-        currentValue: ({ cfg, accountId }) =>
-          normalizeSignalAccountInput(resolveSignalAccount({ cfg, accountId }).config.account) ??
-          undefined,
-        keepPrompt: (value) => `Signal account set (${value}). Keep it?`,
-        validate: ({ value }) =>
-          normalizeSignalAccountInput(value) ? undefined : INVALID_SIGNAL_ACCOUNT_ERROR,
-        normalizeValue: ({ value }) => normalizeSignalAccountInput(value) ?? value,
-      },
+      createSignalCliPathTextInput(
+        createDelegatedTextInputShouldPrompt({
+          loadWizard,
+          inputKey: "cliPath",
+        }),
+      ),
+      signalNumberTextInput,
     ],
-    completionNote: {
-      title: "Signal next steps",
-      lines: [
-        'Link device with: signal-cli link -n "OpenClaw"',
-        "Scan QR in Signal -> Linked Devices",
-        `Then run: ${formatCliCommand("openclaw gateway call channels.status --params '{\"probe\":true}'")}`,
-        `Docs: ${formatDocsLink("/signal", "signal")}`,
-      ],
-    },
+    completionNote: signalCompletionNote,
     dmPolicy: signalDmPolicy,
     disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
-  } satisfies ChannelSetupWizard;
+  });
 }

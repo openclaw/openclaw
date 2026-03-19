@@ -40,11 +40,13 @@ const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 const runProviderPluginAuthMethod = vi.hoisted(() => vi.fn());
 vi.mock("./model-picker.runtime.js", () => ({
-  resolveProviderModelPickerEntries,
-  resolveProviderPluginChoice,
-  runProviderModelSelectedHook,
-  resolvePluginProviders,
-  runProviderPluginAuthMethod,
+  modelPickerRuntime: {
+    resolveProviderModelPickerEntries,
+    resolveProviderPluginChoice,
+    runProviderModelSelectedHook,
+    resolvePluginProviders,
+    runProviderPluginAuthMethod,
+  },
 }));
 
 const OPENROUTER_CATALOG = [

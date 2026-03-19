@@ -24,7 +24,7 @@ type DeliverWithParams = Omit<
   Partial<Pick<DeliverRepliesParams, "replyToMode" | "textLimit">>;
 type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 
-vi.mock("../../../whatsapp/src/media.js", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
 }));
 
@@ -207,6 +207,30 @@ describe("deliverReplies", () => {
         channelId: "telegram",
         accountId: "work",
         conversationId: "123",
+      }),
+    );
+  });
+
+  it("sets disable_notification when silent is true", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 5,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+      silent: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        disable_notification: true,
       }),
     );
   });
@@ -642,6 +666,36 @@ describe("deliverReplies", () => {
       "123",
       expect.stringContaining("Hello there"),
       expect.any(Object),
+    );
+  });
+
+  it("keeps disable_notification on voice fallback text when silent is true", async () => {
+    const runtime = createRuntime();
+    const sendVoice = vi.fn().mockRejectedValue(createVoiceMessagesForbiddenError());
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 5,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendVoice, sendMessage });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        { mediaUrl: "https://example.com/note.ogg", text: "Hello there", audioAsVoice: true },
+      ],
+      runtime,
+      bot,
+      silent: true,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Hello there"),
+      expect.objectContaining({
+        disable_notification: true,
+      }),
     );
   });
 

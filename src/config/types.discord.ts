@@ -1,4 +1,4 @@
-import type { DiscordPluralKitConfig } from "../plugin-sdk-internal/discord.js";
+import type { DiscordPluralKitConfig } from "openclaw/plugin-sdk/discord";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,

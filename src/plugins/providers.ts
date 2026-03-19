@@ -1,6 +1,10 @@
-import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { withBundledPluginAllowlistCompat } from "./bundled-compat.js";
+import {
+  withBundledPluginAllowlistCompat,
+  withBundledPluginEnablementCompat,
+} from "./bundled-compat.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
@@ -62,17 +66,29 @@ function resolveBundledProviderCompatPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  onlyPluginIds?: string[];
 }): string[] {
+  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
   return registry.plugins
-    .filter((plugin) => plugin.origin === "bundled" && plugin.providers.length > 0)
+    .filter(
+      (plugin) =>
+        plugin.origin === "bundled" &&
+        plugin.providers.length > 0 &&
+        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)),
+    )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
+
+export const __testing = {
+  resolveBundledProviderCompatPluginIds,
+  withBundledProviderVitestCompat,
+} as const;
 
 export function resolveOwningPluginIdsForProvider(params: {
   provider: string;
@@ -99,6 +115,33 @@ export function resolveOwningPluginIdsForProvider(params: {
   return pluginIds.length > 0 ? pluginIds : undefined;
 }
 
+export function resolveNonBundledProviderPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): string[] {
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  return registry.plugins
+    .filter(
+      (plugin) =>
+        plugin.origin !== "bundled" &&
+        plugin.providers.length > 0 &&
+        resolveEffectiveEnableState({
+          id: plugin.id,
+          origin: plugin.origin,
+          config: normalizedConfig,
+          rootConfig: params.config,
+        }).enabled,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -116,6 +159,7 @@ export function resolvePluginProviders(params: {
           config: params.config,
           workspaceDir: params.workspaceDir,
           env: params.env,
+          onlyPluginIds: params.onlyPluginIds,
         })
       : [];
   const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
@@ -124,13 +168,20 @@ export function resolvePluginProviders(params: {
         pluginIds: bundledProviderCompatPluginIds,
       })
     : params.config;
-  const config = params.bundledProviderVitestCompat
+  const maybeVitestCompat = params.bundledProviderVitestCompat
     ? withBundledProviderVitestCompat({
         config: maybeAllowlistCompat,
         pluginIds: bundledProviderCompatPluginIds,
         env: params.env,
       })
     : maybeAllowlistCompat;
+  const config =
+    params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
+      ? withBundledPluginEnablementCompat({
+          config: maybeVitestCompat,
+          pluginIds: bundledProviderCompatPluginIds,
+        })
+      : maybeVitestCompat;
   const registry = loadOpenClawPlugins({
     config,
     workspaceDir: params.workspaceDir,

@@ -46,11 +46,11 @@ function normalizePathList(value: unknown): string[] {
   return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }
 
-function normalizeBundlePathList(value: unknown): string[] {
+export function normalizeBundlePathList(value: unknown): string[] {
   return Array.from(new Set(normalizePathList(value)));
 }
 
-function mergeBundlePathLists(...groups: string[][]): string[] {
+export function mergeBundlePathLists(...groups: string[][]): string[] {
   const merged: string[] = [];
   const seen = new Set<string>();
   for (const group of groups) {
@@ -216,6 +216,8 @@ function resolveClaudeSkillDirs(raw: Record<string, unknown>, rootDir: string): 
   return mergeBundlePathLists(
     resolveClaudeSkillsRootDirs(raw, rootDir),
     resolveClaudeCommandRootDirs(raw, rootDir),
+    resolveClaudeAgentDirs(raw, rootDir),
+    resolveClaudeOutputStylePaths(raw, rootDir),
   );
 }
 
@@ -397,7 +399,7 @@ export function loadBundleManifest(params: {
       version,
       skills: resolveClaudeSkillDirs(raw, params.rootDir),
       settingsFiles: resolveClaudeSettingsFiles(raw, params.rootDir),
-      hooks: [],
+      hooks: resolveClaudeHookPaths(raw, params.rootDir),
       bundleFormat: "claude",
       capabilities: buildClaudeCapabilities(raw, params.rootDir),
     },
