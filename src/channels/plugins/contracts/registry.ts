@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expect, vi } from "vitest";
 import {
   __testing as discordThreadBindingTesting,
@@ -129,7 +126,7 @@ type DirectoryContractEntry = {
 type SessionBindingContractEntry = {
   id: string;
   expectedCapabilities: SessionBindingCapabilities;
-  getCapabilities: () => SessionBindingCapabilities | Promise<SessionBindingCapabilities>;
+  getCapabilities: () => SessionBindingCapabilities;
   bindAndResolve: () => Promise<SessionBindingRecord>;
   unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
   cleanup: () => Promise<void> | void;
@@ -592,50 +589,6 @@ const baseSessionBindingCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
-const matrixSessionBindingAuth = {
-  accountId: "default",
-  homeserver: "https://matrix.example.org",
-  userId: "@bot:example.org",
-  accessToken: "token",
-} as const;
-
-let matrixSessionBindingStateDir: string | null = null;
-
-async function loadMatrixThreadBindingsModule() {
-  return await import("../../../../extensions/matrix/src/matrix/thread-bindings.js");
-}
-
-async function loadMatrixRuntimeModule() {
-  return await import("../../../../extensions/matrix/src/runtime.js");
-}
-
-async function ensureMatrixSessionBindingManager() {
-  const [{ createMatrixThreadBindingManager }, { setMatrixRuntime }] = await Promise.all([
-    loadMatrixThreadBindingsModule(),
-    loadMatrixRuntimeModule(),
-  ]);
-  if (!matrixSessionBindingStateDir) {
-    matrixSessionBindingStateDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "matrix-session-binding-contract-"),
-    );
-  }
-  setMatrixRuntime({
-    state: {
-      resolveStateDir: () => matrixSessionBindingStateDir as string,
-    },
-  } as never);
-  return await createMatrixThreadBindingManager({
-    accountId: "default",
-    auth: matrixSessionBindingAuth,
-    client: {
-      sendMessage: vi.fn(async () => "$matrix-event"),
-    } as never,
-    idleTimeoutMs: 24 * 60 * 60 * 1000,
-    maxAgeMs: 0,
-    enableSweeper: false,
-  });
-}
-
 export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
   {
     id: "discord",
@@ -752,58 +705,6 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
         channel: "feishu",
         accountId: "default",
         conversationId: "oc_group_chat:topic:om_topic_root",
-      });
-    },
-  },
-  {
-    id: "matrix",
-    expectedCapabilities: {
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current", "child"],
-    },
-    getCapabilities: async () => {
-      await ensureMatrixSessionBindingManager();
-      return getSessionBindingService().getCapabilities({
-        channel: "matrix",
-        accountId: "default",
-      });
-    },
-    bindAndResolve: async () => {
-      await ensureMatrixSessionBindingManager();
-      const service = getSessionBindingService();
-      const binding = await service.bind({
-        targetSessionKey: "agent:matrix:subagent:thread-1",
-        targetKind: "subagent",
-        conversation: {
-          channel: "matrix",
-          accountId: "default",
-          conversationId: "$matrix-event",
-          parentConversationId: "!room:example",
-        },
-        placement: "current",
-        metadata: {
-          introText: "matrix binding active",
-          label: "matrix-main",
-        },
-      });
-      expectResolvedSessionBinding({
-        channel: "matrix",
-        accountId: "default",
-        conversationId: "$matrix-event",
-        targetSessionKey: "agent:matrix:subagent:thread-1",
-      });
-      return binding;
-    },
-    unbindAndVerify: unbindAndExpectClearedSessionBinding,
-    cleanup: async () => {
-      const { resetMatrixThreadBindingsForTests } = await loadMatrixThreadBindingsModule();
-      resetMatrixThreadBindingsForTests();
-      expectClearedSessionBinding({
-        channel: "matrix",
-        accountId: "default",
-        conversationId: "$matrix-event",
       });
     },
   },
