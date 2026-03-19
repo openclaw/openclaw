@@ -68,7 +68,7 @@ const useVmForks =
     !isWindows &&
     supportsVmForks &&
     !lowMemLocalHost &&
-    testProfile !== "low");
+    (isCI || testProfile !== "low"));
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
 const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
