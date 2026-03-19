@@ -246,7 +246,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 
 # Install Blink CLI — required for blink-* skill scripts (image, video, speech, transcribe, connectors)
 # Version is pinned; update when publishing a new CLI version to npm.
-RUN npm install -g @blinkdotnew/cli@0.2.7
+RUN npm install -g @blinkdotnew/cli@0.3.0
 
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
