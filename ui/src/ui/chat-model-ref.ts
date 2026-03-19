@@ -94,10 +94,19 @@ export function formatChatModelDisplay(value: string): string {
   return `${trimmed.slice(separator + 1)} · ${trimmed.slice(0, separator)}`;
 }
 
-export function buildChatModelOption(entry: ModelCatalogEntry): { value: string; label: string } {
+function resolveCatalogChatModelLabel(
+  entry: Pick<ModelCatalogEntry, "id" | "name" | "provider">,
+): string {
   const provider = entry.provider?.trim();
+  const id = entry.id.trim();
+  const name = entry.name.trim();
+  const displayName = id.includes("/") && name ? name : id;
+  return provider ? `${displayName} · ${provider}` : displayName;
+}
+
+export function buildChatModelOption(entry: ModelCatalogEntry): { value: string; label: string } {
   return {
     value: resolveCatalogChatModelValue(entry),
-    label: provider ? `${entry.id} · ${provider}` : entry.id,
+    label: resolveCatalogChatModelLabel(entry),
   };
 }

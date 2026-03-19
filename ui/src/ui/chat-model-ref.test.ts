@@ -31,7 +31,7 @@ describe("chat-model-ref helpers", () => {
       }),
     ).toEqual({
       value: "custom-hajimi-zabc-net/gpt-5.2",
-      label: "custom-hajimi-zabc-net/gpt-5.2 · moonshot",
+      label: "GPT-5.2 · moonshot",
     });
   });
 
