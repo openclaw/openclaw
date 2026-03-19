@@ -5,6 +5,11 @@ import path from "node:path";
 import { channelTestPrefixes } from "../vitest.channel-paths.mjs";
 import { isUnitConfigTestFile } from "../vitest.unit-paths.mjs";
 import {
+  appendCapturedOutput,
+  hasFatalTestRunOutput,
+  resolveTestRunExitCode,
+} from "./test-parallel-utils.mjs";
+import {
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
   packFilesByDuration,
@@ -55,11 +60,13 @@ const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === 
 const rawTestProfile = process.env.OPENCLAW_TEST_PROFILE?.trim().toLowerCase();
 const testProfile =
   rawTestProfile === "low" ||
+  rawTestProfile === "macmini" ||
   rawTestProfile === "max" ||
   rawTestProfile === "normal" ||
   rawTestProfile === "serial"
     ? rawTestProfile
     : "normal";
+const isMacMiniProfile = testProfile === "macmini";
 // Even on low-memory hosts, keep the isolated lane split so files like
 // git-commit.test.ts still get the worker/process isolation they require.
 const shouldSplitUnitRuns = testProfile !== "serial";
@@ -162,6 +169,17 @@ const parsePassthroughArgs = (args) => {
 };
 const { fileFilters: passthroughFileFilters, optionArgs: passthroughOptionArgs } =
   parsePassthroughArgs(passthroughArgs);
+const passthroughMetadataFlags = new Set(["-h", "--help", "--listTags", "--clearCache"]);
+const passthroughMetadataOnly =
+  passthroughArgs.length > 0 &&
+  passthroughFileFilters.length === 0 &&
+  passthroughOptionArgs.every((arg) => {
+    if (!arg.startsWith("-")) {
+      return false;
+    }
+    const [flag] = arg.split("=", 1);
+    return passthroughMetadataFlags.has(flag);
+  });
 const countExplicitEntryFilters = (entryArgs) => {
   const { fileFilters } = parsePassthroughArgs(entryArgs.slice(2));
   return fileFilters.length > 0 ? fileFilters.length : null;
@@ -242,9 +260,25 @@ const allKnownUnitFiles = allKnownTestFiles.filter((file) => {
   return isUnitConfigTestFile(file);
 });
 const defaultHeavyUnitFileLimit =
-  testProfile === "serial" ? 0 : testProfile === "low" ? 20 : highMemLocalHost ? 80 : 60;
+  testProfile === "serial"
+    ? 0
+    : isMacMiniProfile
+      ? 90
+      : testProfile === "low"
+        ? 20
+        : highMemLocalHost
+          ? 80
+          : 60;
 const defaultHeavyUnitLaneCount =
-  testProfile === "serial" ? 0 : testProfile === "low" ? 2 : highMemLocalHost ? 5 : 4;
+  testProfile === "serial"
+    ? 0
+    : isMacMiniProfile
+      ? 6
+      : testProfile === "low"
+        ? 2
+        : highMemLocalHost
+          ? 5
+          : 4;
 const heavyUnitFileLimit = parseEnvNumber(
   "OPENCLAW_TEST_HEAVY_UNIT_FILE_LIMIT",
   defaultHeavyUnitFileLimit,
@@ -538,12 +572,16 @@ const targetedEntries = (() => {
 // Node 25 local runs still show cross-process worker shutdown contention even
 // after moving the known heavy files into singleton lanes.
 const topLevelParallelEnabled =
-  testProfile !== "low" && testProfile !== "serial" && !(!isCI && nodeMajor >= 25);
+  testProfile !== "low" &&
+  testProfile !== "serial" &&
+  !(!isCI && nodeMajor >= 25) &&
+  !isMacMiniProfile;
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
 const parallelGatewayEnabled =
-  process.env.OPENCLAW_TEST_PARALLEL_GATEWAY === "1" || (!isCI && highMemLocalHost);
+  !isMacMiniProfile &&
+  (process.env.OPENCLAW_TEST_PARALLEL_GATEWAY === "1" || (!isCI && highMemLocalHost));
 // Keep gateway serial by default except when explicitly requested or on high-memory local hosts.
 const keepGatewaySerial =
   isWindowsCi ||
@@ -570,45 +608,52 @@ const defaultWorkerBudget =
         extensions: 4,
         gateway: 1,
       }
-    : testProfile === "serial"
+    : isMacMiniProfile
       ? {
-          unit: 1,
+          unit: 3,
           unitIsolated: 1,
           extensions: 1,
           gateway: 1,
         }
-      : testProfile === "max"
+      : testProfile === "serial"
         ? {
-            unit: localWorkers,
-            unitIsolated: Math.min(4, localWorkers),
-            extensions: Math.max(1, Math.min(6, Math.floor(localWorkers / 2))),
-            gateway: Math.max(1, Math.min(2, Math.floor(localWorkers / 4))),
+            unit: 1,
+            unitIsolated: 1,
+            extensions: 1,
+            gateway: 1,
           }
-        : highMemLocalHost
+        : testProfile === "max"
           ? {
-              // After peeling measured hotspots into dedicated lanes, the shared
-              // unit-fast lane shuts down more reliably with a slightly smaller
-              // worker fan-out than the old "max it out" local default.
-              unit: Math.max(4, Math.min(10, Math.floor((localWorkers * 5) / 8))),
-              unitIsolated: Math.max(1, Math.min(2, Math.floor(localWorkers / 6) || 1)),
-              extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
-              gateway: Math.max(2, Math.min(6, Math.floor(localWorkers / 2))),
+              unit: localWorkers,
+              unitIsolated: Math.min(4, localWorkers),
+              extensions: Math.max(1, Math.min(6, Math.floor(localWorkers / 2))),
+              gateway: Math.max(1, Math.min(2, Math.floor(localWorkers / 4))),
             }
-          : lowMemLocalHost
+          : highMemLocalHost
             ? {
-                // Sub-64 GiB local hosts are prone to OOM with large vmFork runs.
-                unit: 2,
-                unitIsolated: 1,
-                extensions: 4,
-                gateway: 1,
-              }
-            : {
-                // 64-95 GiB local hosts: conservative split with some parallel headroom.
-                unit: Math.max(2, Math.min(8, Math.floor(localWorkers / 2))),
-                unitIsolated: 1,
+                // After peeling measured hotspots into dedicated lanes, the shared
+                // unit-fast lane shuts down more reliably with a slightly smaller
+                // worker fan-out than the old "max it out" local default.
+                unit: Math.max(4, Math.min(10, Math.floor((localWorkers * 5) / 8))),
+                unitIsolated: Math.max(1, Math.min(2, Math.floor(localWorkers / 6) || 1)),
                 extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
-                gateway: 1,
-              };
+                gateway: Math.max(2, Math.min(6, Math.floor(localWorkers / 2))),
+              }
+            : lowMemLocalHost
+              ? {
+                  // Sub-64 GiB local hosts are prone to OOM with large vmFork runs.
+                  unit: 2,
+                  unitIsolated: 1,
+                  extensions: 4,
+                  gateway: 1,
+                }
+              : {
+                  // 64-95 GiB local hosts: conservative split with some parallel headroom.
+                  unit: Math.max(2, Math.min(8, Math.floor(localWorkers / 2))),
+                  unitIsolated: 1,
+                  extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
+                  gateway: 1,
+                };
 
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.
 // In CI on linux/windows, prefer Vitest defaults to avoid cross-test interference from lower worker counts.
@@ -700,10 +745,13 @@ const runOnce = (entry, extraArgs = []) =>
     const resolvedNodeOptions = heapFlag
       ? `${nextNodeOptions} ${heapFlag}`.trim()
       : nextNodeOptions;
+    let output = "";
+    let fatalSeen = false;
+    let childError = null;
     let child;
     try {
       child = spawn(pnpm, args, {
-        stdio: "inherit",
+        stdio: ["inherit", "pipe", "pipe"],
         env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: resolvedNodeOptions },
         shell: isWindows,
       });
@@ -713,17 +761,29 @@ const runOnce = (entry, extraArgs = []) =>
       return;
     }
     children.add(child);
+    child.stdout?.on("data", (chunk) => {
+      const text = chunk.toString();
+      fatalSeen ||= hasFatalTestRunOutput(`${output}${text}`);
+      output = appendCapturedOutput(output, text);
+      process.stdout.write(chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      const text = chunk.toString();
+      fatalSeen ||= hasFatalTestRunOutput(`${output}${text}`);
+      output = appendCapturedOutput(output, text);
+      process.stderr.write(chunk);
+    });
     child.on("error", (err) => {
+      childError = err;
       console.error(`[test-parallel] child error: ${String(err)}`);
     });
-    child.on("exit", (code, signal) => {
+    child.on("close", (code, signal) => {
       children.delete(child);
+      const resolvedCode = resolveTestRunExitCode({ code, signal, output, fatalSeen, childError });
       console.log(
-        `[test-parallel] done ${entry.name} code=${String(code ?? (signal ? 1 : 0))} elapsed=${formatElapsedMs(
-          Date.now() - startedAt,
-        )}`,
+        `[test-parallel] done ${entry.name} code=${String(resolvedCode)} elapsed=${formatElapsedMs(Date.now() - startedAt)}`,
       );
-      resolve(code ?? (signal ? 1 : 0));
+      resolve(resolvedCode);
     });
   });
 
@@ -766,21 +826,52 @@ const run = async (entry, extraArgs = []) => {
   return 0;
 };
 
+const runEntriesWithLimit = async (entries, extraArgs = [], concurrency = 1) => {
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  const normalizedConcurrency = Math.max(1, Math.floor(concurrency));
+  if (normalizedConcurrency <= 1) {
+    for (const entry of entries) {
+      // eslint-disable-next-line no-await-in-loop
+      const code = await run(entry, extraArgs);
+      if (code !== 0) {
+        return code;
+      }
+    }
+
+    return undefined;
+  }
+
+  let nextIndex = 0;
+  let firstFailure;
+  const worker = async () => {
+    while (firstFailure === undefined) {
+      const entryIndex = nextIndex;
+      nextIndex += 1;
+      if (entryIndex >= entries.length) {
+        return;
+      }
+      const code = await run(entries[entryIndex], extraArgs);
+      if (code !== 0 && firstFailure === undefined) {
+        firstFailure = code;
+      }
+    }
+  };
+
+  const workerCount = Math.min(normalizedConcurrency, entries.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return firstFailure;
+};
+
 const runEntries = async (entries, extraArgs = []) => {
   if (topLevelParallelEnabled) {
     const codes = await Promise.all(entries.map((entry) => run(entry, extraArgs)));
     return codes.find((code) => code !== 0);
   }
 
-  for (const entry of entries) {
-    // eslint-disable-next-line no-await-in-loop
-    const code = await run(entry, extraArgs);
-    if (code !== 0) {
-      return code;
-    }
-  }
-
-  return undefined;
+  return runEntriesWithLimit(entries, extraArgs);
 };
 
 const shutdown = (signal) => {
@@ -798,6 +889,17 @@ if (process.env.OPENCLAW_TEST_LIST_LANES === "1") {
     console.log(formatEntrySummary(entry));
   }
   process.exit(0);
+}
+
+if (passthroughMetadataOnly) {
+  const exitCode = await runOnce(
+    {
+      name: "vitest-meta",
+      args: ["vitest", "run"],
+    },
+    passthroughOptionArgs,
+  );
+  process.exit(exitCode);
 }
 
 if (targetedEntries.length > 0) {
@@ -834,9 +936,28 @@ if (passthroughRequiresSingleRun && passthroughOptionArgs.length > 0) {
   process.exit(2);
 }
 
-const failedParallel = await runEntries(parallelRuns, passthroughOptionArgs);
-if (failedParallel !== undefined) {
-  process.exit(failedParallel);
+if (isMacMiniProfile && targetedEntries.length === 0) {
+  const unitFastEntry = parallelRuns.find((entry) => entry.name === "unit-fast");
+  if (unitFastEntry) {
+    const unitFastCode = await run(unitFastEntry, passthroughOptionArgs);
+    if (unitFastCode !== 0) {
+      process.exit(unitFastCode);
+    }
+  }
+  const deferredEntries = parallelRuns.filter((entry) => entry.name !== "unit-fast");
+  const failedMacMiniParallel = await runEntriesWithLimit(
+    deferredEntries,
+    passthroughOptionArgs,
+    3,
+  );
+  if (failedMacMiniParallel !== undefined) {
+    process.exit(failedMacMiniParallel);
+  }
+} else {
+  const failedParallel = await runEntries(parallelRuns, passthroughOptionArgs);
+  if (failedParallel !== undefined) {
+    process.exit(failedParallel);
+  }
 }
 
 for (const entry of serialRuns) {
