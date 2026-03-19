@@ -242,6 +242,31 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(monitorTelegramProvider).not.toHaveBeenCalled();
   });
 
+  it("skips startup probe before polling begins", async () => {
+    const { monitorTelegramProvider, probeTelegram } = installGatewayRuntime({
+      probeOk: true,
+      botUsername: "opsbot",
+    });
+    monitorTelegramProviderMock.mockResolvedValue(undefined);
+
+    await telegramPlugin.gateway!.startAccount!(
+      createStartAccountCtx({
+        cfg: createCfg(),
+        accountId: "ops",
+        runtime: createRuntimeEnv(),
+      }),
+    );
+
+    expect(probeTelegramMock).not.toHaveBeenCalled();
+    expect(monitorTelegramProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        useWebhook: false,
+      }),
+    );
+    expect(probeTelegram).not.toHaveBeenCalled();
+    expect(monitorTelegramProvider).toHaveBeenCalled();
+  });
+
   it("passes webhookPort through to monitor startup options", async () => {
     const { monitorTelegramProvider, probeTelegram } = installGatewayRuntime({
       probeOk: true,

@@ -43,7 +43,7 @@ export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unk
     runner: {
       fetch: {
         // Match grammY defaults
-        timeout: 30,
+        timeout: 10,
         // Request reactions without dropping default update types.
         allowed_updates: resolveTelegramAllowedUpdates(),
       },

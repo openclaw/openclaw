@@ -693,20 +693,23 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         throw new Error(reason);
       }
       const token = (account.token ?? "").trim();
+      const useWebhook = Boolean(account.config.webhookUrl);
       let telegramBotLabel = "";
-      try {
-        const probe = await probeTelegram(token, 2500, {
-          accountId: account.accountId,
-          proxyUrl: account.config.proxy,
-          network: account.config.network,
-        });
-        const username = probe.ok ? probe.bot?.username?.trim() : null;
-        if (username) {
-          telegramBotLabel = ` (@${username})`;
-        }
-      } catch (err) {
-        if (getTelegramRuntime().logging.shouldLogVerbose()) {
-          ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+      if (useWebhook) {
+        try {
+          const probe = await probeTelegram(token, 2500, {
+            accountId: account.accountId,
+            proxyUrl: account.config.proxy,
+            network: account.config.network,
+          });
+          const username = probe.ok ? probe.bot?.username?.trim() : null;
+          if (username) {
+            telegramBotLabel = ` (@${username})`;
+          }
+        } catch (err) {
+          if (getTelegramRuntime().logging.shouldLogVerbose()) {
+            ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+          }
         }
       }
       ctx.log?.info(`[${account.accountId}] starting provider${telegramBotLabel}`);
@@ -716,7 +719,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         config: ctx.cfg,
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
-        useWebhook: Boolean(account.config.webhookUrl),
+        useWebhook,
         webhookUrl: account.config.webhookUrl,
         webhookSecret: account.config.webhookSecret,
         webhookPath: account.config.webhookPath,

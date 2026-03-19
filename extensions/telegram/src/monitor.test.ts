@@ -408,6 +408,9 @@ describe("monitorTelegramProvider (grammY)", () => {
           silent: true,
           maxRetryTime: 60 * 60 * 1000,
           retryInterval: "exponential",
+          fetch: expect.objectContaining({
+            timeout: 10,
+          }),
         }),
       }),
     );
