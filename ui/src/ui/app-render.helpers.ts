@@ -659,7 +659,10 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
       model: nextModel || null,
     });
     // Update the local cache with the server's authoritative resolved value.
-    if (patched?.resolved) {
+    // Skip when clearing to default (nextModel === "") — the server always
+    // returns a concrete resolved model even for null patches, which would
+    // re-select a specific model and prevent "Default" from staying selected.
+    if (nextModel && patched?.resolved) {
       const resolvedValue = resolveServerChatModelValue(
         patched.resolved.model,
         patched.resolved.modelProvider,
