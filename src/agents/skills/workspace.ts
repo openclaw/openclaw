@@ -370,9 +370,10 @@ function loadSkillEntries(
       const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
       const { skills, diagnostics } = unwrapLoadedSkills(loaded);
       for (const diag of diagnostics) {
-        skillsLogger.warn("Skill parse error: skill was dropped from discovery.", {
+        skillsLogger.warn(`Skill parse ${diag.type}: ${diag.message} (${diag.path})`, {
           path: diag.path,
           message: diag.message,
+          type: diag.type,
           source: params.source,
         });
       }
@@ -452,9 +453,10 @@ function loadSkillEntries(
       const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
       const { skills, diagnostics } = unwrapLoadedSkills(loaded);
       for (const diag of diagnostics) {
-        skillsLogger.warn("Skill parse error: skill was dropped from discovery.", {
+        skillsLogger.warn(`Skill parse ${diag.type}: ${diag.message} (${diag.path})`, {
           path: diag.path,
           message: diag.message,
+          type: diag.type,
           source: params.source,
         });
       }
