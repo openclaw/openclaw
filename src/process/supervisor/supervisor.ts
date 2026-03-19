@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { createRunRegistry } from "./registry.js";
+import { killProcessTree } from "../kill-tree.js";
 import type {
   ManagedRun,
   ProcessSupervisor,
@@ -206,6 +207,13 @@ export function createProcessSupervisor(): ProcessSupervisor {
         }
         settled = true;
         clearTimers();
+        // For forced exits (cancel/timeout): kill the full PTY process tree synchronously
+        // while the PID is confirmed live. cancelAdapter is called before wait() can resolve
+        // on forced exits, so the PID is definitely alive here — no PID-recycle hazard.
+        // Natural exits skip this block since the process is already dead.
+        if (forcedReason != null && adapter.pid != null) {
+          killProcessTree(adapter.pid);
+        }
         adapter.dispose();
         active.delete(runId);
 
