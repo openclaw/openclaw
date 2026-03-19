@@ -50,9 +50,15 @@ export async function probeGateway(opts: {
       // We used to disable identity for all local probes without token/password,
       // but that breaks authenticated status checks when hardening is enabled.
       //
-      // Now we only disable it for literal anonymous loopback probes (opts.auth
-      // undefined) to maintain legacy "no-setup" local status behavior.
-      return isLoopbackHost(hostname) && opts.auth === undefined;
+      // Disable device identity for loopback probes that are effectively
+      // unauthenticated: opts.auth undefined OR an auth object with no
+      // credentials. Callers like status/probe pass { token, password } from
+      // resolveGatewayProbeAuth even when both are missing; treat that as
+      // anonymous to preserve legacy "no-setup" local status behavior.
+      const hasCredentials =
+        (typeof opts.auth?.token === "string" && opts.auth.token.trim().length > 0) ||
+        (typeof opts.auth?.password === "string" && opts.auth.password.trim().length > 0);
+      return isLoopbackHost(hostname) && !hasCredentials;
     } catch {
       return false;
     }

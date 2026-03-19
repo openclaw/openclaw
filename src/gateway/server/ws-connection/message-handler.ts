@@ -548,7 +548,6 @@ export function attachGatewayWsMessageHandler(params: {
           if (!device && (!isControlUi || decision.kind !== "allow" || trustedProxyAuthOk)) {
             clearUnboundScopes(grantReadForTokenAuth);
           }
-          }
           if (decision.kind === "allow") {
             return true;
           }
