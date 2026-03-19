@@ -28,6 +28,8 @@ export function resolvePluginHookDirs(params: {
   const registry = loadPluginManifestRegistry({
     workspaceDir,
     config: params.config,
+    // Hook discovery should reflect freshly written bundle manifests immediately.
+    cache: false,
   });
   if (registry.plugins.length === 0) {
     return [];
