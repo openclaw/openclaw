@@ -126,7 +126,7 @@ function createLifecycleAccount(): ResolvedFeishuAccount {
       requireMention: false,
       resolveSenderNames: false,
     },
-  } as ResolvedFeishuAccount;
+  } as unknown as ResolvedFeishuAccount;
 }
 
 function createRuntimeEnv(): RuntimeEnv {
@@ -206,7 +206,7 @@ describe("Feishu bot-menu lifecycle", () => {
       markDispatchIdle: vi.fn(),
     });
 
-    resolveBoundConversationMock.mockReturnValue({
+    resolveBoundConversationMock.mockImplementation(() => ({
       bindingId: "binding-menu",
       targetSessionKey: "agent:bound-agent:feishu:direct:ou_user1",
       targetKind: "session",
@@ -218,7 +218,7 @@ describe("Feishu bot-menu lifecycle", () => {
       status: "active",
       boundAt: 1_710_000_000_000,
       metadata: {},
-    });
+    }));
 
     resolveAgentRouteMock.mockReturnValue({
       agentId: "main",

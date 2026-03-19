@@ -1,4 +1,3 @@
-import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -11,9 +10,7 @@ const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 const createFeishuReplyDispatcherMock = vi.hoisted(() => vi.fn());
-const resolveBoundConversationMock = vi.hoisted(() =>
-  vi.fn<() => SessionBindingRecord | null>(() => null),
-);
+const resolveBoundConversationMock = vi.hoisted(() => vi.fn(() => null));
 const touchBindingMock = vi.hoisted(() => vi.fn());
 const resolveAgentRouteMock = vi.hoisted(() => vi.fn());
 const dispatchReplyFromConfigMock = vi.hoisted(() => vi.fn());
@@ -22,11 +19,11 @@ const finalizeInboundContextMock = vi.hoisted(() => vi.fn((ctx) => ctx));
 const getMessageFeishuMock = vi.hoisted(() => vi.fn(async () => null));
 const listFeishuThreadMessagesMock = vi.hoisted(() => vi.fn(async () => []));
 const sendMessageFeishuMock = vi.hoisted(() =>
-  vi.fn(async () => ({ messageId: "om_sent", chatId: "oc_group_1" })),
+  vi.fn(async () => ({ messageId: "om_sent", chatId: "oc_broadcast_group" })),
 );
 
-let handlers: Record<string, (data: unknown) => Promise<void>> = {};
-let lastRuntime: RuntimeEnv | null = null;
+let handlersByAccount = new Map<string, Record<string, (data: unknown) => Promise<void>>>();
+let runtimesByAccount = new Map<string, RuntimeEnv>();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 vi.mock("./client.js", async () => {
@@ -76,6 +73,50 @@ vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
 
 function createLifecycleConfig(): ClawdbotConfig {
   return {
+    broadcast: {
+      oc_broadcast_group: ["susan", "main"],
+    },
+    agents: {
+      list: [{ id: "main" }, { id: "susan" }],
+    },
+    channels: {
+      feishu: {
+        enabled: true,
+        groupPolicy: "open",
+        requireMention: false,
+        resolveSenderNames: false,
+        accounts: {
+          "account-A": {
+            enabled: true,
+            appId: "cli_a",
+            appSecret: "secret_a", // pragma: allowlist secret
+            connectionMode: "websocket",
+            groupPolicy: "open",
+            requireMention: false,
+            resolveSenderNames: false,
+            groups: {
+              oc_broadcast_group: {
+                requireMention: false,
+              },
+            },
+          },
+          "account-B": {
+            enabled: true,
+            appId: "cli_b",
+            appSecret: "secret_b", // pragma: allowlist secret
+            connectionMode: "websocket",
+            groupPolicy: "open",
+            requireMention: false,
+            resolveSenderNames: false,
+            groups: {
+              oc_broadcast_group: {
+                requireMention: false,
+              },
+            },
+          },
+        },
+      },
+    },
     messages: {
       inbound: {
         debounceMs: 0,
@@ -84,57 +125,27 @@ function createLifecycleConfig(): ClawdbotConfig {
         },
       },
     },
-    channels: {
-      feishu: {
-        enabled: true,
-        accounts: {
-          "acct-lifecycle": {
-            enabled: true,
-            appId: "cli_test",
-            appSecret: "secret_test", // pragma: allowlist secret
-            connectionMode: "websocket",
-            groupPolicy: "open",
-            requireMention: false,
-            resolveSenderNames: false,
-            groups: {
-              oc_group_1: {
-                requireMention: false,
-                groupSessionScope: "group_topic_sender",
-                replyInThread: "enabled",
-              },
-            },
-          },
-        },
-      },
-    },
   } as ClawdbotConfig;
 }
 
-function createLifecycleAccount(): ResolvedFeishuAccount {
+function createLifecycleAccount(accountId: "account-A" | "account-B"): ResolvedFeishuAccount {
   return {
-    accountId: "acct-lifecycle",
+    accountId,
     selectionSource: "explicit",
     enabled: true,
     configured: true,
-    appId: "cli_test",
-    appSecret: "secret_test", // pragma: allowlist secret
+    appId: accountId === "account-A" ? "cli_a" : "cli_b",
+    appSecret: accountId === "account-A" ? "secret_a" : "secret_b", // pragma: allowlist secret
     domain: "feishu",
     config: {
       enabled: true,
-      domain: "feishu",
       connectionMode: "websocket",
-      webhookPath: "/feishu/events",
-      dmPolicy: "pairing",
       groupPolicy: "open",
-      reactionNotifications: "own",
-      typingIndicator: true,
       requireMention: false,
       resolveSenderNames: false,
       groups: {
-        oc_group_1: {
+        oc_broadcast_group: {
           requireMention: false,
-          groupSessionScope: "group_topic_sender",
-          replyInThread: "enabled",
         },
       },
     },
@@ -149,7 +160,7 @@ function createRuntimeEnv(): RuntimeEnv {
   } as RuntimeEnv;
 }
 
-function createTextEvent(messageId: string) {
+function createBroadcastEvent(messageId: string) {
   return {
     sender: {
       sender_id: { open_id: "ou_sender_1" },
@@ -157,12 +168,10 @@ function createTextEvent(messageId: string) {
     },
     message: {
       message_id: messageId,
-      root_id: "om_root_topic_1",
-      thread_id: "omt_topic_1",
-      chat_id: "oc_group_1",
+      chat_id: "oc_broadcast_group",
       chat_type: "group" as const,
       message_type: "text",
-      content: JSON.stringify({ text: "hello from topic" }),
+      content: JSON.stringify({ text: "hello broadcast" }),
       create_time: "1710000000000",
     },
   };
@@ -175,18 +184,19 @@ async function settleAsyncWork(): Promise<void> {
   }
 }
 
-async function setupLifecycleMonitor() {
+async function setupLifecycleMonitor(accountId: "account-A" | "account-B") {
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
-    handlers = registered;
+    handlersByAccount.set(accountId, registered);
   });
-  createEventDispatcherMock.mockReturnValue({ register });
+  createEventDispatcherMock.mockReturnValueOnce({ register });
 
-  lastRuntime = createRuntimeEnv();
+  const runtime = createRuntimeEnv();
+  runtimesByAccount.set(accountId, runtime);
 
   await monitorSingleAccount({
     cfg: createLifecycleConfig(),
-    account: createLifecycleAccount(),
-    runtime: lastRuntime,
+    account: createLifecycleAccount(accountId),
+    runtime,
     botOpenIdSource: {
       kind: "prefetched",
       botOpenId: "ou_bot_1",
@@ -194,21 +204,21 @@ async function setupLifecycleMonitor() {
     },
   });
 
-  const onMessage = handlers["im.message.receive_v1"];
+  const onMessage = handlersByAccount.get(accountId)?.["im.message.receive_v1"];
   if (!onMessage) {
-    throw new Error("missing im.message.receive_v1 handler");
+    throw new Error(`missing im.message.receive_v1 handler for ${accountId}`);
   }
   return onMessage;
 }
 
-describe("Feishu reply-once lifecycle", () => {
+describe("Feishu broadcast reply-once lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    handlers = {};
-    lastRuntime = null;
-    process.env.OPENCLAW_STATE_DIR = `/tmp/openclaw-feishu-lifecycle-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    handlersByAccount = new Map();
+    runtimesByAccount = new Map();
+    process.env.OPENCLAW_STATE_DIR = `/tmp/openclaw-feishu-broadcast-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-    const dispatcher = {
+    const activeDispatcher = {
       sendToolResult: vi.fn(() => false),
       sendBlockReply: vi.fn(() => false),
       sendFinalReply: vi.fn(async () => true),
@@ -218,40 +228,35 @@ describe("Feishu reply-once lifecycle", () => {
     };
 
     createFeishuReplyDispatcherMock.mockReturnValue({
-      dispatcher,
+      dispatcher: activeDispatcher,
       replyOptions: {},
       markDispatchIdle: vi.fn(),
     });
 
-    resolveBoundConversationMock.mockReturnValue({
-      bindingId: "binding-1",
-      targetSessionKey: "agent:bound-agent:feishu:topic:om_root_topic_1:ou_sender_1",
-      targetKind: "session",
-      conversation: {
-        channel: "feishu",
-        accountId: "acct-lifecycle",
-        conversationId: "omt_topic_1",
-        parentConversationId: "om_root_topic_1",
-      },
-      status: "active",
-      boundAt: 1_710_000_000_000,
-      metadata: {},
-    });
-
+    resolveBoundConversationMock.mockReturnValue(null);
     resolveAgentRouteMock.mockReturnValue({
       agentId: "main",
       channel: "feishu",
-      accountId: "acct-lifecycle",
-      sessionKey: "agent:main:feishu:group:oc_group_1",
+      accountId: "account-A",
+      sessionKey: "agent:main:feishu:group:oc_broadcast_group",
       mainSessionKey: "agent:main:main",
       matchedBy: "default",
     });
 
-    dispatchReplyFromConfigMock.mockImplementation(async ({ dispatcher }) => {
-      await dispatcher.sendFinalReply({ text: "reply once" });
+    dispatchReplyFromConfigMock.mockImplementation(async ({ ctx, dispatcher }) => {
+      if (
+        typeof ctx?.SessionKey === "string" &&
+        ctx.SessionKey.includes("agent:main:") &&
+        typeof dispatcher?.sendFinalReply === "function"
+      ) {
+        await dispatcher.sendFinalReply({ text: "broadcast reply once" });
+      }
       return {
         queuedFinal: false,
-        counts: { final: 1 },
+        counts: {
+          final:
+            typeof ctx?.SessionKey === "string" && ctx.SessionKey.includes("agent:main:") ? 1 : 0,
+        },
       };
     });
 
@@ -299,7 +304,7 @@ describe("Feishu reply-once lifecycle", () => {
           },
           session: {
             readSessionUpdatedAt: vi.fn(),
-            resolveStorePath: vi.fn(() => "/tmp/feishu-lifecycle-sessions.json"),
+            resolveStorePath: vi.fn(() => "/tmp/feishu-broadcast-sessions.json"),
           },
           pairing: {
             readAllowFromStore: vi.fn().mockResolvedValue([]),
@@ -322,62 +327,66 @@ describe("Feishu reply-once lifecycle", () => {
     process.env.OPENCLAW_STATE_DIR = originalStateDir;
   });
 
-  it("routes a topic-bound inbound event and emits one reply across duplicate replay", async () => {
-    const onMessage = await setupLifecycleMonitor();
-    const event = createTextEvent("om_lifecycle_once");
+  it("uses one active reply path when the same broadcast event reaches two accounts", async () => {
+    const onMessageA = await setupLifecycleMonitor("account-A");
+    const onMessageB = await setupLifecycleMonitor("account-B");
+    const event = createBroadcastEvent("om_broadcast_once");
 
-    await onMessage(event);
+    await onMessageA(event);
     await settleAsyncWork();
-    await onMessage(event);
+    await onMessageB(event);
     await settleAsyncWork();
 
-    expect(lastRuntime?.error).not.toHaveBeenCalled();
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expect(runtimesByAccount.get("account-A")?.error).not.toHaveBeenCalled();
+    expect(runtimesByAccount.get("account-B")?.error).not.toHaveBeenCalled();
+
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(2);
     expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
     expect(createFeishuReplyDispatcherMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        accountId: "acct-lifecycle",
-        chatId: "oc_group_1",
-        replyToMessageId: "om_root_topic_1",
-        replyInThread: true,
-        rootId: "om_root_topic_1",
+        accountId: "account-a",
+        chatId: "oc_broadcast_group",
+        replyToMessageId: "om_broadcast_once",
       }),
     );
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        AccountId: "acct-lifecycle",
-        SessionKey: "agent:bound-agent:feishu:topic:om_root_topic_1:ou_sender_1",
-        MessageSid: "om_lifecycle_once",
-        MessageThreadId: "om_root_topic_1",
-      }),
-    );
-    expect(touchBindingMock).toHaveBeenCalledWith("binding-1");
 
-    const dispatcher = createFeishuReplyDispatcherMock.mock.results[0]?.value.dispatcher as {
+    const sessionKeys = finalizeInboundContextMock.mock.calls.map(
+      (call) => (call[0] as { SessionKey?: string }).SessionKey,
+    );
+    expect(sessionKeys).toContain("agent:main:feishu:group:oc_broadcast_group");
+    expect(sessionKeys).toContain("agent:susan:feishu:group:oc_broadcast_group");
+
+    const activeDispatcher = createFeishuReplyDispatcherMock.mock.results[0]?.value.dispatcher as {
       sendFinalReply: ReturnType<typeof vi.fn>;
     };
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(activeDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("does not duplicate delivery when the first attempt fails after sending the reply", async () => {
-    const onMessage = await setupLifecycleMonitor();
-    const event = createTextEvent("om_lifecycle_retry");
+  it("does not duplicate delivery after a post-send failure on the first account", async () => {
+    const onMessageA = await setupLifecycleMonitor("account-A");
+    const onMessageB = await setupLifecycleMonitor("account-B");
+    const event = createBroadcastEvent("om_broadcast_retry");
 
-    dispatchReplyFromConfigMock.mockImplementationOnce(async ({ dispatcher }) => {
-      await dispatcher.sendFinalReply({ text: "reply once" });
+    dispatchReplyFromConfigMock.mockImplementationOnce(async ({ ctx, dispatcher }) => {
+      if (typeof ctx?.SessionKey === "string" && ctx.SessionKey.includes("agent:susan:")) {
+        return { queuedFinal: false, counts: { final: 0 } };
+      }
+      await dispatcher.sendFinalReply({ text: "broadcast reply once" });
       throw new Error("post-send failure");
     });
 
-    await onMessage(event);
+    await onMessageA(event);
     await settleAsyncWork();
-    await onMessage(event);
+    await onMessageB(event);
     await settleAsyncWork();
 
-    expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
-    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-    const dispatcher = createFeishuReplyDispatcherMock.mock.results[0]?.value.dispatcher as {
+    expect(runtimesByAccount.get("account-A")?.error).not.toHaveBeenCalled();
+    expect(runtimesByAccount.get("account-B")?.error).not.toHaveBeenCalled();
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(2);
+
+    const activeDispatcher = createFeishuReplyDispatcherMock.mock.results[0]?.value.dispatcher as {
       sendFinalReply: ReturnType<typeof vi.fn>;
     };
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(activeDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 });
