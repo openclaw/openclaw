@@ -1,26 +1,32 @@
 ---
-summary: "VPS hosting hub for OpenClaw (Oracle/Fly/Hetzner/GCP/Azure/exe.dev)"
+summary: "Run OpenClaw on a Linux server or cloud VPS — provider picker, architecture, and tuning"
 read_when:
-  - You want to run the Gateway in the cloud
-  - You need a quick map of VPS/hosting guides
-title: "VPS Hosting"
+  - You want to run the Gateway on a Linux server or cloud VPS
+  - You need a quick map of hosting guides
+  - You want generic Linux server tuning for OpenClaw
+title: "Linux Server"
+sidebarTitle: "Linux Server"
 ---
 
-# VPS Hosting
+# Linux Server
 
-Run the OpenClaw Gateway around the clock on a cloud VPS. This page helps you pick a provider, explains how cloud deployments work, and covers generic Linux server tuning that applies to every provider.
+Run the OpenClaw Gateway on any Linux server or cloud VPS. This page helps you
+pick a provider, explains how cloud deployments work, and covers generic Linux
+tuning that applies everywhere.
 
 ## Pick a provider
 
 <CardGroup cols={2}>
   <Card title="Railway" href="/install/railway">One-click, browser setup</Card>
   <Card title="Northflank" href="/install/northflank">One-click, browser setup</Card>
-  <Card title="Oracle Cloud" href="/platforms/oracle">Always Free ARM tier ($0/month, capacity can be finicky)</Card>
+  <Card title="DigitalOcean" href="/install/digitalocean">Simple paid VPS</Card>
+  <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
   <Card title="Fly.io" href="/install/fly">Fly Machines</Card>
   <Card title="Hetzner" href="/install/hetzner">Docker on Hetzner VPS</Card>
   <Card title="GCP" href="/install/gcp">Compute Engine</Card>
   <Card title="Azure" href="/install/azure">Linux VM</Card>
   <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>
+  <Card title="Raspberry Pi" href="/install/raspberry-pi">ARM self-hosted</Card>
 </CardGroup>
 
 **AWS (EC2 / Lightsail / free tier)** also works well.
@@ -72,7 +78,7 @@ source ~/.bashrc
 - `NODE_COMPILE_CACHE` improves repeated command startup times.
 - `OPENCLAW_NO_RESPAWN=1` avoids extra startup overhead from a self-respawn path.
 - First command run warms the cache; subsequent runs are faster.
-- For Raspberry Pi specifics, see [Raspberry Pi](/platforms/raspberry-pi).
+- For Raspberry Pi specifics, see [Raspberry Pi](/install/raspberry-pi).
 
 ### systemd tuning checklist (optional)
 
