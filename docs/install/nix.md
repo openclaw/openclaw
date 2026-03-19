@@ -79,18 +79,6 @@ stay out of the immutable store.
 - Missing dependencies surface Nix-specific remediation messages
 - UI surfaces a read-only Nix mode banner when present
 
-## Packaging note (macOS)
-
-The macOS packaging flow expects a stable Info.plist template at:
-
-```
-apps/macos/Sources/OpenClaw/Resources/Info.plist
-```
-
-[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) copies this template into the app bundle and patches dynamic fields
-(bundle ID, version/build, Git SHA, Sparkle keys). This keeps the plist deterministic for SwiftPM
-packaging and Nix builds (which do not rely on a full Xcode toolchain).
-
 ## Related
 
 - [nix-openclaw](https://github.com/openclaw/nix-openclaw) — full setup guide
