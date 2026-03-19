@@ -173,7 +173,7 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
     && chmod 755 /app/openclaw.mjs
 
 RUN mkdir -p /home/node/.openclaw && \
-    echo '{"gateway":{"mode":"local","bind":"lan","port":18789,"auth":{"mode":"token","token":"${OPENCLAW_GATEWAY_TOKEN}"}}}' > /home/node/.openclaw/openclaw.json && \
+    echo '{"gateway":{"mode":"local","bind":"lan","port":18789,"auth":{"mode":"token","token":"${OPENCLAW_GATEWAY_TOKEN}"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true}}}' > /home/node/.openclaw/openclaw.json && \
     chown -R node:node /home/node/.openclaw
 
 ENV NODE_ENV=production
