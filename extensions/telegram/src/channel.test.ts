@@ -180,7 +180,7 @@ describe("telegramPlugin threading", () => {
       telegramPlugin.threading?.resolveAutoThreadId?.({
         cfg: createCfg(),
         accountId: "ops",
-        to: "telegram:group:-1003841603622:topic:928",
+        to: "telegram:group:-1003841603622",
         toolContext,
         replyToId: undefined,
       }),
