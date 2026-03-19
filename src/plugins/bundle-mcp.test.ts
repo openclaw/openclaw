@@ -6,9 +6,14 @@ import { captureEnv } from "../test-utils/env.js";
 import { isRecord } from "../utils.js";
 import { loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
 import { createBundleMcpTempHarness, createBundleProbePlugin } from "./bundle-mcp.test-support.js";
+import { safeRealpathSync } from "./path-safety.js";
 
 function getServerArgs(value: unknown): unknown[] | undefined {
   return isRecord(value) && Array.isArray(value.args) ? value.args : undefined;
+}
+
+function canonicalizeExpectedBundlePath(value: string): string {
+  return safeRealpathSync(value) ?? path.resolve(value);
 }
 
 const tempHarness = createBundleMcpTempHarness();
@@ -46,7 +51,7 @@ describe("loadEnabledBundleMcpConfig", () => {
       const loadedServer = loaded.config.mcpServers.bundleProbe;
       const loadedArgs = getServerArgs(loadedServer);
       const loadedServerPath = typeof loadedArgs?.[0] === "string" ? loadedArgs[0] : undefined;
-      const resolvedPluginRoot = await fs.realpath(pluginRoot);
+      const resolvedPluginRoot = canonicalizeExpectedBundlePath(pluginRoot);
 
       expect(loaded.diagnostics).toEqual([]);
       expect(isRecord(loadedServer) ? loadedServer.command : undefined).toBe("node");
@@ -178,7 +183,7 @@ describe("loadEnabledBundleMcpConfig", () => {
           },
         },
       });
-      const resolvedPluginRoot = await fs.realpath(pluginRoot);
+      const resolvedPluginRoot = canonicalizeExpectedBundlePath(pluginRoot);
 
       expect(loaded.diagnostics).toEqual([]);
       expect(loaded.config.mcpServers.inlineProbe).toEqual({

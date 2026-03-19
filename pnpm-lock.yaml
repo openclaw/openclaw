@@ -101,9 +101,6 @@ importers:
       gigachat:
         specifier: ^0.0.18
         version: 0.0.18
-      grammy:
-        specifier: ^1.41.1
-        version: 1.41.1
       hono:
         specifier: 4.12.8
         version: 4.12.8
@@ -204,6 +201,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^4.1.0
         version: 4.1.0(@vitest/browser@4.1.0(vite@8.0.0(@types/node@25.5.0)(esbuild@0.27.3)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2))(vitest@4.1.0))(vitest@4.1.0)
+      grammy:
+        specifier: ^1.41.1
+        version: 1.41.1
       jscpd:
         specifier: 4.0.8
         version: 4.0.8
