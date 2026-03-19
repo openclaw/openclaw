@@ -20,7 +20,6 @@ type MessageActionRunnerTestHelpersModule =
 let runMessageAction: MessageActionRunnerModule["runMessageAction"];
 let installMessageActionRunnerTestRegistry: MessageActionRunnerTestHelpersModule["installMessageActionRunnerTestRegistry"];
 let resetMessageActionRunnerTestRegistry: MessageActionRunnerTestHelpersModule["resetMessageActionRunnerTestRegistry"];
-let slackConfig: MessageActionRunnerTestHelpersModule["slackConfig"];
 let telegramConfig: MessageActionRunnerTestHelpersModule["telegramConfig"];
 
 async function runPollAction(params: {
@@ -37,10 +36,9 @@ async function runPollAction(params: {
   const call = mocks.executePollAction.mock.calls[0]?.[0] as
     | {
         resolveCorePoll?: () => {
-          durationSeconds?: number;
+          durationHours?: number;
           maxSelections?: number;
           threadId?: string;
-          isAnonymous?: boolean;
         };
         ctx?: { params?: Record<string, unknown> };
       }
@@ -60,7 +58,6 @@ describe("runMessageAction poll handling", () => {
     ({
       installMessageActionRunnerTestRegistry,
       resetMessageActionRunnerTestRegistry,
-      slackConfig,
       telegramConfig,
     } = await import("./message-action-runner.test-helpers.js"));
     installMessageActionRunnerTestRegistry();
@@ -88,36 +85,12 @@ describe("runMessageAction poll handling", () => {
       },
       message: /pollOption requires at least two values/i,
     },
-    {
-      name: "rejects durationSeconds outside telegram",
-      getCfg: () => slackConfig,
-      actionParams: {
-        channel: "slack",
-        target: "#C12345678",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi"],
-        pollDurationSeconds: 60,
-      },
-      message: /pollDurationSeconds is only supported for Telegram polls/i,
-    },
-    {
-      name: "rejects poll visibility outside telegram",
-      getCfg: () => slackConfig,
-      actionParams: {
-        channel: "slack",
-        target: "#C12345678",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi"],
-        pollPublic: true,
-      },
-      message: /pollAnonymous\/pollPublic are only supported for Telegram polls/i,
-    },
   ])("$name", async ({ getCfg, actionParams, message }) => {
     await expect(runPollAction({ cfg: getCfg(), actionParams })).rejects.toThrow(message);
     expect(mocks.executePollAction).toHaveBeenCalledTimes(1);
   });
 
-  it("passes Telegram durationSeconds, visibility, and auto threadId to executePollAction", async () => {
+  it("passes shared poll fields and auto threadId to executePollAction", async () => {
     const call = await runPollAction({
       cfg: telegramConfig,
       actionParams: {
@@ -125,8 +98,7 @@ describe("runMessageAction poll handling", () => {
         target: "telegram:123",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi"],
-        pollDurationSeconds: 90,
-        pollPublic: true,
+        pollDurationHours: 2,
       },
       toolContext: {
         currentChannelId: "telegram:123",
@@ -134,8 +106,7 @@ describe("runMessageAction poll handling", () => {
       },
     });
 
-    expect(call?.durationSeconds).toBe(90);
-    expect(call?.isAnonymous).toBe(false);
+    expect(call?.durationHours).toBe(2);
     expect(call?.threadId).toBe("42");
     expect(call?.ctx?.params?.threadId).toBe("42");
   });
