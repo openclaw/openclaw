@@ -70,10 +70,33 @@
 - Format check: `pnpm format` (oxfmt --check)
 - Format fix: `pnpm format:fix` (oxfmt --write)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
-- Hard gate: before any commit, `pnpm check` MUST be run and MUST pass for the change being committed.
-- Hard gate: before any push to `main`, `pnpm check` MUST be run and MUST pass, and `pnpm test` MUST be run and MUST pass.
+- Default landing bar: before any commit, run `pnpm check` and prefer a passing result for the change being committed.
+- For narrowly scoped changes, run narrowly scoped tests that directly validate the touched behavior; this is required proof for the change before commit and push decisions. If no meaningful scoped test exists, say so explicitly and use the next most direct validation available.
+- Default landing bar: before any push to `main`, run `pnpm check` and `pnpm test` and prefer a green result.
+- Scoped tests prove the change itself. `pnpm test` remains the default `main` landing bar; scoped tests do not replace full-suite gates by default.
 - Hard gate: if the change can affect build output, packaging, lazy-loading/module boundaries, or published surfaces, `pnpm build` MUST be run and MUST pass before pushing `main`.
-- Hard gate: do not commit or push with failing format, lint, type, build, or required test checks.
+- Default rule: do not commit or push with failing format, lint, type, build, or required test checks when those failures are caused by the change or plausibly related to the touched surface.
+
+## Judgment / Exception Handling
+
+- Use judgment for narrowly scoped changes when unrelated failures already exist on latest `origin/main`.
+- Before using that judgment, explicitly separate:
+  - failures caused by the change
+  - failures reproducible on current `origin/main`
+  - failures that are clearly unrelated to the touched surface
+- Scoped exceptions are allowed only when all of the following are true:
+  - the diff is narrowly scoped and low blast radius
+  - the failing checks touch unrelated surfaces
+  - the failures are reproducible on current `origin/main` or are otherwise clearly pre-existing
+  - you explicitly explain that conclusion to Tak
+- Even when using a scoped exception, narrowly scoped tests are still required as direct proof of the change unless no meaningful scoped test exists.
+- Do not claim full gate compliance when using a scoped exception. State which checks are failing and why they appear unrelated.
+- When using judgment because full-suite failures are unrelated or already failing on latest `origin/main`, report both:
+  - which scoped tests you ran as direct proof of the change
+  - which full-suite failures you are setting aside and why they appear unrelated
+- If the branch contains only the intended scoped change and the remaining failures are demonstrably unrelated or already failing on latest `origin/main`, report that clearly and ask for a push/waiver decision instead of silently broadening scope into unrelated fixes.
+- If Tak explicitly authorizes landing despite unrelated failing gates, treat that as an informed override. Do not keep repairing unrelated areas unless Tak explicitly asks for that broader work.
+- Do not use judgment as a blanket bypass. If the change could plausibly affect the failing area, treat the failure as in-scope until proven otherwise. Do not use “scoped tests passed” as permission to ignore plausibly related failures.
 
 ## Coding Style & Naming Conventions
 
