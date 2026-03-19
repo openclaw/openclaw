@@ -22,18 +22,22 @@ describe("bundled plugin runtime dependencies", () => {
     expect(rootSpec).toBeUndefined();
   }
 
+  function expectRootMirrorsPluginRuntimeDep(pluginPath: string, dependencyName: string) {
+    const rootManifest = readJson<PackageManifest>("package.json");
+    const pluginManifest = readJson<PackageManifest>(pluginPath);
+    const pluginSpec = pluginManifest.dependencies?.[dependencyName];
+    const rootSpec = rootManifest.dependencies?.[dependencyName];
+
+    expect(pluginSpec).toBeTruthy();
+    expect(rootSpec).toBe(pluginSpec);
+  }
+
   it("keeps bundled Feishu runtime deps plugin-local instead of mirroring them into the root package", () => {
     expectPluginOwnsRuntimeDep("extensions/feishu/package.json", "@larksuiteoapi/node-sdk");
   });
 
-  it("keeps bundled memory-lancedb runtime deps available from the root package while its native runtime stays bundled", () => {
-    const rootManifest = readJson<PackageManifest>("package.json");
-    const memoryManifest = readJson<PackageManifest>("extensions/memory-lancedb/package.json");
-    const memorySpec = memoryManifest.dependencies?.["@lancedb/lancedb"];
-    const rootSpec = rootManifest.dependencies?.["@lancedb/lancedb"];
-
-    expect(memorySpec).toBeTruthy();
-    expect(rootSpec).toBe(memorySpec);
+  it("keeps bundled memory-lancedb runtime deps mirrored in the root package while its native runtime is still packaged that way", () => {
+    expectRootMirrorsPluginRuntimeDep("extensions/memory-lancedb/package.json", "@lancedb/lancedb");
   });
 
   it("keeps bundled Discord runtime deps plugin-local instead of mirroring them into the root package", () => {
@@ -46,6 +50,13 @@ describe("bundled plugin runtime dependencies", () => {
 
   it("keeps bundled Telegram runtime deps plugin-local instead of mirroring them into the root package", () => {
     expectPluginOwnsRuntimeDep("extensions/telegram/package.json", "grammy");
+  });
+
+  it("keeps bundled WhatsApp runtime deps mirrored in the root package while its heavy runtime still uses the legacy bundle path", () => {
+    expectRootMirrorsPluginRuntimeDep(
+      "extensions/whatsapp/package.json",
+      "@whiskeysockets/baileys",
+    );
   });
 
   it("keeps bundled proxy-agent deps plugin-local instead of mirroring them into the root package", () => {
