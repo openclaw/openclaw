@@ -101,6 +101,16 @@ function makeTempDir() {
   return dir;
 }
 
+function withCwd<T>(cwd: string, run: () => T): T {
+  const previousCwd = process.cwd();
+  process.chdir(cwd);
+  try {
+    return run();
+  } finally {
+    process.chdir(previousCwd);
+  }
+}
+
 function writePlugin(params: {
   id: string;
   body: string;
@@ -3350,6 +3360,22 @@ module.exports = {
       modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
     });
     expect(subpaths).toEqual(["channel-runtime", "compat", "core"]);
+  });
+
+  it("derives plugin-sdk subpaths via cwd fallback when module path is a transpiler cache and package is renamed", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageName: "moltbot",
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      },
+    });
+    const subpaths = withCwd(fixture.root, () =>
+      __testing.listPluginSdkExportedSubpaths({
+        modulePath: "/tmp/tsx-cache/openclaw-loader.js",
+      }),
+    );
+    expect(subpaths).toEqual(["channel-runtime", "core"]);
   });
 
   it("configures the plugin loader jiti boundary to prefer native dist modules", () => {
