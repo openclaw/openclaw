@@ -7,6 +7,7 @@ export const BUNDLED_WEB_SEARCH_PLUGIN_IDS = [
   "google",
   "moonshot",
   "perplexity",
+  "tavily",
   "xai",
 ] as const;
 

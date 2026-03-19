@@ -1,0 +1,34 @@
+{
+  "id": "tavily",
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Tavily API Key",
+      "help": "Tavily Search API key (fallback: TAVILY_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "tvly-..."
+    },
+    "webSearch.searchDepth": {
+      "label": "Tavily Search Depth",
+      "help": "Tavily search depth: basic or advanced."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "searchDepth": {
+            "type": "string",
+            "enum": ["basic", "advanced"]
+          }
+        }
+      }
+    }
+  }
+}
