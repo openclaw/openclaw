@@ -18,7 +18,7 @@ const RESPONSE_FILE = path.join(DATA_DIR, 'imessage-response.json');
 const CHAT_DB = path.join(HOME_DIR, 'Library', 'Messages', 'chat.db');
 const ADDRESS_BOOK_DIR = path.join(HOME_DIR, 'Library', 'Application Support', 'AddressBook');
 const DEFAULT_ADDRESS_BOOK_PATH = path.join(ADDRESS_BOOK_DIR, 'AddressBook-v22.abcddb');
-const PHONE_SQL_NORMALIZER = [
+const PHONE_DIGITS_SQL = [
   "replace(",
   "replace(",
   "replace(",
@@ -31,6 +31,7 @@ const PHONE_SQL_NORMALIZER = [
   "' ', ''),",
   "'.', '')"
 ].join('');
+const PHONE_SQL_NORMALIZER = `CASE WHEN length(${PHONE_DIGITS_SQL}) = 10 THEN '1' || ${PHONE_DIGITS_SQL} ELSE ${PHONE_DIGITS_SQL} END`;
 
 let lastProcessedMtimeMs = 0;
 let isProcessing = false;
@@ -227,19 +228,16 @@ function normalizePhoneDigits(value) {
   return String(value || '').replace(/\D/g, '');
 }
 
+function normalizePhone(value) {
+  let digits = normalizePhoneDigits(value);
+  if (digits.length === 10) digits = `1${digits}`;
+  return digits;
+}
+
 function getPhoneLookupKeys(value) {
-  const digits = normalizePhoneDigits(value);
-  if (!digits) return [];
-
-  const keys = new Set([digits]);
-  if (digits.length === 11 && digits.startsWith('1')) {
-    keys.add(digits.slice(1));
-  }
-  if (digits.length === 10) {
-    keys.add(`1${digits}`);
-  }
-
-  return Array.from(keys);
+  const canonical = normalizePhone(value);
+  if (!canonical) return [];
+  return [canonical];
 }
 
 function sqlString(value) {
@@ -277,6 +275,29 @@ function cocoaToDate(cocoaTimestamp) {
   const APPLE_EPOCH_OFFSET = 978307200;
   const unixSeconds = (Number(cocoaTimestamp || 0) / 1000000000) + APPLE_EPOCH_OFFSET;
   return new Date(unixSeconds * 1000);
+}
+
+function extractTextFromBody(hexStr) {
+  if (!hexStr) return '';
+  try {
+    const buf = Buffer.from(hexStr, 'hex');
+    const marker = Buffer.from('NSString');
+    const idx = buf.indexOf(marker);
+    if (idx === -1) return '';
+
+    let pos = idx + marker.length;
+    while (pos < buf.length - 2 && buf[pos] !== 0x2B) pos++;
+    if (pos >= buf.length - 2) return '';
+
+    pos++; // skip '+'
+    const len = buf[pos];
+    pos++;
+
+    if (len === 0 || pos + len > buf.length) return '';
+    return buf.slice(pos, pos + len).toString('utf8');
+  } catch {
+    return '';
+  }
 }
 
 function addMapEntry(map, key, entry) {
@@ -491,9 +512,10 @@ function buildHandleMatchClause(handle) {
 }
 
 function formatMessageRow(row, contactEntry) {
+  const text = row.text || extractTextFromBody(row.body_hex) || '';
   return {
     contact_name: contactEntry.name,
-    text: String(row.text || ''),
+    text: String(text),
     date: cocoaToDate(row.date).toISOString(),
     isFromMe: Number(row.is_from_me || 0) === 1
   };
@@ -505,7 +527,9 @@ function filterKnownMessages(rows) {
   for (const row of rows) {
     const matches = findEntriesByHandle(row.handle);
     if (matches.length === 0) continue;
-    messages.push(formatMessageRow(row, matches[0]));
+    const formatted = formatMessageRow(row, matches[0]);
+    if (!formatted.text) continue;
+    messages.push(formatted);
   }
 
   return messages;
@@ -517,13 +541,13 @@ async function handleRecent(request) {
 
   const limit = clampLimit(request.limit, 20, 100);
   const rows = await queryChatDb([
-    'SELECT m.text, m.date, m.is_from_me, h.id as handle, m.ROWID',
+    'SELECT m.text, hex(m.attributedBody) as body_hex, m.date, m.is_from_me, h.id as handle, m.ROWID',
     'FROM message m',
     'JOIN handle h ON m.handle_id = h.ROWID',
     "WHERE h.service = 'iMessage'",
-    "AND m.text IS NOT NULL AND m.text != ''",
+    'AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)',
     'ORDER BY m.date DESC',
-    'LIMIT 200'
+    'LIMIT 500'
   ].join(' '));
 
   return filterKnownMessages(rows).slice(0, limit);
@@ -536,12 +560,12 @@ async function handleConversation(request) {
   const contact = resolveContact(request.contact);
   const limit = clampLimit(request.limit, 50, 200);
   const rows = await queryChatDb([
-    'SELECT m.text, m.date, m.is_from_me, h.id as handle',
+    'SELECT m.text, hex(m.attributedBody) as body_hex, m.date, m.is_from_me, h.id as handle',
     'FROM message m',
     'JOIN handle h ON m.handle_id = h.ROWID',
     "WHERE h.service = 'iMessage'",
     `AND ${buildHandleMatchClause(contact.phone)}`,
-    "AND m.text IS NOT NULL AND m.text != ''",
+    'AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)',
     'ORDER BY m.date DESC',
     `LIMIT ${limit}`
   ].join(' '));
@@ -565,9 +589,8 @@ async function handleSearch(request) {
 
   const limit = clampLimit(request.limit, 20, 100);
   const whereClauses = [
-    `m.text LIKE '%${escapeSqlLike(query)}%' ESCAPE '\\'`,
-    "m.text IS NOT NULL",
-    "m.text != ''"
+    `(m.text LIKE '%${escapeSqlLike(query)}%' ESCAPE '\\' OR CAST(m.attributedBody AS TEXT) LIKE '%${escapeSqlLike(query)}%' ESCAPE '\\')`,
+    '(m.text IS NOT NULL OR m.attributedBody IS NOT NULL)'
   ];
   let resolvedContact = null;
 
@@ -577,12 +600,12 @@ async function handleSearch(request) {
   }
 
   const rows = await queryChatDb([
-    'SELECT m.text, m.date, m.is_from_me, h.id as handle',
+    'SELECT m.text, hex(m.attributedBody) as body_hex, m.date, m.is_from_me, h.id as handle',
     'FROM message m',
     'JOIN handle h ON m.handle_id = h.ROWID',
     `WHERE h.service = 'iMessage' AND ${whereClauses.join(' AND ')}`,
     'ORDER BY m.date DESC',
-    'LIMIT 200'
+    'LIMIT 500'
   ].join(' '));
 
   const messages = rows
