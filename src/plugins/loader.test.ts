@@ -3341,10 +3341,17 @@ module.exports = {
   });
 
   it("derives plugin-sdk subpaths from package exports", () => {
-    const subpaths = __testing.listPluginSdkExportedSubpaths();
-    expect(subpaths).toContain("telegram");
-    expect(subpaths).not.toContain("compat");
-    expect(subpaths).not.toContain("root-alias");
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/compat": { default: "./dist/plugin-sdk/compat.js" },
+        "./plugin-sdk/telegram": { default: "./dist/plugin-sdk/telegram.js" },
+        "./plugin-sdk/nested/value": { default: "./dist/plugin-sdk/nested/value.js" },
+      },
+    });
+    const subpaths = __testing.listPluginSdkExportedSubpaths({
+      modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
+    });
+    expect(subpaths).toEqual(["compat", "telegram"]);
   });
 
   it("derives plugin-sdk subpaths from nearest package exports even when package name is renamed", () => {
