@@ -252,10 +252,16 @@ export async function downloadMessageResourceFeishu(params: {
       console.warn(
         `feishu: download with type=file returned 502, retrying with type=media (message=${messageId})`,
       );
-      response = await client.im.messageResource.get({
-        path: { message_id: messageId, file_key: normalizedFileKey },
-        params: { type: "media" },
-      });
+      try {
+        response = await client.im.messageResource.get({
+          path: { message_id: messageId, file_key: normalizedFileKey },
+          params: { type: "media" },
+        });
+      } catch {
+        // Retry also failed — throw the original 502 error so callers see
+        // the root cause rather than a potentially confusing secondary error.
+        throw err;
+      }
     } else {
       throw err;
     }
