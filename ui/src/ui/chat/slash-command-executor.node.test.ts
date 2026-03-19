@@ -302,6 +302,35 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
+  it("keeps already-qualified resolved model refs after /model changes", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          key: "main",
+          resolved: {
+            modelProvider: "openrouter",
+            model: "openrouter/aurora-alpha",
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "aurora-alpha",
+    );
+
+    expect(result.content).toBe("Model set to `openrouter/aurora-alpha`.");
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "openrouter/aurora-alpha",
+    });
+  });
+
   it("resolves the legacy main alias for /usage", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
@@ -338,6 +367,40 @@ describe("executeSlashCommand directives", () => {
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+  });
+
+  it("keeps already-qualified provider-prefixed model refs in /usage", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              modelProvider: "openrouter",
+              model: "openrouter/aurora-alpha",
+              inputTokens: 10,
+              outputTokens: 5,
+              totalTokens: 15,
+              contextTokens: 100,
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "openrouter/aurora-alpha", provider: "openrouter" }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "usage",
+      "",
+    );
+
+    expect(result.content).toContain("Model: `openrouter/aurora-alpha`");
   });
 
   it("reports the current thinking level for bare /think", async () => {

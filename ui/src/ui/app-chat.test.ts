@@ -128,4 +128,108 @@ describe("handleSendChat", () => {
       value: "openai/gpt-5-mini",
     });
   });
+
+  it("preserves already-qualified resolved model refs in the chat header cache", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          key: "main",
+          resolved: {
+            modelProvider: "openrouter",
+            model: "openrouter/aurora-alpha",
+          },
+        };
+      }
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 0,
+          defaults: { modelProvider: "openrouter", model: "openrouter/aurora-alpha" },
+          sessions: [],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "openrouter/aurora-alpha", name: "Aurora Alpha", provider: "openrouter" }],
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatMessage: "/model aurora-alpha",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatModelOverrides.main).toEqual({
+      kind: "qualified",
+      value: "openrouter/aurora-alpha",
+    });
+  });
+
+  it("renders already-qualified provider-prefixed refs in /usage output", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: "openrouter", model: "openrouter/aurora-alpha" },
+          sessions: [
+            {
+              key: "main",
+              modelProvider: "openrouter",
+              model: "openrouter/aurora-alpha",
+              inputTokens: 10,
+              outputTokens: 5,
+              totalTokens: 15,
+              contextTokens: 100,
+            },
+          ],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "openrouter/aurora-alpha", name: "Aurora Alpha", provider: "openrouter" }],
+        };
+      }
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatMessage: "/usage",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessages.at(-1)).toMatchObject({
+      role: "system",
+      content: expect.stringContaining("Model: `openrouter/aurora-alpha`"),
+    });
+  });
 });

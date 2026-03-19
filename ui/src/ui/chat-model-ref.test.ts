@@ -45,6 +45,9 @@ describe("chat-model-ref helpers", () => {
 
   it("resolves server session data to qualified option values", () => {
     expect(resolveServerChatModelValue("gpt-5-mini", "openai")).toBe("openai/gpt-5-mini");
+    expect(resolveServerChatModelValue("openrouter/aurora-alpha", "openrouter")).toBe(
+      "openrouter/aurora-alpha",
+    );
     expect(resolveServerChatModelValue("alias-only", null)).toBe("alias-only");
   });
 });
