@@ -334,14 +334,36 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores env proxy by default to preserve DNS-pinned destination binding", async () => {
+  it("routes through env proxy in strict mode via pinned env-proxy dispatcher", async () => {
     await runProxyModeDispatcherTest({
       mode: GUARDED_FETCH_MODE.STRICT,
-      expectEnvProxy: false,
+      expectEnvProxy: true,
     });
   });
 
-  it("uses env proxy only when dangerous proxy bypass is explicitly enabled", async () => {
+  it("keeps allowed hostnames on the direct pinned path when env proxy is configured", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expect(requestInit.dispatcher).toBeDefined();
+      expect(requestInit.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://operator.example/resource",
+      fetchImpl,
+      lookupFn,
+      policy: { allowedHostnames: ["operator.example"] },
+      mode: GUARDED_FETCH_MODE.STRICT,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
+  it("routes through env proxy when trusted proxy mode is explicitly enabled", async () => {
     await runProxyModeDispatcherTest({
       mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       expectEnvProxy: true,

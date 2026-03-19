@@ -1,7 +1,7 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
-import { hasProxyEnvConfigured } from "./proxy-env.js";
+import { hasEnvHttpProxyConfigured, hasProxyEnvConfigured } from "./proxy-env.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
@@ -89,6 +89,14 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
     return GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;
   }
   return GUARDED_FETCH_MODE.STRICT;
+}
+
+function keepsTrustedHostOnDirectPath(policy?: SsrFPolicy): boolean {
+  return (
+    policy?.allowPrivateNetwork === true ||
+    policy?.dangerouslyAllowPrivateNetwork === true ||
+    (policy?.allowedHostnames?.length ?? 0) > 0
+  );
 }
 
 function assertExplicitProxySupportsPinnedDns(
@@ -183,7 +191,15 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
+        const protocol = parsedUrl.protocol === "http:" ? "http" : "https";
+        const useEnvProxy =
+          hasEnvHttpProxyConfigured(protocol) &&
+          !params.dispatcherPolicy?.mode &&
+          !keepsTrustedHostOnDirectPath(params.policy);
+        const dispatcherPolicy: PinnedDispatcherPolicy | undefined = useEnvProxy
+          ? Object.assign({}, params.dispatcherPolicy, { mode: "env-proxy" as const })
+          : params.dispatcherPolicy;
+        dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, params.policy);
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {
