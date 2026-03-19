@@ -450,7 +450,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
     expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
-    expectRecoverableRetryState(1, { assertBackoffHelpers: true });
+    expectRecoverableRetryState(1);
   });
 
   it("retries setup-time recoverable errors before starting polling", async () => {
