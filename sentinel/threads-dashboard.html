@@ -1,208 +1,732 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-TW">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Threads War Room</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #0a0a0a; color: #e0e0e0; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; padding: 16px; }
-  h1 { font-size: 18px; color: #00ff88; margin-bottom: 12px; }
-  h2 { font-size: 14px; color: #888; margin: 16px 0 8px; text-transform: uppercase; letter-spacing: 2px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
-  .card { background: #111; border: 1px solid #222; border-radius: 8px; padding: 14px; }
-  .card-title { color: #666; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
-  .big-number { font-size: 36px; font-weight: bold; }
-  .green { color: #00ff88; }
-  .yellow { color: #ffd700; }
-  .red { color: #ff4444; }
-  .cyan { color: #00ccff; }
-  .dim { color: #555; }
-  .bar { height: 6px; border-radius: 3px; background: #222; margin-top: 6px; overflow: hidden; }
-  .bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
-  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-  th { text-align: left; color: #555; font-size: 11px; padding: 4px 8px; border-bottom: 1px solid #222; }
-  td { padding: 4px 8px; border-bottom: 1px solid #1a1a1a; font-size: 12px; }
-  .tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; margin: 1px; }
-  .tag-military { background: #331111; color: #ff6666; }
-  .tag-energy { background: #332211; color: #ffaa44; }
-  .tag-economy { background: #112233; color: #4488ff; }
-  .tag-china { background: #331122; color: #ff44aa; }
-  .tag-proxy_war { background: #223311; color: #88ff44; }
-  .tag-resilience { background: #113322; color: #44ffaa; }
-  .tag-politics { background: #222211; color: #dddd44; }
-  .tier-S { color: #ff00ff; font-weight: bold; }
-  .tier-A { color: #00ff88; font-weight: bold; }
-  .tier-B { color: #4488ff; }
-  .tier-C { color: #666; }
-  .recruit { color: #ffd700; }
-  .timestamp { color: #444; font-size: 11px; }
-  .funnel { display: flex; gap: 4px; align-items: end; margin-top: 8px; }
-  .funnel-step { flex: 1; text-align: center; }
-  .funnel-bar { background: #222; border-radius: 3px 3px 0 0; margin: 0 auto; width: 80%; transition: height 0.5s; }
-  .funnel-label { font-size: 10px; color: #555; margin-top: 4px; }
-  .funnel-value { font-size: 14px; font-weight: bold; }
-</style>
-<script>window.__THREADS_DATA = {"generated_at": "2026-03-19T15:32:54.670398", "coverage": {"sent": 645, "total": 699, "failed": 41, "rate": 92}, "posts": [{"id": "18166117900414043", "text": "有些東西先準備起來。\n 成本：零。全部開源模型。\n 總計 59.4GB，8 個模型。\n\n  海底電纜斷了，你還有完整的 AI 能力。", "posted_at": "2026-03-19T06:31:30+0000", "comments": 0}, {"id": "18087346435976477", "text": "一架無人機兩萬美元。\n攔截它的飛彈八百五十四萬。\n\n成本比 1:427。\n\n你花一塊，對方花四百二十七塊擋你。\n你不需要打贏。你只需要讓它的帳單比收入高。\n然後", "posted_at": "2026-03-19T04:00:20+0000", "comments": 1}, {"id": "18106831690656379", "text": "一個內容團隊覺得自己最大的問題是「產能不夠」。\n\n所以開始全力導入 AI。\n\n有人拿來寫文案，\n有人拿來生社群貼文，\n有人拿來整理簡報，\n一週後，產出量真的翻了", "posted_at": "2026-03-18T17:01:57+0000", "comments": 0}, {"id": "18061373180375553", "text": "台灣 368 個鄉鎮市區，\n每個都有公開資訊、補助、便民服務。\n問題從來不是沒有資料。\n問題是你要翻三個網站、打兩通電話、\n跑一趟公所，才知道自己能申請什麼。\n", "posted_at": "2026-03-18T13:30:47+0000", "comments": 16}, {"id": "17863859064606568", "text": "講完「台海已經輸了」，\n我中午照樣去吃苗栗皇城鵝肉。\n\n很多人會覺得這很割裂。\n但我反而覺得，這才是真相。\n\n戰爭從來不是先把城市炸掉。\n而是先讓你以為一切都還", "posted_at": "2026-03-18T04:30:39+0000", "comments": 2}, {"id": "17927089545249407", "text": "未來最強的人，\n不一定是最會用 AI 的人。\n\n而是最能看見\nAI 看不見的東西的人。\n\nAI 看得見資料、模式、機率。\n但它不一定看得見：\n- 關係裡的張力\n", "posted_at": "2026-03-17T17:01:17+0000", "comments": 2}, {"id": "18109645525698317", "text": "台海已經輸了\n\n不是還沒打。是不用打了。\n\n美國國債 38 兆。\n2025 年光利息 9,700 億美元，正式超過國防預算 8,930 億。\n2026 年利息破", "posted_at": "2026-03-17T12:34:14+0000", "comments": 1251}, {"id": "18089971652145654", "text": "如果你在台灣跑 Telegram Bot，一定遇過 API timeout。\n\n原因：HiNet → api.telegram.org 要繞美國或法國到荷蘭，路", "posted_at": "2026-03-17T05:07:20+0000", "comments": 15}, {"id": "18105155803855122", "text": "今天的（中）苗栗（市）還真特別\n12:30 阿忠燴飯跟強記燒臘\n居然都賣完了 \n老闆也覺得今天客人來的特別集中\n有人知道為啥嗎？", "posted_at": "2026-03-17T04:41:12+0000", "comments": 2}, {"id": "17849786910661069", "text": "怎麼知道你有沒有在用「結構感知」？\n\n我現在會先問自己 5 個問題。\n\n1. 這真的是執行問題嗎？\n很多時候，看起來像做得不夠，\n其實是方向一開始就錯了。\n\n2", "posted_at": "2026-03-16T17:01:30+0000", "comments": 0}], "subscribers": {"count": 32, "list": [{"username": "mrwawanyc", "tier": "A", "stance": "neutral", "depth": 33, "topics": ["military", "energy", "economy", "china", "proxy_war"], "recruit": null}, {"username": "jerryinsky", "tier": "A", "stance": "neutral", "depth": 17, "topics": ["military", "economy", "china"], "recruit": null}, {"username": "abc0917430752", "tier": "B", "stance": "neutral", "depth": 16, "topics": ["military", "economy", "china", "proxy_war", "resilience"], "recruit": null}, {"username": "lwillyli", "tier": "A", "stance": "neutral", "depth": 15, "topics": ["military", "economy"], "recruit": null}, {"username": "bluewhitegrass.bluebird", "tier": "A", "stance": "pro", "depth": 13, "topics": ["military", "energy", "economy", "china", "proxy_war", "resilience"], "recruit": null}, {"username": "lestill7", "tier": "A", "stance": "neutral", "depth": 13, "topics": ["economy"], "recruit": null}, {"username": "edison94114", "tier": "B", "stance": "neutral", "depth": 12, "topics": ["military", "economy", "china"], "recruit": null}, {"username": "sengthesong", "tier": "A", "stance": "pro", "depth": 11, "topics": ["economy", "china", "resilience"], "recruit": null}, {"username": "landefa4", "tier": "C", "stance": "anti", "depth": 11, "topics": [], "recruit": null}, {"username": "xrush.ethen", "tier": "B", "stance": "pro", "depth": 11, "topics": ["military", "energy", "china"], "recruit": null}, {"username": "tianqitailengtairedubuxing", "tier": "A", "stance": "neutral", "depth": 10, "topics": [], "recruit": null}, {"username": "d_lo64", "tier": "A", "stance": "neutral", "depth": 9, "topics": ["energy", "economy", "china"], "recruit": null}, {"username": "roknrol4evr", "tier": "B", "stance": "pro", "depth": 8, "topics": ["politics"], "recruit": null}, {"username": "jn_tianrr", "tier": "A", "stance": "analytical", "depth": 7, "topics": ["military", "economy", "china", "proxy_war"], "recruit": null}, {"username": "max19930314", "tier": "B", "stance": "pro", "depth": 7, "topics": ["military", "energy", "economy", "china", "proxy_war", "resilience", "politics"], "recruit": null}, {"username": "chubby_tsai", "tier": "A", "stance": "neutral", "depth": 7, "topics": ["energy", "economy", "china"], "recruit": null}, {"username": "yankrays", "tier": "B", "stance": "pro", "depth": 7, "topics": ["military", "china", "resilience", "politics"], "recruit": "希望創造討論空間+支持台灣盾"}, {"username": "seaweed_korena", "tier": "A", "stance": "neutral", "depth": 7, "topics": [], "recruit": null}, {"username": "humihahahaha", "tier": "B", "stance": "neutral", "depth": 7, "topics": ["military", "china", "resilience", "politics"], "recruit": null}, {"username": "lupinjian", "tier": "B", "stance": "neutral", "depth": 6, "topics": ["china"], "recruit": null}, {"username": "njpuz", "tier": "A", "stance": "analytical", "depth": 6, "topics": ["economy", "china"], "recruit": null}, {"username": "mjemusic2024", "tier": "A", "stance": "neutral", "depth": 6, "topics": [], "recruit": null}, {"username": "nike_hsieh", "tier": "A", "stance": "neutral", "depth": 6, "topics": ["china", "politics"], "recruit": null}, {"username": "ethan_jiang82", "tier": "A", "stance": "analytical", "depth": 6, "topics": ["military", "economy", "proxy_war"], "recruit": null}, {"username": "litlle_boy", "tier": "B", "stance": "neutral", "depth": 6, "topics": ["military", "economy", "china"], "recruit": null}, {"username": "solidvajra", "tier": "A", "stance": "neutral", "depth": 6, "topics": ["military"], "recruit": null}, {"username": "tw168311", "tier": "C", "stance": "unknown", "depth": 6, "topics": ["military", "energy", "economy", "china", "politics"], "recruit": null}, {"username": "junfonwang", "tier": "B", "stance": "neutral", "depth": 6, "topics": ["military", "economy", "china"], "recruit": null}, {"username": "infjinfjinfjinfjinfj", "tier": "B", "stance": "neutral", "depth": 5, "topics": ["china"], "recruit": null}, {"username": "yungchi0329", "tier": "B", "stance": "neutral", "depth": 5, "topics": ["military", "china", "proxy_war", "politics"], "recruit": null}, {"username": "ataiwanese8964", "tier": "A", "stance": "neutral", "depth": 5, "topics": [], "recruit": null}, {"username": "hunter199989", "tier": "A", "stance": "neutral", "depth": 5, "topics": ["china"], "recruit": null}]}, "topics": {"china": 22, "military": 17, "economy": 17, "energy": 7, "proxy_war": 7, "politics": 7, "resilience": 6}, "stance": {"analytical": 8, "anti": 2, "neutral": 115, "pro": 14, "unknown": 173}, "tiers": {"A": 23, "B": 70, "C": 218, "S": 1}, "recent_24h": 921};</script>
-</head>
-<body>
-<h1>末日賽局 Threads War Room</h1>
-<div id="timestamp" class="timestamp"></div>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Threads War Room</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #0a0a0a;
+        color: #e0e0e0;
+        font-family: "SF Mono", "Fira Code", monospace;
+        font-size: 13px;
+        padding: 16px;
+      }
+      h1 {
+        font-size: 18px;
+        color: #00ff88;
+        margin-bottom: 12px;
+      }
+      h2 {
+        font-size: 14px;
+        color: #888;
+        margin: 16px 0 8px;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 12px;
+      }
+      .card {
+        background: #111;
+        border: 1px solid #222;
+        border-radius: 8px;
+        padding: 14px;
+      }
+      .card-title {
+        color: #666;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 8px;
+      }
+      .big-number {
+        font-size: 36px;
+        font-weight: bold;
+      }
+      .green {
+        color: #00ff88;
+      }
+      .yellow {
+        color: #ffd700;
+      }
+      .red {
+        color: #ff4444;
+      }
+      .cyan {
+        color: #00ccff;
+      }
+      .dim {
+        color: #555;
+      }
+      .bar {
+        height: 6px;
+        border-radius: 3px;
+        background: #222;
+        margin-top: 6px;
+        overflow: hidden;
+      }
+      .bar-fill {
+        height: 100%;
+        border-radius: 3px;
+        transition: width 0.5s;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 8px;
+      }
+      th {
+        text-align: left;
+        color: #555;
+        font-size: 11px;
+        padding: 4px 8px;
+        border-bottom: 1px solid #222;
+      }
+      td {
+        padding: 4px 8px;
+        border-bottom: 1px solid #1a1a1a;
+        font-size: 12px;
+      }
+      .tag {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 3px;
+        font-size: 10px;
+        margin: 1px;
+      }
+      .tag-military {
+        background: #331111;
+        color: #ff6666;
+      }
+      .tag-energy {
+        background: #332211;
+        color: #ffaa44;
+      }
+      .tag-economy {
+        background: #112233;
+        color: #4488ff;
+      }
+      .tag-china {
+        background: #331122;
+        color: #ff44aa;
+      }
+      .tag-proxy_war {
+        background: #223311;
+        color: #88ff44;
+      }
+      .tag-resilience {
+        background: #113322;
+        color: #44ffaa;
+      }
+      .tag-politics {
+        background: #222211;
+        color: #dddd44;
+      }
+      .tier-S {
+        color: #ff00ff;
+        font-weight: bold;
+      }
+      .tier-A {
+        color: #00ff88;
+        font-weight: bold;
+      }
+      .tier-B {
+        color: #4488ff;
+      }
+      .tier-C {
+        color: #666;
+      }
+      .recruit {
+        color: #ffd700;
+      }
+      .timestamp {
+        color: #444;
+        font-size: 11px;
+      }
+      .funnel {
+        display: flex;
+        gap: 4px;
+        align-items: end;
+        margin-top: 8px;
+      }
+      .funnel-step {
+        flex: 1;
+        text-align: center;
+      }
+      .funnel-bar {
+        background: #222;
+        border-radius: 3px 3px 0 0;
+        margin: 0 auto;
+        width: 80%;
+        transition: height 0.5s;
+      }
+      .funnel-label {
+        font-size: 10px;
+        color: #555;
+        margin-top: 4px;
+      }
+      .funnel-value {
+        font-size: 14px;
+        font-weight: bold;
+      }
+    </style>
+    <script>
+      window.__THREADS_DATA = {
+        generated_at: "2026-03-19T15:32:54.670398",
+        coverage: { sent: 645, total: 699, failed: 41, rate: 92 },
+        posts: [
+          {
+            id: "18166117900414043",
+            text: "有些東西先準備起來。\n 成本：零。全部開源模型。\n 總計 59.4GB，8 個模型。\n\n  海底電纜斷了，你還有完整的 AI 能力。",
+            posted_at: "2026-03-19T06:31:30+0000",
+            comments: 0,
+          },
+          {
+            id: "18087346435976477",
+            text: "一架無人機兩萬美元。\n攔截它的飛彈八百五十四萬。\n\n成本比 1:427。\n\n你花一塊，對方花四百二十七塊擋你。\n你不需要打贏。你只需要讓它的帳單比收入高。\n然後",
+            posted_at: "2026-03-19T04:00:20+0000",
+            comments: 1,
+          },
+          {
+            id: "18106831690656379",
+            text: "一個內容團隊覺得自己最大的問題是「產能不夠」。\n\n所以開始全力導入 AI。\n\n有人拿來寫文案，\n有人拿來生社群貼文，\n有人拿來整理簡報，\n一週後，產出量真的翻了",
+            posted_at: "2026-03-18T17:01:57+0000",
+            comments: 0,
+          },
+          {
+            id: "18061373180375553",
+            text: "台灣 368 個鄉鎮市區，\n每個都有公開資訊、補助、便民服務。\n問題從來不是沒有資料。\n問題是你要翻三個網站、打兩通電話、\n跑一趟公所，才知道自己能申請什麼。\n",
+            posted_at: "2026-03-18T13:30:47+0000",
+            comments: 16,
+          },
+          {
+            id: "17863859064606568",
+            text: "講完「台海已經輸了」，\n我中午照樣去吃苗栗皇城鵝肉。\n\n很多人會覺得這很割裂。\n但我反而覺得，這才是真相。\n\n戰爭從來不是先把城市炸掉。\n而是先讓你以為一切都還",
+            posted_at: "2026-03-18T04:30:39+0000",
+            comments: 2,
+          },
+          {
+            id: "17927089545249407",
+            text: "未來最強的人，\n不一定是最會用 AI 的人。\n\n而是最能看見\nAI 看不見的東西的人。\n\nAI 看得見資料、模式、機率。\n但它不一定看得見：\n- 關係裡的張力\n",
+            posted_at: "2026-03-17T17:01:17+0000",
+            comments: 2,
+          },
+          {
+            id: "18109645525698317",
+            text: "台海已經輸了\n\n不是還沒打。是不用打了。\n\n美國國債 38 兆。\n2025 年光利息 9,700 億美元，正式超過國防預算 8,930 億。\n2026 年利息破",
+            posted_at: "2026-03-17T12:34:14+0000",
+            comments: 1251,
+          },
+          {
+            id: "18089971652145654",
+            text: "如果你在台灣跑 Telegram Bot，一定遇過 API timeout。\n\n原因：HiNet → api.telegram.org 要繞美國或法國到荷蘭，路",
+            posted_at: "2026-03-17T05:07:20+0000",
+            comments: 15,
+          },
+          {
+            id: "18105155803855122",
+            text: "今天的（中）苗栗（市）還真特別\n12:30 阿忠燴飯跟強記燒臘\n居然都賣完了 \n老闆也覺得今天客人來的特別集中\n有人知道為啥嗎？",
+            posted_at: "2026-03-17T04:41:12+0000",
+            comments: 2,
+          },
+          {
+            id: "17849786910661069",
+            text: "怎麼知道你有沒有在用「結構感知」？\n\n我現在會先問自己 5 個問題。\n\n1. 這真的是執行問題嗎？\n很多時候，看起來像做得不夠，\n其實是方向一開始就錯了。\n\n2",
+            posted_at: "2026-03-16T17:01:30+0000",
+            comments: 0,
+          },
+        ],
+        subscribers: {
+          count: 32,
+          list: [
+            {
+              username: "mrwawanyc",
+              tier: "A",
+              stance: "neutral",
+              depth: 33,
+              topics: ["military", "energy", "economy", "china", "proxy_war"],
+              recruit: null,
+            },
+            {
+              username: "jerryinsky",
+              tier: "A",
+              stance: "neutral",
+              depth: 17,
+              topics: ["military", "economy", "china"],
+              recruit: null,
+            },
+            {
+              username: "abc0917430752",
+              tier: "B",
+              stance: "neutral",
+              depth: 16,
+              topics: ["military", "economy", "china", "proxy_war", "resilience"],
+              recruit: null,
+            },
+            {
+              username: "lwillyli",
+              tier: "A",
+              stance: "neutral",
+              depth: 15,
+              topics: ["military", "economy"],
+              recruit: null,
+            },
+            {
+              username: "bluewhitegrass.bluebird",
+              tier: "A",
+              stance: "pro",
+              depth: 13,
+              topics: ["military", "energy", "economy", "china", "proxy_war", "resilience"],
+              recruit: null,
+            },
+            {
+              username: "lestill7",
+              tier: "A",
+              stance: "neutral",
+              depth: 13,
+              topics: ["economy"],
+              recruit: null,
+            },
+            {
+              username: "edison94114",
+              tier: "B",
+              stance: "neutral",
+              depth: 12,
+              topics: ["military", "economy", "china"],
+              recruit: null,
+            },
+            {
+              username: "sengthesong",
+              tier: "A",
+              stance: "pro",
+              depth: 11,
+              topics: ["economy", "china", "resilience"],
+              recruit: null,
+            },
+            {
+              username: "landefa4",
+              tier: "C",
+              stance: "anti",
+              depth: 11,
+              topics: [],
+              recruit: null,
+            },
+            {
+              username: "xrush.ethen",
+              tier: "B",
+              stance: "pro",
+              depth: 11,
+              topics: ["military", "energy", "china"],
+              recruit: null,
+            },
+            {
+              username: "tianqitailengtairedubuxing",
+              tier: "A",
+              stance: "neutral",
+              depth: 10,
+              topics: [],
+              recruit: null,
+            },
+            {
+              username: "d_lo64",
+              tier: "A",
+              stance: "neutral",
+              depth: 9,
+              topics: ["energy", "economy", "china"],
+              recruit: null,
+            },
+            {
+              username: "roknrol4evr",
+              tier: "B",
+              stance: "pro",
+              depth: 8,
+              topics: ["politics"],
+              recruit: null,
+            },
+            {
+              username: "jn_tianrr",
+              tier: "A",
+              stance: "analytical",
+              depth: 7,
+              topics: ["military", "economy", "china", "proxy_war"],
+              recruit: null,
+            },
+            {
+              username: "max19930314",
+              tier: "B",
+              stance: "pro",
+              depth: 7,
+              topics: [
+                "military",
+                "energy",
+                "economy",
+                "china",
+                "proxy_war",
+                "resilience",
+                "politics",
+              ],
+              recruit: null,
+            },
+            {
+              username: "chubby_tsai",
+              tier: "A",
+              stance: "neutral",
+              depth: 7,
+              topics: ["energy", "economy", "china"],
+              recruit: null,
+            },
+            {
+              username: "yankrays",
+              tier: "B",
+              stance: "pro",
+              depth: 7,
+              topics: ["military", "china", "resilience", "politics"],
+              recruit: "希望創造討論空間+支持台灣盾",
+            },
+            {
+              username: "seaweed_korena",
+              tier: "A",
+              stance: "neutral",
+              depth: 7,
+              topics: [],
+              recruit: null,
+            },
+            {
+              username: "humihahahaha",
+              tier: "B",
+              stance: "neutral",
+              depth: 7,
+              topics: ["military", "china", "resilience", "politics"],
+              recruit: null,
+            },
+            {
+              username: "lupinjian",
+              tier: "B",
+              stance: "neutral",
+              depth: 6,
+              topics: ["china"],
+              recruit: null,
+            },
+            {
+              username: "njpuz",
+              tier: "A",
+              stance: "analytical",
+              depth: 6,
+              topics: ["economy", "china"],
+              recruit: null,
+            },
+            {
+              username: "mjemusic2024",
+              tier: "A",
+              stance: "neutral",
+              depth: 6,
+              topics: [],
+              recruit: null,
+            },
+            {
+              username: "nike_hsieh",
+              tier: "A",
+              stance: "neutral",
+              depth: 6,
+              topics: ["china", "politics"],
+              recruit: null,
+            },
+            {
+              username: "ethan_jiang82",
+              tier: "A",
+              stance: "analytical",
+              depth: 6,
+              topics: ["military", "economy", "proxy_war"],
+              recruit: null,
+            },
+            {
+              username: "litlle_boy",
+              tier: "B",
+              stance: "neutral",
+              depth: 6,
+              topics: ["military", "economy", "china"],
+              recruit: null,
+            },
+            {
+              username: "solidvajra",
+              tier: "A",
+              stance: "neutral",
+              depth: 6,
+              topics: ["military"],
+              recruit: null,
+            },
+            {
+              username: "tw168311",
+              tier: "C",
+              stance: "unknown",
+              depth: 6,
+              topics: ["military", "energy", "economy", "china", "politics"],
+              recruit: null,
+            },
+            {
+              username: "junfonwang",
+              tier: "B",
+              stance: "neutral",
+              depth: 6,
+              topics: ["military", "economy", "china"],
+              recruit: null,
+            },
+            {
+              username: "infjinfjinfjinfjinfj",
+              tier: "B",
+              stance: "neutral",
+              depth: 5,
+              topics: ["china"],
+              recruit: null,
+            },
+            {
+              username: "yungchi0329",
+              tier: "B",
+              stance: "neutral",
+              depth: 5,
+              topics: ["military", "china", "proxy_war", "politics"],
+              recruit: null,
+            },
+            {
+              username: "ataiwanese8964",
+              tier: "A",
+              stance: "neutral",
+              depth: 5,
+              topics: [],
+              recruit: null,
+            },
+            {
+              username: "hunter199989",
+              tier: "A",
+              stance: "neutral",
+              depth: 5,
+              topics: ["china"],
+              recruit: null,
+            },
+          ],
+        },
+        topics: {
+          china: 22,
+          military: 17,
+          economy: 17,
+          energy: 7,
+          proxy_war: 7,
+          politics: 7,
+          resilience: 6,
+        },
+        stance: { analytical: 8, anti: 2, neutral: 115, pro: 14, unknown: 173 },
+        tiers: { A: 23, B: 70, C: 218, S: 1 },
+        recent_24h: 921,
+      };
+    </script>
+  </head>
+  <body>
+    <h1>末日賽局 Threads War Room</h1>
+    <div id="timestamp" class="timestamp"></div>
 
-<div class="grid" id="dashboard">
-  <div class="card">
-    <div class="card-title">Coverage Rate</div>
-    <div class="big-number green" id="coverage-rate">--</div>
-    <div id="coverage-detail" class="dim"></div>
-    <div class="bar"><div class="bar-fill green" id="coverage-bar" style="width:0%;background:#00ff88"></div></div>
-  </div>
-  <div class="card">
-    <div class="card-title">Subscribers (5+ interactions)</div>
-    <div class="big-number cyan" id="sub-count">--</div>
-    <div id="sub-breakdown" class="dim"></div>
-  </div>
-  <div class="card">
-    <div class="card-title">24h Activity</div>
-    <div class="big-number yellow" id="recent-count">--</div>
-    <div class="dim">new comments</div>
-  </div>
-  <div class="card">
-    <div class="card-title">Recruitment Signals</div>
-    <div class="big-number" id="recruit-count" style="color:#ffd700">--</div>
-    <div id="recruit-list" class="dim"></div>
-  </div>
-</div>
+    <div class="grid" id="dashboard">
+      <div class="card">
+        <div class="card-title">Coverage Rate</div>
+        <div class="big-number green" id="coverage-rate">--</div>
+        <div id="coverage-detail" class="dim"></div>
+        <div class="bar">
+          <div
+            class="bar-fill green"
+            id="coverage-bar"
+            style="width: 0%; background: #00ff88"
+          ></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Subscribers (5+ interactions)</div>
+        <div class="big-number cyan" id="sub-count">--</div>
+        <div id="sub-breakdown" class="dim"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">24h Activity</div>
+        <div class="big-number yellow" id="recent-count">--</div>
+        <div class="dim">new comments</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Recruitment Signals</div>
+        <div class="big-number" id="recruit-count" style="color: #ffd700">--</div>
+        <div id="recruit-list" class="dim"></div>
+      </div>
+    </div>
 
-<h2>Conversion Funnel</h2>
-<div class="card">
-  <div class="funnel" id="funnel"></div>
-</div>
+    <h2>Conversion Funnel</h2>
+    <div class="card">
+      <div class="funnel" id="funnel"></div>
+    </div>
 
-<h2>Topic Distribution</h2>
-<div class="card" id="topics-card"></div>
+    <h2>Topic Distribution</h2>
+    <div class="card" id="topics-card"></div>
 
-<h2>Top Subscribers</h2>
-<div class="card">
-  <table>
-    <thead><tr><th>User</th><th>Tier</th><th>Stance</th><th>Depth</th><th>Topics</th><th>Signal</th></tr></thead>
-    <tbody id="sub-table"></tbody>
-  </table>
-</div>
+    <h2>Top Subscribers</h2>
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Tier</th>
+            <th>Stance</th>
+            <th>Depth</th>
+            <th>Topics</th>
+            <th>Signal</th>
+          </tr>
+        </thead>
+        <tbody id="sub-table"></tbody>
+      </table>
+    </div>
 
-<h2>Posts</h2>
-<div class="card">
-  <table>
-    <thead><tr><th>Post</th><th>Comments</th><th>Date</th></tr></thead>
-    <tbody id="posts-table"></tbody>
-  </table>
-</div>
+    <h2>Posts</h2>
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>Post</th>
+            <th>Comments</th>
+            <th>Date</th>
+          </tr>
+        </thead>
+        <tbody id="posts-table"></tbody>
+      </table>
+    </div>
 
-<script>
-const DATA_URL = '/threads-data';
+    <script>
+      const DATA_URL = "/threads-data";
 
-async function loadData() {
-  try {
-    const resp = await fetch(DATA_URL);
-    if (!resp.ok) throw new Error('fetch failed');
-    return await resp.json();
-  } catch {
-    // Fallback: try loading from embedded data
-    if (window.__THREADS_DATA) return window.__THREADS_DATA;
-    // Try relative path
-    try {
-      const resp2 = await fetch('../workspace/tools/threads-reply/dashboard-data.json');
-      return await resp2.json();
-    } catch { return null; }
-  }
-}
+      async function loadData() {
+        try {
+          const resp = await fetch(DATA_URL);
+          if (!resp.ok) throw new Error("fetch failed");
+          return await resp.json();
+        } catch {
+          // Fallback: try loading from embedded data
+          if (window.__THREADS_DATA) return window.__THREADS_DATA;
+          // Try relative path
+          try {
+            const resp2 = await fetch("../workspace/tools/threads-reply/dashboard-data.json");
+            return await resp2.json();
+          } catch {
+            return null;
+          }
+        }
+      }
 
-function tagHTML(topic) {
-  return `<span class="tag tag-${topic}">${topic}</span>`;
-}
+      function tagHTML(topic) {
+        return `<span class="tag tag-${topic}">${topic}</span>`;
+      }
 
-function render(data) {
-  if (!data) { document.body.innerHTML = '<h1 style="color:red">No data</h1>'; return; }
+      function render(data) {
+        if (!data) {
+          document.body.innerHTML = '<h1 style="color:red">No data</h1>';
+          return;
+        }
 
-  document.getElementById('timestamp').textContent = `Last update: ${data.generated_at}`;
+        document.getElementById("timestamp").textContent = `Last update: ${data.generated_at}`;
 
-  // Coverage
-  const c = data.coverage;
-  document.getElementById('coverage-rate').textContent = c.rate + '%';
-  document.getElementById('coverage-detail').textContent = `${c.sent} / ${c.total} sent | ${c.failed} failed`;
-  document.getElementById('coverage-bar').style.width = c.rate + '%';
+        // Coverage
+        const c = data.coverage;
+        document.getElementById("coverage-rate").textContent = c.rate + "%";
+        document.getElementById("coverage-detail").textContent =
+          `${c.sent} / ${c.total} sent | ${c.failed} failed`;
+        document.getElementById("coverage-bar").style.width = c.rate + "%";
 
-  // Subscribers
-  const subs = data.subscribers;
-  document.getElementById('sub-count').textContent = subs.count;
-  const tiers = data.tiers || {};
-  document.getElementById('sub-breakdown').textContent =
-    `A:${tiers.A||0} B:${tiers.B||0} C:${tiers.C||0} S:${tiers.S||0}`;
+        // Subscribers
+        const subs = data.subscribers;
+        document.getElementById("sub-count").textContent = subs.count;
+        const tiers = data.tiers || {};
+        document.getElementById("sub-breakdown").textContent =
+          `A:${tiers.A || 0} B:${tiers.B || 0} C:${tiers.C || 0} S:${tiers.S || 0}`;
 
-  // 24h
-  document.getElementById('recent-count').textContent = data.recent_24h;
+        // 24h
+        document.getElementById("recent-count").textContent = data.recent_24h;
 
-  // Recruitment
-  const recruits = subs.list.filter(s => s.recruit);
-  document.getElementById('recruit-count').textContent = recruits.length;
-  document.getElementById('recruit-list').innerHTML = recruits.map(r =>
-    `<div>@${r.username}: ${r.recruit}</div>`
-  ).join('');
+        // Recruitment
+        const recruits = subs.list.filter((s) => s.recruit);
+        document.getElementById("recruit-count").textContent = recruits.length;
+        document.getElementById("recruit-list").innerHTML = recruits
+          .map((r) => `<div>@${r.username}: ${r.recruit}</div>`)
+          .join("");
 
-  // Funnel
-  const stanceData = data.stance || {};
-  const funnelSteps = [
-    { label: 'Total', value: Object.values(stanceData).reduce((a,b)=>a+b, 0) || data.coverage.total, color: '#444' },
-    { label: 'Neutral', value: stanceData.neutral || 0, color: '#4488ff' },
-    { label: 'Pro', value: stanceData.pro || 0, color: '#00ff88' },
-    { label: 'Analytical', value: stanceData.analytical || 0, color: '#00ccff' },
-    { label: 'Recruited', value: recruits.length, color: '#ffd700' },
-  ];
-  const maxVal = Math.max(...funnelSteps.map(s => s.value), 1);
-  document.getElementById('funnel').innerHTML = funnelSteps.map(s => {
-    const h = Math.max(20, (s.value / maxVal) * 120);
-    return `<div class="funnel-step">
+        // Funnel
+        const stanceData = data.stance || {};
+        const funnelSteps = [
+          {
+            label: "Total",
+            value: Object.values(stanceData).reduce((a, b) => a + b, 0) || data.coverage.total,
+            color: "#444",
+          },
+          { label: "Neutral", value: stanceData.neutral || 0, color: "#4488ff" },
+          { label: "Pro", value: stanceData.pro || 0, color: "#00ff88" },
+          { label: "Analytical", value: stanceData.analytical || 0, color: "#00ccff" },
+          { label: "Recruited", value: recruits.length, color: "#ffd700" },
+        ];
+        const maxVal = Math.max(...funnelSteps.map((s) => s.value), 1);
+        document.getElementById("funnel").innerHTML = funnelSteps
+          .map((s) => {
+            const h = Math.max(20, (s.value / maxVal) * 120);
+            return `<div class="funnel-step">
       <div class="funnel-value" style="color:${s.color}">${s.value}</div>
       <div class="funnel-bar" style="height:${h}px;background:${s.color}"></div>
       <div class="funnel-label">${s.label}</div>
     </div>`;
-  }).join('');
+          })
+          .join("");
 
-  // Topics
-  const topics = data.topics || {};
-  const maxTopic = Math.max(...Object.values(topics), 1);
-  document.getElementById('topics-card').innerHTML = Object.entries(topics).map(([t, c]) => {
-    const w = (c / maxTopic) * 100;
-    return `<div style="display:flex;align-items:center;margin:4px 0">
+        // Topics
+        const topics = data.topics || {};
+        const maxTopic = Math.max(...Object.values(topics), 1);
+        document.getElementById("topics-card").innerHTML = Object.entries(topics)
+          .map(([t, c]) => {
+            const w = (c / maxTopic) * 100;
+            return `<div style="display:flex;align-items:center;margin:4px 0">
       <span style="width:100px">${tagHTML(t)}</span>
       <div style="flex:1;height:14px;background:#1a1a1a;border-radius:3px;overflow:hidden">
         <div style="width:${w}%;height:100%;border-radius:3px" class="tag-${t}"></div>
       </div>
       <span style="width:30px;text-align:right;color:#888">${c}</span>
     </div>`;
-  }).join('');
+          })
+          .join("");
 
-  // Subscribers table
-  document.getElementById('sub-table').innerHTML = subs.list.slice(0, 20).map(s => {
-    const tierClass = `tier-${s.tier}`;
-    return `<tr>
+        // Subscribers table
+        document.getElementById("sub-table").innerHTML = subs.list
+          .slice(0, 20)
+          .map((s) => {
+            const tierClass = `tier-${s.tier}`;
+            return `<tr>
       <td>@${s.username}</td>
       <td class="${tierClass}">${s.tier}</td>
       <td>${s.stance}</td>
       <td>${s.depth}</td>
-      <td>${s.topics.map(tagHTML).join('')}</td>
-      <td>${s.recruit ? `<span class="recruit">${s.recruit}</span>` : ''}</td>
+      <td>${s.topics.map(tagHTML).join("")}</td>
+      <td>${s.recruit ? `<span class="recruit">${s.recruit}</span>` : ""}</td>
     </tr>`;
-  }).join('');
+          })
+          .join("");
 
-  // Posts table
-  document.getElementById('posts-table').innerHTML = (data.posts || []).map(p =>
-    `<tr><td>${p.text}</td><td>${p.comments}</td><td class="timestamp">${(p.posted_at||'').slice(0,16)}</td></tr>`
-  ).join('');
-}
+        // Posts table
+        document.getElementById("posts-table").innerHTML = (data.posts || [])
+          .map(
+            (p) =>
+              `<tr><td>${p.text}</td><td>${p.comments}</td><td class="timestamp">${(p.posted_at || "").slice(0, 16)}</td></tr>`,
+          )
+          .join("");
+      }
 
-loadData().then(render);
-// Auto-refresh every 5 minutes
-setInterval(() => loadData().then(render), 300000);
-</script>
-</body>
+      loadData().then(render);
+      // Auto-refresh every 5 minutes
+      setInterval(() => loadData().then(render), 300000);
+    </script>
+  </body>
 </html>
