@@ -468,30 +468,31 @@ export async function sendMediaFeishu(params: {
     let duration: number | undefined;
     if ((fileType === "opus" || fileType === "mp4") && mediaUrl && !mediaUrl.startsWith("http")) {
       try {
-        // Check if ffprobe is available and file exists
-        if (fs.existsSync(mediaUrl)) {
-          const ffprobeCheck = spawnSync("which", ["ffprobe"], { encoding: "utf-8" });
-          if (ffprobeCheck.status === 0) {
-            const result = spawnSync(
-              "ffprobe",
-              [
-                "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                mediaUrl,
-              ],
-              { encoding: "utf-8", timeout: 10000 }
-            );
-            if (result.status === 0 && result.stdout) {
-              const durationSec = parseFloat(result.stdout.trim());
-              if (!isNaN(durationSec)) {
-                duration = Math.round(durationSec * 1000); // Convert to milliseconds
-              }
+        // Normalize file path (handle file:// URLs)
+        const normalizedPath = mediaUrl.startsWith("file://") ? mediaUrl.slice(7) : mediaUrl;
+        // Check if file exists and is a regular file (not a URL)
+        if (fs.existsSync(normalizedPath) && fs.statSync(normalizedPath).isFile()) {
+          // Try to run ffprobe directly - works on both POSIX and Windows
+          const result = spawnSync(
+            "ffprobe",
+            [
+              "-v", "error",
+              "-show_entries", "format=duration",
+              "-of", "default=noprint_wrappers=1:nokey=1",
+              normalizedPath,
+            ],
+            { encoding: "utf-8", timeout: 10000 }
+          );
+          if (result.status === 0 && result.stdout) {
+            const durationSec = parseFloat(result.stdout.trim());
+            if (!isNaN(durationSec)) {
+              duration = Math.round(durationSec * 1000); // Convert to milliseconds
             }
           }
         }
       } catch (e) {
         // Silently ignore ffprobe errors - duration is optional
+        // This includes cases where ffprobe is not installed (ENOENT)
       }
     }
 
