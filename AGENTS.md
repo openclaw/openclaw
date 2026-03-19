@@ -104,6 +104,7 @@
 - Framework: Vitest with V8 coverage thresholds (70% lines/branches/functions/statements).
 - Naming: match source names with `*.test.ts`; e2e in `*.e2e.test.ts`.
 - Run `pnpm test` (or `pnpm test:coverage`) before pushing when you touch logic.
+- Agents MUST NOT modify baseline, inventory, ignore, snapshot, or expected-failure files to silence failing checks without explicit approval in this chat.
 - For targeted/local debugging, keep using the wrapper: `pnpm test -- <path-or-filter> [vitest args...]` (for example `pnpm test -- src/commands/onboard-search.test.ts -t "shows registered plugin providers"`); do not default to raw `pnpm vitest run ...` because it bypasses wrapper config/profile/pool routing.
 - Do not set test workers above 16; tried already.
 - If local Vitest runs cause memory pressure (common on non-Mac-Studio hosts), use `OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test` for land/gate runs.
