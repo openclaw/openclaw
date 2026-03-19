@@ -35,7 +35,10 @@ function toStringRecord(
 
 export function resolveSseMcpServerLaunchConfig(
   raw: unknown,
-  options?: { onDroppedHeader?: (key: string, value: unknown) => void },
+  options?: {
+    onDroppedHeader?: (key: string, value: unknown) => void;
+    onMalformedHeaders?: (value: unknown) => void;
+  },
 ): SseMcpServerLaunchResult {
   if (!isRecord(raw)) {
     return { ok: false, reason: "server config must be an object" };
@@ -56,17 +59,49 @@ export function resolveSseMcpServerLaunchConfig(
       reason: `only http and https URLs are supported, got ${parsed.protocol}`,
     };
   }
+  // Warn if headers is present but not an object (e.g. a string or array).
+  let headers: Record<string, string> | undefined;
+  if (raw.headers !== undefined && raw.headers !== null) {
+    if (!isRecord(raw.headers)) {
+      options?.onMalformedHeaders?.(raw.headers);
+    } else {
+      headers = toStringRecord(raw.headers, options?.onDroppedHeader);
+    }
+  }
   return {
     ok: true,
     config: {
       url,
-      headers: toStringRecord(raw.headers, options?.onDroppedHeader),
+      headers,
     },
   };
 }
 
 export function describeSseMcpServerLaunchConfig(config: SseMcpServerLaunchConfig): string {
-  return config.url;
+  try {
+    const parsed = new URL(config.url);
+    // Redact embedded credentials and query-token auth from log/description output.
+    if (parsed.username || parsed.password) {
+      parsed.username = parsed.username ? "***" : "";
+      parsed.password = parsed.password ? "***" : "";
+    }
+    for (const key of parsed.searchParams.keys()) {
+      const lower = key.toLowerCase();
+      if (
+        lower === "token" ||
+        lower === "key" ||
+        lower === "api_key" ||
+        lower === "apikey" ||
+        lower === "secret" ||
+        lower === "access_token"
+      ) {
+        parsed.searchParams.set(key, "***");
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return config.url;
+  }
 }
 
 export type { SseMcpServerLaunchConfig, SseMcpServerLaunchResult };
