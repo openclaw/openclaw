@@ -47,3 +47,6 @@ if [ "${#format_files[@]}" -gt 0 ]; then
 fi
 
 git add -- "${files[@]}"
+
+cd "$ROOT_DIR"
+pnpm check
