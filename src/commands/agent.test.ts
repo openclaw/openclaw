@@ -745,7 +745,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("preserves user-pinned auth profile source when persisting final rotated auth profile", async () => {
+  it("preserves user-pinned auth profile source when persisting the final rotated auth profile", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       writeSessionStoreSeed(store, {
