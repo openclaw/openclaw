@@ -20,9 +20,11 @@ Docs: [Dashboard](/web/dashboard) and [Control UI](/web/control-ui).
 ## Prereqs
 
 - Node 24 recommended (Node 22 LTS, currently `22.16+`, still supported for compatibility)
+- An API key from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you for this
 
 <Tip>
 Check your Node version with `node --version` if you are unsure.
+Windows users: WSL2 is strongly recommended. See [Windows](/platforms/windows).
 </Tip>
 
 ## Quick setup (CLI)
@@ -73,33 +75,20 @@ Check your Node version with `node --version` if you are unsure.
     ```bash
     openclaw dashboard
     ```
+
+    If the Control UI loads, your Gateway is ready.
+
+  </Step>
+  <Step title="Send your first message">
+    The fastest way to chat is directly in the Control UI browser tab.
+    Type a message and you should get an AI reply.
+
+    Want to chat from a messaging app instead? The fastest channel setup
+    is usually [Telegram](/channels/telegram) (just a bot token, no QR
+    pairing). See [Channels](/channels) for all options.
+
   </Step>
 </Steps>
-
-<Check>
-If the Control UI loads, your Gateway is ready for use.
-</Check>
-
-## Optional checks and extras
-
-<AccordionGroup>
-  <Accordion title="Run the Gateway in the foreground">
-    Useful for quick tests or troubleshooting.
-
-    ```bash
-    openclaw gateway --port 18789
-    ```
-
-  </Accordion>
-  <Accordion title="Send a test message">
-    Requires a configured channel.
-
-    ```bash
-    openclaw message send --target +15555550123 --message "Hello from OpenClaw"
-    ```
-
-  </Accordion>
-</AccordionGroup>
 
 ## Useful environment variables
 
