@@ -30,6 +30,17 @@ const FUTURE_PROMISE_HINTS = [
   "我现在只做这一件事",
 ] as const;
 
+const FUTURE_PROMISE_REGEXES = [
+  /我(?:会|将|准备|打算)(?:先)?(?:去)?(?:帮你)?(?:看|查|检查|确认|复现|定位|分析|执行|处理|推进|跟进|跑|同步|拉取|截图|生成|获取|取出|拿到)/,
+  /(?:我|让我|我这边|我这里)(?:先|马上|立刻|这就|现在就|待会|稍后|等下|等会|一会儿|一会)(?:去)?(?:帮你)?(?:看|查|检查|确认|复现|定位|分析|执行|处理|推进|跟进|跑|同步|拉取|截图|生成|获取|取出|拿到)/,
+  /我来(?:先)?(?:帮你)?(?:看|查|检查|确认|复现|定位|分析|执行|处理|推进|跟进|跑|同步|拉取|截图|生成|获取|取出|拿到)/,
+  /(?:看完|查完|确认完|处理完|跑完|同步完|拉取完|截图完|生成完).*(?:再|然后).*(?:回报|同步|反馈|回复|告诉你|跟你说)/,
+  /先.*(?:再|然后).*(?:回报|同步|反馈|回复|告诉你|跟你说)/,
+  /\b(i'?ll|i will)\b.*\b(check|look|see|investigate|get|run|do|pull|gather)\b/,
+  /\blet me\b.*\b(check|look|see|investigate|get|run|do|pull|gather)\b/,
+  /\bgive me\b.*\b(sec|secs|second|seconds|min|mins|minute|minutes|moment)\b/,
+] as const;
+
 const FINAL_RESULT_HINTS = [
   "here is the final result",
   "here are the final results",
@@ -44,14 +55,7 @@ const FINAL_RESULT_HINTS = [
   "我已经看到结果",
 ] as const;
 
-const BLOCKER_HINTS = [
-  "当前卡点",
-  "当前阻塞",
-  "需要你",
-  "请你提供",
-  "无法继续",
-  "缺少你",
-] as const;
+const BLOCKER_HINTS = ["当前卡点", "当前阻塞", "需要你", "请你提供", "无法继续", "缺少你"] as const;
 
 const MAX_INTERIM_EXECUTION_WORDS = 45;
 const MAX_INTERIM_EXECUTION_CHARS = 140;
@@ -68,6 +72,9 @@ export function isLikelyInterimExecutionMessage(value: string): boolean {
   if (FINAL_RESULT_HINTS.some((hint) => normalized.includes(hint))) {
     return false;
   }
+  if (BLOCKER_HINTS.some((hint) => normalized.includes(hint))) {
+    return false;
+  }
   const words = normalized.split(" ").filter(Boolean).length;
   if (
     words <= MAX_INTERIM_EXECUTION_WORDS &&
@@ -76,8 +83,8 @@ export function isLikelyInterimExecutionMessage(value: string): boolean {
   ) {
     return true;
   }
-  if (BLOCKER_HINTS.some((hint) => normalized.includes(hint))) {
-    return false;
+  if (FUTURE_PROMISE_HINTS.some((hint) => normalized.includes(hint))) {
+    return true;
   }
-  return FUTURE_PROMISE_HINTS.some((hint) => normalized.includes(hint));
+  return FUTURE_PROMISE_REGEXES.some((pattern) => pattern.test(normalized));
 }

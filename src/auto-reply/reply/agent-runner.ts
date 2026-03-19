@@ -10,8 +10,8 @@ import { isLikelyInterimExecutionMessage } from "../../agents/interim-execution.
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
-import { spawnSubagentRun } from "../../agents/subagent-spawn.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
+import { spawnSubagentRun } from "../../agents/subagent-spawn.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -371,7 +371,9 @@ export async function runReplyAgent(params: {
     !isHeartbeat &&
     sessionKey &&
     preRunSnapshot?.hasActiveRuns &&
-    isLikelyContinuationNudge(resolveContinuationNudgeCandidate(followupRun.summaryLine, commandBody))
+    isLikelyContinuationNudge(
+      resolveContinuationNudgeCandidate(followupRun.summaryLine, commandBody),
+    )
   ) {
     typing.cleanup();
     return buildBackgroundRunAlreadyActiveReply();
@@ -522,7 +524,9 @@ export async function runReplyAgent(params: {
     if (!isHeartbeat && sessionKey) {
       const interimPayloads = runResult.payloads ?? [];
       const interimText = pickLastNonEmptyTextFromPayloads(interimPayloads)?.trim() ?? "";
-      const hasRenderableInterimError = interimPayloads.some((payload) => payload?.isError === true);
+      const hasRenderableInterimError = interimPayloads.some(
+        (payload) => payload?.isError === true,
+      );
       const runSnapshot = inspectSubagentRuns(sessionKey, runStartedAt);
       const shouldRetryInterimAck =
         !runResult.meta.error &&

@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeishuMessageEvent } from "./bot.js";
 
 const mocks = vi.hoisted(() => ({
@@ -23,7 +23,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk", () => ({
   DEFAULT_GROUP_HISTORY_LIMIT: 8,
-  buildPendingHistoryContextFromMap: vi.fn(({ currentMessage }: { currentMessage: string }) => currentMessage),
+  buildPendingHistoryContextFromMap: vi.fn(
+    ({ currentMessage }: { currentMessage: string }) => currentMessage,
+  ),
   recordPendingHistoryEntryIfEnabled: vi.fn(),
   clearHistoryEntriesIfEnabled: vi.fn(),
 }));
