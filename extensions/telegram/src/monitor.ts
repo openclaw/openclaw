@@ -87,6 +87,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
   let pollingSession: TelegramPollingSession | undefined;
   let execApprovalsHandler: TelegramExecApprovalHandler | undefined;
+  let stopError: unknown;
+  let stopAt: number | null = null;
 
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
     const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
@@ -215,16 +217,14 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     });
     await pollingSession.runUntilAbort();
   } catch (err) {
-    opts.statusSink?.({
-      running: false,
-      lastStopAt: Date.now(),
-      lastError: formatErrorMessage(err),
-    });
+    stopError = err;
     throw err;
   } finally {
+    stopAt ??= Date.now();
     opts.statusSink?.({
       running: false,
-      lastStopAt: Date.now(),
+      lastStopAt: stopAt,
+      ...(stopError != null ? { lastError: formatErrorMessage(stopError) } : {}),
     });
     await execApprovalsHandler?.stop().catch(() => {});
     unregisterHandler();
