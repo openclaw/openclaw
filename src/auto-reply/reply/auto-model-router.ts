@@ -63,6 +63,33 @@ const inFlightByKey = new Map<string, InFlightEntry>();
 const cacheByKey = new Map<string, CacheEntry>();
 const pendingBatch: PendingBatchEntry[] = [];
 let batchFlushTimer: ReturnType<typeof setTimeout> | undefined;
+let pruneInterval: ReturnType<typeof setInterval> | undefined;
+
+const ROUTER_PRUNE_INTERVAL_MS = 60_000;
+
+function pruneExpiredRouterState(): void {
+  const now = Date.now();
+  for (const [k, v] of inFlightByKey) {
+    if (v.expiresAt <= now) {
+      inFlightByKey.delete(k);
+    }
+  }
+  for (const [k, v] of cacheByKey) {
+    if (v.expiresAt <= now) {
+      cacheByKey.delete(k);
+    }
+  }
+}
+
+function ensurePruneInterval(): void {
+  if (pruneInterval !== undefined) {
+    return;
+  }
+  pruneInterval = setInterval(pruneExpiredRouterState, ROUTER_PRUNE_INTERVAL_MS);
+  if (typeof pruneInterval.unref === "function") {
+    pruneInterval.unref();
+  }
+}
 
 function buildDedupeKey(params: {
   sessionKey?: string;
@@ -70,7 +97,11 @@ function buildDedupeKey(params: {
   promptHash?: string;
 }): string {
   const parts = [params.sessionKey ?? "", params.agentId ?? "", params.promptHash ?? ""];
-  return parts.join("::");
+  const joined = parts.join("::");
+  if (joined === "::") {
+    return `::${Date.now()}-${Math.random()}`;
+  }
+  return joined;
 }
 
 function resolveRouterConfig(cfg: OpenClawConfig | undefined): RouterConfig {
@@ -154,7 +185,7 @@ function maybeSelectLocalModel(params: {
     provider: split.provider,
     model: split.model,
     reason: "local-preferred",
-    tag: ROUTING_TAG.EXPENSIVE,
+    tag: ROUTING_TAG.FAST,
     pass1TokenUsage: { input: 0, output: 0, estimated: true },
   };
 }
@@ -188,10 +219,12 @@ export async function routeAutoModel(params: {
   lastNonAutoProvider?: string;
   lastNonAutoModel?: string;
 }): Promise<RouterResult> {
+  ensurePruneInterval();
   const config = resolveRouterConfig(params.cfg);
   const dedupeTtlMs = config.dedupeTtlMs ?? DEFAULT_DEDUPE_TTL_MS;
   const cacheTtlMs = config.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
   const now = Date.now();
+  pruneExpiredRouterState();
   const key = buildDedupeKey({
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -358,5 +391,9 @@ export function _clearRouterState() {
   if (batchFlushTimer) {
     clearTimeout(batchFlushTimer);
     batchFlushTimer = undefined;
+  }
+  if (pruneInterval) {
+    clearInterval(pruneInterval);
+    pruneInterval = undefined;
   }
 }

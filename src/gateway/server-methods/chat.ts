@@ -961,7 +961,7 @@ function rewriteTranscriptBeforeUserPivot(params: {
   }
 
   const keepMessages = messages.slice(0, pivotAbsoluteIndex);
-  const backupPath = `${params.transcriptPath}.edit.bak`;
+  const backupPath = `${params.transcriptPath}.edit-${Date.now()}.bak`;
   fs.copyFileSync(params.transcriptPath, backupPath);
 
   const header = {

@@ -394,6 +394,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             runId,
             messageId: pivot.messageId,
             userMessageIndex: pivot.userMessageIndex,
+            thinking: opts.thinking,
           });
           chatLog.addUser(parsed.nextText, createLocalPromptId());
           setActivityStatus("waiting");
