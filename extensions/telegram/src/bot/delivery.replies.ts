@@ -636,7 +636,9 @@ export async function deliverReplies(params: {
         params.replyToMode === "off"
           ? undefined
           : (resolveTelegramReplyId(reply.replyToId) ??
-            (reply.replyToCurrent === false ? undefined : params.defaultReplyToId));
+            (params.replyToMode !== "all" || reply.replyToCurrent === false
+              ? undefined
+              : params.defaultReplyToId));
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const shouldPinFirstMessage = telegramData?.pin === true;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
