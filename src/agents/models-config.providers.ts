@@ -21,7 +21,6 @@ import { findNormalizedProviderValue } from "./model-selection.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import { normalizeGoogleModelId } from "./model-id-normalization.js";
 import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
-import { findNormalizedProviderValue } from "./provider-id.js";
 export { buildKimiCodingProvider } from "../../extensions/kimi-coding/provider-catalog.js";
 export { buildKilocodeProvider } from "../../extensions/kilocode/provider-catalog.js";
 export {

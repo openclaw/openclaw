@@ -178,6 +178,49 @@ describe("models-config", () => {
     });
   });
 
+  it("falls back to stored github-copilot profiles when ordered tokenRefs stay unresolved", async () => {
+    await withTempHome(async (home) => {
+      await withUnsetCopilotTokenEnv(async () => {
+        const fetchMock = mockCopilotTokenExchangeSuccess();
+        const agentDir = path.join(home, "agent-profiles");
+        try {
+          delete process.env.MISSING_ORDERED_COPILOT_TOKEN;
+          await writeAuthProfiles(agentDir, {
+            "github-copilot:preferred": {
+              type: "token",
+              provider: "github-copilot",
+              tokenRef: {
+                source: "env",
+                provider: "default",
+                id: "MISSING_ORDERED_COPILOT_TOKEN",
+              },
+            },
+            "github-copilot:backup": {
+              type: "token",
+              provider: "github-copilot",
+              token: "backup-token",
+            },
+          });
+
+          await ensureOpenClawModelsJson(
+            {
+              auth: {
+                order: {
+                  "github-copilot": ["github-copilot:preferred"],
+                },
+              },
+              models: { providers: {} },
+            },
+            agentDir,
+          );
+          expectBearerAuthHeader(fetchMock, "backup-token");
+        } finally {
+          delete process.env.MISSING_ORDERED_COPILOT_TOKEN;
+        }
+      });
+    });
+  });
+
   it("falls back to config auth.order when stored github-copilot order is stale", async () => {
     await withTempHome(async (home) => {
       await withUnsetCopilotTokenEnv(async () => {
