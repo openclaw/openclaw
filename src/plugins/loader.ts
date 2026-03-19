@@ -448,10 +448,10 @@ function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): voi
   // would cause HTTP routes registered in the original registry to become
   // unreachable (404).  See #47625.
   const isEmptyDefault = current != null && current.plugins.length === 0 && current.diagnostics.length === 0;
-  if (current == null || current === registry || isEmptyDefault) {
+  if (current === registry || isEmptyDefault) {
     setActivePluginRegistry(registry, cacheKey);
+    initializeGlobalHookRunner(registry);
   }
-  initializeGlobalHookRunner(registry);
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
