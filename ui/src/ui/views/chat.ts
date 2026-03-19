@@ -142,6 +142,7 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
 interface ChatEphemeralState {
   sttRecording: boolean;
   sttInterimText: string;
+  sttError: string;
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
   slashMenuIndex: number;
@@ -157,6 +158,7 @@ function createChatEphemeralState(): ChatEphemeralState {
   return {
     sttRecording: false,
     sttInterimText: "",
+    sttError: "",
     slashMenuOpen: false,
     slashMenuItems: [],
     slashMenuIndex: 0,
@@ -549,6 +551,25 @@ function tokenEstimate(draft: string): string | null {
     return null;
   }
   return `~${Math.ceil(draft.length / 4)} tokens`;
+}
+
+/**
+ * 將瀏覽器原始 STT 錯誤字串轉換為使用者可讀的訊息。
+ */
+function formatSttError(error: string): string {
+  if (error === "not-allowed" || error === "service-not-allowed") {
+    return "Microphone access denied. Please allow microphone access in your browser.";
+  }
+  if (error === "network") {
+    return "Speech recognition failed: network error.";
+  }
+  if (error === "audio-capture") {
+    return "No microphone found.";
+  }
+  if (error === "language-not-supported") {
+    return "Language not supported for speech recognition.";
+  }
+  return `Speech recognition error: ${error}`;
 }
 
 /**
@@ -1195,6 +1216,7 @@ export function renderChat(props: ChatProps) {
         />
 
         ${vs.sttRecording && vs.sttInterimText ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>` : nothing}
+        ${vs.sttError ? html`<div class="agent-chat__stt-error">${formatSttError(vs.sttError)}</div>` : nothing}
 
         <textarea
           ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
@@ -1231,9 +1253,10 @@ export function renderChat(props: ChatProps) {
                         stopStt();
                         vs.sttRecording = false;
                         vs.sttInterimText = "";
+                        vs.sttError = "";
                         requestUpdate();
                       } else {
-                        const started = startStt({
+                        startStt({
                           onTranscript: (text, isFinal) => {
                             if (isFinal) {
                               const current = getDraft();
@@ -1247,6 +1270,7 @@ export function renderChat(props: ChatProps) {
                           },
                           onStart: () => {
                             vs.sttRecording = true;
+                            vs.sttError = "";
                             requestUpdate();
                           },
                           onEnd: () => {
@@ -1254,18 +1278,15 @@ export function renderChat(props: ChatProps) {
                             vs.sttInterimText = "";
                             requestUpdate();
                           },
-                          onError: () => {
+                          onError: (error: string) => {
                             vs.sttRecording = false;
                             vs.sttInterimText = "";
+                            vs.sttError = error;
                             requestUpdate();
                           },
                         });
-                        if (started) {
-                          vs.sttRecording = true;
-                          requestUpdate();
-                        }
                       }
-                    }}
+                    }}}
                     title=${vs.sttRecording ? "Stop recording" : "Voice input"}
                     ?disabled=${!props.connected}
                   >
