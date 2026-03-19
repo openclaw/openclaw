@@ -430,7 +430,7 @@ function resetSlashMenuState(): void {
 
 function updateSlashMenu(value: string, requestUpdate: () => void): void {
   // Arg mode: /command <partial-arg>
-  const argMatch = value.match(/^\/( \S+)\s(.*)$/);
+  const argMatch = value.match(/^\/(\S+)\s(.*)$/);
   if (argMatch) {
     const cmdName = argMatch[1].toLowerCase();
     const argFilter = argMatch[2].toLowerCase();
