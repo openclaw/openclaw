@@ -296,6 +296,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     reasoningText = "";
   };
 
+  const logOutboundResult = (details: {
+    kind: "text" | "card" | "media";
+    mode: "send" | "reply";
+    infoKind?: string;
+    messageId?: string;
+  }) => {
+    params.runtime.log?.(
+      `feishu[${account.accountId}] outbound ${details.kind} ${details.mode} ok` +
+        ` chat=${chatId}` +
+        (sendReplyToMessageId ? ` replyTo=${sendReplyToMessageId}` : "") +
+        (effectiveReplyInThread ? ` thread=${String(effectiveReplyInThread)}` : "") +
+        (details.infoKind ? ` kind=${details.infoKind}` : "") +
+        (details.messageId ? ` messageId=${details.messageId}` : ""),
+    );
+  };
+
   const sendChunkedTextReply = async (params: {
     text: string;
     useCard: boolean;
@@ -320,9 +336,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         accountId,
       };
       if (params.useCard) {
-        await sendMarkdownCardFeishu(message);
+        const result = await sendMarkdownCardFeishu(message);
+        logOutboundResult({
+          kind: "card",
+          mode: sendReplyToMessageId ? "reply" : "send",
+          infoKind: params.infoKind,
+          messageId: result.messageId,
+        });
       } else {
-        await sendMessageFeishu(message);
+        const result = await sendMessageFeishu(message);
+        logOutboundResult({
+          kind: "text",
+          mode: sendReplyToMessageId ? "reply" : "send",
+          infoKind: params.infoKind,
+          messageId: result.messageId,
+        });
       }
       first = false;
     }
@@ -398,13 +426,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // Send media even when streaming handled the text
             if (hasMedia) {
               for (const mediaUrl of mediaList) {
-                await sendMediaFeishu({
+                const result = await sendMediaFeishu({
                   cfg,
                   to: chatId,
                   mediaUrl,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
                   accountId,
+                });
+                logOutboundResult({
+                  kind: "media",
+                  mode: sendReplyToMessageId ? "reply" : "send",
+                  infoKind: info?.kind,
+                  messageId: result?.messageId,
                 });
               }
             }
@@ -419,7 +453,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               textChunkLimit,
               chunkMode,
             )) {
-              await sendStructuredCardFeishu({
+              const result = await sendStructuredCardFeishu({
                 cfg,
                 to: chatId,
                 text: chunk,
@@ -429,6 +463,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 accountId,
                 header: cardHeader,
                 note: cardNote,
+              });
+              logOutboundResult({
+                kind: "card",
+                mode: sendReplyToMessageId ? "reply" : "send",
+                infoKind: info?.kind,
+                messageId: result.messageId,
               });
               first = false;
             }
@@ -442,13 +482,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
         if (hasMedia) {
           for (const mediaUrl of mediaList) {
-            await sendMediaFeishu({
+            const result = await sendMediaFeishu({
               cfg,
               to: chatId,
               mediaUrl,
               replyToMessageId: sendReplyToMessageId,
               replyInThread: effectiveReplyInThread,
               accountId,
+            });
+            logOutboundResult({
+              kind: "media",
+              mode: sendReplyToMessageId ? "reply" : "send",
+              infoKind: info?.kind,
+              messageId: result?.messageId,
             });
           }
         }

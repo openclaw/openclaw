@@ -57,8 +57,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     streamingInstances.length = 0;
-    sendMediaFeishuMock.mockResolvedValue(undefined);
-    sendStructuredCardFeishuMock.mockResolvedValue(undefined);
+    sendMessageFeishuMock.mockResolvedValue({ messageId: "om_text" });
+    sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "om_card_md" });
+    sendMediaFeishuMock.mockResolvedValue({ messageId: "om_media" });
+    sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "om_card" });
 
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
@@ -220,12 +222,18 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("keeps auto mode plain text on non-streaming send path", async () => {
-    const { options } = createDispatcherHarness();
+    const runtime = createRuntimeLogger();
+    const { options } = createDispatcherHarness({ runtime });
     await options.deliver({ text: "plain text" }, { kind: "final" });
 
     expect(streamingInstances).toHaveLength(0);
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "feishu[main] outbound text send ok chat=oc_chat kind=final messageId=om_text",
+      ),
+    );
   });
 
   it("suppresses internal block payload delivery", async () => {
@@ -444,7 +452,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("passes replyInThread to sendMessageFeishu for plain text", async () => {
+    const runtime = createRuntimeLogger();
     const { options } = createDispatcherHarness({
+      runtime,
       replyToMessageId: "om_msg",
       replyInThread: true,
     });
@@ -455,6 +465,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         replyToMessageId: "om_msg",
         replyInThread: true,
       }),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "feishu[main] outbound text reply ok chat=oc_chat replyTo=om_msg thread=true kind=final messageId=om_text",
+      ),
     );
   });
 
