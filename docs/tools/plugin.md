@@ -193,7 +193,8 @@ enablement via `plugins.entries.<id>.enabled` or
 Bundled plugin runtime dependencies are owned by each plugin package. Packaged
 builds stage opted-in bundled dependencies under
 `dist/extensions/<id>/node_modules` instead of requiring mirrored copies in the
-root package.
+root package. npm artifacts ship the built `dist/extensions/*` tree; source
+`extensions/*` directories stay in source checkouts only.
 
 Installed plugins are enabled by default, but can be disabled the same way.
 
