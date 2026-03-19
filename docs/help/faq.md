@@ -13,7 +13,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 ## Table of contents
 
 - [Quick start and first-run setup]
-  - [I am stuck - fastest way to get unstuck](#i-am-stuck-fastest-way-to-get-unstuck)
+  - [I am stuck, fastest way to get unstuck](#i-am-stuck-fastest-way-to-get-unstuck)
   - [Recommended way to install and set up OpenClaw](#recommended-way-to-install-and-set-up-openclaw)
   - [How do I open the dashboard after onboarding?](#how-do-i-open-the-dashboard-after-onboarding)
   - [How do I authenticate the dashboard (token) on localhost vs remote?](#how-do-i-authenticate-the-dashboard-token-on-localhost-vs-remote)
@@ -267,7 +267,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## Quick start and first-run setup
 
-### I am stuck - fastest way to get unstuck
+### I am stuck, fastest way to get unstuck
 
 Use a local AI agent that can **see your machine**. That is far more effective than asking
 in Discord, because most "I'm stuck" cases are **local config or environment issues** that
