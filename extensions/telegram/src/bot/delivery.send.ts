@@ -2,6 +2,7 @@ import { type Bot, GrammyError } from "grammy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
+import { retryTelegramPreConnectSend } from "../final-reply-retry.js";
 import { markdownToTelegramHtml } from "../format.js";
 import { buildInlineKeyboard } from "../send.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./helpers.js";
@@ -121,16 +122,21 @@ export async function sendTelegramText(
   const fallbackText = opts?.plainText ?? text;
   const hasFallbackText = fallbackText.trim().length > 0;
   const sendPlainFallback = async () => {
-    const res = await sendTelegramWithThreadFallback({
-      operation: "sendMessage",
-      runtime,
-      thread: opts?.thread,
-      requestParams: baseParams,
-      send: (effectiveParams) =>
-        bot.api.sendMessage(chatId, fallbackText, {
-          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-          ...effectiveParams,
+    const res = await retryTelegramPreConnectSend({
+      operationLabel: "sendMessage",
+      log: runtime.log,
+      deliver: () =>
+        sendTelegramWithThreadFallback({
+          operation: "sendMessage",
+          runtime,
+          thread: opts?.thread,
+          requestParams: baseParams,
+          send: (effectiveParams) =>
+            bot.api.sendMessage(chatId, fallbackText, {
+              ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+              ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+              ...effectiveParams,
+            }),
         }),
     });
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
@@ -145,21 +151,26 @@ export async function sendTelegramText(
     return await sendPlainFallback();
   }
   try {
-    const res = await sendTelegramWithThreadFallback({
-      operation: "sendMessage",
-      runtime,
-      thread: opts?.thread,
-      requestParams: baseParams,
-      shouldLog: (err) => {
-        const errText = formatErrorMessage(err);
-        return !PARSE_ERR_RE.test(errText) && !EMPTY_TEXT_ERR_RE.test(errText);
-      },
-      send: (effectiveParams) =>
-        bot.api.sendMessage(chatId, htmlText, {
-          parse_mode: "HTML",
-          ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
-          ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
-          ...effectiveParams,
+    const res = await retryTelegramPreConnectSend({
+      operationLabel: "sendMessage",
+      log: runtime.log,
+      deliver: () =>
+        sendTelegramWithThreadFallback({
+          operation: "sendMessage",
+          runtime,
+          thread: opts?.thread,
+          requestParams: baseParams,
+          shouldLog: (err) => {
+            const errText = formatErrorMessage(err);
+            return !PARSE_ERR_RE.test(errText) && !EMPTY_TEXT_ERR_RE.test(errText);
+          },
+          send: (effectiveParams) =>
+            bot.api.sendMessage(chatId, htmlText, {
+              parse_mode: "HTML",
+              ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
+              ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+              ...effectiveParams,
+            }),
         }),
     });
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
