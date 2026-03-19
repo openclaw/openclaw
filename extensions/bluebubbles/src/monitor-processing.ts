@@ -1,9 +1,9 @@
+import { callGateway } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   resolveOutboundMediaUrls,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
-import { callGateway } from "openclaw/plugin-sdk/gateway-runtime";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { fetchBlueBubblesHistory } from "./history.js";
@@ -884,15 +884,11 @@ export async function processMessage(
 
   if (isTapbackMessage && tapbackParsed?.action !== "removed" && replyToBody) {
     const approvalId =
-      replyToBody.match(/Approval required \(id ([a-z0-9-]{8,})(?:,|\))/i)?.[1]?.trim() ||
+      replyToBody.match(/Full id:\s*`?([^\s`]+)`?/i)?.[1]?.trim() ||
       replyToBody.match(/\/approve\s+([^\s`]+)\s+allow-(?:once|always)/i)?.[1]?.trim() ||
-      replyToBody.match(/Full id:\s*`?([^\s`]+)`?/i)?.[1]?.trim();
+      replyToBody.match(/Approval required \(id ([a-z0-9-]{8,})(?:,|\))/i)?.[1]?.trim();
     const decision =
-      tapbackParsed.emoji === "👍"
-        ? "allow-always"
-        : tapbackParsed.emoji === "👎"
-          ? "deny"
-          : null;
+      tapbackParsed.emoji === "👍" ? "allow-once" : tapbackParsed.emoji === "👎" ? "deny" : null;
     if (approvalId && decision) {
       if (!commandAuthorized) {
         logInboundDrop({
@@ -915,12 +911,12 @@ export async function processMessage(
           runtime,
           `bluebubbles: resolved exec approval ${approvalId} via tapback ${tapbackParsed.emoji}`,
         );
+        return;
       } catch (err) {
         runtime.error?.(
           `[bluebubbles] approval tapback resolve failed id=${approvalId}: ${String(err)}`,
         );
       }
-      return;
     }
   }
 
