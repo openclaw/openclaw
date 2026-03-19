@@ -30,7 +30,7 @@ function makeSuccessfulAssistant(): EmbeddedRunAttemptResult["lastAssistant"] {
       cacheWrite: 0,
       total: 300,
     },
-  } as EmbeddedRunAttemptResult["lastAssistant"];
+  } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
 }
 
 describe("same-profile overloaded retry loop", () => {

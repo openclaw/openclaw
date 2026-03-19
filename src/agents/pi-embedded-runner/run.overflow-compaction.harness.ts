@@ -122,8 +122,12 @@ export const mockedLog: {
   isEnabled: vi.fn(() => false),
 };
 
-export const mockedClassifyFailoverReason = vi.fn(() => null);
-export const mockedIsFailoverAssistantError = vi.fn(() => false);
+export const mockedClassifyFailoverReason = vi.fn<(message?: string) => "overloaded" | null>(
+  () => null,
+);
+export const mockedIsFailoverAssistantError = vi.fn<
+  (assistant?: { errorMessage?: string }) => boolean
+>(() => false);
 export const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
   const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
   return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
