@@ -33,13 +33,21 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     merged.groupSpace = groupSpace;
   }
 
-  if (
-    merged.currentThreadTs == null &&
-    opts.threadId != null &&
-    opts.threadId !== "" &&
-    opts.threadId !== null
-  ) {
-    merged.currentThreadTs = String(opts.threadId);
+  const inferredSessionThreadId = (() => {
+    const sessionKey = opts.sessionKey?.trim();
+    if (!sessionKey) {
+      return undefined;
+    }
+    const match = sessionKey.match(/:(?:topic|thread):([^:]+)(?::sender:[^:]+)?$/);
+    return match?.[1]?.trim() || undefined;
+  })();
+
+  if (merged.currentThreadTs == null) {
+    if (opts.threadId != null && opts.threadId !== "" && opts.threadId !== null) {
+      merged.currentThreadTs = String(opts.threadId);
+    } else if (inferredSessionThreadId) {
+      merged.currentThreadTs = inferredSessionThreadId;
+    }
   }
 
   // Populate currentChannelId from the outbound target so channel threading

@@ -21,7 +21,7 @@ export function parseSessionThreadInfo(sessionKey: string | undefined): {
   const baseSessionKey = markerIndex === -1 ? sessionKey : sessionKey.slice(0, markerIndex);
   const threadIdRaw =
     markerIndex === -1 ? undefined : sessionKey.slice(markerIndex + marker.length);
-  const threadId = threadIdRaw?.trim() || undefined;
+  const threadId = threadIdRaw?.split(":sender:")[0]?.split(":")[0]?.trim() || undefined;
   return { baseSessionKey, threadId };
 }
 

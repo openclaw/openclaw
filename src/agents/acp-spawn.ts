@@ -26,6 +26,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import { callGateway } from "../gateway/call.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
@@ -529,7 +530,7 @@ export async function spawnAcpDirect(
       channel: ctx.agentChannel,
       accountId: ctx.agentAccountId,
       to: ctx.agentTo,
-      threadId: ctx.agentThreadId,
+      threadId: ctx.agentThreadId ?? parseSessionThreadInfo(ctx.agentSessionKey).threadId,
     });
     if (!prepared.ok) {
       return {
@@ -662,7 +663,7 @@ export async function spawnAcpDirect(
     channel: ctx.agentChannel,
     accountId: ctx.agentAccountId,
     to: ctx.agentTo,
-    threadId: ctx.agentThreadId,
+    threadId: ctx.agentThreadId ?? parseSessionThreadInfo(ctx.agentSessionKey).threadId,
   });
   // For thread-bound ACP spawns, force bootstrap delivery to the new child thread.
   const boundThreadIdRaw = binding?.conversation.conversationId;
