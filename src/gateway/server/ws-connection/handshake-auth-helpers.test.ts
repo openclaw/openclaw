@@ -68,16 +68,43 @@ describe("handshake auth helpers", () => {
     });
   });
 
-  it("allows silent local pairing only for not-paired and scope upgrades", () => {
+  it("allows silent local pairing for not-paired reason", () => {
     expect(
       shouldAllowSilentLocalPairing({
         isLocalClient: true,
         hasBrowserOriginHeader: false,
-        isControlUi: false,
+        isControlUi: true,
         isWebchat: false,
         reason: "not-paired",
       }),
     ).toBe(true);
+  });
+
+  it("rejects silent local pairing for scope-upgrade even from local ControlUI", () => {
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        isControlUi: true,
+        isWebchat: false,
+        reason: "scope-upgrade",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects silent local pairing for role-upgrade", () => {
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        isControlUi: true,
+        isWebchat: false,
+        reason: "role-upgrade",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects silent local pairing for metadata-upgrade", () => {
     expect(
       shouldAllowSilentLocalPairing({
         isLocalClient: true,
