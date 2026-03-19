@@ -2183,12 +2183,32 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
 - `models.providers.*.api`: request adapter (`openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, etc).
 - `models.providers.*.apiKey`: provider credential (prefer SecretRef/env substitution).
 - `models.providers.*.auth`: auth strategy (`api-key`, `token`, `oauth`, `aws-sdk`).
+- `models.providers.*.safetySettings`: optional Gemini safety threshold defaults for provider entries using `api: "google-generative-ai"`; supported keys are `harassment`, `hateSpeech`, `sexuallyExplicit`, and `dangerousContent`.
 - `models.providers.*.injectNumCtxForOpenAICompat`: for Ollama + `openai-completions`, inject `options.num_ctx` into requests (default: `true`).
 - `models.providers.*.authHeader`: force credential transport in the `Authorization` header when required.
 - `models.providers.*.baseUrl`: upstream API base URL.
 - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
 - `models.providers.*.models`: explicit provider model catalog entries.
 - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
+
+Example Gemini safety settings:
+
+```json5
+{
+  models: {
+    providers: {
+      google: {
+        api: "google-generative-ai",
+        safetySettings: {
+          harassment: "BLOCK_NONE",
+          dangerousContent: "BLOCK_ONLY_HIGH",
+        },
+      },
+    },
+  },
+}
+```
+
 - `models.bedrockDiscovery`: Bedrock auto-discovery settings root.
 - `models.bedrockDiscovery.enabled`: turn discovery polling on/off.
 - `models.bedrockDiscovery.region`: AWS region for discovery.
