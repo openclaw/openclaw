@@ -13,6 +13,7 @@ import {
 } from "../../../channels/thread-bindings-policy.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import { isFeishuSenderScopedTopic } from "../feishu-context.js";
 import {
   type SubagentsCommandContext,
   isDiscordSurface,
@@ -72,11 +73,11 @@ function resolveFocusBindingContext(
     if (!baseConversationId) {
       return null;
     }
-    // In group_topic_sender scope, inbound routing resolves a sender-scoped
-    // conversation ID (chatId:topic:topicId:sender:openId). Bind with the
-    // sender-scoped variant so the exact-match lookup in bot.ts succeeds.
+    // Only group_topic_sender scope uses sender-scoped conversation IDs
+    // (chatId:topic:topicId:sender:openId). group_topic scope routes by
+    // topic-only IDs, so the binding must match what inbound routing uses.
     let conversationId = baseConversationId;
-    if (baseConversationId.includes(":topic:")) {
+    if (isFeishuSenderScopedTopic({ cfg: params.cfg, conversationId: baseConversationId })) {
       const senderId = (params.command.senderId ?? "").trim();
       if (senderId) {
         conversationId = `${baseConversationId}:sender:${senderId}`;

@@ -40,7 +40,7 @@ import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { parseDiscordParentChannelFromSessionKey } from "./discord-parent-channel.js";
-import { resolveFeishuConversationId } from "./feishu-context.js";
+import { isFeishuSenderScopedTopic, resolveFeishuConversationId } from "./feishu-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import {
@@ -192,9 +192,12 @@ function resolveBoundAcpSessionForReset(params: {
     skipConfiguredFallbackWhenActiveSessionNonAcp: true,
     fallbackToActiveAcpWhenUnbound: false,
   } as const;
-  // Feishu group_topic_sender bindings are keyed with :sender:<openId> suffix
-  // that resolveFeishuConversationId does not include. Try sender-scoped first.
-  if (bindingContext.channel === "feishu" && bindingContext.conversationId?.includes(":topic:")) {
+  // Only group_topic_sender scope uses sender-scoped conversation IDs.
+  if (
+    bindingContext.channel === "feishu" &&
+    bindingContext.conversationId &&
+    isFeishuSenderScopedTopic({ cfg: params.cfg, conversationId: bindingContext.conversationId })
+  ) {
     const senderId = normalizeConversationText(params.ctx.SenderId);
     if (senderId) {
       const senderScoped = resolveEffectiveResetTargetSessionKey({

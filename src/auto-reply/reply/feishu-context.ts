@@ -78,3 +78,36 @@ export function resolveFeishuConversationId(params: FeishuConversationParams): s
   );
   return undefined;
 }
+
+/**
+ * Check whether a Feishu topic conversation uses sender-scoped IDs based on
+ * the channel config. Only `group_topic_sender` scope appends
+ * `:sender:<openId>` to the conversation ID during inbound routing.
+ */
+export function isFeishuSenderScopedTopic(params: {
+  cfg: { channels?: Record<string, unknown> };
+  conversationId: string;
+}): boolean {
+  if (!params.conversationId.includes(":topic:")) {
+    return false;
+  }
+  const feishuCfg = params.cfg.channels?.feishu as Record<string, unknown> | undefined;
+  if (!feishuCfg) {
+    return false;
+  }
+  const chatId = params.conversationId.split(":topic:")[0];
+  // Resolve per-group config (exact match, case-insensitive, or wildcard).
+  const groups = feishuCfg.groups as Record<string, Record<string, unknown>> | undefined;
+  let groupConfig: Record<string, unknown> | undefined;
+  if (groups && chatId) {
+    groupConfig = groups[chatId];
+    if (!groupConfig) {
+      const lowered = chatId.toLowerCase();
+      const matchKey = Object.keys(groups).find((key) => key.toLowerCase() === lowered);
+      groupConfig = matchKey ? groups[matchKey] : groups["*"];
+    }
+  }
+  const scope =
+    (groupConfig?.groupSessionScope as string) ?? (feishuCfg.groupSessionScope as string);
+  return scope === "group_topic_sender";
+}

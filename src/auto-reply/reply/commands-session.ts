@@ -25,7 +25,7 @@ import {
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
-import { resolveFeishuConversationId } from "./feishu-context.js";
+import { isFeishuSenderScopedTopic, resolveFeishuConversationId } from "./feishu-context.js";
 import { resolveTelegramConversationId } from "./telegram-context.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
@@ -412,12 +412,15 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
           conversationId: telegramConversationId,
         })
       : null;
-  // Feishu group_topic_sender bindings are keyed with :sender:<openId> suffix
-  // that resolveFeishuConversationId does not include. Prefer sender-scoped
-  // lookup so lifecycle changes target the user's own binding, not a shared
-  // topic-level configured binding.
+  // Only group_topic_sender scope uses sender-scoped conversation IDs.
+  // Prefer sender-scoped lookup so lifecycle changes target the user's own
+  // binding, not a shared topic-level configured binding.
   let feishuBinding: ReturnType<typeof sessionBindingService.resolveByConversation> = null;
-  if (onFeishu && feishuConversationId?.includes(":topic:")) {
+  if (
+    onFeishu &&
+    feishuConversationId &&
+    isFeishuSenderScopedTopic({ cfg: params.cfg, conversationId: feishuConversationId })
+  ) {
     const senderId = (params.command.senderId ?? "").trim();
     if (senderId) {
       feishuBinding = sessionBindingService.resolveByConversation({

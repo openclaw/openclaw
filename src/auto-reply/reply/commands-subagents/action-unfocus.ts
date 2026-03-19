@@ -1,5 +1,6 @@
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import { isFeishuSenderScopedTopic } from "../feishu-context.js";
 import {
   type SubagentsCommandContext,
   isDiscordSurface,
@@ -38,14 +39,15 @@ export async function handleSubagentsUnfocusAction(
     return undefined;
   })();
 
-  // Feishu sender-scoped bindings: in group_topic_sender scope, bindings are
-  // keyed with :sender:<openId>. Prefer sender-scoped lookup so /unfocus removes
-  // the user's own binding rather than a shared topic-level configured binding.
+  // Feishu sender-scoped bindings: only group_topic_sender scope uses
+  // :sender:<openId> suffixed conversation IDs. Prefer sender-scoped lookup
+  // so /unfocus removes the user's own binding rather than a shared
+  // topic-level configured binding.
   const resolveFeishuBinding = () => {
     if (channel !== "feishu" || !conversationId) {
       return null;
     }
-    if (conversationId.includes(":topic:")) {
+    if (isFeishuSenderScopedTopic({ cfg: params.cfg, conversationId })) {
       const senderId = (params.command.senderId ?? "").trim();
       if (senderId) {
         const senderScoped = bindingService.resolveByConversation({
