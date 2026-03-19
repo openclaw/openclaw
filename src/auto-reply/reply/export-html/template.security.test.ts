@@ -40,7 +40,10 @@ function renderTemplate(sessionData: SessionData) {
     .replace("{{SESSION_DATA}}", Buffer.from(JSON.stringify(sessionData), "utf8").toString("base64"))
     .replace("{{MARKED_JS}}", "")
     .replace("{{HIGHLIGHT_JS}}", "")
-    .replace("{{JS}}", "");
+    .replace("{{HIGHLIGHT_JS}}", "")
+    .replace(/\{\s*\{\s*JS\s*;?\s*\}\s*\}/g, "")
+    .replace(/\{\s*\{\s*MARKED_JS\s*;?\s*\}\s*\}/g, "")
+    .replace(/\{\s*\{\s*HIGHLIGHT_JS\s*;?\s*\}\s*\}/g, "");
 
   const { document, window } = parseHTML(html);
   if (window.HTMLElement?.prototype) {
@@ -80,6 +83,12 @@ function now() {
 }
 
 describe("export html security hardening", () => {
+  it("keeps script injection placeholders intact", () => {
+    expect(templateHtml).toContain("MARKED_JS");
+    expect(templateHtml).toContain("HIGHLIGHT_JS");
+    expect(templateHtml).toContain("JS");
+  });
+
   it("escapes raw HTML from markdown blocks", () => {
     const attack = "<img src=x onerror=alert(1)>";
     const session: SessionData = {

@@ -29,6 +29,15 @@ function loadTemplate(fileName: string): string {
   return fs.readFileSync(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
 }
 
+function replaceTemplateScriptToken(template: string, token: string, value: string): string {
+  const literalToken = `{{${token}}}`;
+  if (template.includes(literalToken)) {
+    return template.replace(literalToken, value);
+  }
+  const formattedTokenRegex = new RegExp(`\\{\\s*\\{\\s*${token}\\s*;?\\s*\\}\\s*\\}`, "g");
+  return template.replace(formattedTokenRegex, value);
+}
+
 function generateHtml(sessionData: SessionData): string {
   const template = loadTemplate("template.html");
   const templateCss = loadTemplate("template.css");
@@ -90,12 +99,19 @@ function generateHtml(sessionData: SessionData): string {
     .replace("/* {{CONTAINER_BG_DECL}} */", `--container-bg: ${containerBg};`)
     .replace("/* {{INFO_BG_DECL}} */", `--info-bg: ${infoBg};`);
 
-  return template
-    .replace("{{CSS}}", css)
-    .replace("{{JS}}", templateJs)
-    .replace("{{SESSION_DATA}}", sessionDataBase64)
-    .replace("{{MARKED_JS}}", markedJs)
-    .replace("{{HIGHLIGHT_JS}}", hljsJs);
+  return replaceTemplateScriptToken(
+    replaceTemplateScriptToken(
+      replaceTemplateScriptToken(
+        template.replace("{{CSS}}", css).replace("{{SESSION_DATA}}", sessionDataBase64),
+        "MARKED_JS",
+        markedJs,
+      ),
+      "HIGHLIGHT_JS",
+      hljsJs,
+    ),
+    "JS",
+    templateJs,
+  );
 }
 
 function parseExportArgs(commandBodyNormalized: string): { outputPath?: string } {

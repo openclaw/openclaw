@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import * as imageOps from "../media/image-ops.js";
 import {
   buildMessageWithAttachments,
   type ChatAttachment,
@@ -136,6 +137,51 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images[0]?.mimeType).toBe("image/png");
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
     expect(logs.some((l) => /non-image/i.test(l))).toBe(true);
+  });
+
+  it("converts HEIC attachments to JPEG before returning prompt images", async () => {
+    const heic = Buffer.from("fake-heic-image").toString("base64");
+    const jpeg = Buffer.from("normalized-jpeg-image");
+    const convertSpy = vi.spyOn(imageOps, "convertHeicToJpeg").mockResolvedValueOnce(jpeg);
+    try {
+      const { parsed, logs } = await parseWithWarnings("x", [
+        {
+          type: "image",
+          mimeType: "image/heic",
+          fileName: "photo.heic",
+          content: heic,
+        },
+      ]);
+      expect(parsed.images).toHaveLength(1);
+      expect(parsed.images[0]?.mimeType).toBe("image/jpeg");
+      expect(parsed.images[0]?.data).toBe(jpeg.toString("base64"));
+      expect(logs).toHaveLength(0);
+      expect(convertSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      convertSpy.mockRestore();
+    }
+  });
+
+  it("drops HEIC attachment when conversion fails", async () => {
+    const heic = Buffer.from("fake-heic-image").toString("base64");
+    const convertSpy = vi
+      .spyOn(imageOps, "convertHeicToJpeg")
+      .mockRejectedValueOnce(new Error("convert failed"));
+    try {
+      const { parsed, logs } = await parseWithWarnings("x", [
+        {
+          type: "image",
+          mimeType: "image/heif",
+          fileName: "photo.heif",
+          content: heic,
+        },
+      ]);
+      expect(parsed.images).toHaveLength(0);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toMatch(/failed to convert/i);
+    } finally {
+      convertSpy.mockRestore();
+    }
   });
 });
 

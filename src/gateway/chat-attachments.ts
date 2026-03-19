@@ -1,4 +1,5 @@
 import { estimateBase64DecodedBytes } from "../media/base64.js";
+import { convertHeicToJpeg } from "../media/image-ops.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 
 export type ChatAttachment = {
@@ -28,6 +29,8 @@ type NormalizedAttachment = {
   mime: string;
   base64: string;
 };
+
+const HEIC_IMAGE_MIMES = new Set(["image/heic", "image/heif"]);
 
 function normalizeMime(mime?: string): string | undefined {
   if (!mime) {
@@ -89,6 +92,26 @@ function validateAttachmentBase64OrThrow(
   return sizeBytes;
 }
 
+async function normalizeImagePayloadForModel(params: {
+  base64: string;
+  mime: string;
+  label: string;
+  log?: AttachmentLog;
+}): Promise<{ data: string; mimeType: string } | null> {
+  if (!HEIC_IMAGE_MIMES.has(params.mime)) {
+    return { data: params.base64, mimeType: params.mime };
+  }
+  try {
+    const jpegBuffer = await convertHeicToJpeg(Buffer.from(params.base64, "base64"));
+    return { data: jpegBuffer.toString("base64"), mimeType: "image/jpeg" };
+  } catch {
+    params.log?.warn(
+      `attachment ${params.label}: failed to convert ${params.mime} to image/jpeg, dropping`,
+    );
+    return null;
+  }
+}
+
 /**
  * Parse attachments and extract images as structured content blocks.
  * Returns the message text and an array of image content blocks
@@ -134,10 +157,20 @@ export async function parseMessageWithAttachments(
       );
     }
 
+    const finalMime = sniffedMime ?? providedMime ?? mime;
+    const normalizedImage = await normalizeImagePayloadForModel({
+      base64: b64,
+      mime: finalMime,
+      label,
+      log,
+    });
+    if (!normalizedImage) {
+      continue;
+    }
     images.push({
       type: "image",
-      data: b64,
-      mimeType: sniffedMime ?? providedMime ?? mime,
+      data: normalizedImage.data,
+      mimeType: normalizedImage.mimeType,
     });
   }
 

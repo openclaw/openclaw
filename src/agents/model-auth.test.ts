@@ -1,4 +1,5 @@
 import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
+import * as piAi from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -99,6 +100,21 @@ describe("resolveModelAuthMode", () => {
     expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
       "aws-sdk",
     );
+  });
+
+  it("treats google-vertex ADC sentinel auth as oauth mode", () => {
+    const getEnvApiKeySpy = vi
+      .spyOn(piAi, "getEnvApiKey")
+      .mockImplementation((provider) =>
+        provider === "google-vertex" ? "<authenticated>" : undefined,
+      );
+    try {
+      expect(resolveModelAuthMode("google-vertex", undefined, { version: 1, profiles: {} })).toBe(
+        "oauth",
+      );
+    } finally {
+      getEnvApiKeySpy.mockRestore();
+    }
   });
 });
 
@@ -486,6 +502,22 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
 
     expect(auth.mode).toBe("aws-sdk");
     expect(auth.apiKey).toBeUndefined();
+  });
+
+  it("does not return apiKey when google-vertex resolves ADC sentinel", async () => {
+    const getEnvApiKeySpy = vi
+      .spyOn(piAi, "getEnvApiKey")
+      .mockImplementation((provider) =>
+        provider === "google-vertex" ? "<authenticated>" : undefined,
+      );
+    try {
+      const auth = await resolveApiKeyForProvider({ provider: "google-vertex" });
+      expect(auth.mode).toBe("oauth");
+      expect(auth.source).toBe("gcloud adc");
+      expect(auth.apiKey).toBeUndefined();
+    } finally {
+      getEnvApiKeySpy.mockRestore();
+    }
   });
 });
 
