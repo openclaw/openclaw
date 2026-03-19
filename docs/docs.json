@@ -1117,6 +1117,7 @@
                   "providers/openai",
                   "providers/opencode-go",
                   "providers/opencode",
+                  "providers/meganova",
                   "providers/openrouter",
                   "providers/perplexity-provider",
                   "providers/qianfan",

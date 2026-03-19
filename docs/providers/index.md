@@ -34,6 +34,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Hugging Face (Inference)](/providers/huggingface)
 - [Kilocode](/providers/kilocode)
 - [LiteLLM (unified gateway)](/providers/litellm)
+- [MegaNova AI](/providers/meganova)
 - [MiniMax](/providers/minimax)
 - [Mistral](/providers/mistral)
 - [Model Studio (Alibaba Cloud)](/providers/modelstudio)

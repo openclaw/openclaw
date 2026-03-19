@@ -63,6 +63,12 @@ export {
   SYNTHETIC_MODEL_CATALOG,
 } from "../agents/synthetic-models.js";
 export {
+  buildMeganovaModelDefinition,
+  MEGANOVA_BASE_URL,
+  MEGANOVA_DEFAULT_MODEL_REF,
+  MEGANOVA_MODEL_CATALOG,
+} from "../agents/meganova-models.js";
+export {
   buildTogetherModelDefinition,
   TOGETHER_BASE_URL,
   TOGETHER_MODEL_CATALOG,

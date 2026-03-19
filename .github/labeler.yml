@@ -266,6 +266,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/minimax/**"
+"extensions: meganova":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/meganova/**"
 "extensions: modelstudio":
   - changed-files:
       - any-glob-to-any-file:

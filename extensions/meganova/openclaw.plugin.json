@@ -1,0 +1,27 @@
+{
+  "id": "meganova",
+  "providers": ["meganova"],
+  "providerAuthEnvVars": {
+    "meganova": ["MEGANOVA_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "meganova",
+      "method": "api-key",
+      "choiceId": "meganova-api-key",
+      "choiceLabel": "MegaNova AI API key",
+      "groupId": "meganova",
+      "groupLabel": "MegaNova AI",
+      "groupHint": "API key (30+ models)",
+      "optionKey": "meganovaApiKey",
+      "cliFlag": "--meganova-api-key",
+      "cliOption": "--meganova-api-key <key>",
+      "cliDescription": "MegaNova API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
