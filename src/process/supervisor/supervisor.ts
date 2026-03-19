@@ -146,6 +146,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
             });
 
       registry.updateState(runId, "running", { pid: adapter.pid });
+      const isPty = input.mode === "pty";
 
       const clearTimers = () => {
         if (timeoutTimer) {
@@ -207,11 +208,12 @@ export function createProcessSupervisor(): ProcessSupervisor {
         }
         settled = true;
         clearTimers();
-        // For forced exits (cancel/timeout): kill the full PTY process tree synchronously
-        // while the PID is confirmed live. cancelAdapter is called before wait() can resolve
-        // on forced exits, so the PID is definitely alive here — no PID-recycle hazard.
-        // Natural exits skip this block since the process is already dead.
-        if (forcedReason != null && adapter.pid != null) {
+        // For forced PTY exits (cancel/timeout): kill the full PTY process tree
+        // synchronously while the PID is confirmed live. cancelAdapter is called before
+        // wait() resolves on forced exits, so no PID-recycle hazard at this point.
+        // Natural exits are skipped since the process is already dead.
+        // child adapters skip this: cancelAdapter already called killProcessTree before wait().
+        if (forcedReason != null && isPty && adapter.pid != null) {
           killProcessTree(adapter.pid);
         }
         adapter.dispose();
