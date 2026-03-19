@@ -43,6 +43,11 @@
         "label": "Releases",
         "href": "https://github.com/openclaw/openclaw/releases",
         "icon": "package"
+      },
+      {
+        "label": "Discord",
+        "href": "https://discord.com/invite/clawd",
+        "icon": "discord"
       }
     ]
   },
