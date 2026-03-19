@@ -13,7 +13,7 @@ vi.mock("@sinclair/typebox", () => ({
 vi.mock("ajv", () => ({
   default: class MockAjv {
     compile(schema: unknown) {
-      return (value: unknown) => {
+      const validate = (value: unknown) => {
         if (
           schema &&
           typeof schema === "object" &&
@@ -22,17 +22,15 @@ vi.mock("ajv", () => ({
             "string"
         ) {
           const ok = typeof (value as { foo?: unknown })?.foo === "string";
-          (this as { errors?: Array<{ instancePath: string; message: string }> }).errors = ok
-            ? undefined
-            : [{ instancePath: "/foo", message: "must be string" }];
+          validate.errors = ok ? undefined : [{ instancePath: "/foo", message: "must be string" }];
           return ok;
         }
-        (this as { errors?: Array<{ instancePath: string; message: string }> }).errors = undefined;
+        validate.errors = undefined;
         return true;
       };
+      validate.errors = undefined as Array<{ instancePath: string; message: string }> | undefined;
+      return validate;
     }
-
-    errors?: Array<{ instancePath: string; message: string }>;
   },
 }));
 
