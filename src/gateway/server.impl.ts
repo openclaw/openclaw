@@ -36,6 +36,10 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import {
+  detectPluginInstallPathIssue,
+  formatPluginInstallPathIssue,
+} from "../infra/plugin-install-path-warnings.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import {
   primeRemoteSkillsCache,
@@ -525,6 +529,22 @@ export async function startGatewayServer(
     env: process.env,
     log,
   });
+  const matrixInstallPathIssue = await detectPluginInstallPathIssue({
+    pluginId: "matrix",
+    install: cfgAtStart.plugins?.installs?.matrix,
+  });
+  if (matrixInstallPathIssue) {
+    const lines = formatPluginInstallPathIssue({
+      issue: matrixInstallPathIssue,
+      pluginLabel: "Matrix",
+      defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
+      repoInstallCommand: "openclaw plugins install ./extensions/matrix",
+      formatCommand: formatCliCommand,
+    });
+    log.warn(
+      `gateway: matrix install path warning:\n${lines.map((entry) => `- ${entry}`).join("\n")}`,
+    );
+  }
 
   initSubagentRegistry();
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
