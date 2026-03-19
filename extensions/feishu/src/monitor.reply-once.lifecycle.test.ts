@@ -1,3 +1,4 @@
+import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -10,7 +11,9 @@ const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 const createFeishuReplyDispatcherMock = vi.hoisted(() => vi.fn());
-const resolveBoundConversationMock = vi.hoisted(() => vi.fn(() => null));
+const resolveBoundConversationMock = vi.hoisted(() =>
+  vi.fn<() => SessionBindingRecord | null>(() => null),
+);
 const touchBindingMock = vi.hoisted(() => vi.fn());
 const resolveAgentRouteMock = vi.hoisted(() => vi.fn());
 const dispatchReplyFromConfigMock = vi.hoisted(() => vi.fn());
@@ -110,6 +113,7 @@ function createLifecycleConfig(): ClawdbotConfig {
 function createLifecycleAccount(): ResolvedFeishuAccount {
   return {
     accountId: "acct-lifecycle",
+    selectionSource: "explicit",
     enabled: true,
     configured: true,
     appId: "cli_test",
@@ -117,8 +121,13 @@ function createLifecycleAccount(): ResolvedFeishuAccount {
     domain: "feishu",
     config: {
       enabled: true,
+      domain: "feishu",
       connectionMode: "websocket",
+      webhookPath: "/feishu/events",
+      dmPolicy: "pairing",
       groupPolicy: "open",
+      reactionNotifications: "own",
+      typingIndicator: true,
       requireMention: false,
       resolveSenderNames: false,
       groups: {
@@ -217,6 +226,16 @@ describe("Feishu reply-once lifecycle", () => {
     resolveBoundConversationMock.mockReturnValue({
       bindingId: "binding-1",
       targetSessionKey: "agent:bound-agent:feishu:topic:om_root_topic_1:ou_sender_1",
+      targetKind: "session",
+      conversation: {
+        channel: "feishu",
+        accountId: "acct-lifecycle",
+        conversationId: "omt_topic_1",
+        parentConversationId: "om_root_topic_1",
+      },
+      status: "active",
+      boundAt: 1_710_000_000_000,
+      metadata: {},
     });
 
     resolveAgentRouteMock.mockReturnValue({
