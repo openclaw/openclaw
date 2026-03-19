@@ -131,6 +131,7 @@ function createLifecycleConfig(): ClawdbotConfig {
 function createLifecycleAccount(accountId: "account-A" | "account-B"): ResolvedFeishuAccount {
   return {
     accountId,
+    selectionSource: "explicit",
     enabled: true,
     configured: true,
     appId: accountId === "account-A" ? "cli_a" : "cli_b",
@@ -148,7 +149,7 @@ function createLifecycleAccount(accountId: "account-A" | "account-B"): ResolvedF
         },
       },
     },
-  } as ResolvedFeishuAccount;
+  } as unknown as ResolvedFeishuAccount;
 }
 
 function createRuntimeEnv(): RuntimeEnv {
