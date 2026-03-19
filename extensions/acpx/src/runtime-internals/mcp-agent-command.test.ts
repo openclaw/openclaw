@@ -9,6 +9,7 @@ vi.mock("./process.js", () => ({
 }));
 
 import { __testing, resolveAcpxAgentCommand } from "./mcp-agent-command.js";
+import { splitCommandLine } from "./mcp-proxy.mjs";
 
 describe("resolveAcpxAgentCommand", () => {
   it("threads stripProviderAuthEnvVars through the config show probe", async () => {
@@ -55,5 +56,29 @@ describe("buildMcpProxyAgentCommand", () => {
       '"C:\\\\repo\\\\extensions\\\\acpx\\\\src\\\\runtime-internals\\\\mcp-proxy.mjs"',
     );
     expect(quoted).not.toContain("\\\\\\");
+  });
+
+  it("parses quoted Windows executable paths without dropping backslashes", () => {
+    const parsed = splitCommandLine(
+      '"C:\\Program Files\\Claude\\claude.exe" --stdio --flag "two words"',
+      "win32",
+    );
+
+    expect(parsed).toEqual({
+      command: "C:\\Program Files\\Claude\\claude.exe",
+      args: ["--stdio", "--flag", "two words"],
+    });
+  });
+
+  it("parses unquoted Windows executable paths with spaces as the command", () => {
+    const parsed = splitCommandLine(
+      "C:\\Program Files\\Claude\\claude.exe --stdio --dangerously-skip-permissions",
+      "win32",
+    );
+
+    expect(parsed).toEqual({
+      command: "C:\\Program Files\\Claude\\claude.exe",
+      args: ["--stdio", "--dangerously-skip-permissions"],
+    });
   });
 });
