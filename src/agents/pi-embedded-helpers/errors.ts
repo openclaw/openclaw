@@ -849,13 +849,17 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
 }
 
 /**
- * Match an HTTP status code embedded in a wrapped error message.
- * Covers formats like:
+ * Match an **HTTP** status code embedded in a wrapped error message.
+ *
+ * Only matches the "error NNN:" format (with a colon/whitespace after the
+ * digits) which is used when the status originates from an HTTP response:
  * - Ollama: "Ollama API error 400: ..."
- * - MiniMax VLM: "MiniMax VLM API error (400)..."
- * - Generic wrappers: "... error 401: unauthorized"
+ *
+ * Deliberately does NOT match parenthesised codes like "error (400)" because
+ * some providers (e.g. MiniMax VLM) use their own internal status codes in
+ * that format, which are unrelated to HTTP status.
  */
-const EMBEDDED_HTTP_STATUS_RE = /\berror\s*[:(]?\s*(\d{3})\b/i;
+const EMBEDDED_HTTP_STATUS_RE = /\berror\s+(\d{3})\s*:/i;
 
 function extractEmbeddedHttpStatus(raw: string): number | null {
   const match = raw.match(EMBEDDED_HTTP_STATUS_RE);
