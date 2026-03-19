@@ -153,6 +153,22 @@ function computeCodexKeychainAccount(codexHome: string) {
   return `cli|${hash.slice(0, 16)}`;
 }
 
+function decodeJwtExpiryMs(token: string): number | null {
+  const parts = token.split(".");
+  if (parts.length < 2) {
+    return null;
+  }
+  try {
+    const payloadRaw = Buffer.from(parts[1], "base64url").toString("utf8");
+    const payload = JSON.parse(payloadRaw) as { exp?: unknown };
+    return typeof payload.exp === "number" && Number.isFinite(payload.exp) && payload.exp > 0
+      ? payload.exp * 1000
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function readCodexKeychainCredentials(options?: {
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
@@ -193,9 +209,10 @@ function readCodexKeychainCredentials(options?: {
       typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
         ? new Date(lastRefreshRaw).getTime()
         : Date.now();
-    const expires = Number.isFinite(lastRefresh)
+    const fallbackExpiry = Number.isFinite(lastRefresh)
       ? lastRefresh + 60 * 60 * 1000
       : Date.now() + 60 * 60 * 1000;
+    const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
 
     log.info("read codex credentials from keychain", {
@@ -483,13 +500,14 @@ export function readCodexCliCredentials(options?: {
     return null;
   }
 
-  let expires: number;
+  let fallbackExpiry: number;
   try {
     const stat = fs.statSync(authPath);
-    expires = stat.mtimeMs + 60 * 60 * 1000;
+    fallbackExpiry = stat.mtimeMs + 60 * 60 * 1000;
   } catch {
-    expires = Date.now() + 60 * 60 * 1000;
+    fallbackExpiry = Date.now() + 60 * 60 * 1000;
   }
+  const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
 
   return {
     type: "oauth",

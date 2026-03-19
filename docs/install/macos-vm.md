@@ -112,7 +112,7 @@ After setup completes, enable SSH:
 
 ---
 
-## 4) Get the VM's IP address
+## 4) Get the VM IP address
 
 ```bash
 lume get openclaw

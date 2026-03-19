@@ -7,12 +7,14 @@ export const ConnectErrorDetailCodes = {
   AUTH_PASSWORD_MISSING: "AUTH_PASSWORD_MISSING", // pragma: allowlist secret
   AUTH_PASSWORD_MISMATCH: "AUTH_PASSWORD_MISMATCH", // pragma: allowlist secret
   AUTH_PASSWORD_NOT_CONFIGURED: "AUTH_PASSWORD_NOT_CONFIGURED", // pragma: allowlist secret
+  AUTH_BOOTSTRAP_TOKEN_INVALID: "AUTH_BOOTSTRAP_TOKEN_INVALID",
   AUTH_DEVICE_TOKEN_MISMATCH: "AUTH_DEVICE_TOKEN_MISMATCH",
   AUTH_RATE_LIMITED: "AUTH_RATE_LIMITED",
   AUTH_TAILSCALE_IDENTITY_MISSING: "AUTH_TAILSCALE_IDENTITY_MISSING",
   AUTH_TAILSCALE_PROXY_MISSING: "AUTH_TAILSCALE_PROXY_MISSING",
   AUTH_TAILSCALE_WHOIS_FAILED: "AUTH_TAILSCALE_WHOIS_FAILED",
   AUTH_TAILSCALE_IDENTITY_MISMATCH: "AUTH_TAILSCALE_IDENTITY_MISMATCH",
+  CONTROL_UI_ORIGIN_NOT_ALLOWED: "CONTROL_UI_ORIGIN_NOT_ALLOWED",
   CONTROL_UI_DEVICE_IDENTITY_REQUIRED: "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
   DEVICE_IDENTITY_REQUIRED: "DEVICE_IDENTITY_REQUIRED",
   DEVICE_AUTH_INVALID: "DEVICE_AUTH_INVALID",
@@ -27,6 +29,26 @@ export const ConnectErrorDetailCodes = {
 
 export type ConnectErrorDetailCode =
   (typeof ConnectErrorDetailCodes)[keyof typeof ConnectErrorDetailCodes];
+
+export type ConnectRecoveryNextStep =
+  | "retry_with_device_token"
+  | "update_auth_configuration"
+  | "update_auth_credentials"
+  | "wait_then_retry"
+  | "review_auth_configuration";
+
+export type ConnectErrorRecoveryAdvice = {
+  canRetryWithDeviceToken?: boolean;
+  recommendedNextStep?: ConnectRecoveryNextStep;
+};
+
+const CONNECT_RECOVERY_NEXT_STEP_VALUES: ReadonlySet<ConnectRecoveryNextStep> = new Set([
+  "retry_with_device_token",
+  "update_auth_configuration",
+  "update_auth_credentials",
+  "wait_then_retry",
+  "review_auth_configuration",
+]);
 
 export function resolveAuthConnectErrorDetailCode(
   reason: string | undefined,
@@ -44,6 +66,8 @@ export function resolveAuthConnectErrorDetailCode(
       return ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH;
     case "password_missing_config":
       return ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED;
+    case "bootstrap_token_invalid":
+      return ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID;
     case "tailscale_user_missing":
       return ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING;
     case "tailscale_proxy_missing":
@@ -90,4 +114,27 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
   }
   const code = (details as { code?: unknown }).code;
   return typeof code === "string" && code.trim().length > 0 ? code : null;
+}
+
+export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRecoveryAdvice {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return {};
+  }
+  const raw = details as {
+    canRetryWithDeviceToken?: unknown;
+    recommendedNextStep?: unknown;
+  };
+  const canRetryWithDeviceToken =
+    typeof raw.canRetryWithDeviceToken === "boolean" ? raw.canRetryWithDeviceToken : undefined;
+  const normalizedNextStep =
+    typeof raw.recommendedNextStep === "string" ? raw.recommendedNextStep.trim() : "";
+  const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
+    normalizedNextStep as ConnectRecoveryNextStep,
+  )
+    ? (normalizedNextStep as ConnectRecoveryNextStep)
+    : undefined;
+  return {
+    canRetryWithDeviceToken,
+    recommendedNextStep,
+  };
 }

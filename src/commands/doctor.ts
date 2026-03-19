@@ -29,6 +29,7 @@ import {
   noteAuthProfileHealth,
 } from "./doctor-auth.js";
 import { noteBootstrapFileSize } from "./doctor-bootstrap-size.js";
+import { noteChromeMcpBrowserReadiness } from "./doctor-browser.js";
 import { doctorShellCompletion } from "./doctor-completion.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { maybeRepairLegacyCronStore } from "./doctor-cron.js";
@@ -236,6 +237,7 @@ export async function doctorCommand(
   await noteMacLaunchctlGatewayEnvOverrides(cfg);
 
   await noteSecurityWarnings(cfg);
+  await noteChromeMcpBrowserReadiness(cfg);
   await noteOpenAIOAuthTlsPrerequisites({
     cfg,
     deep: options.deep === true,

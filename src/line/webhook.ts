@@ -3,7 +3,9 @@ import type { Request, Response, NextFunction } from "express";
 import { logVerbose, danger } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateLineSignature } from "./signature.js";
-import { isLineWebhookVerificationRequest, parseLineWebhookBody } from "./webhook-utils.js";
+import { parseLineWebhookBody } from "./webhook-utils.js";
+
+const LINE_WEBHOOK_MAX_RAW_BODY_BYTES = 64 * 1024;
 
 export interface LineWebhookOptions {
   channelSecret: string;
@@ -39,24 +41,20 @@ export function createLineWebhookMiddleware(
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
     try {
       const signature = req.headers["x-line-signature"];
-      const rawBody = readRawBody(req);
-      const body = parseWebhookBody(req, rawBody);
 
-      // LINE webhook verification sends POST {"events":[]} without a
-      // signature header.  Return 200 immediately so the LINE Developers
-      // Console "Verify" button succeeds.
       if (!signature || typeof signature !== "string") {
-        if (isLineWebhookVerificationRequest(body)) {
-          logVerbose("line: webhook verification request (empty events, no signature) - 200 OK");
-          res.status(200).json({ status: "ok" });
-          return;
-        }
         res.status(400).json({ error: "Missing X-Line-Signature header" });
         return;
       }
 
+      const rawBody = readRawBody(req);
+
       if (!rawBody) {
         res.status(400).json({ error: "Missing raw request body for signature verification" });
+        return;
+      }
+      if (Buffer.byteLength(rawBody, "utf-8") > LINE_WEBHOOK_MAX_RAW_BODY_BYTES) {
+        res.status(413).json({ error: "Payload too large" });
         return;
       }
 
@@ -65,6 +63,8 @@ export function createLineWebhookMiddleware(
         res.status(401).json({ error: "Invalid signature" });
         return;
       }
+
+      const body = parseWebhookBody(req, rawBody);
 
       if (!body) {
         res.status(400).json({ error: "Invalid webhook payload" });

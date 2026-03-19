@@ -203,6 +203,10 @@ describe("memory flush settings", () => {
     expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(settings?.prompt.length).toBeGreaterThan(0);
     expect(settings?.systemPrompt.length).toBeGreaterThan(0);
+    expect(settings?.prompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.prompt).toContain("MEMORY.md");
+    expect(settings?.systemPrompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.systemPrompt).toContain("MEMORY.md");
   });
 
   it("respects disable flag", () => {
@@ -230,6 +234,10 @@ describe("memory flush settings", () => {
     });
     expect(settings?.prompt).toContain("NO_REPLY");
     expect(settings?.systemPrompt).toContain("NO_REPLY");
+    expect(settings?.prompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.prompt).toContain("MEMORY.md");
+    expect(settings?.systemPrompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.systemPrompt).toContain("MEMORY.md");
   });
 
   it("falls back to defaults when numeric values are invalid", () => {
@@ -435,6 +443,23 @@ describe("incrementCompactionCount", () => {
     // input/output cleared since we only have the total estimate
     expect(stored[sessionKey].inputTokens).toBeUndefined();
     expect(stored[sessionKey].outputTokens).toBeUndefined();
+  });
+
+  it("increments compaction count by an explicit amount", async () => {
+    const entry = { sessionId: "s1", updatedAt: Date.now(), compactionCount: 2 } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    const count = await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      amount: 2,
+    });
+    expect(count).toBe(4);
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].compactionCount).toBe(4);
   });
 
   it("does not update totalTokens when tokensAfter is not provided", async () => {
