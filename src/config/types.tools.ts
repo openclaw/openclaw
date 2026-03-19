@@ -1,5 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import type { PowerShellWindowStyle } from "../agents/shell-utils.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { SecretInput } from "./types.secrets.js";
 
@@ -235,7 +236,7 @@ export type ExecToolConfig = {
   /** Default node binding for exec.host=node (node id/name). */
   node?: string;
   /** Default PowerShell window style for exec on Windows hosts. */
-  windowStyle?: "normal" | "hidden" | "minimized" | "maximized";
+  windowStyle?: PowerShellWindowStyle;
   /** Directories to prepend to PATH when running exec (gateway/sandbox). */
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */

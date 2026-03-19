@@ -41,21 +41,8 @@ export function resolvePowerShellPath(): string {
 
 export type PowerShellWindowStyle = "normal" | "hidden" | "minimized" | "maximized";
 
-function normalizePowerShellWindowStyle(value?: string): PowerShellWindowStyle {
-  const lowered = value?.trim().toLowerCase();
-  if (
-    lowered === "hidden" ||
-    lowered === "minimized" ||
-    lowered === "maximized" ||
-    lowered === "normal"
-  ) {
-    return lowered;
-  }
-  return "normal";
-}
-
 function toPowerShellWindowStyleArg(
-  style: PowerShellWindowStyle,
+  style?: PowerShellWindowStyle,
 ): "Normal" | "Hidden" | "Minimized" | "Maximized" {
   if (style === "hidden") {
     return "Hidden";
@@ -78,16 +65,16 @@ export function getShellConfig(options?: {
     // directly to the console via WriteConsole API, bypassing stdout pipes.
     // When Node.js spawns cmd.exe with piped stdio, these utilities produce no output.
     // PowerShell properly captures and redirects their output to stdout.
-    const windowStyle = normalizePowerShellWindowStyle(options?.windowsPowerShellWindowStyle);
+    const windowStyleArg = toPowerShellWindowStyleArg(options?.windowsPowerShellWindowStyle);
+    const args = ["-NoProfile", "-NonInteractive"];
+    // -WindowStyle is only meaningful when requesting a non-default style.
+    if (windowStyleArg !== "Normal") {
+      args.push("-WindowStyle", windowStyleArg);
+    }
+    args.push("-Command");
     return {
       shell: resolvePowerShellPath(),
-      args: [
-        "-NoProfile",
-        "-NonInteractive",
-        "-WindowStyle",
-        toPowerShellWindowStyleArg(windowStyle),
-        "-Command",
-      ],
+      args,
     };
   }
 

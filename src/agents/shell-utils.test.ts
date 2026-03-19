@@ -44,8 +44,7 @@ describe("getShellConfig", () => {
       const { shell, args } = getShellConfig();
       const normalized = shell.toLowerCase();
       expect(normalized.includes("powershell") || normalized.includes("pwsh")).toBe(true);
-      expect(args).toContain("-WindowStyle");
-      expect(args).toContain("Normal");
+      expect(args).not.toContain("-WindowStyle");
     });
 
     it("applies configured PowerShell window style on Windows", () => {
