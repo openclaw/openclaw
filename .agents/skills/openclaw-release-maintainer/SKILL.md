@@ -1,11 +1,11 @@
 ---
 name: openclaw-release-maintainer
-description: Maintainer workflow for OpenClaw releases, prereleases, advisories, changelog release notes, and publish validation. Use when Codex needs to prepare or verify stable or beta release steps, align version naming, assemble release notes, handle GHSA patch or publish flow, check release auth requirements, or validate publish-time commands and artifacts.
+description: Maintainer workflow for OpenClaw releases, prereleases, changelog release notes, and publish validation. Use when Codex needs to prepare or verify stable or beta release steps, align version naming, assemble release notes, check release auth requirements, or validate publish-time commands and artifacts.
 ---
 
 # OpenClaw Release Maintainer
 
-Use this skill for release, advisory, and publish-time workflow. Keep ordinary development changes outside this skill.
+Use this skill for release and publish-time workflow. Keep ordinary development changes and GHSA-specific advisory work outside this skill.
 
 ## Respect release guardrails
 
@@ -69,28 +69,6 @@ OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke
 - `@openclaw/*` plugin publishes use a separate maintainer-only flow.
 - Only publish plugins that already exist on npm; bundled disk-tree-only plugins stay unpublished.
 
-## Patch and publish GHSAs safely
+## GHSA advisory work
 
-- Before advisory review, read `SECURITY.md`.
-- Fetch advisory details:
-
-```bash
-gh api /repos/openclaw/openclaw/security-advisories/<GHSA>
-npm view openclaw version --userconfig "$(mktemp)"
-```
-
-- Make sure private fork PRs are closed:
-
-```bash
-fork=$(gh api /repos/openclaw/openclaw/security-advisories/<GHSA> | jq -r .private_fork.full_name)
-gh pr list -R "$fork" --state open
-```
-
-- Write Markdown descriptions through a heredoc file, not escaped `\n` strings.
-- Build advisory patch JSON with `jq`.
-- Do not set `severity` and `cvss_vector_string` in the same PATCH call.
-- Publish by PATCHing the advisory with `"state":"published"`; there is no separate `/publish` endpoint.
-- After publish, re-fetch and confirm:
-  - `state=published`
-  - `published_at` is set
-  - the description does not contain literal escaped `\\n`
+- Use `openclaw-ghsa-maintainer` for GHSA advisory inspection, patch/publish flow, private-fork validation, and GHSA API-specific publish checks.
