@@ -867,7 +867,7 @@
                 "pages": ["install/index", "install/installer", "install/node"]
               },
               {
-                "group": "Other install methods",
+                "group": "Containers and package managers",
                 "pages": [
                   "install/docker",
                   "install/podman",
