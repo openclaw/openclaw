@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { CronConfig } from "../config/types.cron.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
@@ -21,10 +22,12 @@ describe("CronService restart catch-up", () => {
     storePath: string;
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
     requestHeartbeatNow: ReturnType<typeof vi.fn>;
+    cronConfig?: CronConfig;
   }) {
     return new CronService({
       storePath: params.storePath,
       cronEnabled: true,
+      cronConfig: params.cronConfig,
       log: noopLogger,
       enqueueSystemEvent: params.enqueueSystemEvent as never,
       requestHeartbeatNow: params.requestHeartbeatNow as never,
@@ -54,6 +57,7 @@ describe("CronService restart catch-up", () => {
       enqueueSystemEvent: ReturnType<typeof vi.fn>;
       requestHeartbeatNow: ReturnType<typeof vi.fn>;
     }) => Promise<void>,
+    cronConfig?: CronConfig,
   ) {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
@@ -65,6 +69,7 @@ describe("CronService restart catch-up", () => {
       storePath: store.storePath,
       enqueueSystemEvent,
       requestHeartbeatNow,
+      cronConfig,
     });
 
     try {
@@ -280,6 +285,42 @@ describe("CronService restart catch-up", () => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
         expect(requestHeartbeatNow).not.toHaveBeenCalled();
       },
+    );
+  });
+
+  it("does not replay missed cron slots before a custom recurring backoff elapses after restart", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
+    const customBackoffMs = 2 * 60 * 60_000;
+
+    await withRestartedCron(
+      [
+        {
+          id: "restart-custom-backoff-pending",
+          name: "custom backoff pending",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T04:01:10.000Z"),
+          schedule: { kind: "cron", expr: "1,11,21,31,41,51 4-20 * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "respect custom backoff after restart" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T06:01:00.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+            lastStatus: "error",
+            consecutiveErrors: 1,
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeatNow).not.toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-custom-backoff-pending");
+        expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T06:01:00.000Z"));
+      },
+      { retry: { backoffMs: [customBackoffMs] } },
     );
   });
 
