@@ -20,14 +20,21 @@ function shouldWrapRuntimeJsFile(sourcePath) {
   return path.extname(sourcePath) === ".js";
 }
 
-function shouldCopyRuntimeFile(sourcePath) {
-  const relativePath = sourcePath.replace(/\\/g, "/");
+function isBundledSkillRuntimePath(relativePath) {
+  const normalized = relativePath.replace(/\\/g, "/");
+  return normalized === "skills" || normalized.startsWith("skills/");
+}
+
+function shouldCopyRuntimeFile(sourcePath, relativePath) {
+  const normalizedRelativePath = relativePath.replace(/\\/g, "/");
+  const normalizedSourcePath = sourcePath.replace(/\\/g, "/");
   return (
-    relativePath.endsWith("/package.json") ||
-    relativePath.endsWith("/openclaw.plugin.json") ||
-    relativePath.endsWith("/.codex-plugin/plugin.json") ||
-    relativePath.endsWith("/.claude-plugin/plugin.json") ||
-    relativePath.endsWith("/.cursor-plugin/plugin.json")
+    isBundledSkillRuntimePath(normalizedRelativePath) ||
+    normalizedSourcePath.endsWith("/package.json") ||
+    normalizedSourcePath.endsWith("/openclaw.plugin.json") ||
+    normalizedSourcePath.endsWith("/.codex-plugin/plugin.json") ||
+    normalizedSourcePath.endsWith("/.claude-plugin/plugin.json") ||
+    normalizedSourcePath.endsWith("/.cursor-plugin/plugin.json")
   );
 }
 
@@ -46,7 +53,7 @@ function writeRuntimeModuleWrapper(sourcePath, targetPath) {
   );
 }
 
-function stagePluginRuntimeOverlay(sourceDir, targetDir) {
+function stagePluginRuntimeOverlay(sourceDir, targetDir, relativeDir = "") {
   fs.mkdirSync(targetDir, { recursive: true });
 
   for (const dirent of fs.readdirSync(sourceDir, { withFileTypes: true })) {
@@ -56,9 +63,10 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir) {
 
     const sourcePath = path.join(sourceDir, dirent.name);
     const targetPath = path.join(targetDir, dirent.name);
+    const relativePath = relativeDir ? path.join(relativeDir, dirent.name) : dirent.name;
 
     if (dirent.isDirectory()) {
-      stagePluginRuntimeOverlay(sourcePath, targetPath);
+      stagePluginRuntimeOverlay(sourcePath, targetPath, relativePath);
       continue;
     }
 
@@ -76,7 +84,7 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir) {
       continue;
     }
 
-    if (shouldCopyRuntimeFile(sourcePath)) {
+    if (shouldCopyRuntimeFile(sourcePath, relativePath)) {
       fs.copyFileSync(sourcePath, targetPath);
       continue;
     }

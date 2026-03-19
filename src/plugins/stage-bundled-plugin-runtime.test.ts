@@ -4,10 +4,15 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
-import { discoverOpenClawPlugins } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadWorkspaceSkillEntries } from "../agents/skills/workspace.js";
+import { clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
+import {
+  clearPluginManifestRegistryCache,
+  loadPluginManifestRegistry,
+} from "./manifest-registry.js";
 
 const tempDirs: string[] = [];
+const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
 function makeRepoRoot(prefix: string): string {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -18,6 +23,13 @@ function makeRepoRoot(prefix: string): string {
 afterEach(() => {
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
+  if (originalBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
   }
 });
 
@@ -305,6 +317,106 @@ describe("stageBundledPluginRuntime", () => {
     );
     expect(manifestRegistry.plugins[0]?.startupDeferConfiguredChannelFullLoadUntilAfterListen).toBe(
       true,
+    );
+  });
+
+  it("copies bundled skill files into dist-runtime so plugin skill roots stay self-contained", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-skills-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "demo");
+    const runtimeExtensionsDir = path.join(repoRoot, "dist-runtime", "extensions");
+    const distSkillPath = path.join(distPluginDir, "skills", "demo-skill", "SKILL.md");
+    const distReferencePath = path.join(
+      distPluginDir,
+      "skills",
+      "demo-skill",
+      "references",
+      "guide.md",
+    );
+    const runtimeSkillPath = path.join(
+      runtimeExtensionsDir,
+      "demo",
+      "skills",
+      "demo-skill",
+      "SKILL.md",
+    );
+    const runtimeReferencePath = path.join(
+      runtimeExtensionsDir,
+      "demo",
+      "skills",
+      "demo-skill",
+      "references",
+      "guide.md",
+    );
+    fs.mkdirSync(path.join(distPluginDir, "skills", "demo-skill", "references"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(distPluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/demo",
+          openclaw: {
+            extensions: ["./index.js"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(distPluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "demo",
+          configSchema: { type: "object" },
+          skills: ["./skills"],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
+    fs.writeFileSync(
+      distSkillPath,
+      [
+        "---",
+        "name: demo-skill",
+        "description: Demo skill for runtime staging tests.",
+        "---",
+        "",
+        "# Demo skill",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(distReferencePath, "reference\n", "utf8");
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(runtimeSkillPath, "utf8")).toContain("name: demo-skill");
+    expect(fs.lstatSync(runtimeReferencePath).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(runtimeReferencePath, "utf8")).toBe("reference\n");
+
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = runtimeExtensionsDir;
+
+    const entries = loadWorkspaceSkillEntries(path.join(repoRoot, "workspace"), {
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["demo"],
+          entries: {
+            demo: { enabled: true },
+          },
+        },
+      },
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("demo-skill");
+    expect(entries.find((entry) => entry.skill.name === "demo-skill")?.skill.filePath).toBe(
+      runtimeSkillPath,
     );
   });
 
