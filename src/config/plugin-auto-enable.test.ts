@@ -7,7 +7,7 @@ import {
   clearPluginManifestRegistryCache,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject, validateConfigObjectWithPlugins } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 
 const tempDirs: string[] = [];
@@ -36,15 +36,46 @@ function makeTempDir() {
   return dir;
 }
 
-function writePluginManifestFixture(params: { rootDir: string; id: string; channels: string[] }) {
+function writePluginManifestFixture(params: { rootDir: string; id: string; channels?: string[] }) {
   mkdirSafe(params.rootDir);
+  const manifest: Record<string, unknown> = {
+    id: params.id,
+    configSchema: { type: "object" },
+  };
+  if (params.channels) {
+    manifest.channels = params.channels;
+  }
   fs.writeFileSync(
     path.join(params.rootDir, "openclaw.plugin.json"),
+    JSON.stringify(manifest, null, 2),
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(params.rootDir, "index.ts"), "export default {}", "utf-8");
+}
+
+function writePackageChannelFixture(params: {
+  rootDir: string;
+  packageName: string;
+  channelId: string;
+  channelLabel?: string;
+}) {
+  mkdirSafe(params.rootDir);
+  fs.writeFileSync(
+    path.join(params.rootDir, "package.json"),
     JSON.stringify(
       {
-        id: params.id,
-        channels: params.channels,
-        configSchema: { type: "object" },
+        name: params.packageName,
+        version: "1.0.0",
+        openclaw: {
+          channel: {
+            id: params.channelId,
+            label: params.channelLabel ?? params.channelId,
+            blurb: "fixture channel",
+          },
+          install: {
+            npmSpec: params.packageName,
+          },
+        },
       },
       null,
       2,
@@ -500,6 +531,44 @@ describe("applyPluginAutoEnable", () => {
 
       expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.apn).toBeUndefined();
+    });
+
+    it("uses catalog plugin ids when manifest registry channel mappings are missing", () => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "extensions", "wecom-openclaw-plugin");
+      writePluginManifestFixture({
+        rootDir: pluginDir,
+        id: "wecom-openclaw-plugin",
+        channels: ["wecom"],
+      });
+      writePackageChannelFixture({
+        rootDir: pluginDir,
+        packageName: "@wecom/wecom-openclaw-plugin",
+        channelId: "wecom",
+        channelLabel: "WeCom",
+      });
+
+      const env = {
+        ...process.env,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      };
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { wecom: { corpId: "wx-demo" } },
+        },
+        env,
+        manifestRegistry: makeRegistry([{ id: "wecom-openclaw-plugin", channels: [] }]),
+      });
+
+      expect(result.config.plugins?.entries?.["wecom-openclaw-plugin"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.wecom).toBeUndefined();
+      expect(result.changes.join("\n")).toContain("wecom configured, enabled automatically.");
+
+      const validated = validateConfigObjectWithPlugins(result.config, { env });
+      expect(validated.ok).toBe(true);
     });
   });
 });

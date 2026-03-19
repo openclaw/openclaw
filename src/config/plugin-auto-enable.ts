@@ -4,6 +4,7 @@ import { hasMeaningfulChannelConfig } from "../channels/config-presence.js";
 import {
   getChannelPluginCatalogEntry,
   listChannelPluginCatalogEntries,
+  type ChannelPluginCatalogEntry,
 } from "../channels/plugins/catalog.js";
 import {
   getChatChannelMeta,
@@ -280,13 +281,21 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
   return false;
 }
 
-function buildChannelToPluginIdMap(registry: PluginManifestRegistry): Map<string, string> {
+function buildChannelToPluginIdMap(
+  registry: PluginManifestRegistry,
+  catalogEntries: readonly ChannelPluginCatalogEntry[],
+): Map<string, string> {
   const map = new Map<string, string>();
   for (const record of registry.plugins) {
     for (const channelId of record.channels) {
       if (channelId && !map.has(channelId)) {
         map.set(channelId, record.id);
       }
+    }
+  }
+  for (const entry of catalogEntries) {
+    if (entry.id && entry.pluginId && !map.has(entry.id)) {
+      map.set(entry.id, entry.pluginId);
     }
   }
   return map;
@@ -305,17 +314,20 @@ function resolvePluginIdForChannel(
   return channelToPluginId.get(channelId) ?? channelId;
 }
 
-function listKnownChannelPluginIds(env: NodeJS.ProcessEnv): string[] {
+function listKnownChannelPluginIds(catalogEntries: readonly ChannelPluginCatalogEntry[]): string[] {
   return Array.from(
     new Set([
       ...listChatChannels().map((meta) => meta.id),
-      ...listChannelPluginCatalogEntries({ env }).map((entry) => entry.id),
+      ...catalogEntries.map((entry) => entry.id),
     ]),
   );
 }
 
-function collectCandidateChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  const channelIds = new Set<string>(listKnownChannelPluginIds(env));
+function collectCandidateChannelIds(
+  cfg: OpenClawConfig,
+  catalogEntries: readonly ChannelPluginCatalogEntry[],
+): string[] {
+  const channelIds = new Set<string>(listKnownChannelPluginIds(catalogEntries));
   const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
   if (!configuredChannels || typeof configuredChannels !== "object") {
     return Array.from(channelIds);
@@ -336,9 +348,10 @@ function resolveConfiguredPlugins(
   registry: PluginManifestRegistry,
 ): PluginEnableChange[] {
   const changes: PluginEnableChange[] = [];
+  const catalogEntries = listChannelPluginCatalogEntries({ env });
   // Build reverse map: channel ID → plugin ID from installed plugin manifests.
-  const channelToPluginId = buildChannelToPluginIdMap(registry);
-  for (const channelId of collectCandidateChannelIds(cfg, env)) {
+  const channelToPluginId = buildChannelToPluginIdMap(registry, catalogEntries);
+  for (const channelId of collectCandidateChannelIds(cfg, catalogEntries)) {
     const pluginId = resolvePluginIdForChannel(channelId, channelToPluginId);
     if (isChannelConfigured(cfg, channelId, env)) {
       changes.push({ pluginId, reason: `${channelId} configured` });
