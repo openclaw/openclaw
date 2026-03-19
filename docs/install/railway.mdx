@@ -72,23 +72,14 @@ Set these variables on the service:
 
 If Telegram DMs are set to pairing, web setup can approve the pairing code.
 
-## Getting chat tokens
+## Connect a channel
 
-### Telegram bot token
+Paste your Telegram or Discord token into the `/setup` wizard. For setup
+instructions, see the channel docs:
 
-1. Message `@BotFather` in Telegram
-2. Run `/newbot`
-3. Copy the token (looks like `123456789:AA...`)
-4. Paste it into `/setup`
-
-### Discord bot token
-
-1. Go to [https://discord.com/developers/applications](https://discord.com/developers/applications)
-2. **New Application** → choose a name
-3. **Bot** → **Add Bot**
-4. **Enable MESSAGE CONTENT INTENT** under Bot → Privileged Gateway Intents (required or the bot will crash on startup)
-5. Copy the **Bot Token** and paste into `/setup`
-6. Invite the bot to your server (OAuth2 URL Generator; scopes: `bot`, `applications.commands`)
+- [Telegram](/channels/telegram) (fastest — just a bot token)
+- [Discord](/channels/discord)
+- [All channels](/channels)
 
 ## Backups & migration
 
