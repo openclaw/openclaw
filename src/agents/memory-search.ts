@@ -3,19 +3,31 @@ import path from "node:path";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
   supportsMemoryMultimodalEmbeddings,
   type MemoryMultimodalSettings,
 } from "../memory/multimodal.js";
+import {
+  SHARED_AGENT_ID,
+  getSharedMemoryConventionDir,
+  getSharedStorePath,
+} from "../memory/shared-constants.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
+
+const log = createSubsystemLogger("memory");
+
+export type ResolvedSharedPath = { path: string; weight: number };
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
+  sharedPaths: ResolvedSharedPath[];
+  sharedStorePath: string;
   multimodal: MemoryMultimodalSettings;
   provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto";
   remote?: {
@@ -208,10 +220,49 @@ function mergeConfig(
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
   };
   const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
-  const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
+  // Resolve sharedPaths from defaults + overrides
+  const rawShared: Array<string | { path: string; weight?: number }> = [
+    ...(defaults?.sharedPaths ?? []),
+    ...(overrides?.sharedPaths ?? []),
+  ];
+  const sharedPaths: ResolvedSharedPath[] = rawShared.map((entry) =>
+    typeof entry === "string"
+      ? { path: resolveUserPath(entry), weight: 1.0 }
+      : { path: resolveUserPath(entry.path), weight: entry.weight ?? 1.0 },
+  );
+
+  // Soft-migrate: extraPaths in defaults → sharedPaths (deprecation)
+  const defaultExtraPaths = defaults?.extraPaths ?? [];
+  if (defaultExtraPaths.length > 0) {
+    log.warn(
+      "agents.defaults.memorySearch.extraPaths is deprecated; use sharedPaths instead. " +
+        "These paths are being migrated to the shared store automatically.",
+    );
+    for (const p of defaultExtraPaths) {
+      const resolved = resolveUserPath(p.trim());
+      if (resolved && !sharedPaths.some((sp) => sp.path === resolved)) {
+        sharedPaths.push({ path: resolved, weight: 1.0 });
+      }
+    }
+  }
+
+  // Convention directory: include ~/.openclaw/shared-memory/ only when user has opted in
+  if (sharedPaths.length > 0) {
+    const conventionDir = getSharedMemoryConventionDir();
+    if (!sharedPaths.some((sp) => sp.path === conventionDir)) {
+      sharedPaths.unshift({ path: conventionDir, weight: 1.0 });
+    }
+  }
+
+  // Per-agent extraPaths: only from overrides, excluding any shared paths
+  const sharedSet = new Set(sharedPaths.map((sp) => sp.path));
+  const rawPaths = (overrides?.extraPaths ?? [])
     .map((value) => value.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((p) => resolveUserPath(p))
+    .filter((p) => !sharedSet.has(p));
   const extraPaths = Array.from(new Set(rawPaths));
+  const sharedStorePath = getSharedStorePath();
   const multimodal = normalizeMemoryMultimodalSettings({
     enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
     modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
@@ -321,10 +372,12 @@ function mergeConfig(
   const deltaBytes = clampInt(sync.sessions.deltaBytes, 0, Number.MAX_SAFE_INTEGER);
   const deltaMessages = clampInt(sync.sessions.deltaMessages, 0, Number.MAX_SAFE_INTEGER);
   const postCompactionForce = sync.sessions.postCompactionForce;
-  return {
+  const result: ResolvedMemorySearchConfig = {
     enabled,
     sources,
     extraPaths,
+    sharedPaths,
+    sharedStorePath,
     multimodal,
     provider,
     remote,
@@ -373,6 +426,15 @@ function mergeConfig(
           : undefined,
     },
   };
+
+  // For the shared manager: shared paths become its extraPaths, no shared nesting
+  if (agentId === SHARED_AGENT_ID) {
+    result.extraPaths = sharedPaths.map((sp) => sp.path);
+    result.sharedPaths = [];
+    result.sources = ["memory"];
+  }
+
+  return result;
 }
 
 export function resolveMemorySearchConfig(

@@ -568,6 +568,19 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`  ${warn(issue)}`);
       }
     }
+    // Shared store info
+    if (status.shared) {
+      lines.push("");
+      lines.push(heading("Shared Store"));
+      lines.push(`${label("Store")} ${info(shortenHomePath(status.shared.dbPath))}`);
+      lines.push(
+        `${label("Indexed")} ${success(`${status.shared.files} files · ${status.shared.chunks} chunks`)}`,
+      );
+      for (const sp of status.shared.paths) {
+        const weightLabel = sp.weight !== 1.0 ? ` ${muted(`(weight: ${sp.weight})`)}` : "";
+        lines.push(`  ${accent(shortenHomePath(sp.path))}${weightLabel}`);
+      }
+    }
     defaultRuntime.log(lines.join("\n"));
     defaultRuntime.log("");
   }
@@ -597,11 +610,16 @@ export function registerMemoryCli(program: Command) {
     .command("status")
     .description("Show memory search index status")
     .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--shared", "Show only the shared memory store status", false)
     .option("--json", "Print JSON")
     .option("--deep", "Probe embedding provider availability")
     .option("--index", "Reindex if dirty (implies --deep)")
     .option("--verbose", "Verbose logging", false)
-    .action(async (opts: MemoryCommandOptions & { force?: boolean }) => {
+    .action(async (opts: MemoryCommandOptions & { force?: boolean; shared?: boolean }) => {
+      if (opts.shared) {
+        const { SHARED_AGENT_ID } = await import("../memory/shared-constants.js");
+        opts.agent = SHARED_AGENT_ID;
+      }
       await runMemoryStatus(opts);
     });
 
@@ -610,9 +628,30 @@ export function registerMemoryCli(program: Command) {
     .description("Reindex memory files")
     .option("--agent <id>", "Agent id (default: default agent)")
     .option("--force", "Force full reindex", false)
+    .option("--shared", "Index only the shared memory store", false)
     .option("--verbose", "Verbose logging", false)
-    .action(async (opts: MemoryCommandOptions) => {
+    .action(async (opts: MemoryCommandOptions & { shared?: boolean }) => {
       setVerbose(Boolean(opts.verbose));
+      // Handle --shared: sync only the shared store
+      if (opts.shared) {
+        const { SHARED_AGENT_ID } = await import("../memory/shared-constants.js");
+        const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory index");
+        emitMemorySecretResolveDiagnostics(diagnostics);
+        await withMemoryManagerForAgent({
+          cfg,
+          agentId: SHARED_AGENT_ID,
+          run: async (manager) => {
+            if (!manager.sync) {
+              defaultRuntime.log("Shared store sync not available.");
+              return;
+            }
+            defaultRuntime.log("Syncing shared memory store…");
+            await manager.sync({ reason: "cli", force: Boolean(opts.force) });
+            defaultRuntime.log("Shared store synced.");
+          },
+        });
+        return;
+      }
       const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory index");
       emitMemorySecretResolveDiagnostics(diagnostics);
       const agentIds = resolveAgentIds(cfg, opts.agent);
@@ -749,6 +788,7 @@ export function registerMemoryCli(program: Command) {
     .argument("[query]", "Search query")
     .option("--query <text>", "Search query (alternative to positional argument)")
     .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--shared", "Search only the shared memory store", false)
     .option("--max-results <n>", "Max results", (value: string) => Number(value))
     .option("--min-score <n>", "Minimum score", (value: string) => Number(value))
     .option("--json", "Print JSON")
@@ -757,6 +797,7 @@ export function registerMemoryCli(program: Command) {
         queryArg: string | undefined,
         opts: MemoryCommandOptions & {
           query?: string;
+          shared?: boolean;
           maxResults?: number;
           minScore?: number;
         },
@@ -768,6 +809,10 @@ export function registerMemoryCli(program: Command) {
           );
           process.exitCode = 1;
           return;
+        }
+        if (opts.shared) {
+          const { SHARED_AGENT_ID } = await import("../memory/shared-constants.js");
+          opts.agent = SHARED_AGENT_ID;
         }
         const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory search");
         emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });

@@ -588,6 +588,17 @@ export const MemorySearchSchema = z
     enabled: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z.array(z.string()).optional(),
+    sharedPaths: z
+      .array(
+        z.union([
+          z.string().transform((p) => ({ path: p, weight: 1.0 })),
+          z.object({
+            path: z.string(),
+            weight: z.number().positive().optional().default(1.0),
+          }),
+        ]),
+      )
+      .optional(),
     multimodal: z
       .object({
         enabled: z.boolean().optional(),
@@ -759,9 +770,16 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
+import { SHARED_AGENT_ID } from "../memory/shared-constants.js";
+
+/** Agent IDs reserved for internal use (e.g. shared memory store). */
+export const RESERVED_AGENT_IDS = new Set([SHARED_AGENT_ID]);
+
 export const AgentEntrySchema = z
   .object({
-    id: z.string(),
+    id: z.string().refine((id) => !RESERVED_AGENT_IDS.has(id.trim().toLowerCase()), {
+      message: 'Agent ID "_shared" is reserved for the shared memory store',
+    }),
     default: z.boolean().optional(),
     name: z.string().optional(),
     workspace: z.string().optional(),

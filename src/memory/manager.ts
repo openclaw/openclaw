@@ -19,10 +19,12 @@ import {
 } from "./embeddings.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
-import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
+import { ensureDir, isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
+import { SHARED_AGENT_ID } from "./shared-constants.js";
+import { requireNodeSqlite } from "./sqlite.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -38,6 +40,8 @@ const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const BATCH_FAILURE_LIMIT = 2;
 
 const log = createSubsystemLogger("memory");
+
+const tagAgent = <T extends MemorySearchResult>(r: T) => ({ ...r, origin: "agent" as const });
 
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
@@ -238,6 +242,44 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const statusOnly = params.purpose === "status";
     this.dirty = this.sources.has("memory") && (statusOnly ? !meta : true);
     this.batch = this.resolveBatchConfig();
+
+    // Shared manager is initialized lazily on first search
+    this.hasSharedPaths = this.settings.sharedPaths.length > 0 && this.agentId !== SHARED_AGENT_ID;
+    if (this.hasSharedPaths) {
+      // Ensure convention directories exist (once per manager, not per config resolve)
+      for (const sp of this.settings.sharedPaths) {
+        ensureDir(sp.path);
+      }
+    }
+  }
+
+  private hasSharedPaths: boolean;
+  private sharedManager: MemoryIndexManager | null = null;
+  private sharedManagerPending: Promise<MemoryIndexManager | null> | null = null;
+
+  private async getSharedManager(): Promise<MemoryIndexManager | null> {
+    // hasSharedPaths is false when agentId === SHARED_AGENT_ID, preventing recursion
+    if (!this.hasSharedPaths) {
+      return null;
+    }
+    if (this.sharedManager) {
+      return this.sharedManager;
+    }
+    if (this.sharedManagerPending) {
+      return this.sharedManagerPending;
+    }
+    this.sharedManagerPending = MemoryIndexManager.get({
+      cfg: this.cfg,
+      agentId: SHARED_AGENT_ID,
+    })
+      .then((mgr) => {
+        this.sharedManager = mgr;
+        return mgr;
+      })
+      .finally(() => {
+        this.sharedManagerPending = null;
+      });
+    return this.sharedManagerPending;
   }
 
   async warmSession(sessionKey?: string): Promise<void> {
@@ -310,12 +352,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         }
       }
 
-      const merged = [...seenIds.values()]
+      const agentResults = [...seenIds.values()]
         .toSorted((a, b) => b.score - a.score)
         .filter((entry) => entry.score >= minScore)
-        .slice(0, maxResults);
+        .map(tagAgent);
 
-      return merged;
+      return this.mergeWithSharedResults(agentResults, cleaned, maxResults, minScore);
     }
 
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
@@ -331,7 +373,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       : [];
 
     if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
-      return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+      const agentResults = vectorResults.filter((entry) => entry.score >= minScore).map(tagAgent);
+      return this.mergeWithSharedResults(agentResults, cleaned, maxResults, minScore);
     }
 
     const merged = await this.mergeHybridResults({
@@ -343,26 +386,78 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       temporalDecay: hybrid.temporalDecay,
     });
     const strict = merged.filter((entry) => entry.score >= minScore);
+    let agentResults: MemorySearchResult[];
     if (strict.length > 0 || keywordResults.length === 0) {
-      return strict.slice(0, maxResults);
+      agentResults = strict.map(tagAgent);
+    } else {
+      // Hybrid defaults can produce keyword-only matches with max score equal to
+      // textWeight (for example 0.3). If minScore is higher (for example 0.35),
+      // these exact lexical hits get filtered out even when they are the only
+      // relevant results.
+      const relaxedMinScore = Math.min(minScore, hybrid.textWeight);
+      const keywordKeys = new Set(
+        keywordResults.map(
+          (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
+        ),
+      );
+      agentResults = merged
+        .filter(
+          (entry) =>
+            keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`) &&
+            entry.score >= relaxedMinScore,
+        )
+        .map(tagAgent);
     }
 
-    // Hybrid defaults can produce keyword-only matches with max score equal to
-    // textWeight (for example 0.3). If minScore is higher (for example 0.35),
-    // these exact lexical hits get filtered out even when they are the only
-    // relevant results.
-    const relaxedMinScore = Math.min(minScore, hybrid.textWeight);
-    const keywordKeys = new Set(
-      keywordResults.map(
-        (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
-      ),
-    );
-    return merged
-      .filter(
-        (entry) =>
-          keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`) &&
-          entry.score >= relaxedMinScore,
-      )
+    return this.mergeWithSharedResults(agentResults, cleaned, maxResults, minScore);
+  }
+
+  /** Search the shared manager and merge results with agent results. */
+  private async mergeWithSharedResults(
+    agentResults: MemorySearchResult[],
+    query: string,
+    maxResults: number,
+    minScore: number,
+  ): Promise<MemorySearchResult[]> {
+    const shared = await this.getSharedManager();
+    if (!shared) {
+      return agentResults.slice(0, maxResults);
+    }
+
+    // Fetch extra candidates so weighting can promote hits that would otherwise be cut off
+    const maxWeightedSharedPaths = Math.max(...this.settings.sharedPaths.map((sp) => sp.weight), 1);
+    const sharedFetchLimit = maxWeightedSharedPaths > 1 ? maxResults * 2 : maxResults;
+    const sharedMinScore =
+      maxWeightedSharedPaths > 1 ? minScore / maxWeightedSharedPaths : minScore;
+    const sharedResults = await shared
+      .search(query, { maxResults: sharedFetchLimit, minScore: sharedMinScore })
+      .catch(() => []);
+    if (sharedResults.length === 0) {
+      return agentResults.slice(0, maxResults);
+    }
+
+    // Resolve shared result paths to absolute so they work from any agent's workspace
+    const sharedWorkspaceDir = shared.status().workspaceDir ?? "";
+    const tagged = sharedResults.map((r) => {
+      const absPath = path.isAbsolute(r.path) ? r.path : path.resolve(sharedWorkspaceDir, r.path);
+      let weight = 1.0;
+      for (const sp of this.settings.sharedPaths) {
+        if (absPath === sp.path || absPath.startsWith(`${sp.path}${path.sep}`)) {
+          weight = sp.weight;
+          break;
+        }
+      }
+      return {
+        ...r,
+        path: absPath,
+        score: r.score * weight,
+        origin: "shared" as const,
+      };
+    });
+
+    return [...agentResults, ...tagged]
+      .filter((r) => r.score >= minScore)
+      .toSorted((a, b) => b.score - a.score)
       .slice(0, maxResults);
   }
 
@@ -632,7 +727,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         } catch {}
       }
     }
-    if (!allowedWorkspace && !allowedAdditional) {
+    let allowedShared = false;
+    if (!allowedWorkspace && !allowedAdditional && this.settings.sharedPaths.length > 0) {
+      for (const sp of this.settings.sharedPaths) {
+        if (absPath === sp.path || absPath.startsWith(`${sp.path}${path.sep}`)) {
+          allowedShared = true;
+          break;
+        }
+      }
+    }
+    if (!allowedWorkspace && !allowedAdditional && !allowedShared) {
       throw new Error("path required");
     }
     if (!absPath.endsWith(".md")) {
@@ -772,7 +876,49 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           lastError: this.readonlyRecoveryLastError,
         },
       },
+      shared: this.hasSharedPaths
+        ? (() => {
+            if (this.sharedManager) {
+              const s = this.sharedManager.status();
+              return {
+                dbPath: this.settings.sharedStorePath,
+                files: s.files ?? 0,
+                chunks: s.chunks ?? 0,
+                paths: this.settings.sharedPaths,
+              };
+            }
+            // Read counts directly from the shared sqlite so status is accurate before lazy init
+            const counts = this.readSharedStoreCounts();
+            return {
+              dbPath: this.settings.sharedStorePath,
+              files: counts.files,
+              chunks: counts.chunks,
+              paths: this.settings.sharedPaths,
+            };
+          })()
+        : undefined,
     };
+  }
+
+  /** Read file/chunk counts directly from the shared sqlite without initializing the full manager. */
+  private readSharedStoreCounts(): { files: number; chunks: number } {
+    try {
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(this.settings.sharedStorePath, { open: true, readOnly: true });
+      try {
+        const filesRow = db.prepare("SELECT COUNT(*) as c FROM files").get() as
+          | { c: number }
+          | undefined;
+        const chunksRow = db.prepare("SELECT COUNT(*) as c FROM chunks").get() as
+          | { c: number }
+          | undefined;
+        return { files: filesRow?.c ?? 0, chunks: chunksRow?.c ?? 0 };
+      } finally {
+        db.close();
+      }
+    } catch {
+      return { files: 0, chunks: 0 };
+    }
   }
 
   async probeVectorAvailability(): Promise<boolean> {
@@ -835,6 +981,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       } catch {}
     }
     this.db.close();
+    // Shared manager lifecycle is handled by INDEX_CACHE; don't close it here
+    this.sharedManager = null;
     INDEX_CACHE.delete(this.cacheKey);
   }
 }
