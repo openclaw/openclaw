@@ -134,13 +134,13 @@ async function dispatchHarnessReplies(
     params: DispatchReplyHarnessParams,
   ) => Promise<ReplyPayload | ReplyPayload[] | undefined>,
 ): Promise<DispatchReplyWithBufferedBlockDispatcherResult> {
-  await params.dispatcherOptions?.typingCallbacks?.onReplyStart?.();
+  await params.dispatcherOptions.typingCallbacks?.onReplyStart?.();
   const reply = await runReply(params);
   const payloads: ReplyPayload[] =
     reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
   const dispatcher = createReplyDispatcher({
     deliver: async (payload, info) => {
-      await params.dispatcherOptions?.deliver?.(payload, info);
+      await params.dispatcherOptions.deliver?.(payload, info);
     },
     responsePrefix: params.dispatcherOptions.responsePrefix,
     enableSlackInteractiveReplies: params.dispatcherOptions.enableSlackInteractiveReplies,
@@ -148,10 +148,10 @@ async function dispatchHarnessReplies(
     responsePrefixContext: params.dispatcherOptions.responsePrefixContext,
     onHeartbeatStrip: params.dispatcherOptions.onHeartbeatStrip,
     onSkip: (payload, info) => {
-      params.dispatcherOptions?.onSkip?.(payload, info);
+      params.dispatcherOptions.onSkip?.(payload, info);
     },
     onError: (err, info) => {
-      params.dispatcherOptions?.onError?.(err, info);
+      params.dispatcherOptions.onError?.(err, info);
     },
   });
   let finalCount = 0;
