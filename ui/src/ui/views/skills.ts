@@ -38,9 +38,7 @@ export function renderSkills(props: SkillsProps) {
 
   return html`
     <section class="card">
-      <div class="row" style="justify-content: space-between;">
-        <div>
-        </div>
+      <div class="row" style="justify-content: flex-end;">
         <button class="btn" ?disabled=${props.loading || !props.connected} @click=${props.onRefresh}>
           ${props.loading ? "Loading…" : "Refresh"}
         </button>

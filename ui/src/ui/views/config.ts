@@ -984,7 +984,7 @@ export function renderConfig(props: ConfigProps) {
                     `
                     : nothing
                 }
-              div>
+              </div>
             `
             : nothing
         }

@@ -55,9 +55,7 @@ export function renderLogs(props: LogsProps) {
 
   return html`
     <section class="card">
-      <div class="row" style="justify-content: space-between;">
-        <div>
-        </div>
+      <div class="row" style="justify-content: space-between; gap: 8px;">
         <div class="row" style="gap: 8px;">
           <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
             ${props.loading ? "Loading…" : "Refresh"}

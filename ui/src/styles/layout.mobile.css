@@ -17,6 +17,11 @@
     grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
   }
 
+  /* Hide chat content-header on mobile - controls are in topbar gear menu */
+  .content-header--chat {
+    display: none;
+  }
+
   .shell-nav,
   .shell--nav-collapsed .shell-nav {
     position: fixed;
