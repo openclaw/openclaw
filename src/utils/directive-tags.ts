@@ -15,7 +15,14 @@ type InlineDirectiveParseOptions = {
 };
 
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
-const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
+// REPLY_TAG_RE requires the `[[` to appear at start-of-string, start-of-line,
+// or preceded by whitespace. This prevents the pattern from matching inside
+// embedded content where `[[` appears mid-word (e.g. URLs or prose that
+// accidentally contains the substring). Stripping is best-effort for quality,
+// not security — spoofing sentinel lines is a trusted-input concern handled
+// upstream before text reaches the indexer.
+const REPLY_TAG_RE =
+  /(?:^|(?<=[\s]))\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
 function normalizeDirectiveWhitespace(text: string): string {
   return text

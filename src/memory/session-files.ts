@@ -49,6 +49,13 @@ function normalizeSessionText(value: string): string {
  * Strips OpenClaw-injected metadata from a raw content string before
  * normalization. Must be called on the original multi-line text so that
  * the line-based sentinel detection in `stripInboundMetadata` works correctly.
+ *
+ * Security note: stripping is done for indexing quality, not for security.
+ * An attacker who can write arbitrary content to the session transcript could
+ * include lines that look like metadata sentinels — this would cause those
+ * lines to be stripped from the index, but would not grant privilege escalation.
+ * Spoofing sentinel lines is a trusted-input concern handled upstream before
+ * messages are stored; the stripping here is best-effort and intentional.
  */
 function stripRawContentMeta(raw: string): string {
   const stripped = stripInboundMetadata(raw);
