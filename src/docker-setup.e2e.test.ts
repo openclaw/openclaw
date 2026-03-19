@@ -50,13 +50,14 @@ exit 0
 
 async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   const rootDir = await mkdtemp(join(tmpdir(), "openclaw-docker-setup-"));
-  const scriptPath = join(rootDir, "docker-setup.sh");
+  const scriptPath = join(rootDir, "scripts", "docker", "setup.sh");
   const dockerfilePath = join(rootDir, "Dockerfile");
   const composePath = join(rootDir, "docker-compose.yml");
   const binDir = join(rootDir, "bin");
   const logPath = join(rootDir, "docker-stub.log");
 
-  await copyFile(join(repoRoot, "docker-setup.sh"), scriptPath);
+  await mkdir(join(rootDir, "scripts", "docker"), { recursive: true });
+  await copyFile(join(repoRoot, "scripts", "docker", "setup.sh"), scriptPath);
   await chmod(scriptPath, 0o755);
   await writeFile(dockerfilePath, "FROM scratch\n");
   await writeFile(
@@ -168,7 +169,7 @@ function resolveBashForCompatCheck(): string | null {
   return null;
 }
 
-describe("docker-setup.sh", () => {
+describe("scripts/docker/setup.sh", () => {
   let sandbox: DockerSetupSandbox | null = null;
 
   beforeAll(async () => {
@@ -439,7 +440,7 @@ describe("docker-setup.sh", () => {
   });
 
   it("avoids associative arrays so the script remains Bash 3.2-compatible", async () => {
-    const script = await readFile(join(repoRoot, "docker-setup.sh"), "utf8");
+    const script = await readFile(join(repoRoot, "scripts", "docker", "setup.sh"), "utf8");
     expect(script).not.toMatch(/^\s*declare -A\b/m);
 
     const systemBash = resolveBashForCompatCheck();
@@ -456,9 +457,13 @@ describe("docker-setup.sh", () => {
       return;
     }
 
-    const syntaxCheck = spawnSync(systemBash, ["-n", join(repoRoot, "docker-setup.sh")], {
-      encoding: "utf8",
-    });
+    const syntaxCheck = spawnSync(
+      systemBash,
+      ["-n", join(repoRoot, "scripts", "docker", "setup.sh")],
+      {
+        encoding: "utf8",
+      },
+    );
 
     expect(syntaxCheck.status).toBe(0);
     expect(syntaxCheck.stderr).not.toContain("declare: -A: invalid option");
