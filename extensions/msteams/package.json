@@ -32,11 +32,6 @@
     },
     "release": {
       "publishToNpm": true
-    },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "@microsoft/agents-hosting"
-      ]
     }
   }
 }
