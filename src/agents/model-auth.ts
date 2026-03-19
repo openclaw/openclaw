@@ -326,25 +326,25 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
-  // Run preScript if configured on this provider.
-  // In the normal config-loading path, preScripts are executed earlier
-  // (in resolveConfigForRead → applyProviderPreScripts) so that their output
-  // takes priority during ${VAR} substitution. This block acts as a fallback
-  // for cases where the config was not loaded through the standard path, or
-  // where apiKey still contains unresolved placeholders after config loading.
+  // Run preScript if configured on this provider AND apiKey still contains
+  // unresolved ${...} placeholders. In the normal config-loading path,
+  // preScripts are executed earlier (in resolveConfigForRead →
+  // applyProviderPreScripts) and all placeholders are already substituted.
+  // This block only fires as a fallback when config was loaded through a
+  // non-standard path, avoiding redundant script execution on every request.
   const providerConfig = resolveProviderConfig(cfg, provider);
-  if (providerConfig?.preScript) {
+  const rawKey = providerConfig?.preScript
+    ? normalizeOptionalSecretInput(providerConfig.apiKey)
+    : undefined;
+  if (providerConfig?.preScript && rawKey?.includes("${")) {
     const scriptVars = await executeProviderPreScript(providerConfig.preScript);
-    const rawKey = normalizeOptionalSecretInput(providerConfig.apiKey);
-    if (rawKey) {
-      const resolvedKey = resolvePreScriptPlaceholders(rawKey, scriptVars);
-      if (resolvedKey && resolvedKey !== rawKey) {
-        return {
-          apiKey: resolvedKey,
-          source: "preScript",
-          mode: "api-key",
-        };
-      }
+    const resolvedKey = resolvePreScriptPlaceholders(rawKey, scriptVars);
+    if (resolvedKey && resolvedKey !== rawKey) {
+      return {
+        apiKey: resolvedKey,
+        source: "preScript",
+        mode: "api-key",
+      };
     }
   }
 

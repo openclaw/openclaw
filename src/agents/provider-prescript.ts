@@ -44,12 +44,11 @@ export async function executeProviderPreScript(
       resolve({});
     });
 
-    child.on("close", (code) => {
-      if (code !== 0) {
+    child.on("close", (code, signal) => {
+      if (code !== 0 || signal != null) {
         const stderr = Buffer.concat(errChunks).toString().trim();
-        console.warn(
-          `[preScript] "${command}" exited with code ${code}${stderr ? `: ${stderr}` : ""}`,
-        );
+        const reason = signal === "SIGTERM" ? "timed out" : `exited with code ${code}`;
+        console.warn(`[preScript] "${command}" ${reason}${stderr ? `: ${stderr}` : ""}`);
         resolve({});
         return;
       }
@@ -145,7 +144,8 @@ function normalizePreScriptConfig(config: PreScriptConfig): {
   timeoutMs?: number;
 } {
   if (typeof config === "string") {
-    const parts = config.split(/\s+/);
+    const trimmed = config.trim();
+    const parts = trimmed.split(/\s+/);
     return { command: parts[0], args: parts.slice(1) };
   }
   return {

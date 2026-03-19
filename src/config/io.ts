@@ -1638,16 +1638,17 @@ function resolveConfigForRead(
     applyConfigEnvVars(resolvedIncludes as OpenClawConfig, env);
   }
 
-  // Run provider preScripts and merge output into env BEFORE ${VAR} substitution.
-  // This ensures preScript-provided values (e.g., dynamic tokens or endpoints)
-  // take priority over process.env when resolveConfigEnvVars replaces ${VAR} placeholders.
-  applyProviderPreScripts(resolvedIncludes, env);
+  // Run provider preScripts and merge output into an ephemeral env snapshot
+  // BEFORE ${VAR} substitution. This ensures preScript-provided values take
+  // priority during substitution without permanently mutating process.env.
+  const substitutionEnv = { ...env } as NodeJS.ProcessEnv;
+  applyProviderPreScripts(resolvedIncludes, substitutionEnv);
 
   // Collect missing env var references as warnings instead of throwing,
   // so non-critical config sections with unset vars don't crash the gateway.
   const envWarnings: EnvSubstitutionWarning[] = [];
   return {
-    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env, {
+    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, substitutionEnv, {
       onMissing: (w) => envWarnings.push(w),
     }),
     // Capture env snapshot after substitution for write-time ${VAR} restoration.
