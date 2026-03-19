@@ -1,15 +1,17 @@
 /**
  * Upload an image from a URL to Tlon storage.
  */
-import { uploadFile } from "@tloncorp/api";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/infra-runtime";
 import { getDefaultSsrFPolicy } from "./context.js";
 
 /**
- * Fetch an image from a URL and upload it to Tlon storage.
- * Returns the uploaded URL, or falls back to the original URL on error.
+ * Fetch an image URL with SSRF protection and return a safe URL for embedding.
+ * We intentionally avoid installing the upstream Tlon storage client at install time
+ * because its git package currently runs a broken build during dependency install.
+ * Returning the validated source URL preserves media sending without the brittle
+ * install-time build step.
  *
- * Note: configureClient must be called before using this function.
+ * Returns the reachable final URL, or falls back to the original URL on error.
  */
 export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
   try {
@@ -22,7 +24,7 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
 
     // Fetch the image with SSRF protection
     // Use fetchWithSsrFGuard directly (not urbitFetch) to preserve the full URL path
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, finalUrl, release } = await fetchWithSsrFGuard({
       url: imageUrl,
       init: { method: "GET" },
       policy: getDefaultSsrFPolicy(),
@@ -35,21 +37,7 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
         return imageUrl;
       }
 
-      const contentType = response.headers.get("content-type") || "image/png";
-      const blob = await response.blob();
-
-      // Extract filename from URL or use a default
-      const urlPath = new URL(imageUrl).pathname;
-      const fileName = urlPath.split("/").pop() || `upload-${Date.now()}.png`;
-
-      // Upload to Tlon storage
-      const result = await uploadFile({
-        blob,
-        fileName,
-        contentType,
-      });
-
-      return result.url;
+      return response.url || finalUrl || imageUrl;
     } finally {
       await release();
     }

@@ -1,8 +1,12 @@
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
+import {
+  resolveDefaultWebAuthDir,
+  resolveWebCredsBackupPath,
+  resolveWebCredsPath,
+} from "./auth-store.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
 const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
@@ -22,28 +26,31 @@ async function emitCredsUpdateAndReadSaveCreds() {
 }
 
 function mockCredsJsonSpies(readContents: string) {
-  const credsSuffix = path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json");
+  const credsPath = resolveWebCredsPath(resolveDefaultWebAuthDir());
+  const backupPath = resolveWebCredsBackupPath(resolveDefaultWebAuthDir());
+  const credsSuffix = credsPath;
   const copySpy = vi.spyOn(fsSync, "copyFileSync").mockImplementation(() => {});
   const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
     if (typeof p !== "string") {
       return false;
     }
-    return p.endsWith(credsSuffix);
+    return p === credsPath;
   });
   const statSpy = vi.spyOn(fsSync, "statSync").mockImplementation((p) => {
-    if (typeof p === "string" && p.endsWith(credsSuffix)) {
+    if (typeof p === "string" && p === credsPath) {
       return { isFile: () => true, size: 12 } as never;
     }
     throw new Error(`unexpected statSync path: ${String(p)}`);
   });
   const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((p) => {
-    if (typeof p === "string" && p.endsWith(credsSuffix)) {
+    if (typeof p === "string" && p === credsPath) {
       return readContents as never;
     }
     throw new Error(`unexpected readFileSync path: ${String(p)}`);
   });
   return {
     copySpy,
+    backupPath,
     credsSuffix,
     restore: () => {
       copySpy.mockRestore();
@@ -308,13 +315,6 @@ describe("web session", () => {
 
   it("rotates creds backup when creds.json is valid JSON", async () => {
     const creds = mockCredsJsonSpies("{}");
-    const backupSuffix = path.join(
-      "/tmp",
-      "openclaw-oauth",
-      "whatsapp",
-      "default",
-      "creds.json.bak",
-    );
 
     await createWaSocket(false, false);
     const saveCreds = await emitCredsUpdateAndReadSaveCreds();
@@ -322,7 +322,7 @@ describe("web session", () => {
     expect(creds.copySpy).toHaveBeenCalledTimes(1);
     const args = creds.copySpy.mock.calls[0] ?? [];
     expect(String(args[0] ?? "")).toContain(creds.credsSuffix);
-    expect(String(args[1] ?? "")).toContain(backupSuffix);
+    expect(String(args[1] ?? "")).toBe(creds.backupPath);
     expect(saveCreds).toHaveBeenCalled();
 
     creds.restore();
