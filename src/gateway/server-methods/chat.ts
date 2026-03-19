@@ -1268,10 +1268,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       // Register the reconnecting client as a stream recipient before returning
       // in_flight, so a page-refresh or reconnect on the same idempotencyKey
       // still receives in-progress thinking and tool events.
+      // Guard: only subscribe if the request targets the same session as the
+      // active run. A stale retry or buggy client that reuses an idempotencyKey
+      // while pointing at a different session must not receive another
+      // conversation's stream.
       const connIdReconnect = normalizeOptionalText(client?.connId);
       const deviceIdReconnect = normalizeOptionalText(client?.connect?.device?.id);
       if (
         connIdReconnect &&
+        activeExisting.sessionKey === rawSessionKey &&
         isBackfillAuthorized(
           activeExisting.ownerConnId,
           activeExisting.ownerDeviceId,

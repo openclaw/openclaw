@@ -484,6 +484,51 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(toolReg).not.toHaveBeenCalled();
   });
 
+  it("does not register a reconnecting client when sessionKey does not match the in-flight run", async () => {
+    // A stale retry or buggy client that reuses an idempotencyKey while
+    // pointing at a different session must not receive the wrong session's stream.
+    const respond = vi.fn();
+    const context = createChatContext();
+    const runId = "idem-in-flight-session-mismatch";
+    context.chatAbortControllers.set(runId, {
+      controller: new AbortController(),
+      sessionId: "sess-original",
+      sessionKey: "main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 30_000,
+      ownerConnId: "conn-1",
+      ownerDeviceId: "dev-1",
+    });
+
+    await chatHandlers["chat.send"]({
+      // Same idempotencyKey, but a DIFFERENT sessionKey.
+      params: { sessionKey: "other-session", message: "hello", idempotencyKey: runId },
+      respond,
+      req: {} as never,
+      client: {
+        connId: "conn-1",
+        connect: {
+          caps: [GATEWAY_CLIENT_CAPS.THINKING_EVENTS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+          device: { id: "dev-1" },
+        },
+      } as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "in_flight" }),
+      undefined,
+      expect.objectContaining({ cached: true }),
+    );
+    // Session mismatch — no stream subscription must be created.
+    const thinkingReg = context.registerThinkingEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    const toolReg = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    expect(thinkingReg).not.toHaveBeenCalled();
+    expect(toolReg).not.toHaveBeenCalled();
+  });
+
   it("chat.inject keeps message defined when directive tag is the only content", async () => {
     createTranscriptFixture("openclaw-chat-inject-directive-only-");
     const respond = vi.fn();
