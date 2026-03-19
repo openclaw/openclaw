@@ -16,8 +16,8 @@ import {
   resolveTargetsWithOptionalToken,
 } from "openclaw/plugin-sdk/channel-runtime";
 import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw/plugin-sdk/core";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   listEnabledSlackAccounts,
   resolveSlackAccount,
@@ -418,6 +418,17 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     targetResolver: {
       looksLikeId: looksLikeSlackTargetId,
       hint: "<channelId|user:ID|channel:ID>",
+      resolveTarget: async ({ input }) => {
+        const parsed = parseSlackExplicitTarget(input);
+        if (!parsed) {
+          return null;
+        }
+        return {
+          to: parsed.to,
+          kind: parsed.chatType === "direct" ? "user" : "group",
+          source: "normalized",
+        };
+      },
     },
   },
   directory: createChannelDirectoryAdapter({

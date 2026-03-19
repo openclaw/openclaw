@@ -309,6 +309,9 @@ describe("session history HTTP endpoints", () => {
           ?.content?.[0]?.text,
       ).toBe("second message");
       expect((messageEvent.data as { messageSeq?: number }).messageSeq).toBe(2);
+      if (!appended.ok) {
+        throw new Error(`append failed: ${appended.reason}`);
+      }
       expect(
         (
           messageEvent.data as {
@@ -316,7 +319,7 @@ describe("session history HTTP endpoints", () => {
           }
         ).message?.__openclaw,
       ).toMatchObject({
-        id: appended.messageId,
+        id: appended.ok ? appended.messageId : undefined,
         seq: 2,
       });
 

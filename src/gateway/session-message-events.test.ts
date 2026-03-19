@@ -152,6 +152,9 @@ describe("session.message websocket events", () => {
 
         const [appended, event] = await Promise.all([appendPromise, eventPromise]);
         expect(appended.ok).toBe(true);
+        if (!appended.ok) {
+          throw new Error(`append failed: ${appended.reason}`);
+        }
         expect(
           (event.payload as { message?: { content?: Array<{ text?: string }> } }).message
             ?.content?.[0]?.text,
@@ -164,7 +167,7 @@ describe("session.message websocket events", () => {
             }
           ).message?.__openclaw,
         ).toMatchObject({
-          id: appended.messageId,
+          id: appended.ok ? appended.messageId : undefined,
           seq: 1,
         });
       } finally {

@@ -34,7 +34,8 @@ export type * from "../channels/plugins/types.js";
 export * from "../channels/plugins/config-writes.js";
 export * from "../channels/plugins/directory-adapters.js";
 export * from "../channels/plugins/media-payload.js";
-export * from "../channels/plugins/message-tool-schema.js";
+export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
+export * from "./message-tool-schema.js";
 export * from "../channels/plugins/normalize/signal.js";
 export * from "../channels/plugins/normalize/whatsapp.js";
 export * from "../channels/plugins/outbound/direct-text-media.js";
@@ -45,6 +46,14 @@ export * from "../channels/plugins/target-resolvers.js";
 export * from "../channels/plugins/threading-helpers.js";
 export * from "../channels/plugins/status-issues/shared.js";
 export * from "../channels/plugins/whatsapp-heartbeat.js";
+export {
+  buildComputedAccountStatusSnapshot,
+  buildTokenChannelStatusSummary,
+} from "./status-helpers.js";
+export {
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromCredentialStatuses,
+} from "../channels/account-snapshot-fields.js";
 export * from "../infra/outbound/send-deps.js";
 export * from "../polls.js";
 export * from "../utils/message-channel.js";
