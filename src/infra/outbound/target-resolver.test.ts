@@ -5,6 +5,7 @@ type TargetResolverModule = typeof import("./target-resolver.js");
 
 let resetDirectoryCache: TargetResolverModule["resetDirectoryCache"];
 let resolveMessagingTarget: TargetResolverModule["resolveMessagingTarget"];
+let formatTargetDisplay: TargetResolverModule["formatTargetDisplay"];
 
 const mocks = vi.hoisted(() => ({
   listPeers: vi.fn(),
@@ -33,7 +34,8 @@ beforeEach(async () => {
   vi.doMock("../../plugins/runtime.js", () => ({
     getActivePluginRegistryVersion: () => mocks.getActivePluginRegistryVersion(),
   }));
-  ({ resetDirectoryCache, resolveMessagingTarget } = await import("./target-resolver.js"));
+  ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
+    await import("./target-resolver.js"));
 });
 
 describe("resolveMessagingTarget (directory fallback)", () => {
@@ -186,5 +188,43 @@ describe("resolveMessagingTarget (directory fallback)", () => {
         input: "+15551234567",
       }),
     );
+  });
+
+  it("keeps plugin-owned id casing when resolver returns a normalized target", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.resolveTarget.mockResolvedValue({
+      to: "channel:C123ABC",
+      kind: "group",
+      source: "normalized",
+    });
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "slack",
+      input: "#C123ABC",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.to).toBe("channel:C123ABC");
+      expect(result.target.display).toBeUndefined();
+    }
+  });
+
+  it("defers target display formatting to the plugin when available", () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        formatTargetDisplay: ({ target }: { target: string }) => target.replace(/^telegram:/i, ""),
+      },
+    });
+
+    expect(formatTargetDisplay({ channel: "telegram", target: "telegram:12345" })).toBe("12345");
   });
 });
