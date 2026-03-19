@@ -142,6 +142,7 @@ function resolvePluginRuntimeModulePath(params: LoaderModuleResolveParams = {}):
 
 export const __testing = {
   buildPluginLoaderJitiOptions,
+  buildPluginLoaderCacheKey,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
   resolvePluginSdkScopedAliasMap,
@@ -151,6 +152,21 @@ export const __testing = {
   shouldPreferNativeJiti,
   maxPluginRegistryCacheEntries: MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
 };
+
+function buildPluginLoaderCacheKey(params: {
+  modulePath: string;
+  tryNative: boolean;
+  aliasMap: Record<string, string>;
+}): string {
+  const aliasOrderKey = resolvePluginSdkAliasCandidateOrder({
+    modulePath: params.modulePath,
+    isProduction: process.env.NODE_ENV === "production",
+  }).join(">");
+  const aliasEntries = Object.entries(params.aliasMap).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  return `${params.tryNative ? "native" : "jiti"}:${aliasOrderKey}:${JSON.stringify(aliasEntries)}`;
+}
 
 function getCachedPluginRegistry(cacheKey: string): PluginRegistry | undefined {
   const cached = registryCache.get(cacheKey);
@@ -711,20 +727,20 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
   const getJiti = (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
-    const aliasOrderKey = resolvePluginSdkAliasCandidateOrder({
-      modulePath,
-      isProduction: process.env.NODE_ENV === "production",
-    }).join(">");
-    const cacheKey = `${tryNative ? "native" : "jiti"}:${aliasOrderKey}`;
-    const cached = jitiLoaders.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
     const pluginSdkAlias = resolvePluginSdkAlias({ modulePath });
     const aliasMap = {
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
       ...resolvePluginSdkScopedAliasMap({ modulePath }),
     };
+    const cacheKey = buildPluginLoaderCacheKey({
+      modulePath,
+      tryNative,
+      aliasMap,
+    });
+    const cached = jitiLoaders.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
     const loader = createJiti(import.meta.url, {
       ...buildPluginLoaderJitiOptions(aliasMap),
       // Source .ts runtime shims import sibling ".js" specifiers that only exist

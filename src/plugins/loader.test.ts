@@ -676,6 +676,21 @@ function resolvePluginRuntimeModule(params: {
   return params.env ? withEnv(params.env, run) : run();
 }
 
+function buildPluginLoaderCacheKey(params: {
+  modulePath: string;
+  tryNative: boolean;
+  aliasMap: Record<string, string>;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const run = () =>
+    __testing.buildPluginLoaderCacheKey({
+      modulePath: params.modulePath,
+      tryNative: params.tryNative,
+      aliasMap: params.aliasMap,
+    });
+  return params.env ? withEnv(params.env, run) : run();
+}
+
 afterEach(() => {
   clearPluginLoaderCache();
   if (prevBundledDir === undefined) {
@@ -3492,6 +3507,44 @@ module.exports = {
     expect(options.extensions).toContain(".js");
     expect(options.extensions).toContain(".ts");
     expect("alias" in options).toBe(false);
+  });
+
+  it("keys plugin loader caches by resolved alias map so different roots do not share a loader", () => {
+    const first = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      },
+      srcFile: "channel-runtime.ts",
+      distFile: "channel-runtime.js",
+    });
+    const second = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      },
+      srcFile: "channel-runtime.ts",
+      distFile: "channel-runtime.js",
+    });
+
+    const firstKey = buildPluginLoaderCacheKey({
+      modulePath: path.join(first.root, "src", "plugins", "loader.ts"),
+      tryNative: false,
+      aliasMap: {
+        "openclaw/plugin-sdk": first.srcFile,
+        "openclaw/plugin-sdk/channel-runtime": first.srcFile,
+      },
+      env: { NODE_ENV: undefined },
+    });
+    const secondKey = buildPluginLoaderCacheKey({
+      modulePath: path.join(second.root, "src", "plugins", "loader.ts"),
+      tryNative: false,
+      aliasMap: {
+        "openclaw/plugin-sdk": second.srcFile,
+        "openclaw/plugin-sdk/channel-runtime": second.srcFile,
+      },
+      env: { NODE_ENV: undefined },
+    });
+
+    expect(firstKey).not.toBe(secondKey);
   });
 
   it("uses transpiled Jiti loads for source TypeScript plugin entries", () => {
