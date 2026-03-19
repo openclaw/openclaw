@@ -260,15 +260,17 @@ This is often easier than hand-editing JSON manifests.
 
 4. **Configure OpenClaw**
 
-   ```json
+   ```json5
    {
-     "msteams": {
-       "enabled": true,
-       "appId": "<APP_ID>",
-       "appPassword": "<APP_PASSWORD>",
-       "tenantId": "<TENANT_ID>",
-       "webhook": { "port": 3978, "path": "/api/messages" }
-     }
+     channels: {
+       msteams: {
+         enabled: true,
+         appId: "<APP_ID>",
+         appPassword: "<APP_PASSWORD>",
+         tenantId: "<TENANT_ID>",
+         webhook: { port: 3978, path: "/api/messages" },
+       },
+     },
    }
    ```
 
@@ -312,49 +314,49 @@ These are the **existing resourceSpecific permissions** in our Teams app manifes
 
 Minimal, valid example with the required fields. Replace IDs and URLs.
 
-```json
+```json5
 {
-  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.23/MicrosoftTeams.schema.json",
-  "manifestVersion": "1.23",
-  "version": "1.0.0",
-  "id": "00000000-0000-0000-0000-000000000000",
-  "name": { "short": "OpenClaw" },
-  "developer": {
-    "name": "Your Org",
-    "websiteUrl": "https://example.com",
-    "privacyUrl": "https://example.com/privacy",
-    "termsOfUseUrl": "https://example.com/terms"
+  $schema: "https://developer.microsoft.com/en-us/json-schemas/teams/v1.23/MicrosoftTeams.schema.json",
+  manifestVersion: "1.23",
+  version: "1.0.0",
+  id: "00000000-0000-0000-0000-000000000000",
+  name: { short: "OpenClaw" },
+  developer: {
+    name: "Your Org",
+    websiteUrl: "https://example.com",
+    privacyUrl: "https://example.com/privacy",
+    termsOfUseUrl: "https://example.com/terms",
   },
-  "description": { "short": "OpenClaw in Teams", "full": "OpenClaw in Teams" },
-  "icons": { "outline": "outline.png", "color": "color.png" },
-  "accentColor": "#5B6DEF",
-  "bots": [
+  description: { short: "OpenClaw in Teams", full: "OpenClaw in Teams" },
+  icons: { outline: "outline.png", color: "color.png" },
+  accentColor: "#5B6DEF",
+  bots: [
     {
-      "botId": "11111111-1111-1111-1111-111111111111",
-      "scopes": ["personal", "team", "groupChat"],
-      "isNotificationOnly": false,
-      "supportsCalling": false,
-      "supportsVideo": false,
-      "supportsFiles": true
-    }
+      botId: "11111111-1111-1111-1111-111111111111",
+      scopes: ["personal", "team", "groupChat"],
+      isNotificationOnly: false,
+      supportsCalling: false,
+      supportsVideo: false,
+      supportsFiles: true,
+    },
   ],
-  "webApplicationInfo": {
-    "id": "11111111-1111-1111-1111-111111111111"
+  webApplicationInfo: {
+    id: "11111111-1111-1111-1111-111111111111",
   },
-  "authorization": {
-    "permissions": {
-      "resourceSpecific": [
-        { "name": "ChannelMessage.Read.Group", "type": "Application" },
-        { "name": "ChannelMessage.Send.Group", "type": "Application" },
-        { "name": "Member.Read.Group", "type": "Application" },
-        { "name": "Owner.Read.Group", "type": "Application" },
-        { "name": "ChannelSettings.Read.Group", "type": "Application" },
-        { "name": "TeamMember.Read.Group", "type": "Application" },
-        { "name": "TeamSettings.Read.Group", "type": "Application" },
-        { "name": "ChatMessage.Read.Chat", "type": "Application" }
-      ]
-    }
-  }
+  authorization: {
+    permissions: {
+      resourceSpecific: [
+        { name: "ChannelMessage.Read.Group", type: "Application" },
+        { name: "ChannelMessage.Send.Group", type: "Application" },
+        { name: "Member.Read.Group", type: "Application" },
+        { name: "Owner.Read.Group", type: "Application" },
+        { name: "ChannelSettings.Read.Group", type: "Application" },
+        { name: "TeamMember.Read.Group", type: "Application" },
+        { name: "TeamSettings.Read.Group", type: "Application" },
+        { name: "ChatMessage.Read.Chat", type: "Application" },
+      ],
+    },
+  },
 }
 ```
 
@@ -500,20 +502,22 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 
 **Solution:** Configure `replyStyle` per-channel based on how the channel is set up:
 
-```json
+```json5
 {
-  "msteams": {
-    "replyStyle": "thread",
-    "teams": {
-      "19:abc...@thread.tacv2": {
-        "channels": {
-          "19:xyz...@thread.tacv2": {
-            "replyStyle": "top-level"
-          }
-        }
-      }
-    }
-  }
+  channels: {
+    msteams: {
+      replyStyle: "thread",
+      teams: {
+        "19:abc...@thread.tacv2": {
+          channels: {
+            "19:xyz...@thread.tacv2": {
+              replyStyle: "top-level",
+            },
+          },
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -616,16 +620,16 @@ The `card` parameter accepts an Adaptive Card JSON object. When `card` is provid
 
 **Agent tool:**
 
-```json
+```json5
 {
-  "action": "send",
-  "channel": "msteams",
-  "target": "user:<id>",
-  "card": {
-    "type": "AdaptiveCard",
-    "version": "1.5",
-    "body": [{ "type": "TextBlock", "text": "Hello!" }]
-  }
+  action: "send",
+  channel: "msteams",
+  target: "user:<id>",
+  card: {
+    type: "AdaptiveCard",
+    version: "1.5",
+    body: [{ type: "TextBlock", text: "Hello!" }],
+  },
 }
 ```
 
@@ -669,25 +673,25 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 
 **Agent tool examples:**
 
-```json
+```json5
 {
-  "action": "send",
-  "channel": "msteams",
-  "target": "user:John Smith",
-  "message": "Hello!"
+  action: "send",
+  channel: "msteams",
+  target: "user:John Smith",
+  message: "Hello!",
 }
 ```
 
-```json
+```json5
 {
-  "action": "send",
-  "channel": "msteams",
-  "target": "conversation:19:abc...@thread.tacv2",
-  "card": {
-    "type": "AdaptiveCard",
-    "version": "1.5",
-    "body": [{ "type": "TextBlock", "text": "Hello" }]
-  }
+  action: "send",
+  channel: "msteams",
+  target: "conversation:19:abc...@thread.tacv2",
+  card: {
+    type: "AdaptiveCard",
+    version: "1.5",
+    body: [{ type: "TextBlock", text: "Hello" }],
+  },
 }
 ```
 
