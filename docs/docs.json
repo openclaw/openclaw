@@ -48,6 +48,10 @@
   },
   "redirects": [
     {
+      "source": "/start/quickstart",
+      "destination": "/start/getting-started"
+    },
+    {
       "source": "/messages",
       "destination": "/concepts/messages"
     },
@@ -880,6 +884,7 @@
                 "group": "Hosting and deployment",
                 "pages": [
                   "vps",
+                  "install/docker-vm-runtime",
                   "install/kubernetes",
                   "install/fly",
                   "install/hetzner",
@@ -1024,7 +1029,8 @@
                 "pages": [
                   "tools/browser",
                   "tools/browser-login",
-                  "tools/browser-linux-troubleshooting"
+                  "tools/browser-linux-troubleshooting",
+                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
                 ]
               },
               {
@@ -1211,6 +1217,7 @@
                       "gateway/heartbeat",
                       "gateway/doctor",
                       "gateway/logging",
+                      "logging",
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/multiple-gateways",
@@ -1241,6 +1248,7 @@
                   {
                     "group": "Networking and discovery",
                     "pages": [
+                      "network",
                       "gateway/network-model",
                       "gateway/pairing",
                       "gateway/discovery",
@@ -1278,6 +1286,7 @@
                   "cli/agent",
                   "cli/agents",
                   "cli/approvals",
+                  "cli/backup",
                   "cli/browser",
                   "cli/channels",
                   "cli/clawbot",
