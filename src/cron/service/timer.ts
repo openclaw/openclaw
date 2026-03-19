@@ -73,13 +73,11 @@ export async function executeJobCoreWithTimeout(
 
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
-  let timeoutFired = false;
   try {
     return await Promise.race([
       executeJobCore(state, job, runAbortController.signal),
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
-          timeoutFired = true;
           runAbortController.abort(timeoutErrorMessage());
           // Best-effort: clear the running marker immediately when the timeout
           // fires so subsequent manual runs are not blocked by a stale marker.
@@ -88,22 +86,16 @@ export async function executeJobCoreWithTimeout(
           void locked(state, async () => {
             await ensureLoaded(state, { forceReload: true, skipRecompute: true });
             const storeJob = state.store?.jobs.find((entry) => entry.id === job.id);
-            const startedAt = storeJob?.state.runningAtMs;
-            if (!storeJob || typeof startedAt !== "number") {
+            if (!storeJob || typeof storeJob.state.runningAtMs !== "number") {
               return;
             }
-            applyJobResult(state, storeJob, {
-              status: "error",
-              error: timeoutErrorMessage(),
-              startedAt,
-              endedAt: state.deps.nowMs(),
-            });
-            emitJobFinished(
-              state,
-              storeJob,
-              { status: "error", error: timeoutErrorMessage() },
-              startedAt,
-            );
+            // Keep timeout cleanup minimal: clear stale running marker without
+            // applying full result accounting. The normal completion path will
+            // record the final outcome exactly once when/if it returns.
+            storeJob.state.runningAtMs = undefined;
+            storeJob.state.lastStatus = "error";
+            storeJob.state.lastError = timeoutErrorMessage();
+            storeJob.updatedAtMs = state.deps.nowMs();
             await persist(state);
           }).catch((err) => {
             state.deps.log.warn(
@@ -117,11 +109,6 @@ export async function executeJobCoreWithTimeout(
     ]);
   } finally {
     if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-    // If we timed out, avoid leaving the timer callback alive.
-    // (It should already have fired or been cleared above.)
-    if (timeoutFired && timeoutId) {
       clearTimeout(timeoutId);
     }
   }

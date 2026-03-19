@@ -1459,7 +1459,7 @@ describe("Cron issue regressions", () => {
       requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => {
         await blocked.promise;
-        return { status: "ok", summary: "unblocked" };
+        return { status: "ok" as const, summary: "unblocked" };
       }),
     });
 
@@ -1490,6 +1490,64 @@ describe("Cron issue regressions", () => {
 
     expect(updated?.state.runningAtMs).toBeUndefined();
     expect(updated?.state.lastStatus).toBe("error");
+  });
+
+  it("#50280: timeout on onTimer path applies result once", async () => {
+    vi.useRealTimers();
+    const store = makeStorePath();
+    const now = Date.parse("2026-03-19T10:15:00.000Z");
+    const job: CronJob = {
+      id: "timeout-single-apply",
+      name: "timeout-single-apply",
+      enabled: true,
+      createdAtMs: now - 3_600_000,
+      updatedAtMs: now - 3_600_000,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "agentTurn",
+        message: "test",
+        timeoutSeconds: FAST_TIMEOUT_SECONDS,
+      },
+      state: {
+        nextRunAtMs: now,
+        lastRunAtMs: now - 60_000,
+        lastStatus: "ok",
+      },
+    };
+    await writeCronStoreSnapshot(store.storePath, [job]);
+
+    const blocked = createDeferred<void>();
+    const events: CronEvent[] = [];
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      onEvent: (evt) => {
+        events.push(evt);
+      },
+      runIsolatedAgentJob: vi.fn(async () => {
+        await blocked.promise;
+        return { status: "ok" as const, summary: "late" };
+      }),
+    });
+
+    await onTimer(state);
+    blocked.resolve();
+
+    const updated = state.store?.jobs.find((entry) => entry.id === job.id);
+    expect(updated).toBeDefined();
+    expect(updated?.state.lastStatus).toBe("error");
+    expect(updated?.state.consecutiveErrors).toBe(1);
+
+    const finishedEvents = events.filter(
+      (evt) => evt.jobId === job.id && evt.action === "finished" && evt.status === "error",
+    );
+    expect(finishedEvents).toHaveLength(1);
   });
 
   it("honors cron maxConcurrentRuns for due jobs", async () => {
