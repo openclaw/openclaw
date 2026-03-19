@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **MAX Messenger** — MAX Messenger channel plugin with long polling, outbound delivery, file attachments, typing indicators, and access control.
+  npm: `@biguxuzz/max`
+  repo: `https://github.com/biguxuzz/openclaw-max-plugin`
+  install: `openclaw plugins install @biguxuzz/max`
