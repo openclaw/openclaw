@@ -97,6 +97,28 @@ function getSessionStatusTool(agentSessionKey = "main") {
 }
 
 describe("session_status tool", () => {
+  it("includes a machine-readable UTC time in the status card", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-09T10:15:00Z"));
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    try {
+      const tool = getSessionStatusTool();
+
+      const result = await tool.execute("call-utc", {});
+      const details = result.details as { ok?: boolean; statusText?: string };
+      expect(details.ok).toBe(true);
+      expect(details.statusText).toContain("2026-03-09 10:15 UTC");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns a status card for the current session", async () => {
     resetSessionStore({
       main: {

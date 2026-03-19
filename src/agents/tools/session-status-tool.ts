@@ -341,11 +341,13 @@ export function createSessionStatusTool(opts?: {
         resolved.entry.queueDebounceMs ?? resolved.entry.queueCap ?? resolved.entry.queueDrop,
       );
 
+      const nowMs = Date.now();
       const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
       const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
-      const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+      const userTime = formatUserTime(new Date(nowMs), userTimezone, userTimeFormat);
+      const utcTime = `${new Date(nowMs).toISOString().slice(0, 16).replace("T", " ")} UTC`;
       const timeLine = userTime
-        ? `🕒 Time: ${userTime} (${userTimezone})`
+        ? `🕒 Time: ${userTime} (${userTimezone}) / ${utcTime}`
         : `🕒 Time zone: ${userTimezone}`;
 
       const agentDefaults = cfg.agents?.defaults ?? {};
