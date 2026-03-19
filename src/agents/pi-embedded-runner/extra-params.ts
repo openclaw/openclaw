@@ -3,11 +3,11 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { normalizeProviderId } from "../model-selection.js";
 import {
   prepareProviderExtraParams,
   wrapProviderStreamFn,
 } from "../../plugins/provider-runtime.js";
+import { normalizeProviderId } from "../model-selection.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
