@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logDebug, logWarn } from "../logger.js";
@@ -18,15 +19,10 @@ type BundleMcpToolRuntime = {
   dispose: () => Promise<void>;
 };
 
-/** Minimal interface shared by StdioClientTransport and SSEClientTransport. */
-type McpTransport = {
-  close: () => Promise<void>;
-};
-
 type BundleMcpSession = {
   serverName: string;
   client: Client;
-  transport: McpTransport;
+  transport: Transport;
   detachStderr?: () => void;
 };
 
@@ -131,7 +127,7 @@ function resolveTransport(
   serverName: string,
   rawServer: unknown,
 ): {
-  transport: McpTransport;
+  transport: Transport;
   description: string;
   detachStderr?: () => void;
 } | null {
