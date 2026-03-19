@@ -22,6 +22,26 @@
       {
         "file": "src/cli/command-secret-gateway.test.ts",
         "reason": "Clean in isolation, but can hang after sharing the broad lane."
+      },
+      {
+        "file": "src/memory/manager.get-concurrency.test.ts",
+        "reason": "Memory manager cache concurrency coverage can spike shared unit-fast heap on Linux Node 24."
+      },
+      {
+        "file": "src/memory/manager.vector-dedupe.test.ts",
+        "reason": "Vector dedupe coverage exercises the memory manager/sqlite stack and is safer outside shared unit-fast forks."
+      },
+      {
+        "file": "src/memory/manager.watcher-config.test.ts",
+        "reason": "Watcher config coverage reuses memory manager caches and is safer outside shared unit-fast forks."
+      },
+      {
+        "file": "src/memory/manager.embedding-batches.test.ts",
+        "reason": "Embedding batch coverage inflates memory manager state and is safer outside shared unit-fast forks."
+      },
+      {
+        "file": "src/memory/manager.readonly-recovery.test.ts",
+        "reason": "Readonly recovery coverage exercises sqlite reopen flows and is safer outside shared unit-fast forks."
       }
     ],
     "threadSingleton": [
