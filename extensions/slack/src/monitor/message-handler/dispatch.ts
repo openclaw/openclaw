@@ -334,11 +334,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
               ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
             },
           );
+          hasStreamedMessage = false;
           return;
         } catch (err) {
           logVerbose(
             `slack: preview final edit failed; falling back to standard send (${String(err)})`,
           );
+          const threadTs = usedReplyThreadTs;
+          await draftStream?.clear();
+          hasStreamedMessage = false;
+          await deliverNormally(payload, threadTs);
+          return;
         }
       } else if (previewStreamingEnabled && streamMode === "status_final" && hasStreamedMessage) {
         try {
@@ -355,7 +361,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         } catch (err) {
           logVerbose(`slack: status_final completion update failed (${String(err)})`);
         }
-      } else if (reply.hasMedia) {
+      } else if (reply.hasMedia || hasStreamedMessage) {
         await draftStream?.clear();
         hasStreamedMessage = false;
       }
