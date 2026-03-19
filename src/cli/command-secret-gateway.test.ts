@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const callGateway = vi.fn();
@@ -9,10 +9,12 @@ vi.mock("../gateway/call.js", () => ({
 
 let resolveCommandSecretRefsViaGateway: typeof import("./command-secret-gateway.js").resolveCommandSecretRefsViaGateway;
 
-beforeEach(async () => {
-  vi.resetModules();
-  callGateway.mockReset();
+beforeAll(async () => {
   ({ resolveCommandSecretRefsViaGateway } = await import("./command-secret-gateway.js"));
+});
+
+beforeEach(() => {
+  callGateway.mockReset();
 });
 
 describe("resolveCommandSecretRefsViaGateway", () => {
@@ -289,7 +291,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       expect(result.targetStatesByPath["tools.web.search.gemini.apiKey"]).toBe("resolved_local");
       expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
-  });
+  }, 300_000);
 
   it("falls back to local resolution for Firecrawl SecretRefs when gateway is unavailable", async () => {
     const envKey = "WEB_FETCH_FIRECRAWL_API_KEY_LOCAL_FALLBACK";

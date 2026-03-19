@@ -101,15 +101,17 @@ describe("native command auth in groups", () => {
   it("keeps groupPolicy disabled enforced when commands.allowFrom is configured", async () => {
     const { handlers, sendMessage } = setup({
       cfg: {
+        channels: {
+          telegram: {
+            groupPolicy: "disabled",
+          },
+        },
         commands: {
           allowFrom: {
             telegram: ["12345"],
           },
         },
       } as OpenClawConfig,
-      telegramCfg: {
-        groupPolicy: "disabled",
-      } as TelegramAccountConfig,
       useAccessGroups: true,
       resolveGroupPolicy: () =>
         ({
