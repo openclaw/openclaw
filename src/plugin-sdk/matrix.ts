@@ -1,8 +1,6 @@
 // Narrow plugin-sdk surface for the bundled matrix plugin.
 // Keep this list additive and scoped to symbols used under extensions/matrix.
 
-import { createOptionalChannelSetupSurface } from "./channel-setup.js";
-
 export {
   createActionGate,
   jsonResult,
@@ -108,13 +106,3 @@ export {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";
-
-const matrixSetup = createOptionalChannelSetupSurface({
-  channel: "matrix",
-  label: "Matrix",
-  npmSpec: "@openclaw/matrix",
-  docsPath: "/channels/matrix",
-});
-
-export const matrixSetupWizard = matrixSetup.setupWizard;
-export const matrixSetupAdapter = matrixSetup.setupAdapter;
