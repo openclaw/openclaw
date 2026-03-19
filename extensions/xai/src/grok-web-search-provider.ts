@@ -11,7 +11,7 @@ import {
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
-  resolveSearchTimeoutSeconds,
+  resolveTimeoutSeconds,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
@@ -23,6 +23,10 @@ import {
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
+// Grok searches invoke the xAI Responses API with a native web_search tool call;
+// the reasoning step + tool round-trip routinely takes 20-45 s, so we use a
+// higher default than the global 30 s to avoid spurious timeouts.
+const GROK_DEFAULT_TIMEOUT_SECONDS = 60;
 
 type GrokConfig = {
   apiKey?: string;
@@ -87,13 +91,23 @@ function extractGrokContent(data: GrokSearchResponse): {
   annotationCitations: string[];
 } {
   for (const output of data.output ?? []) {
+    // Guard against null/undefined entries that can appear in malformed payloads (#35063)
+    if (output == null || typeof output !== "object") {
+      continue;
+    }
     if (output.type === "message") {
       for (const block of output.content ?? []) {
+        // Guard against null/undefined content entries (#35063)
+        if (block == null || typeof block !== "object") {
+          continue;
+        }
         if (block.type === "output_text" && typeof block.text === "string" && block.text) {
           const urls = (block.annotations ?? [])
             .filter(
               (annotation) =>
-                annotation.type === "url_citation" && typeof annotation.url === "string",
+                annotation != null &&
+                annotation.type === "url_citation" &&
+                typeof annotation.url === "string",
             )
             .map((annotation) => annotation.url as string);
           return { text: block.text, annotationCitations: [...new Set(urls)] };
@@ -103,7 +117,10 @@ function extractGrokContent(data: GrokSearchResponse): {
     if (output.type === "output_text" && typeof output.text === "string" && output.text) {
       const urls = (Array.isArray(output.annotations) ? output.annotations : [])
         .filter(
-          (annotation) => annotation.type === "url_citation" && typeof annotation.url === "string",
+          (annotation) =>
+            annotation != null &&
+            annotation.type === "url_citation" &&
+            typeof annotation.url === "string",
         )
         .map((annotation) => annotation.url as string);
       return { text: output.text, annotationCitations: [...new Set(urls)] };
@@ -158,6 +175,26 @@ async function runGrokSearch(params: {
         inlineCitations: data.inline_citations,
       };
     },
+  ).catch((err: unknown) => {
+    // Convert AbortErrors from the internal fetch timeout into plain Errors so the
+    // tool execution framework returns a structured JSON error to the LLM instead of
+    // re-throwing them as session-level aborts (which silently swallows the result).
+    // See: https://github.com/openclaw/openclaw/issues/26355
+    if (isAbortError(err)) {
+      throw new Error(
+        `xAI web search timed out after ${params.timeoutSeconds}s. ` +
+          `Increase tools.web.search.timeoutSeconds in your config if queries are complex.`,
+        { cause: err },
+      );
+    }
+    throw err;
+  });
+}
+
+function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof Error && err.name === "AbortError") ||
+    (err instanceof Error && err.message === "This operation was aborted")
   );
 }
 
@@ -241,7 +278,10 @@ function createGrokToolDefinition(
         query,
         apiKey,
         model,
-        timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+        timeoutSeconds: resolveTimeoutSeconds(
+          searchConfig?.timeoutSeconds,
+          GROK_DEFAULT_TIMEOUT_SECONDS,
+        ),
         inlineCitations,
       });
       const payload = {

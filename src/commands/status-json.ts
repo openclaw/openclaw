@@ -1,12 +1,12 @@
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 import { scanStatusJsonFast } from "./status.scan.fast-json.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
 let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
 let gatewayCallModulePromise: Promise<typeof import("../gateway/call.js")> | undefined;
+let statusDaemonModulePromise: Promise<typeof import("./status.daemon.js")> | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
@@ -21,6 +21,11 @@ function loadSecurityAuditModule() {
 function loadGatewayCallModule() {
   gatewayCallModulePromise ??= import("../gateway/call.js");
   return gatewayCallModulePromise;
+}
+
+function loadStatusDaemonModule() {
+  statusDaemonModulePromise ??= import("./status.daemon.js");
+  return statusDaemonModulePromise;
 }
 
 export async function statusJsonCommand(
@@ -70,9 +75,10 @@ export async function statusJsonCommand(
         }).catch(() => null)
       : null;
 
+  const daemonModule = await loadStatusDaemonModule();
   const [daemon, nodeDaemon] = await Promise.all([
-    getDaemonStatusSummary(),
-    getNodeDaemonStatusSummary(),
+    daemonModule.getDaemonStatusSummary(),
+    daemonModule.getNodeDaemonStatusSummary(),
   ]);
   const channelInfo = resolveUpdateChannelDisplay({
     configChannel: normalizeUpdateChannel(scan.cfg.update?.channel),

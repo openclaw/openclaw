@@ -38,6 +38,22 @@ function loadConfigIoModule() {
   return configIoModulePromise;
 }
 
+/** Normalize well-known bare Anthropic aliases (e.g. "opus-4.6" → "claude-opus-4-6"). */
+function normalizeBareAnthropicAlias(model: string): string {
+  switch (model.toLowerCase()) {
+    case "opus-4.6":
+      return "claude-opus-4-6";
+    case "opus-4.5":
+      return "claude-opus-4-5";
+    case "sonnet-4.6":
+      return "claude-sonnet-4-6";
+    case "sonnet-4.5":
+      return "claude-sonnet-4-5";
+    default:
+      return model;
+  }
+}
+
 function parseStatusModelRef(
   raw: string,
   defaultProvider: string,
@@ -80,7 +96,7 @@ function resolveConfiguredStatusModelRef(params: {
           return parsed;
         }
       }
-      return { provider: "anthropic", model: trimmed };
+      return { provider: "anthropic", model: normalizeBareAnthropicAlias(trimmed) };
     }
     const parsed = parseStatusModelRef(trimmed, params.defaultProvider);
     if (parsed) {
