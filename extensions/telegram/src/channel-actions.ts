@@ -1,6 +1,5 @@
 import {
   createMessageToolButtonsSchema,
-  createTelegramPollExtraToolSchemas,
   createUnionActionGate,
   listTokenSourcedAccounts,
   resolveReactionMessageId,
@@ -18,6 +17,7 @@ import {
 } from "./accounts.js";
 import { handleTelegramAction } from "./action-runtime.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
+import { createTelegramPollExtraToolSchemas } from "./message-tool-schema.js";
 
 export const telegramMessageActionRuntime = {
   handleTelegramAction,
