@@ -28,8 +28,6 @@ type ModelsJsonCostCache = {
   entries: Map<string, ModelCostConfig>;
 };
 
-let modelsJsonCostCache: ModelsJsonCostCache | null = null;
-
 export function formatTokenCount(value?: number): string {
   if (value === undefined || !Number.isFinite(value)) {
     return "0";
@@ -89,37 +87,69 @@ function buildProviderCostIndex(
   return entries;
 }
 
-function loadModelsJsonCostIndex(): Map<string, ModelCostConfig> {
-  const modelsPath = path.join(resolveOpenClawAgentDir(), "models.json");
-  try {
-    const stat = fs.statSync(modelsPath);
-    if (
-      modelsJsonCostCache &&
-      modelsJsonCostCache.path === modelsPath &&
-      modelsJsonCostCache.mtimeMs === stat.mtimeMs
-    ) {
-      return modelsJsonCostCache.entries;
-    }
+/**
+ * Injectable loader for Model Cost data.
+ * Allows tests to inject mocked fs/path implementations without
+ * relying on global mutable state or fragile jest.mock patterns.
+ */
+export class CostIndexLoader {
+  private cache: ModelsJsonCostCache | null = null;
 
-    const parsed = JSON.parse(fs.readFileSync(modelsPath, "utf8")) as {
-      providers?: Record<string, ModelProviderConfig>;
-    };
-    const entries = buildProviderCostIndex(parsed.providers);
-    modelsJsonCostCache = {
-      path: modelsPath,
-      mtimeMs: stat.mtimeMs,
-      entries,
-    };
-    return entries;
-  } catch {
-    const empty = new Map<string, ModelCostConfig>();
-    modelsJsonCostCache = {
-      path: modelsPath,
-      mtimeMs: -1,
-      entries: empty,
-    };
-    return empty;
+  constructor(
+    private readonly fs: typeof import("fs"),
+    private readonly path: typeof import("path"),
+    private readonly resolveDir: () => string,
+  ) {}
+
+  load(): Map<string, ModelCostConfig> {
+    const modelsPath = this.path.join(this.resolveDir(), "models.json");
+    try {
+      const stat = this.fs.statSync(modelsPath);
+      if (this.cache && this.cache.path === modelsPath && this.cache.mtimeMs === stat.mtimeMs) {
+        return this.cache.entries;
+      }
+
+      const parsed = JSON.parse(this.fs.readFileSync(modelsPath, "utf8")) as {
+        providers?: Record<string, ModelProviderConfig>;
+      };
+
+      const entries = this.buildProviderCostIndex(parsed.providers);
+      this.cache = {
+        path: modelsPath,
+        mtimeMs: stat.mtimeMs,
+        entries,
+      };
+      return entries;
+    } catch {
+      const empty = new Map<string, ModelCostConfig>();
+      this.cache = {
+        path: modelsPath,
+        mtimeMs: -1,
+        entries: empty,
+      };
+      return empty;
+    }
   }
+
+  private buildProviderCostIndex(
+    providers: Record<string, ModelProviderConfig> | undefined,
+  ): Map<string, ModelCostConfig> {
+    return buildProviderCostIndex(providers);
+  }
+
+  resetCacheForTest(): void {
+    this.cache = null;
+  }
+}
+
+// Default singleton instance for use in production code.
+// Production code can simply use `defaultLoader.load()`.
+export const defaultLoader = new CostIndexLoader(fs, path, resolveOpenClawAgentDir);
+
+// Helper to maintain backward compatibility with existing function calls if necessary,
+// or to be replaced by direct `defaultLoader` usage.
+export function loadModelsJsonCostIndex(): Map<string, ModelCostConfig> {
+  return defaultLoader.load();
 }
 
 function findConfiguredProviderCost(params: {
@@ -185,5 +215,5 @@ export function estimateUsageCost(params: {
 }
 
 export function __resetUsageFormatCachesForTest(): void {
-  modelsJsonCostCache = null;
+  defaultLoader.resetCacheForTest();
 }
