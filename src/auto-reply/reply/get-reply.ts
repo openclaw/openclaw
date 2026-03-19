@@ -4,6 +4,7 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
+import type { ImageContent } from "../../agents/command/types.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -11,6 +12,8 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { isImageAttachment, normalizeAttachments } from "../../media-understanding/attachments.js";
+import { resolveMediaAttachmentLocalRoots } from "../../media-understanding/runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -72,7 +75,7 @@ export async function getReplyFromConfig(
     opts?.skillFilter,
     resolveAgentSkillsFilter(cfg, agentId),
   );
-  const resolvedOpts =
+  let resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
@@ -136,6 +139,43 @@ export async function getReplyFromConfig(
       ctx: finalized,
       cfg,
     });
+
+    // If the model supports vision natively, read image attachments and pass them directly
+    // to the agent instead of relying on OCR text extraction.
+    if (!isFastTestEnv && !resolvedOpts?.images) {
+      const attachments = normalizeAttachments(finalized);
+      const imageAttachments = attachments.filter(isImageAttachment);
+      if (imageAttachments.length > 0) {
+        const images: ImageContent[] = [];
+        const { createMediaAttachmentCache } = await import("../../media-understanding/runner.js");
+        const cache = createMediaAttachmentCache(attachments, {
+          localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx: finalized }),
+        });
+        for (const attachment of imageAttachments) {
+          if (attachment.index === undefined) {
+            continue;
+          }
+          const cached = cache.get(attachment.index);
+          if (cached?.resolvedPath) {
+            try {
+              const fs = await import("node:fs/promises");
+              const buffer = await fs.readFile(cached.resolvedPath);
+              const mimeType = cached.mime ?? "image/jpeg";
+              images.push({
+                type: "image",
+                data: `data:${mimeType};base64,${buffer.toString("base64")}`,
+                mimeType,
+              });
+            } catch {
+              // Skip images that can't be read
+            }
+          }
+        }
+        if (images.length > 0) {
+          resolvedOpts = { ...resolvedOpts, images };
+        }
+      }
+    }
   }
   emitPreAgentMessageHooks({
     ctx: finalized,
