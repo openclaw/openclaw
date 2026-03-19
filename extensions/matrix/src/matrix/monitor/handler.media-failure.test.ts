@@ -98,6 +98,7 @@ function createHandlerHarness() {
     dmPolicy: "open",
     textLimit: 4000,
     mediaMaxBytes: 5 * 1024 * 1024,
+    dropPreStartupMessages: false,
     startupMs: Date.now() - 120_000,
     startupGraceMs: 60_000,
     dropPreStartupMessages: false,

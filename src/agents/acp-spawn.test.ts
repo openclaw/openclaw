@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as acpSessionManager from "../acp/control-plane/manager.js";
-import type {
-  AcpCloseSessionInput,
-  AcpInitializeSessionInput,
-} from "../acp/control-plane/manager.types.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -16,7 +12,7 @@ import * as heartbeatWake from "../infra/heartbeat-wake.js";
 import {
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
-  type SessionBindingPlacement,
+  type SessionBindingAdapterCapabilities,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import * as acpSpawnParentStream from "./acp-spawn-parent-stream.js";
@@ -104,12 +100,11 @@ function replaceSpawnConfig(next: OpenClawConfig): void {
   setRuntimeConfigSnapshot(hoisted.state.cfg);
 }
 
-function createSessionBindingCapabilities() {
+function createSessionBindingCapabilities(): SessionBindingAdapterCapabilities {
   return {
-    adapterAvailable: true,
     bindSupported: true,
     unbindSupported: true,
-    placements: ["current", "child"] satisfies SessionBindingPlacement[],
+    placements: ["current", "child"],
   };
 }
 
@@ -184,12 +179,16 @@ describe("spawnAcpDirect", () => {
       metaCleared: false,
     });
     getAcpSessionManagerSpy.mockReset().mockReturnValue({
-      initializeSession: async (params: AcpInitializeSessionInput) =>
-        await hoisted.initializeSessionMock(params),
-      closeSession: async (params: AcpCloseSessionInput) => await hoisted.closeSessionMock(params),
+      initializeSession: async (params: unknown) => await hoisted.initializeSessionMock(params),
+      closeSession: async (params: unknown) => await hoisted.closeSessionMock(params),
     } as unknown as ReturnType<typeof acpSessionManager.getAcpSessionManager>);
     hoisted.initializeSessionMock.mockReset().mockImplementation(async (argsUnknown: unknown) => {
-      const args = argsUnknown as AcpInitializeSessionInput;
+      const args = argsUnknown as {
+        sessionKey: string;
+        agent: string;
+        mode: "persistent" | "oneshot";
+        cwd?: string;
+      };
       const runtimeSessionName = `${args.sessionKey}:runtime`;
       const cwd = typeof args.cwd === "string" ? args.cwd : undefined;
       return {
@@ -386,6 +385,7 @@ describe("spawnAcpDirect", () => {
         matrix: {
           threadBindings: {
             enabled: true,
+            spawnAcpSessions: true,
           },
         },
       },
@@ -1039,7 +1039,7 @@ describe("spawnAcpDirect", () => {
         ...hoisted.state.cfg.channels,
         telegram: {
           threadBindings: {
-            enabled: true,
+            spawnAcpSessions: true,
           },
         },
       },

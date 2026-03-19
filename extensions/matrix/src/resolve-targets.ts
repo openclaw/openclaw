@@ -1,11 +1,11 @@
-import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
-import { isMatrixQualifiedUserId, normalizeMatrixMessagingTarget } from "./matrix/target-ids.js";
 import type {
   ChannelDirectoryEntry,
   ChannelResolveKind,
   ChannelResolveResult,
   RuntimeEnv,
-} from "./runtime-api.js";
+} from "../runtime-api.js";
+import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
+import { isMatrixQualifiedUserId, normalizeMatrixMessagingTarget } from "./matrix/target-ids.js";
 
 function normalizeLookupQuery(query: string): string {
   return query.trim().toLowerCase();

@@ -464,6 +464,7 @@ vi.mock("../../../extensions/discord/src/monitor/provider.lifecycle.js", () => (
 }));
 
 vi.mock("../../../extensions/discord/src/monitor/rest-fetch.js", () => ({
+  patchDiscordRequestClientFetch: vi.fn(),
   resolveDiscordRestFetch: () => async () => {
     throw new Error("offline");
   },
@@ -474,4 +475,6 @@ vi.mock("../../../extensions/discord/src/monitor/thread-bindings.js", () => ({
   createThreadBindingManager: createThreadBindingManagerMock,
   reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
   resolveThreadBindingIdleTimeoutMs: vi.fn(() => 24 * 60 * 60 * 1000),
+  resolveThreadBindingMaxAgeMs: vi.fn(() => 0),
+  resolveThreadBindingsEnabled: vi.fn(() => true),
 }));

@@ -1,5 +1,3 @@
-import { resolveMatrixEnvAuthReadiness } from "./matrix/client.js";
-import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
@@ -7,7 +5,9 @@ import {
   normalizeAccountId,
   normalizeSecretInputString,
   type ChannelSetupInput,
-} from "./runtime-api.js";
+} from "../runtime-api.js";
+import { resolveMatrixEnvAuthReadiness } from "./matrix/client.js";
+import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;

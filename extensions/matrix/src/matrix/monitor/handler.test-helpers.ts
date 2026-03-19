@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
+import type { RuntimeEnv, RuntimeLogger } from "../../../runtime-api.js";
 import type { MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";
@@ -35,7 +35,6 @@ type MatrixHandlerTestHarnessOptions = {
   startupMs?: number;
   startupGraceMs?: number;
   dropPreStartupMessages?: boolean;
-  needsRoomAliasesForConfig?: boolean;
   isDirectMessage?: boolean;
   readAllowFromStore?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   upsertPairingRequest?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
@@ -180,7 +179,7 @@ export function createMatrixHandlerTestHarness(
     },
     getRoomInfo: options.getRoomInfo ?? (async () => ({ altAliases: [] })),
     getMemberDisplayName: options.getMemberDisplayName ?? (async () => "sender"),
-    needsRoomAliasesForConfig: options.needsRoomAliasesForConfig ?? false,
+    needsRoomAliasesForConfig: false,
   });
 
   return {

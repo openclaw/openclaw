@@ -6,14 +6,12 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import * as configSessions from "../config/sessions.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import * as gatewayCall from "../gateway/call.js";
 import {
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
 import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
-import type { HookRunner } from "../plugins/hooks.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as piEmbedded from "./pi-embedded.js";
@@ -67,23 +65,11 @@ const waitForEmbeddedPiRunEndSpy = vi.spyOn(piEmbedded, "waitForEmbeddedPiRunEnd
 const readLatestAssistantReplyMock = vi.fn(
   async (_sessionKey?: string): Promise<string | undefined> => "raw subagent reply",
 );
-const embeddedPiRunActiveMock = vi.fn<typeof piEmbedded.isEmbeddedPiRunActive>(
-  (_sessionId: string) => false,
-);
-const embeddedPiRunStreamingMock = vi.fn<typeof piEmbedded.isEmbeddedPiRunStreaming>(
-  (_sessionId: string) => false,
-);
-const queueEmbeddedPiMessageMock = vi.fn<typeof piEmbedded.queueEmbeddedPiMessage>(
-  (_sessionId: string, _text: string) => false,
-);
-const waitForEmbeddedPiRunEndMock = vi.fn<typeof piEmbedded.waitForEmbeddedPiRunEnd>(
-  async (_sessionId: string, _timeoutMs?: number) => true,
-);
 const embeddedRunMock = {
-  isEmbeddedPiRunActive: embeddedPiRunActiveMock,
-  isEmbeddedPiRunStreaming: embeddedPiRunStreamingMock,
-  queueEmbeddedPiMessage: queueEmbeddedPiMessageMock,
-  waitForEmbeddedPiRunEnd: waitForEmbeddedPiRunEndMock,
+  isEmbeddedPiRunActive: vi.fn(() => false),
+  isEmbeddedPiRunStreaming: vi.fn(() => false),
+  queueEmbeddedPiMessage: vi.fn(() => false),
+  waitForEmbeddedPiRunEnd: vi.fn(async () => true),
 };
 const { subagentRegistryMock } = vi.hoisted(() => ({
   subagentRegistryMock: {
@@ -106,21 +92,18 @@ const subagentDeliveryTargetHookMock = vi.fn(
     undefined,
 );
 let hasSubagentDeliveryTargetHook = false;
-const hookHasHooksMock = vi.fn<HookRunner["hasHooks"]>(
-  (hookName) => hookName === "subagent_delivery_target" && hasSubagentDeliveryTargetHook,
-);
-const hookRunSubagentDeliveryTargetMock = vi.fn<HookRunner["runSubagentDeliveryTarget"]>(
-  async (event, ctx) => await subagentDeliveryTargetHookMock(event, ctx),
-);
 const hookRunnerMock = {
-  hasHooks: hookHasHooksMock,
-  runSubagentDeliveryTarget: hookRunSubagentDeliveryTargetMock,
-} as unknown as HookRunner;
+  hasHooks: vi.fn(
+    (hookName: string) => hookName === "subagent_delivery_target" && hasSubagentDeliveryTargetHook,
+  ),
+  runSubagentDeliveryTarget: vi.fn((event: unknown, ctx: unknown) =>
+    subagentDeliveryTargetHookMock(event, ctx),
+  ),
+};
 const chatHistoryMock = vi.fn(async (_sessionKey?: string) => ({
   messages: [] as Array<unknown>,
 }));
-type TestSessionStore = Record<string, Partial<SessionEntry>>;
-let sessionStore: TestSessionStore = {};
+let sessionStore: Record<string, Record<string, unknown>> = {};
 let configOverride: OpenClawConfig = {
   session: {
     mainKey: "main",
@@ -148,34 +131,13 @@ function setConfigOverride(next: OpenClawConfig): void {
   setRuntimeConfigSnapshot(configOverride);
 }
 
-function toSessionEntry(
-  sessionKey: string,
-  entry?: Partial<SessionEntry>,
-): SessionEntry | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  return {
-    sessionId: entry.sessionId ?? sessionKey,
-    updatedAt: entry.updatedAt ?? Date.now(),
-    ...entry,
-  };
-}
-
-function loadSessionStoreFixture(): Record<string, SessionEntry> {
-  return new Proxy({} as Record<string, SessionEntry>, {
-    get(_target, key: string | symbol) {
-      if (typeof key !== "string") {
-        return undefined;
+function loadSessionStoreFixture(): Record<string, Record<string, unknown>> {
+  return new Proxy(sessionStore, {
+    get(target, key: string | symbol) {
+      if (typeof key === "string" && !(key in target) && key.includes(":subagent:")) {
+        return { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
       }
-      if (!(key in sessionStore) && key.includes(":subagent:")) {
-        return toSessionEntry(key, {
-          inputTokens: 1,
-          outputTokens: 1,
-          totalTokens: 2,
-        });
-      }
-      return toSessionEntry(key, sessionStore[key]);
+      return target[key as keyof typeof target];
     },
   });
 }
@@ -241,7 +203,14 @@ describe("subagent announce formatting", () => {
       }
       return {};
     });
-    loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
+    loadSessionStoreSpy
+      .mockReset()
+      .mockImplementation(
+        () =>
+          loadSessionStoreFixture() as unknown as ReturnType<
+            typeof configSessions.loadSessionStore
+          >,
+      );
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
     resolveStorePathSpy.mockReset().mockImplementation(() => "/tmp/sessions.json");
     resolveMainSessionKeySpy.mockReset().mockImplementation(() => "agent:main:main");
@@ -255,21 +224,16 @@ describe("subagent announce formatting", () => {
       .mockImplementation(async (params) => await readLatestAssistantReplyMock(params?.sessionKey));
     isEmbeddedPiRunActiveSpy
       .mockReset()
-      .mockImplementation((sessionId) => embeddedRunMock.isEmbeddedPiRunActive(sessionId));
+      .mockImplementation(() => embeddedRunMock.isEmbeddedPiRunActive());
     isEmbeddedPiRunStreamingSpy
       .mockReset()
-      .mockImplementation((sessionId) => embeddedRunMock.isEmbeddedPiRunStreaming(sessionId));
+      .mockImplementation(() => embeddedRunMock.isEmbeddedPiRunStreaming());
     queueEmbeddedPiMessageSpy
       .mockReset()
-      .mockImplementation((sessionId, text) =>
-        embeddedRunMock.queueEmbeddedPiMessage(sessionId, text),
-      );
+      .mockImplementation(() => embeddedRunMock.queueEmbeddedPiMessage());
     waitForEmbeddedPiRunEndSpy
       .mockReset()
-      .mockImplementation(
-        async (sessionId, timeoutMs) =>
-          await embeddedRunMock.waitForEmbeddedPiRunEnd(sessionId, timeoutMs),
-      );
+      .mockImplementation(async () => await embeddedRunMock.waitForEmbeddedPiRunEnd());
     embeddedRunMock.isEmbeddedPiRunActive.mockClear().mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockClear().mockReturnValue(false);
     embeddedRunMock.queueEmbeddedPiMessage.mockClear().mockReturnValue(false);
@@ -293,8 +257,8 @@ describe("subagent announce formatting", () => {
     subagentRegistryMock.replaceSubagentRunAfterSteer.mockClear().mockReturnValue(true);
     subagentRegistryMock.resolveRequesterForChildSession.mockClear().mockReturnValue(null);
     hasSubagentDeliveryTargetHook = false;
-    hookHasHooksMock.mockClear();
-    hookRunSubagentDeliveryTargetMock.mockClear();
+    hookRunnerMock.hasHooks.mockClear();
+    hookRunnerMock.runSubagentDeliveryTarget.mockClear();
     subagentDeliveryTargetHookMock.mockReset().mockResolvedValue(undefined);
     readLatestAssistantReplyMock.mockClear().mockResolvedValue("raw subagent reply");
     chatHistoryMock.mockReset().mockResolvedValue({ messages: [] });

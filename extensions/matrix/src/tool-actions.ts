@@ -1,4 +1,12 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import {
+  createActionGate,
+  jsonResult,
+  readNumberParam,
+  readReactionParams,
+  readStringArrayParam,
+  readStringParam,
+} from "../runtime-api.js";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import {
   bootstrapMatrixVerification,
@@ -33,14 +41,6 @@ import {
 } from "./matrix/actions.js";
 import { reactMatrixMessage } from "./matrix/send.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
-import {
-  createActionGate,
-  jsonResult,
-  readNumberParam,
-  readReactionParams,
-  readStringArrayParam,
-  readStringParam,
-} from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
@@ -93,27 +93,6 @@ function readRawParam(params: Record<string, unknown>, key: string): unknown {
   const snakeKey = toSnakeCaseKey(key);
   if (snakeKey !== key && Object.hasOwn(params, snakeKey)) {
     return params[snakeKey];
-  }
-  return undefined;
-}
-
-function readStringAliasParam(
-  params: Record<string, unknown>,
-  keys: string[],
-  options: { required?: boolean } = {},
-): string | undefined {
-  for (const key of keys) {
-    const raw = readRawParam(params, key);
-    if (typeof raw !== "string") {
-      continue;
-    }
-    const trimmed = raw.trim();
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-  if (options.required) {
-    throw new Error(`${keys[0]} required`);
   }
   return undefined;
 }
@@ -190,10 +169,7 @@ export async function handleMatrixAction(
 
   if (pollActions.has(action)) {
     const roomId = readRoomId(params);
-    const pollId = readStringAliasParam(params, ["pollId", "messageId"], { required: true });
-    if (!pollId) {
-      throw new Error("pollId required");
-    }
+    const pollId = readStringParam(params, "pollId", { required: true });
     const optionId = readStringParam(params, "pollOptionId");
     const optionIndex = readNumberParam(params, "pollOptionIndex", { integer: true });
     const optionIds = [

@@ -1,5 +1,20 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { type ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+import {
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizardAdapter,
+} from "openclaw/plugin-sdk/setup";
+import type { DmPolicy } from "../runtime-api.js";
+import {
+  addWildcardAllowFrom,
+  formatDocsLink,
+  mergeAllowFromEntries,
+  moveSingleAccountChannelSectionToDefaultAccount,
+  normalizeAccountId,
+  promptChannelAccessConfig,
+  promptAccountId,
+  type RuntimeEnv,
+  type WizardPrompter,
+} from "../runtime-api.js";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import {
@@ -16,70 +31,10 @@ import {
 } from "./matrix/config-update.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
-import type { DmPolicy } from "./runtime-api.js";
-import {
-  addWildcardAllowFrom,
-  formatDocsLink,
-  mergeAllowFromEntries,
-  moveSingleAccountChannelSectionToDefaultAccount,
-  normalizeAccountId,
-  promptChannelAccessConfig,
-  promptAccountId,
-  type RuntimeEnv,
-  type WizardPrompter,
-} from "./runtime-api.js";
 import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
-
-type MatrixOnboardingStatus = {
-  channel: typeof channel;
-  configured: boolean;
-  statusLines: string[];
-  selectionHint?: string;
-  quickstartScore?: number;
-};
-
-type MatrixAccountOverrides = Partial<Record<typeof channel, string>>;
-
-type MatrixOnboardingConfigureContext = {
-  cfg: CoreConfig;
-  runtime: RuntimeEnv;
-  prompter: WizardPrompter;
-  options?: unknown;
-  forceAllowFrom: boolean;
-  accountOverrides: MatrixAccountOverrides;
-  shouldPromptAccountIds: boolean;
-};
-
-type MatrixOnboardingInteractiveContext = MatrixOnboardingConfigureContext & {
-  configured: boolean;
-  label?: string;
-};
-
-type MatrixOnboardingAdapter = {
-  channel: typeof channel;
-  getStatus: (ctx: {
-    cfg: CoreConfig;
-    options?: unknown;
-    accountOverrides: MatrixAccountOverrides;
-  }) => Promise<MatrixOnboardingStatus>;
-  configure: (
-    ctx: MatrixOnboardingConfigureContext,
-  ) => Promise<{ cfg: CoreConfig; accountId?: string }>;
-  configureInteractive?: (
-    ctx: MatrixOnboardingInteractiveContext,
-  ) => Promise<{ cfg: CoreConfig; accountId?: string } | "skip">;
-  afterConfigWritten?: (ctx: {
-    previousCfg: CoreConfig;
-    cfg: CoreConfig;
-    accountId: string;
-    runtime: RuntimeEnv;
-  }) => Promise<void> | void;
-  dmPolicy?: ChannelSetupDmPolicy;
-  disable?: (cfg: CoreConfig) => CoreConfig;
-};
 
 function resolveMatrixOnboardingAccountId(cfg: CoreConfig, accountId?: string): string {
   return normalizeAccountId(
@@ -518,7 +473,7 @@ async function runMatrixConfigure(params: {
   return { cfg: next, accountId };
 }
 
-export const matrixOnboardingAdapter: MatrixOnboardingAdapter = {
+export const matrixOnboardingAdapter: ChannelSetupWizardAdapter = {
   channel,
   getStatus: async ({ cfg, accountOverrides }) => {
     const resolvedCfg = cfg as CoreConfig;

@@ -9,6 +9,7 @@ import {
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
 } from "matrix-js-sdk";
+import { Preset } from "matrix-js-sdk/lib/@types/partials.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";

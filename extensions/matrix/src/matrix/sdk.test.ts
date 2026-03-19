@@ -222,16 +222,15 @@ describe("MatrixClient request hardening", () => {
 
   it("prefers authenticated client media downloads", async () => {
     const payload = Buffer.from([1, 2, 3, 4]);
-    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
-      async () => new Response(payload, { status: 200 }),
-    );
+    const fetchMock = vi.fn(async () => new Response(payload, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("https://matrix.example.org", "token");
     await expect(client.downloadContent("mxc://example.org/media")).resolves.toEqual(payload);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const firstUrl = String((fetchMock.mock.calls as unknown[][])[0]?.[0] ?? "");
+    const firstCall = fetchMock.mock.calls.at(0) as [RequestInfo | URL] | undefined;
+    const firstUrl = String(firstCall?.[0]);
     expect(firstUrl).toContain("/_matrix/client/v1/media/download/example.org/media");
   });
 
@@ -259,8 +258,8 @@ describe("MatrixClient request hardening", () => {
     await expect(client.downloadContent("mxc://example.org/media")).resolves.toEqual(payload);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const firstUrl = String((fetchMock.mock.calls as unknown[][])[0]?.[0] ?? "");
-    const secondUrl = String((fetchMock.mock.calls as unknown[][])[1]?.[0] ?? "");
+    const firstUrl = String(fetchMock.mock.calls[0]?.[0]);
+    const secondUrl = String(fetchMock.mock.calls[1]?.[0]);
     expect(firstUrl).toContain("/_matrix/client/v1/media/download/example.org/media");
     expect(secondUrl).toContain("/_matrix/media/v3/download/example.org/media");
   });
@@ -976,7 +975,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     await client.start();
 
     expect(bootstrapSpy).toHaveBeenCalledTimes(2);
-    expect((bootstrapSpy.mock.calls as unknown[][])[1]?.[1] ?? {}).toEqual({
+    expect(bootstrapSpy.mock.calls[1]?.[1]).toEqual({
       forceResetCrossSigning: true,
       strict: true,
     });
@@ -1024,7 +1023,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     await client.start();
 
     expect(bootstrapSpy).toHaveBeenCalledTimes(1);
-    expect((bootstrapSpy.mock.calls as unknown[][])[0]?.[1] ?? {}).toEqual({
+    expect(bootstrapSpy.mock.calls[0]?.[1]).toEqual({
       allowAutomaticCrossSigningReset: false,
     });
   });
@@ -2060,12 +2059,12 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     expect(result.success).toBe(true);
     expect(result.verification.backupVersion).toBe("9");
-    const bootstrapSecretStorageCalls = bootstrapSecretStorage.mock.calls as Array<unknown[]>;
-    expect(
-      bootstrapSecretStorageCalls.some((call) =>
-        Boolean((call[0] as { setupNewKeyBackup?: boolean })?.setupNewKeyBackup),
-      ),
-    ).toBe(false);
+    const bootstrapSecretStorageCalls = bootstrapSecretStorage.mock.calls as Array<
+      [{ setupNewKeyBackup?: boolean }?]
+    >;
+    expect(bootstrapSecretStorageCalls.some((call) => Boolean(call[0]?.setupNewKeyBackup))).toBe(
+      false,
+    );
   });
 
   it("does not report bootstrap errors when final verification state is healthy", async () => {

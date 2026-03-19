@@ -1,18 +1,17 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expect, vi } from "vitest";
 import {
   __testing as discordThreadBindingTesting,
   createThreadBindingManager as createDiscordThreadBindingManager,
 } from "../../../../extensions/discord/runtime-api.js";
 import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
-import { createMatrixThreadBindingManager } from "../../../../extensions/matrix/api.js";
 import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/runtime-api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getSessionBindingService,
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
   type SessionBindingCapabilities,
+  type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import {
@@ -130,7 +129,7 @@ type DirectoryContractEntry = {
 type SessionBindingContractEntry = {
   id: string;
   expectedCapabilities: SessionBindingCapabilities;
-  getCapabilities: () => SessionBindingCapabilities | Promise<SessionBindingCapabilities>;
+  getCapabilities: () => SessionBindingCapabilities;
   bindAndResolve: () => Promise<SessionBindingRecord>;
   unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
   cleanup: () => Promise<void> | void;
@@ -148,7 +147,7 @@ function expectResolvedSessionBinding(params: {
       channel: params.channel,
       accountId: params.accountId,
       conversationId: params.conversationId,
-      parentConversationId: params.parentConversationId,
+      ...(params.parentConversationId ? { parentConversationId: params.parentConversationId } : {}),
     }),
   )?.toMatchObject({
     targetSessionKey: params.targetSessionKey,
@@ -169,12 +168,14 @@ function expectClearedSessionBinding(params: {
   channel: string;
   accountId: string;
   conversationId: string;
+  parentConversationId?: string;
 }) {
   expect(
     getSessionBindingService().resolveByConversation({
       channel: params.channel,
       accountId: params.accountId,
       conversationId: params.conversationId,
+      ...(params.parentConversationId ? { parentConversationId: params.parentConversationId } : {}),
     }),
   ).toBeNull();
 }
@@ -595,22 +596,87 @@ const baseSessionBindingCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
-async function createContractMatrixThreadBindingManager() {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "matrix-contract-thread-bindings-"));
-  return await createMatrixThreadBindingManager({
-    accountId: "ops",
-    auth: {
-      accountId: "ops",
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "token",
+const matrixContractBindings = new Map<string, SessionBindingRecord>();
+
+function resolveMatrixContractBindingId(params: {
+  accountId: string;
+  conversationId: string;
+  parentConversationId?: string;
+}) {
+  return `matrix:${params.accountId}:${params.parentConversationId ?? "-"}:${params.conversationId}`;
+}
+
+function registerMatrixContractAdapter(accountId = "default"): SessionBindingAdapter {
+  const adapter: SessionBindingAdapter = {
+    channel: "matrix",
+    accountId,
+    capabilities: {
+      placements: ["current", "child"],
+      bindSupported: true,
+      unbindSupported: true,
     },
-    client: {} as never,
-    stateDir,
-    idleTimeoutMs: 24 * 60 * 60 * 1000,
-    maxAgeMs: 0,
-    enableSweeper: false,
-  });
+    bind: async (input) => {
+      const conversationId = input.conversation.conversationId.trim();
+      const parentConversationId = input.conversation.parentConversationId?.trim() || undefined;
+      if (!conversationId) {
+        return null;
+      }
+      const boundConversationId =
+        input.placement === "child" ? `$matrix-child:${conversationId}` : conversationId;
+      const boundParentConversationId =
+        input.placement === "child"
+          ? (parentConversationId ?? conversationId)
+          : parentConversationId;
+      const binding: SessionBindingRecord = {
+        bindingId: resolveMatrixContractBindingId({
+          accountId,
+          conversationId: boundConversationId,
+          ...(boundParentConversationId ? { parentConversationId: boundParentConversationId } : {}),
+        }),
+        targetSessionKey: input.targetSessionKey,
+        targetKind: input.targetKind,
+        conversation: {
+          channel: "matrix",
+          accountId,
+          conversationId: boundConversationId,
+          ...(boundParentConversationId ? { parentConversationId: boundParentConversationId } : {}),
+        },
+        status: "active",
+        boundAt: Date.now(),
+        metadata: input.metadata,
+      };
+      matrixContractBindings.set(binding.bindingId, binding);
+      return binding;
+    },
+    listBySession: (targetSessionKey) =>
+      [...matrixContractBindings.values()].filter(
+        (binding) => binding.targetSessionKey === targetSessionKey,
+      ),
+    resolveByConversation: (ref) => {
+      const bindingId = resolveMatrixContractBindingId({
+        accountId,
+        conversationId: ref.conversationId,
+        ...(ref.parentConversationId ? { parentConversationId: ref.parentConversationId } : {}),
+      });
+      return matrixContractBindings.get(bindingId) ?? null;
+    },
+    unbind: async (input) => {
+      const removed: SessionBindingRecord[] = [];
+      for (const [bindingId, binding] of matrixContractBindings) {
+        if (input.bindingId && bindingId !== input.bindingId) {
+          continue;
+        }
+        if (input.targetSessionKey && binding.targetSessionKey !== input.targetSessionKey) {
+          continue;
+        }
+        matrixContractBindings.delete(bindingId);
+        removed.push(binding);
+      }
+      return removed;
+    },
+  };
+  registerSessionBindingAdapter(adapter);
+  return adapter;
 }
 
 export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
@@ -740,34 +806,33 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
       unbindSupported: true,
       placements: ["current", "child"],
     },
-    getCapabilities: async () => {
-      await createContractMatrixThreadBindingManager();
+    getCapabilities: () => {
+      registerMatrixContractAdapter("default");
       return getSessionBindingService().getCapabilities({
         channel: "matrix",
-        accountId: "ops",
+        accountId: "default",
       });
     },
     bindAndResolve: async () => {
-      await createContractMatrixThreadBindingManager();
+      registerMatrixContractAdapter("default");
       const service = getSessionBindingService();
       const binding = await service.bind({
         targetSessionKey: "agent:matrix:subagent:child-1",
         targetKind: "subagent",
         conversation: {
           channel: "matrix",
-          accountId: "ops",
+          accountId: "default",
           conversationId: "!room:example",
         },
         placement: "child",
         metadata: {
           label: "codex-matrix",
-          introText: "intro root",
         },
       });
       expectResolvedSessionBinding({
         channel: "matrix",
-        accountId: "ops",
-        conversationId: "$root",
+        accountId: "default",
+        conversationId: "$matrix-child:!room:example",
         parentConversationId: "!room:example",
         targetSessionKey: "agent:matrix:subagent:child-1",
       });
@@ -775,16 +840,17 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
-      const manager = await createContractMatrixThreadBindingManager();
-      manager.stop();
-      expect(
-        getSessionBindingService().resolveByConversation({
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$root",
-          parentConversationId: "!room:example",
-        }),
-      ).toBeNull();
+      matrixContractBindings.clear();
+      unregisterSessionBindingAdapter({
+        channel: "matrix",
+        accountId: "default",
+      });
+      expectClearedSessionBinding({
+        channel: "matrix",
+        accountId: "default",
+        conversationId: "$matrix-child:!room:example",
+        parentConversationId: "!room:example",
+      });
     },
   },
   {

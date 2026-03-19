@@ -1,13 +1,10 @@
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as sessionBindingTesting,
-  createTestRegistry,
   registerSessionBindingAdapter,
-  resolveAgentRoute,
-  setActivePluginRegistry,
   type OpenClawConfig,
-} from "../../../../../test/helpers/extensions/matrix-monitor-route.js";
-import { matrixPlugin } from "../../channel.js";
+} from "../../../runtime-api.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 
 const baseCfg = {
@@ -32,9 +29,6 @@ function resolveDmRoute(cfg: OpenClawConfig) {
 describe("resolveMatrixInboundRoute", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "matrix", source: "test", plugin: matrixPlugin }]),
-    );
   });
 
   it("prefers sender-bound DM routing over DM room fallback bindings", () => {
