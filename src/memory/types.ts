@@ -8,6 +8,8 @@ export type MemorySearchResult = {
   snippet: string;
   source: MemorySource;
   citation?: string;
+  /** Schema type for schema-based organization (Phase 2) */
+  schemaType?: string;
 };
 
 export type MemoryEmbeddingProbeResult = {

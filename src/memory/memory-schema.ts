@@ -79,11 +79,35 @@ export function ensureMemoryIndexSchema(params: {
   // Phase 1: salience (importance score 0-1) and access_count for active forgetting
   ensureColumn(params.db, "chunks", "salience", "REAL NOT NULL DEFAULT 0.5");
   ensureColumn(params.db, "chunks", "access_count", "INTEGER NOT NULL DEFAULT 0");
+  // Phase 2: schema_type for schema-based memory organization
+  ensureColumn(params.db, "chunks", "schema_type", "TEXT DEFAULT NULL");
+  // Phase 2: tier for memory hierarchy (working/short_term/long_term)
+  ensureColumn(params.db, "chunks", "tier", "TEXT DEFAULT 'short_term'");
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);`);
   // Index for forgetting queries - find low salience chunks
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_salience ON chunks(salience);`);
   params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_access_count ON chunks(access_count);`);
+  // Index for schema-based queries
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_schema_type ON chunks(schema_type);`);
+  // Index for tier-based queries
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_tier ON chunks(tier);`);
+
+  // Phase 2: associations table for associative graph (spreading activation)
+  params.db.exec(`
+    CREATE TABLE IF NOT EXISTS associations (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      strength REAL NOT NULL DEFAULT 0.5,
+      type TEXT NOT NULL DEFAULT 'semantic',
+      context TEXT,
+      created_at INTEGER NOT NULL
+    );
+  `);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_associations_source ON associations(source_id);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_associations_target ON associations(target_id);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_associations_strength ON associations(strength);`);
 
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }
