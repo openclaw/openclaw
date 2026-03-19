@@ -30,6 +30,7 @@ export { formatDocsLink } from "../terminal/links.js";
 export {
   formatWhatsAppConfigAllowFromEntries,
   resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigAllowSendTo,
   resolveWhatsAppConfigDefaultTo,
 } from "./channel-config-helpers.js";
 export { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";

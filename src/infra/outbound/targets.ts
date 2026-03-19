@@ -185,6 +185,7 @@ export function resolveOutboundTarget(params: {
   channel: GatewayMessageChannel;
   to?: string;
   allowFrom?: string[];
+  allowSendTo?: string[];
   cfg?: OpenClawConfig;
   accountId?: string | null;
   mode?: ChannelOutboundTargetMode;
@@ -219,6 +220,16 @@ export function resolveOutboundTarget(params: {
       : undefined);
   const allowFrom = allowFromRaw ? mapAllowFromEntries(allowFromRaw) : undefined;
 
+  const allowSendToRaw =
+    params.allowSendTo ??
+    (params.cfg && plugin.config.resolveAllowSendTo
+      ? plugin.config.resolveAllowSendTo({
+          cfg: params.cfg,
+          accountId: params.accountId ?? undefined,
+        })
+      : undefined);
+  const allowSendTo = allowSendToRaw?.map((entry) => String(entry));
+
   // Fall back to per-channel defaultTo when no explicit target is provided.
   const effectiveTo =
     params.to?.trim() ||
@@ -235,6 +246,7 @@ export function resolveOutboundTarget(params: {
       cfg: params.cfg,
       to: effectiveTo,
       allowFrom,
+      allowSendTo,
       accountId: params.accountId ?? undefined,
       mode: params.mode ?? "explicit",
     });

@@ -512,6 +512,19 @@ export function resolveWhatsAppConfigAllowFrom(params: {
     : [];
 }
 
+export function resolveWhatsAppConfigAllowSendTo(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): string[] | undefined {
+  const account = getChannelPlugin("whatsapp")?.config.resolveAccount(params.cfg, params.accountId);
+  return account &&
+    typeof account === "object" &&
+    "allowSendTo" in account &&
+    Array.isArray(account.allowSendTo)
+    ? account.allowSendTo.map(String)
+    : undefined;
+}
+
 /** Format WhatsApp allowlist entries with the same normalization used by the channel plugin. */
 export function formatWhatsAppConfigAllowFromEntries(allowFrom: Array<string | number>): string[] {
   return normalizeWhatsAppAllowFromEntries(allowFrom);

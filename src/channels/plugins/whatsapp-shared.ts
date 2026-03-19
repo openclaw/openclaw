@@ -40,8 +40,8 @@ export function createWhatsAppOutboundBase({
   sendMessageWhatsApp,
   sendPollWhatsApp,
   shouldLogVerbose,
-  resolveTarget = ({ to, allowFrom, mode }) =>
-    resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+  resolveTarget = ({ to, allowFrom, allowSendTo, mode }) =>
+    resolveWhatsAppOutboundTarget({ to, allowFrom, allowSendTo, mode }),
   normalizeText = (text) => text ?? "",
   skipEmptyText = false,
 }: CreateWhatsAppOutboundBaseParams): Pick<

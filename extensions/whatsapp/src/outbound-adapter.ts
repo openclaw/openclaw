@@ -21,8 +21,8 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   chunkerMode: "text",
   textChunkLimit: 4000,
   pollMaxOptions: 12,
-  resolveTarget: ({ to, allowFrom, mode }) =>
-    resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+  resolveTarget: ({ to, allowFrom, allowSendTo, mode }) =>
+    resolveWhatsAppOutboundTarget({ to, allowFrom, allowSendTo, mode }),
   sendPayload: async (ctx) => {
     const text = trimLeadingWhitespace(ctx.payload.text);
     const hasMedia = resolveSendableOutboundReplyParts(ctx.payload).hasMedia;

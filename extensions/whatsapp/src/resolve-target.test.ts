@@ -20,10 +20,12 @@ vi.mock("openclaw/plugin-sdk/whatsapp", async () => {
     resolveWhatsAppOutboundTarget: ({
       to,
       allowFrom,
+      allowSendTo,
       mode,
     }: {
       to?: string;
       allowFrom: string[];
+      allowSendTo?: string[];
       mode: "explicit" | "implicit";
     }) => {
       const raw = typeof to === "string" ? to.trim() : "";
@@ -36,8 +38,10 @@ vi.mock("openclaw/plugin-sdk/whatsapp", async () => {
       }
 
       if (mode === "implicit" && !normalized.endsWith("@g.us")) {
-        const allowAll = allowFrom.includes("*");
-        const allowExact = allowFrom.some((entry) => {
+        // Use allowSendTo if defined, otherwise fall back to allowFrom
+        const effectiveList = allowSendTo ?? allowFrom;
+        const allowAll = effectiveList.includes("*");
+        const allowExact = effectiveList.some((entry) => {
           if (!entry) {
             return false;
           }
