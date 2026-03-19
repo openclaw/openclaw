@@ -28,7 +28,7 @@ metadata: { "openclaw": { "emoji": "🚀", "requires": { "bins": ["sed", "python
 ## 执行方法
 
 ```bash
-cd /home/wayne/.openclaw/workspace/skills/bailian-maxperf
+cd ~/.openclaw/workspace/skills/bailian-maxperf
 ./scripts/maxperf.sh
 openclaw gateway restart
 ```

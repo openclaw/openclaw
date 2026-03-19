@@ -3,7 +3,7 @@
 ## 快速开始
 
 ```bash
-cd /home/wayne/.openclaw/workspace/skills/bailian-maxperf
+cd ~/.openclaw/workspace/skills/bailian-maxperf
 ./scripts/maxperf.sh
 openclaw gateway restart
 ```
