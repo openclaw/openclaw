@@ -318,14 +318,16 @@ async function handleBroadcastAction(
     throw new Error("Broadcast requires at least one target in --targets.");
   }
   const channelHint = readStringParam(params, "channel");
-  const configured = await listConfiguredMessageChannels(input.cfg);
-  if (configured.length === 0) {
-    throw new Error("Broadcast requires at least one configured channel.");
-  }
   const targetChannels =
     channelHint && channelHint.trim().toLowerCase() !== "all"
       ? [await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)]
-      : configured;
+      : await (async () => {
+          const configured = await listConfiguredMessageChannels(input.cfg);
+          if (configured.length === 0) {
+            throw new Error("Broadcast requires at least one configured channel.");
+          }
+          return configured;
+        })();
   const results: Array<{
     channel: ChannelId;
     to: string;
