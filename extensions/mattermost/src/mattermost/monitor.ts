@@ -1835,25 +1835,31 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             // instead of overwriting the previous one. See GH issue #43020.
             onAssistantMessageStart: blockStreamingClient
               ? async () => {
-                  if (!streamMessageId) return;
-
-                  // Stop interval immediately to prevent further patches to the old message.
+                  // Always stop the patch interval and reset turn-local text state,
+                  // even when no streaming post exists yet (short tool-call turns where
+                  // the 200ms ticker hasn't fired). Without this, pendingPatchText /
+                  // lastSentText / patchInterval state from the previous turn would carry
+                  // into the next turn and potentially patch a newer post with stale text.
                   stopPatchInterval();
+                  pendingPatchText = "";
+                  lastSentText = "";
 
-                  // Capture state before reset so we can finalize the old message async.
+                  if (!streamMessageId) {
+                    patchSending = false;
+                    return;
+                  }
+
+                  // Capture state before clearing streamMessageId so we can finalize.
                   const finalizeId = streamMessageId;
                   const finalizeText = pendingPatchText;
 
-                  // Reset text state immediately so new onPartialReply calls create a
-                  // fresh message for the next turn. Keep patchSending as-is until
-                  // after the wait loop below — clearing it first would make the wait
-                  // a no-op and allow the old in-flight PATCH to overwrite the post
-                  // after the finalization PATCH completes.
+                  // Clear the stream ID immediately — onPartialReply calls for the next
+                  // turn will create a fresh post. patchSending stays as-is until after
+                  // the wait loop so the loop is not a no-op.
                   streamMessageId = null;
-                  pendingPatchText = "";
-                  lastSentText = "";
-                  // Guard: pendingPatchText is set only by the interval which requires
-                  // non-empty text, so finalizeText is always non-empty here in practice.
+                  // Guard: pendingPatchText is set by the interval which requires
+                  // non-empty text, so finalizeText is always non-empty in practice.
+                  // (Already cleared above in the early-path reset.)
                   if (!finalizeText) {
                     patchSending = false;
                     return;
@@ -1866,10 +1872,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     await new Promise<void>((r) => setTimeout(r, 20));
                   }
                   patchSending = false;
+                  // Truncate to textLimit — the same cap applied by schedulePatch/
+                  // flushPendingPatch. For turns longer than the server limit the
+                  // patch would fail without truncation, leaving the post at whatever
+                  // partial text the interval last wrote. deliver() still sends the
+                  // full authoritative text via deliverMattermostReplyPayload.
+                  const finalizeTextTruncated =
+                    finalizeText.length > textLimit
+                      ? finalizeText.slice(0, textLimit)
+                      : finalizeText;
                   try {
                     await patchMattermostPost(blockStreamingClient, {
                       postId: finalizeId,
-                      message: finalizeText,
+                      message: finalizeTextTruncated,
                     });
                     // Increment only after a successful patch so deliver() only
                     // skips this turn if we know the complete text is visible.
