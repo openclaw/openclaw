@@ -278,6 +278,39 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
   });
 
+  it("blocks URLs that use credentials to obscure a private host", async () => {
+    const fetchImpl = vi.fn();
+    // http://attacker.com@127.0.0.1:8080/ — URL parser extracts hostname as 127.0.0.1
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://attacker.com@127.0.0.1:8080/internal",
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("blocks private IPv6 addresses embedded in URLs with credentials", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://user:pass@[::1]:8080/internal",
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("blocks redirect to a URL using credentials to obscure a private host", async () => {
+    const lookupFn = createPublicLookup();
+    await expectRedirectFailure({
+      url: "https://public.example/start",
+      responses: [redirectResponse("http://public@127.0.0.1:6379/")],
+      expectedError: /private|internal|blocked/i,
+      lookupFn,
+    });
+  });
+
   it("ignores env proxy by default to preserve DNS-pinned destination binding", async () => {
     await runProxyModeDispatcherTest({
       mode: GUARDED_FETCH_MODE.STRICT,
