@@ -292,6 +292,57 @@ describe("sessions tools", () => {
     expect(serialized).not.toContain("thinkingSignature");
   });
 
+  it("sessions_list backfills previews after sanitized empty turns", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "main",
+              kind: "direct",
+              sessionId: "s-main",
+              updatedAt: 10,
+            },
+          ],
+        };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "previous visible answer" }],
+            },
+            {
+              role: "assistant",
+              content: [{ type: "redacted_thinking", data: "sealed" }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_list tool");
+    }
+
+    const result = await tool.execute("call2d", { messageLimit: 1 });
+    const details = result.details as {
+      sessions?: Array<{ messages?: Array<{ content?: Array<{ type?: string; text?: string }> }> }>;
+    };
+    expect(details.sessions?.[0]?.messages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "previous visible answer" }],
+      },
+    ]);
+  });
+
   it("sessions_history filters tool messages by default", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
@@ -371,6 +422,63 @@ describe("sessions tools", () => {
     expect(serialized).not.toContain("private chain of thought");
     expect(serialized).not.toContain("redacted_thinking");
     expect(serialized).not.toContain("thinkingSignature");
+  });
+
+  it("sessions_history can preserve the latest assistant reasoning turn for replay", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "old private", thinkingSignature: "old-sig" },
+                { type: "text", text: "old answer" },
+              ],
+            },
+            { role: "toolResult", content: [] },
+            {
+              role: "assistant",
+              content: [
+                { type: "redacted_thinking", data: "sealed" },
+                { type: "text", text: "latest answer" },
+              ],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    const result = await tool.execute("call-thinking-preserve", {
+      sessionKey: "main",
+      includeTools: true,
+      preserveLatestAssistantReasoning: true,
+    });
+    const details = result.details as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    expect(details.messages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "old answer" }],
+      },
+      { role: "toolResult", content: [] },
+      {
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", data: "sealed" },
+          { type: "text", text: "latest answer" },
+        ],
+      },
+    ]);
   });
 
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {

@@ -14,12 +14,13 @@ import {
   resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
-import { sanitizeHistoryMessage } from "./sessions-history-sanitize.js";
+import { hasReasoningHistoryContent, sanitizeHistoryMessage } from "./sessions-history-sanitize.js";
 
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
   limit: Type.Optional(Type.Number({ minimum: 1 })),
   includeTools: Type.Optional(Type.Boolean()),
+  preserveLatestAssistantReasoning: Type.Optional(Type.Boolean()),
 });
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
@@ -122,13 +123,33 @@ export function createSessionsHistoryTool(opts?: {
           ? Math.max(1, Math.floor(params.limit))
           : undefined;
       const includeTools = Boolean(params.includeTools);
+      const preserveLatestAssistantReasoning = Boolean(params.preserveLatestAssistantReasoning);
       const result = await callGateway<{ messages: Array<unknown> }>({
         method: "chat.history",
         params: { sessionKey: resolvedKey, limit },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
-      const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
+      let latestAssistantReasoningIndex = -1;
+      if (preserveLatestAssistantReasoning) {
+        for (let index = selectedMessages.length - 1; index >= 0; index -= 1) {
+          const message = selectedMessages[index];
+          if (
+            message &&
+            typeof message === "object" &&
+            (message as { role?: unknown }).role === "assistant"
+          ) {
+            latestAssistantReasoningIndex = index;
+            break;
+          }
+        }
+      }
+      const sanitizedMessages = selectedMessages.map((message, index) =>
+        sanitizeHistoryMessage(message, {
+          preserveReasoningBlocks:
+            index === latestAssistantReasoningIndex && hasReasoningHistoryContent(message),
+        }),
+      );
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
       const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);
       const cappedMessages = capArrayByJsonBytes(

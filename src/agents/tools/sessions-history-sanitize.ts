@@ -3,6 +3,10 @@ import { truncateUtf16Safe } from "../../utils.js";
 
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 
+function isReasoningContentType(type: string): boolean {
+  return type === "thinking" || type === "redacted_thinking";
+}
+
 export function truncateHistoryText(text: string): {
   text: string;
   truncated: boolean;
@@ -19,7 +23,12 @@ export function truncateHistoryText(text: string): {
   return { text: `${cut}\n…(truncated)…`, truncated: true, redacted };
 }
 
-export function sanitizeHistoryContentBlock(block: unknown): {
+export function sanitizeHistoryContentBlock(
+  block: unknown,
+  opts?: {
+    preserveReasoningBlocks?: boolean;
+  },
+): {
   block: unknown;
   truncated: boolean;
   redacted: boolean;
@@ -32,7 +41,10 @@ export function sanitizeHistoryContentBlock(block: unknown): {
   let truncated = false;
   let redacted = false;
   const type = typeof entry.type === "string" ? entry.type : "";
-  if (type === "thinking" || type === "redacted_thinking") {
+  if (isReasoningContentType(type)) {
+    if (opts?.preserveReasoningBlocks) {
+      return { block, truncated: false, redacted: false, omitted: false };
+    }
     return { block: null, truncated: true, redacted: false, omitted: true };
   }
   if (typeof entry.text === "string") {
@@ -62,7 +74,12 @@ export function sanitizeHistoryContentBlock(block: unknown): {
   return { block: entry, truncated, redacted, omitted: false };
 }
 
-export function sanitizeHistoryMessage(message: unknown): {
+export function sanitizeHistoryMessage(
+  message: unknown,
+  opts?: {
+    preserveReasoningBlocks?: boolean;
+  },
+): {
   message: unknown;
   truncated: boolean;
   redacted: boolean;
@@ -93,7 +110,7 @@ export function sanitizeHistoryMessage(message: unknown): {
     truncated ||= res.truncated;
     redacted ||= res.redacted;
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) => sanitizeHistoryContentBlock(block));
+    const updated = entry.content.map((block) => sanitizeHistoryContentBlock(block, opts));
     const kept = updated.filter((item) => !item.omitted).map((item) => item.block);
     const needsAssistantPlaceholder = entry.role === "assistant" && kept.length === 0;
     entry.content = needsAssistantPlaceholder ? [{ type: "text", text: "" }] : kept;
@@ -107,4 +124,47 @@ export function sanitizeHistoryMessage(message: unknown): {
     redacted ||= res.redacted;
   }
   return { message: entry, truncated, redacted };
+}
+
+export function hasReasoningHistoryContent(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as { content?: unknown };
+  if (!Array.isArray(entry.content)) {
+    return false;
+  }
+  return entry.content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return typeof type === "string" && isReasoningContentType(type);
+  });
+}
+
+export function hasVisibleHistoryPreviewContent(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as { content?: unknown; text?: unknown };
+  if (typeof entry.content === "string") {
+    return entry.content.trim().length > 0;
+  }
+  if (Array.isArray(entry.content)) {
+    if (entry.content.length === 0) {
+      return false;
+    }
+    return entry.content.some((block) => {
+      if (!block || typeof block !== "object") {
+        return true;
+      }
+      const text = (block as { text?: unknown }).text;
+      return typeof text !== "string" || text.length > 0;
+    });
+  }
+  if (typeof entry.text === "string") {
+    return entry.text.trim().length > 0;
+  }
+  return true;
 }

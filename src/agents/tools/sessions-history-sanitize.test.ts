@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeHistoryMessage } from "./sessions-history-sanitize.js";
+import {
+  hasVisibleHistoryPreviewContent,
+  sanitizeHistoryMessage,
+} from "./sessions-history-sanitize.js";
 
 describe("sanitizeHistoryMessage", () => {
   it("strips reasoning blocks from returned assistant messages", () => {
@@ -54,5 +57,36 @@ describe("sanitizeHistoryMessage", () => {
       role: "toolResult",
       content: [],
     });
+  });
+
+  it("preserves reasoning blocks when explicitly requested for replayable turns", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "private chain of thought", thinkingSignature: "sig" },
+        { type: "redacted_thinking", data: "sealed" },
+        { type: "text", text: "public answer" },
+      ],
+    };
+
+    const result = sanitizeHistoryMessage(message, { preserveReasoningBlocks: true });
+
+    expect(result.truncated).toBe(false);
+    expect(result.message).toEqual(message);
+  });
+
+  it("treats blank assistant placeholders as preview-invisible", () => {
+    expect(
+      hasVisibleHistoryPreviewContent({
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+      }),
+    ).toBe(false);
+    expect(
+      hasVisibleHistoryPreviewContent({
+        role: "assistant",
+        content: [{ type: "text", text: "visible" }],
+      }),
+    ).toBe(true);
   });
 });
