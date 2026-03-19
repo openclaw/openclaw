@@ -1,6 +1,6 @@
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   listDeliverableMessageChannels,
@@ -165,7 +165,7 @@ export async function resolveMessageChannelSelection(params: {
       if (fallback) {
         return {
           channel: fallback,
-          configured: await listConfiguredMessageChannels(params.cfg),
+          configured: [],
           source: "tool-context-fallback",
         };
       }
@@ -176,7 +176,7 @@ export async function resolveMessageChannelSelection(params: {
     }
     return {
       channel: availableExplicit,
-      configured: await listConfiguredMessageChannels(params.cfg),
+      configured: [],
       source: "explicit",
     };
   }
@@ -188,7 +188,7 @@ export async function resolveMessageChannelSelection(params: {
   if (fallback) {
     return {
       channel: fallback,
-      configured: await listConfiguredMessageChannels(params.cfg),
+      configured: [],
       source: "tool-context-fallback",
     };
   }

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginBundleFormat } from "./types.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
@@ -13,7 +14,7 @@ import {
 } from "./bundle-manifest.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginBundleFormat } from "./types.js";
+import { safeRealpathSync } from "./path-safety.js";
 
 export type BundleMcpServerConfig = Record<string, unknown>;
 
@@ -121,6 +122,14 @@ function expandBundleRootPlaceholders(value: string, rootDir: string): string {
   return value.split(CLAUDE_PLUGIN_ROOT_PLACEHOLDER).join(rootDir);
 }
 
+function canonicalizeBundlePath(targetPath: string): string {
+  return path.normalize(safeRealpathSync(targetPath) ?? path.resolve(targetPath));
+}
+
+function normalizeExpandedAbsolutePath(value: string): string {
+  return path.isAbsolute(value) ? path.normalize(value) : value;
+}
+
 function absolutizeBundleMcpServer(params: {
   rootDir: string;
   baseDir: string;
@@ -137,7 +146,7 @@ function absolutizeBundleMcpServer(params: {
     const expanded = expandBundleRootPlaceholders(command, params.rootDir);
     next.command = isExplicitRelativePath(expanded)
       ? path.resolve(params.baseDir, expanded)
-      : expanded;
+      : normalizeExpandedAbsolutePath(expanded);
   }
 
   const cwd = next.cwd;
@@ -150,7 +159,7 @@ function absolutizeBundleMcpServer(params: {
   if (typeof workingDirectory === "string") {
     const expanded = expandBundleRootPlaceholders(workingDirectory, params.rootDir);
     next.workingDirectory = path.isAbsolute(expanded)
-      ? expanded
+      ? path.normalize(expanded)
       : path.resolve(params.baseDir, expanded);
   }
 
@@ -161,7 +170,7 @@ function absolutizeBundleMcpServer(params: {
       }
       const expanded = expandBundleRootPlaceholders(entry, params.rootDir);
       if (!isExplicitRelativePath(expanded)) {
-        return expanded;
+        return normalizeExpandedAbsolutePath(expanded);
       }
       return path.resolve(params.baseDir, expanded);
     });
@@ -171,7 +180,9 @@ function absolutizeBundleMcpServer(params: {
     next.env = Object.fromEntries(
       Object.entries(next.env).map(([key, value]) => [
         key,
-        typeof value === "string" ? expandBundleRootPlaceholders(value, params.rootDir) : value,
+        typeof value === "string"
+          ? normalizeExpandedAbsolutePath(expandBundleRootPlaceholders(value, params.rootDir))
+          : value,
       ]),
     );
   }
@@ -183,10 +194,11 @@ function loadBundleFileBackedMcpConfig(params: {
   rootDir: string;
   relativePath: string;
 }): BundleMcpConfig {
-  const absolutePath = path.resolve(params.rootDir, params.relativePath);
+  const rootDir = canonicalizeBundlePath(params.rootDir);
+  const absolutePath = path.resolve(rootDir, params.relativePath);
   const opened = openBoundaryFileSync({
     absolutePath,
-    rootPath: params.rootDir,
+    rootPath: rootDir,
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
   });
@@ -200,12 +212,12 @@ function loadBundleFileBackedMcpConfig(params: {
     }
     const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
     const servers = extractMcpServerMap(raw);
-    const baseDir = path.dirname(absolutePath);
+    const baseDir = canonicalizeBundlePath(path.dirname(absolutePath));
     return {
       mcpServers: Object.fromEntries(
         Object.entries(servers).map(([serverName, server]) => [
           serverName,
-          absolutizeBundleMcpServer({ rootDir: params.rootDir, baseDir, server }),
+          absolutizeBundleMcpServer({ rootDir, baseDir, server }),
         ]),
       ),
     };
@@ -221,12 +233,13 @@ function loadBundleInlineMcpConfig(params: {
   if (!isRecord(params.raw.mcpServers)) {
     return { mcpServers: {} };
   }
+  const baseDir = canonicalizeBundlePath(params.baseDir);
   const servers = extractMcpServerMap(params.raw.mcpServers);
   return {
     mcpServers: Object.fromEntries(
       Object.entries(servers).map(([serverName, server]) => [
         serverName,
-        absolutizeBundleMcpServer({ rootDir: params.baseDir, baseDir: params.baseDir, server }),
+        absolutizeBundleMcpServer({ rootDir: baseDir, baseDir, server }),
       ]),
     ),
   };
