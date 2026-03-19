@@ -466,28 +466,32 @@ export async function sendMediaFeishu(params: {
 
     // Get duration for audio/video files (required by Feishu API)
     let duration: number | undefined;
-    if (fileType === "opus" || fileType === "mp4") {
+    if ((fileType === "opus" || fileType === "mp4") && mediaUrl && !mediaUrl.startsWith("http")) {
       try {
-        // Try to get duration from the original file path if available
-        const filePath = mediaUrl && !mediaUrl.startsWith("http") ? mediaUrl : undefined;
-        if (filePath && fs.existsSync(filePath)) {
-          const result = spawnSync(
-            "ffprobe",
-            [
-              "-v", "error",
-              "-show_entries", "format=duration",
-              "-of", "default=noprint_wrappers=1:nokey=1",
-              filePath,
-            ],
-            { encoding: "utf-8", timeout: 10000 }
-          );
-          if (result.status === 0) {
-            const durationSec = parseFloat(result.stdout.trim());
-            duration = Math.round(durationSec * 1000); // Convert to milliseconds
+        // Check if ffprobe is available and file exists
+        if (fs.existsSync(mediaUrl)) {
+          const ffprobeCheck = spawnSync("which", ["ffprobe"], { encoding: "utf-8" });
+          if (ffprobeCheck.status === 0) {
+            const result = spawnSync(
+              "ffprobe",
+              [
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                mediaUrl,
+              ],
+              { encoding: "utf-8", timeout: 10000 }
+            );
+            if (result.status === 0 && result.stdout) {
+              const durationSec = parseFloat(result.stdout.trim());
+              if (!isNaN(durationSec)) {
+                duration = Math.round(durationSec * 1000); // Convert to milliseconds
+              }
+            }
           }
         }
       } catch (e) {
-        // Silently ignore ffprobe errors
+        // Silently ignore ffprobe errors - duration is optional
       }
     }
 
