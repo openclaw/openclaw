@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveArchiveKind } from "../infra/archive.js";
+import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { installPluginFromPath, type InstallPluginResult } from "./install.js";
@@ -299,7 +300,7 @@ async function pathExists(target: string): Promise<boolean> {
 }
 
 async function readClaudeKnownMarketplaces(): Promise<Record<string, KnownMarketplaceRecord>> {
-  const knownPath = resolveUserPath(CLAUDE_KNOWN_MARKETPLACES_PATH);
+  const knownPath = resolveOsHomeRelativePath(CLAUDE_KNOWN_MARKETPLACES_PATH);
   if (!(await pathExists(knownPath))) {
     return {};
   }

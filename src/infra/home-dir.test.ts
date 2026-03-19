@@ -4,6 +4,8 @@ import {
   expandHomePrefix,
   resolveEffectiveHomeDir,
   resolveHomeRelativePath,
+  resolveOsHomeDir,
+  resolveOsHomeRelativePath,
   resolveRequiredHomeDir,
 } from "./home-dir.js";
 
@@ -95,6 +97,21 @@ describe("resolveRequiredHomeDir", () => {
   });
 });
 
+describe("resolveOsHomeDir", () => {
+  it("ignores OPENCLAW_HOME and uses HOME", () => {
+    expect(
+      resolveOsHomeDir(
+        {
+          OPENCLAW_HOME: "/srv/openclaw-home",
+          HOME: "/home/alice",
+          USERPROFILE: "C:/Users/alice",
+        } as NodeJS.ProcessEnv,
+        () => "/fallback",
+      ),
+    ).toBe(path.resolve("/home/alice"));
+  });
+});
+
 describe("expandHomePrefix", () => {
   it.each([
     {
@@ -156,5 +173,18 @@ describe("resolveHomeRelativePath", () => {
         },
       }),
     ).toBe(path.resolve(process.cwd()));
+  });
+});
+
+describe("resolveOsHomeRelativePath", () => {
+  it("expands tilde paths using the OS home instead of OPENCLAW_HOME", () => {
+    expect(
+      resolveOsHomeRelativePath("~/docs", {
+        env: {
+          OPENCLAW_HOME: "/srv/openclaw-home",
+          HOME: "/home/alice",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(path.resolve("/home/alice/docs"));
   });
 });
