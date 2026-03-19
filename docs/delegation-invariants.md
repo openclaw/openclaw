@@ -131,6 +131,7 @@ Required fields (minimal):
 - `result` (`"success" | "failure" | "partial"`)
 
 Optional fields (recommended):
+
 - `step_id`
 - `side_effects` (summary)
 - `evidence_refs` (links to logs/txns/screenshots)
