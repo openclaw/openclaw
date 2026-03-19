@@ -46,6 +46,12 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function mockLocalTimeZoneName(timeZone: string) {
+  vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue({
+    timeZone,
+  } as Intl.ResolvedDateTimeFormatOptions);
+}
+
 function expectSpecificTimezoneCalls(request: ReturnType<typeof vi.fn>, startCall: number): void {
   const utcOffset = __test.formatUtcOffset(new Date().getTimezoneOffset());
   const localTimeZoneName = __test.resolveLocalTimeZoneName();
@@ -73,8 +79,11 @@ function expectSpecificTimezoneCalls(request: ReturnType<typeof vi.fn>, startCal
   });
 }
 
-function expectOffsetOnlyCalls(request: ReturnType<typeof vi.fn>, startCall: number): void {
-  const utcOffset = __test.formatUtcOffset(new Date().getTimezoneOffset());
+function expectOffsetOnlyCalls(
+  request: ReturnType<typeof vi.fn>,
+  startCall: number,
+  utcOffset: string,
+): void {
   expect(request).toHaveBeenNthCalledWith(startCall, "sessions.usage", {
     startDate: "2026-02-16",
     endDate: "2026-02-16",
@@ -137,6 +146,7 @@ describe("usage controller date interpretation params", () => {
   it("sends specific mode with browser offset when usage timezone is local", async () => {
     const request = vi.fn(async () => ({}));
     const state = createState(request, { usageTimeZone: "local" });
+    mockLocalTimeZoneName("Asia/Kolkata");
     vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-330);
 
     await loadUsage(state);
@@ -171,6 +181,7 @@ describe("usage controller date interpretation params", () => {
   it("fails loudly and remembers compatibility when local mode hits a legacy gateway", async () => {
     const storage = createStorageMock();
     vi.stubGlobal("localStorage", storage as unknown as Storage);
+    mockLocalTimeZoneName("Asia/Kolkata");
     vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-330);
 
     const request = vi.fn(async (method: string, params?: unknown) => {
@@ -214,7 +225,12 @@ describe("usage controller date interpretation params", () => {
   it("retries local mode with utcOffset when the gateway rejects only timeZone", async () => {
     const storage = createStorageMock();
     vi.stubGlobal("localStorage", storage as unknown as Storage);
+    mockLocalTimeZoneName("Asia/Kolkata");
     vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-330);
+    const localTimeZoneName = __test.resolveLocalTimeZoneName();
+    const fallbackUtcOffset = localTimeZoneName
+      ? __test.resolveFixedUtcOffsetForRange("2026-02-16", "2026-02-16", localTimeZoneName)
+      : undefined;
 
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.usage") {
@@ -235,12 +251,92 @@ describe("usage controller date interpretation params", () => {
     await loadUsage(state);
 
     expectSpecificTimezoneCalls(request, 1);
-    expectOffsetOnlyCalls(request, 3);
+    expectOffsetOnlyCalls(
+      request,
+      3,
+      fallbackUtcOffset ?? __test.formatUtcOffset(new Date().getTimezoneOffset()),
+    );
     expect(request).toHaveBeenCalledTimes(4);
     expect(state.usageError).toBeNull();
     expect(state.usageResult).toEqual({ sessions: [{ key: "offset-only" }] });
     expect(state.usageCostSummary).toEqual({ daily: [], totals: { totalTokens: 3 } });
-    expect(__test.shouldSendLegacyTimeZoneName(state)).toBe(false);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("retries local mode with timeZone again after a gateway upgrades", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage as unknown as Storage);
+    mockLocalTimeZoneName("Asia/Kolkata");
+    vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-330);
+
+    let supportsTimeZone = false;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      const record = (params ?? {}) as Record<string, unknown>;
+      if (method === "sessions.usage") {
+        if ("timeZone" in record && !supportsTimeZone) {
+          throw new Error("invalid sessions.usage params: at root: unexpected property 'timeZone'");
+        }
+        return { sessions: [{ key: supportsTimeZone ? "time-zone" : "offset-only" }] };
+      }
+      return { daily: [], totals: { totalTokens: supportsTimeZone ? 8 : 3 } };
+    });
+
+    const state = createState(request, {
+      usageTimeZone: "local",
+      settings: { gatewayUrl: "ws://127.0.0.1:18789" },
+    });
+
+    await loadUsage(state);
+
+    supportsTimeZone = true;
+    await loadUsage(state);
+
+    expect(request).toHaveBeenCalledTimes(6);
+    expectSpecificTimezoneCalls(request, 5);
+    expect(state.usageError).toBeNull();
+    expect(state.usageResult).toEqual({ sessions: [{ key: "time-zone" }] });
+    expect(state.usageCostSummary).toEqual({ daily: [], totals: { totalTokens: 8 } });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("marks DST-crossing ranges as unsafe for offset-only fallback", () => {
+    expect(
+      __test.resolveFixedUtcOffsetForRange("2026-03-08", "2026-03-09", "America/New_York"),
+    ).toBeUndefined();
+  });
+
+  it("fails loudly instead of retrying offset-only across a DST transition", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage as unknown as Storage);
+    mockLocalTimeZoneName("America/New_York");
+    vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(240);
+
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.usage") {
+        const record = (params ?? {}) as Record<string, unknown>;
+        if ("timeZone" in record) {
+          throw new Error("invalid sessions.usage params: at root: unexpected property 'timeZone'");
+        }
+        return { sessions: [{ key: "should-not-retry" }] };
+      }
+      return { daily: [], totals: { totalTokens: 5 } };
+    });
+
+    const state = createState(request, {
+      usageTimeZone: "local",
+      usageStartDate: "2026-03-08",
+      usageEndDate: "2026-03-08",
+      settings: { gatewayUrl: "ws://127.0.0.1:18789" },
+    });
+
+    await loadUsage(state);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.usageResult).toBeNull();
+    expect(state.usageCostSummary).toBeNull();
+    expect(state.usageError).toContain("too old to support Usage time zone filters");
 
     vi.unstubAllGlobals();
   });

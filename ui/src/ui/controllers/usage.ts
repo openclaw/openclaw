@@ -36,7 +36,6 @@ type UsageDateInterpretationParams = {
 };
 
 const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY = "openclaw.control.usage.date-params.v1";
-const LEGACY_USAGE_TIME_ZONE_STORAGE_KEY = "openclaw.control.usage.time-zone.v1";
 const LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY = "__default__";
 const LEGACY_USAGE_DATE_PARAMS_MODE_RE = /unexpected property ['"]mode['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_OFFSET_RE = /unexpected property ['"]utcoffset['"]/i;
@@ -44,9 +43,9 @@ const LEGACY_USAGE_DATE_PARAMS_TIME_ZONE_RE = /unexpected property ['"]timezone[
 const LEGACY_USAGE_DATE_PARAMS_INVALID_RE = /invalid sessions\.usage params/i;
 const LEGACY_USAGE_DATE_PARAMS_UNSUPPORTED_MESSAGE =
   "This gateway is too old to support Usage time zone filters. Upgrade the gateway to use the Local/UTC toggle.";
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 let legacyUsageDateParamsCache: Set<string> | null = null;
-let legacyUsageTimeZoneCache: Set<string> | null = null;
 
 function getLocalStorage(): Storage | null {
   return getSafeLocalStorage();
@@ -85,13 +84,6 @@ function loadLegacyUsageDateParamsCache(): Set<string> {
   );
 }
 
-function loadLegacyUsageTimeZoneCache(): Set<string> {
-  return loadGatewayCompatibilityCache(
-    LEGACY_USAGE_TIME_ZONE_STORAGE_KEY,
-    "unsupportedTimeZoneGatewayKeys",
-  );
-}
-
 function persistGatewayCompatibilityCache(
   storageKey: string,
   entryKey: string,
@@ -116,26 +108,11 @@ function persistLegacyUsageDateParamsCache(cache: Set<string>) {
   );
 }
 
-function persistLegacyUsageTimeZoneCache(cache: Set<string>) {
-  persistGatewayCompatibilityCache(
-    LEGACY_USAGE_TIME_ZONE_STORAGE_KEY,
-    "unsupportedTimeZoneGatewayKeys",
-    cache,
-  );
-}
-
 function getLegacyUsageDateParamsCache(): Set<string> {
   if (!legacyUsageDateParamsCache) {
     legacyUsageDateParamsCache = loadLegacyUsageDateParamsCache();
   }
   return legacyUsageDateParamsCache;
-}
-
-function getLegacyUsageTimeZoneCache(): Set<string> {
-  if (!legacyUsageTimeZoneCache) {
-    legacyUsageTimeZoneCache = loadLegacyUsageTimeZoneCache();
-  }
-  return legacyUsageTimeZoneCache;
 }
 
 function normalizeGatewayCompatibilityKey(gatewayUrl?: string): string {
@@ -164,16 +141,6 @@ function rememberLegacyDateInterpretation(state: UsageState) {
   const cache = getLegacyUsageDateParamsCache();
   cache.add(resolveGatewayCompatibilityKey(state));
   persistLegacyUsageDateParamsCache(cache);
-}
-
-function shouldSendLegacyTimeZoneName(state: UsageState): boolean {
-  return !getLegacyUsageTimeZoneCache().has(resolveGatewayCompatibilityKey(state));
-}
-
-function rememberLegacyTimeZoneName(state: UsageState) {
-  const cache = getLegacyUsageTimeZoneCache();
-  cache.add(resolveGatewayCompatibilityKey(state));
-  persistLegacyUsageTimeZoneCache(cache);
 }
 
 function isLegacyDateInterpretationUnsupportedError(err: unknown): boolean {
@@ -205,6 +172,131 @@ const resolveLocalTimeZoneName = (): string | undefined => {
   }
 };
 
+type DateParts = { year: number; monthIndex: number; day: number };
+type DateTimeParts = DateParts & { hour: number; minute: number; second: number };
+
+const timeZoneDateTimeFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+const parseDateParts = (raw: string): DateParts | undefined => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
+  if (!match) {
+    return undefined;
+  }
+  const [, yearStr, monthStr, dayStr] = match;
+  const year = Number(yearStr);
+  const monthIndex = Number(monthStr) - 1;
+  const day = Number(dayStr);
+  if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || !Number.isFinite(day)) {
+    return undefined;
+  }
+  const normalized = new Date(Date.UTC(year, monthIndex, day));
+  if (
+    normalized.getUTCFullYear() !== year ||
+    normalized.getUTCMonth() !== monthIndex ||
+    normalized.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
+  return { year, monthIndex, day };
+};
+
+const getTimeZoneDateTimeFormatter = (timeZone: string): Intl.DateTimeFormat => {
+  let formatter = timeZoneDateTimeFormatterCache.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    });
+    timeZoneDateTimeFormatterCache.set(timeZone, formatter);
+  }
+  return formatter;
+};
+
+const parseDateTimePartsInTimeZone = (date: Date, timeZone: string): DateTimeParts | undefined => {
+  try {
+    const parts = getTimeZoneDateTimeFormatter(timeZone).formatToParts(date);
+    const map: Record<string, string> = {};
+    for (const part of parts) {
+      if (part.type !== "literal") {
+        map[part.type] = part.value;
+      }
+    }
+    const year = Number(map.year);
+    const month = Number(map.month);
+    const day = Number(map.day);
+    const hour = Number(map.hour);
+    const minute = Number(map.minute);
+    const second = Number(map.second);
+    if (
+      !Number.isFinite(year) ||
+      !Number.isFinite(month) ||
+      !Number.isFinite(day) ||
+      !Number.isFinite(hour) ||
+      !Number.isFinite(minute) ||
+      !Number.isFinite(second)
+    ) {
+      return undefined;
+    }
+    return {
+      year,
+      monthIndex: month - 1,
+      day,
+      hour,
+      minute,
+      second,
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+const addDaysToDateParts = (parts: DateParts, days: number): DateParts => {
+  const shifted = new Date(Date.UTC(parts.year, parts.monthIndex, parts.day + days));
+  return {
+    year: shifted.getUTCFullYear(),
+    monthIndex: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
+  };
+};
+
+const getTimeZoneStartOfDayMs = (parts: DateParts, timeZone: string): number | undefined => {
+  const targetUtcMidnight = Date.UTC(parts.year, parts.monthIndex, parts.day);
+  let candidateMs = targetUtcMidnight;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const zoned = parseDateTimePartsInTimeZone(new Date(candidateMs), timeZone);
+    if (!zoned) {
+      return undefined;
+    }
+    const offsetMs =
+      Date.UTC(zoned.year, zoned.monthIndex, zoned.day, zoned.hour, zoned.minute, zoned.second) -
+      candidateMs;
+    const nextCandidateMs = targetUtcMidnight - offsetMs;
+    if (nextCandidateMs === candidateMs) {
+      break;
+    }
+    candidateMs = nextCandidateMs;
+  }
+  const resolved = parseDateTimePartsInTimeZone(new Date(candidateMs), timeZone);
+  if (
+    !resolved ||
+    resolved.year !== parts.year ||
+    resolved.monthIndex !== parts.monthIndex ||
+    resolved.day !== parts.day ||
+    resolved.hour !== 0 ||
+    resolved.minute !== 0 ||
+    resolved.second !== 0
+  ) {
+    return undefined;
+  }
+  return candidateMs;
+};
+
 const formatUtcOffset = (timezoneOffsetMinutes: number): string => {
   // `Date#getTimezoneOffset()` is minutes to add to local time to reach UTC.
   // Convert to UTC±H[:MM] where positive means east of UTC.
@@ -218,10 +310,49 @@ const formatUtcOffset = (timezoneOffsetMinutes: number): string => {
     : `UTC${sign}${hours}:${minutes.toString().padStart(2, "0")}`;
 };
 
+const resolveFixedUtcOffsetForRange = (
+  startDate: string,
+  endDate: string,
+  timeZone: string,
+): string | undefined => {
+  const startParts = parseDateParts(startDate);
+  const endParts = parseDateParts(endDate);
+  if (!startParts || !endParts) {
+    return undefined;
+  }
+
+  const endUtcDay = Date.UTC(endParts.year, endParts.monthIndex, endParts.day);
+  let cursor = startParts;
+  let expectedUtcOffset: string | undefined;
+  while (Date.UTC(cursor.year, cursor.monthIndex, cursor.day) <= endUtcDay) {
+    const dayStartMs = getTimeZoneStartOfDayMs(cursor, timeZone);
+    const nextParts = addDaysToDateParts(cursor, 1);
+    const nextDayStartMs = getTimeZoneStartOfDayMs(nextParts, timeZone);
+    if (dayStartMs === undefined || nextDayStartMs === undefined) {
+      return undefined;
+    }
+    if (nextDayStartMs - dayStartMs !== DAY_MS) {
+      return undefined;
+    }
+    const utcOffset = formatUtcOffset(
+      (dayStartMs - Date.UTC(cursor.year, cursor.monthIndex, cursor.day)) / 60_000,
+    );
+    if (!expectedUtcOffset) {
+      expectedUtcOffset = utcOffset;
+    } else if (expectedUtcOffset !== utcOffset) {
+      return undefined;
+    }
+    cursor = nextParts;
+  }
+
+  return expectedUtcOffset;
+};
+
 const buildDateInterpretationParams = (
   timeZone: "local" | "utc",
   includeDateInterpretation: boolean,
   includeTimeZoneName = true,
+  fallbackUtcOffset?: string,
 ): UsageDateInterpretationParams | undefined => {
   if (!includeDateInterpretation) {
     return undefined;
@@ -229,7 +360,7 @@ const buildDateInterpretationParams = (
   if (timeZone === "utc") {
     return { mode: "utc" };
   }
-  const utcOffset = formatUtcOffset(new Date().getTimezoneOffset());
+  const utcOffset = fallbackUtcOffset ?? formatUtcOffset(new Date().getTimezoneOffset());
   const localTimeZoneName = resolveLocalTimeZoneName();
   if (includeTimeZoneName && localTimeZoneName) {
     return {
@@ -289,18 +420,19 @@ export async function loadUsage(
     const endDate = overrides?.endDate ?? state.usageEndDate;
     const usageTimeZone = state.usageTimeZone;
     const includeDateInterpretation = shouldSendLegacyDateInterpretation(state);
-    const includeTimeZoneName = shouldSendLegacyTimeZoneName(state);
     if (!includeDateInterpretation && usageTimeZone !== "utc") {
       throw createLegacyUsageDateInterpretationUnsupportedError();
     }
     const runUsageRequests = async (
       includeDateInterpretation: boolean,
       includeTimeZoneName: boolean,
+      fallbackUtcOffset?: string,
     ) => {
       const dateInterpretation = buildDateInterpretationParams(
         usageTimeZone,
         includeDateInterpretation,
         includeTimeZoneName,
+        fallbackUtcOffset,
       );
       return await Promise.all([
         client.request("sessions.usage", {
@@ -331,21 +463,23 @@ export async function loadUsage(
     };
 
     try {
-      const [sessionsRes, costRes] = await runUsageRequests(
-        includeDateInterpretation,
-        includeTimeZoneName,
-      );
+      const [sessionsRes, costRes] = await runUsageRequests(includeDateInterpretation, true);
       applyUsageResults(sessionsRes, costRes);
     } catch (err) {
       if (
         usageTimeZone === "local" &&
         includeDateInterpretation &&
-        includeTimeZoneName &&
         isLegacyTimeZoneUnsupportedError(err)
       ) {
-        rememberLegacyTimeZoneName(state);
+        const localTimeZoneName = resolveLocalTimeZoneName();
+        const fallbackUtcOffset = localTimeZoneName
+          ? resolveFixedUtcOffsetForRange(startDate, endDate, localTimeZoneName)
+          : undefined;
+        if (!fallbackUtcOffset) {
+          throw createLegacyUsageDateInterpretationUnsupportedError();
+        }
         try {
-          const [sessionsRes, costRes] = await runUsageRequests(true, false);
+          const [sessionsRes, costRes] = await runUsageRequests(true, false, fallbackUtcOffset);
           applyUsageResults(sessionsRes, costRes);
         } catch (offsetErr) {
           if (isLegacyDateInterpretationUnsupportedError(offsetErr)) {
@@ -385,18 +519,16 @@ export async function loadUsage(
 export const __test = {
   formatUtcOffset,
   resolveLocalTimeZoneName,
+  resolveFixedUtcOffsetForRange,
   buildDateInterpretationParams,
   toErrorMessage,
   isLegacyDateInterpretationUnsupportedError,
   isLegacyTimeZoneUnsupportedError,
   normalizeGatewayCompatibilityKey,
   shouldSendLegacyDateInterpretation,
-  shouldSendLegacyTimeZoneName,
   rememberLegacyDateInterpretation,
-  rememberLegacyTimeZoneName,
   resetLegacyUsageDateParamsCache: () => {
     legacyUsageDateParamsCache = null;
-    legacyUsageTimeZoneCache = null;
   },
 };
 
