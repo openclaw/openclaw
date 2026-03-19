@@ -1,6 +1,6 @@
 # Browser Spike Results (Week 1)
 
-Last updated: 2026-03-18
+Last updated: 2026-03-19
 Owner: consumer execution team
 Status: In progress
 
@@ -35,29 +35,38 @@ Legend:
 
 - `PASS`, `FAIL`, `BLOCKED`, `PENDING`
 
-| Approach                  | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Notes                                                                                                            |
-| ------------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `user` (existing-session) | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Control lane passes (`start/status/tabs`); local agent runs exit cleanly, but current model auth is rate-limited |
-| `openclaw` (managed)      | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Control lane passes (`start/status/tabs`); local agent runs exit cleanly, but current model auth is rate-limited |
-| Claude-in-Chrome          | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Investigation/adaptation track                                                                                   |
-| Browserbase               | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Credential-blocked (no Browserbase key configured)                                                               |
+| Approach                  | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Notes                                                                                                                                    |
+| ------------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `user` (existing-session) | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Control lane passes on clean direct-built gateway (`status`, `tabs`, `open`); current blocker is local `openclaw-agent` timeout          |
+| `openclaw` (managed)      | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Control lane passes on clean direct-built gateway (`start`, `status`, `tabs`, `open`); current blocker is local `openclaw-agent` timeout |
+| Claude-in-Chrome          | PENDING       | PENDING     | PENDING            | PENDING          | PENDING           | Investigation/adaptation track                                                                                                           |
+| Browserbase               | BLOCKED       | BLOCKED     | BLOCKED            | BLOCKED          | BLOCKED           | Credential-blocked (no Browserbase key configured)                                                                                       |
 
 ## Current blocker summary
 
 - Browser attach is no longer the primary blocker.
-- Isolated `agent --local` turns now start, run, and exit cleanly after local teardown fixes.
-- The current hard blocker is provider quota inside `/tmp/openclaw-consumer`:
-  - `openai-codex:default` returns `⚠️ API rate limit reached. Please try again later.`
-  - `openai-codex:notblockedamazon` returns `⚠️ API rate limit reached. Please try again later.`
-  - previous isolated logs showed lower-priority Codex profiles failing with `refresh_token_reused`
-  - previous isolated logs showed Anthropic fallback surfacing `overloaded`
-- Codex OAuth login is now proven healthy again once stale auth tabs are closed and the old `127.0.0.1:1455` listener is cleared. The earlier `state mismatch` was an auth-window collision, not a broken OpenAI token.
+- Gateway/browser control is healthy on a clean direct-built runtime:
+  - `user`: `status`, `tabs`, and `open https://example.com` succeed
+  - `openclaw`: `start`, `status`, `tabs`, and `open https://example.com` succeed
+- The benchmark-specific runtime now lives at `/tmp/openclaw-consumer-bench`:
+  - copied from `/tmp/openclaw-consumer`
+  - `channels.telegram.enabled=false`
+  - stale `plugins.entries.openai` removed
+- Gateway handshake tracing on the bench runtime is fast, around 23 ms from connect auth resolution to `hello_ok`, so the timeout budget is not being lost in gateway auth or browser attach.
+- The current hard blocker is local `openclaw-agent` startup/bootstrap on trivial prompts:
+  - `agent --local --message 'Reply with exactly OK and nothing else.' --timeout 120` still times out on `openai-codex/gpt-5.1-codex-mini`
+  - logs show `candidate_failed ... reason=timeout`, not gateway failure
+  - sampled `openclaw-agent` processes show heavy `fs.stat` callback churn during startup/bootstrap
+- Codex OAuth is healthy enough again to rule out the old auth-window collision:
+  - the previous `state mismatch` was caused by overlapping OAuth tabs / stale `127.0.0.1:1455` listener state
+  - current failure mode is runtime timeout, not OAuth rejection
 
 Interpretation:
 
 - This is not currently a browser failure.
-- We are blocked on getting one healthy model credential path for the isolated runtime.
-- Once one provider path is healthy, both `user` and `openclaw` browser lanes can resume real task runs immediately.
+- This is no longer primarily a model-auth failure either.
+- The next fix loop belongs in the local runner / `openclaw-agent` startup path.
+- Once a trivial local `OK` run finishes reliably, both `user` and `openclaw` browser lanes can resume the real task matrix immediately.
 
 ## Command-level benchmark runbook (week 1)
 

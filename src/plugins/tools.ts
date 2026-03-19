@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -43,6 +44,18 @@ function isOptionalToolAllowed(params: {
   return params.allowlist.has("group:plugins");
 }
 
+function tracePluginToolStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only. Never let debug logging change runtime behavior.
+  }
+}
+
 export function resolvePluginTools(params: {
   context: OpenClawPluginToolContext;
   existingToolNames?: Set<string>;
@@ -56,11 +69,13 @@ export function resolvePluginTools(params: {
   const effectiveConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
   const normalized = normalizePluginsConfig(effectiveConfig.plugins);
   if (!normalized.enabled) {
+    tracePluginToolStage("plugin-tools-disabled");
     return [];
   }
 
   // Agent runtime paths eagerly bootstrap plugins before tool construction, so reusing the
   // global registry avoids a second full discovery/import/register pass on the same turn.
+  tracePluginToolStage("plugin-tools-pre-registry");
   const registry =
     getGlobalPluginRegistry() ??
     loadOpenClawPlugins({
@@ -69,6 +84,7 @@ export function resolvePluginTools(params: {
       env,
       logger: createPluginLoaderLogger(log),
     });
+  tracePluginToolStage(`plugin-tools-post-registry count=${registry.tools.length}`);
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
@@ -77,7 +93,9 @@ export function resolvePluginTools(params: {
   const blockedPlugins = new Set<string>();
 
   for (const entry of registry.tools) {
+    tracePluginToolStage(`plugin-tools-entry-start plugin=${entry.pluginId}`);
     if (blockedPlugins.has(entry.pluginId)) {
+      tracePluginToolStage(`plugin-tools-entry-skip-blocked plugin=${entry.pluginId}`);
       continue;
     }
     const pluginIdKey = normalizeToolName(entry.pluginId);
@@ -97,12 +115,16 @@ export function resolvePluginTools(params: {
     }
     let resolved: AnyAgentTool | AnyAgentTool[] | null | undefined = null;
     try {
+      tracePluginToolStage(`plugin-tools-entry-factory-start plugin=${entry.pluginId}`);
       resolved = entry.factory(params.context);
+      tracePluginToolStage(`plugin-tools-entry-factory-done plugin=${entry.pluginId}`);
     } catch (err) {
       log.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);
+      tracePluginToolStage(`plugin-tools-entry-factory-error plugin=${entry.pluginId}`);
       continue;
     }
     if (!resolved) {
+      tracePluginToolStage(`plugin-tools-entry-empty plugin=${entry.pluginId}`);
       continue;
     }
     const listRaw = Array.isArray(resolved) ? resolved : [resolved];
@@ -116,6 +138,7 @@ export function resolvePluginTools(params: {
         )
       : listRaw;
     if (list.length === 0) {
+      tracePluginToolStage(`plugin-tools-entry-filtered plugin=${entry.pluginId}`);
       continue;
     }
     const nameSet = new Set<string>();
@@ -141,7 +164,9 @@ export function resolvePluginTools(params: {
       });
       tools.push(tool);
     }
+    tracePluginToolStage(`plugin-tools-entry-done plugin=${entry.pluginId} count=${list.length}`);
   }
 
+  tracePluginToolStage(`plugin-tools-complete count=${tools.length}`);
   return tools;
 }

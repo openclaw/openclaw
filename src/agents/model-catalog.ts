@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
@@ -37,6 +38,18 @@ let providerRuntimePromise:
 let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
 
 const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
+
+function traceModelCatalogStage(stage: string): void {
+  const stageLogPath = process.env.OPENCLAW_STAGE_LOG?.trim();
+  if (!stageLogPath) {
+    return;
+  }
+  try {
+    appendFileSync(stageLogPath, `${new Date().toISOString()} ${stage}\n`);
+  } catch {
+    // Best-effort tracing only. Never let debug logging change runtime behavior.
+  }
+}
 
 function loadProviderRuntime() {
   providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");
@@ -150,6 +163,7 @@ export async function loadModelCatalog(params?: {
     modelCatalogPromise = null;
   }
   if (modelCatalogPromise) {
+    traceModelCatalogStage("model-catalog-cache-hit");
     return modelCatalogPromise;
   }
 
@@ -164,18 +178,24 @@ export async function loadModelCatalog(params?: {
         return a.name.localeCompare(b.name);
       });
     try {
+      traceModelCatalogStage("model-catalog-start");
       const cfg = params?.config ?? loadConfig();
+      traceModelCatalogStage("model-catalog-post-load-config");
       await ensureOpenClawModelsJson(cfg);
+      traceModelCatalogStage("model-catalog-post-ensure-models-json");
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
       // we must not poison the cache with a rejected promise (otherwise all channel handlers
       // will keep failing until restart).
       const piSdk = await importPiSdk();
+      traceModelCatalogStage("model-catalog-post-import-pi-sdk");
       const agentDir = resolveOpenClawAgentDir();
       const [{ shouldSuppressBuiltInModel }, { augmentModelCatalogWithProviderPlugins }] =
         await Promise.all([loadModelSuppression(), loadProviderRuntime()]);
+      traceModelCatalogStage("model-catalog-post-runtime-imports");
       const { join } = await import("node:path");
       const authStorage = piSdk.discoverAuthStorage(agentDir);
+      traceModelCatalogStage("model-catalog-post-discover-auth-storage");
       const registry = new (piSdk.ModelRegistry as unknown as {
         new (
           authStorage: unknown,
@@ -186,7 +206,9 @@ export async function loadModelCatalog(params?: {
               getAll: () => Array<DiscoveredModel>;
             };
       })(authStorage, join(agentDir, "models.json"));
+      traceModelCatalogStage("model-catalog-post-model-registry");
       const entries = Array.isArray(registry) ? registry : registry.getAll();
+      traceModelCatalogStage(`model-catalog-post-registry-getall count=${entries.length}`);
       for (const entry of entries) {
         const id = String(entry?.id ?? "").trim();
         if (!id) {
@@ -209,6 +231,7 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
+      traceModelCatalogStage(`model-catalog-post-merge-configured count=${models.length}`);
       const supplemental = await augmentModelCatalogWithProviderPlugins({
         config: cfg,
         env: process.env,
@@ -219,6 +242,7 @@ export async function loadModelCatalog(params?: {
           entries: [...models],
         },
       });
+      traceModelCatalogStage(`model-catalog-post-provider-augment count=${supplemental.length}`);
       if (supplemental.length > 0) {
         const seen = new Set(
           models.map(
@@ -240,6 +264,7 @@ export async function loadModelCatalog(params?: {
         modelCatalogPromise = null;
       }
 
+      traceModelCatalogStage(`model-catalog-complete count=${models.length}`);
       return sortModels(models);
     } catch (error) {
       if (!hasLoggedModelCatalogError) {

@@ -1,6 +1,6 @@
 # OpenClaw Consumer Execution Tracker
 
-Last updated: 2026-03-18
+Last updated: 2026-03-19
 Owner: consumer execution team
 Status: Active
 
@@ -33,16 +33,13 @@ Use these documents in this order when there is any ambiguity:
 - `origin/main...upstream/main`: ahead 88, behind 220
 - Phase A merge and runtime validation are complete.
 - Phase B status now:
-  - `profile=user` control lane passes (`start/status/tabs`) after remote debugging enablement.
-  - `profile=openclaw` control lane passes (`start/status/tabs`) on isolated runtime.
-  - Local `agent --local` prompt execution now exits cleanly in the isolated runtime after teardown fixes.
-  - Remaining blocker is provider quota for full task-matrix execution:
-    - `openai-codex:default` returns `API rate limit reached`.
-    - `openai-codex:notblockedamazon` returns `API rate limit reached`.
-    - lower-priority Codex OAuth profiles previously surfaced `refresh_token_reused`.
-    - Anthropic fallback previously surfaced `overloaded`.
-  - Codex OAuth login does work once stale auth windows are closed; overlapping browser tabs caused repeated `state mismatch` until the old `127.0.0.1:1455` listener was cleared.
-  - LaunchAgent route was tested and reverted: it binds `19001` but runs against `~/.openclaw` state instead of `/tmp/openclaw-consumer`, so isolated auth/state checks fail.
+  - `profile=user` control lane passes on a clean direct-built gateway (`status`, `tabs`, `open https://example.com`).
+  - `profile=openclaw` control lane passes on a clean direct-built gateway (`start`, `status`, `tabs`, `open https://example.com`).
+  - Gateway/browser control is no longer the main blocker.
+  - A benchmark-only runtime at `/tmp/openclaw-consumer-bench` disables Telegram and removes the stale `plugins.entries.openai` config noise so browser checks do not collide with shared bot traffic.
+  - The current hard blocker is the local `openclaw-agent` / embedded runner path timing out on trivial prompts even after fresh Codex OAuth and a healthy gateway.
+  - Handshake tracing on the clean bench gateway is fast (roughly 23 ms from connect auth resolution to `hello_ok`), so connect/auth is not where the timeout budget is disappearing.
+  - `pnpm openclaw ...` runs from a dirty tree can trigger rebuild churn via `scripts/run-node.mjs`; use the already-built `node dist/entry.js ...` path for clean benchmark/debug runs to avoid false negatives.
 
 ## Execution phases and gates
 
@@ -72,9 +69,9 @@ Phase A validation notes (2026-03-16):
 
 - [ ] Finalize benchmark matrix in `docs/consumer/browser-spike-results.md`
 - [ ] Run approach: `user` existing-session path
-  - Control lane verified; task execution now blocked by model auth health, not browser attach.
+  - Control lane verified on direct-built gateway; task execution now blocked by agent/model runtime timeout, not browser attach.
 - [ ] Run approach: `openclaw` managed profile path
-  - Control lane verified; task execution now blocked by model auth health, not browser attach.
+  - Control lane verified on direct-built gateway; task execution now blocked by agent/model runtime timeout, not browser attach.
 - [ ] Run approach: Claude-in-Chrome investigation/adaptation
 - [ ] Mark Browserbase rows `credential-blocked` until credentials are available
 - [ ] Re-run Browserbase rows once credentials are provided
@@ -135,12 +132,12 @@ OPENCLAW_HOME=/tmp/openclaw-consumer OPENCLAW_PROFILE=consumer-test pnpm opencla
 
 ## Benchmark tracker template
 
-| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                                                        |
-| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | -------------------------------------------------------------------------------------------- |
-| user (existing-session) | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | control lane passes; local agent run works; current blocker is model rate limits/auth health |
-| openclaw (managed)      | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | control lane passes; local agent run works; current blocker is model rate limits/auth health |
-| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation                                                                     |
-| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                                                                              |
+| Approach                | Task 1 Flight | Task 2 Form | Task 3 Web Summary | Task 4 X Summary | Task 5 Multi-step | Status             | Notes                                                                                          |
+| ----------------------- | ------------- | ----------- | ------------------ | ---------------- | ----------------- | ------------------ | ---------------------------------------------------------------------------------------------- |
+| user (existing-session) | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | control lane passes on direct-built gateway; current blocker is local `openclaw-agent` timeout |
+| openclaw (managed)      | blocked       | blocked     | blocked            | blocked          | blocked           | blocked            | control lane passes on direct-built gateway; current blocker is local `openclaw-agent` timeout |
+| Claude-in-Chrome        | TODO          | TODO        | TODO               | TODO             | TODO              | pending            | feasibility + adaptation                                                                       |
+| Browserbase             | blocked       | blocked     | blocked            | blocked          | blocked           | credential-blocked | run after creds                                                                                |
 
 ## Scope guardrails (week 1)
 
@@ -195,3 +192,25 @@ Out of scope:
   - Keep only the least-bad Codex profiles in isolated auth order so future runs skip known-bad refresh tokens.
   - Update `docs/consumer/browser-spike-results.md` so benchmark state reflects provider-auth blockage rather than browser failure.
   - If credentials remain unhealthy, request reauth or a non-Codex API-key-backed model for isolated runtime smoke.
+
+### 2026-03-19
+
+- Done:
+  - Proved gateway/browser control works on a clean direct-built runtime rather than the rebuild-prone `pnpm openclaw ...` path.
+  - Verified `profile=user` and `profile=openclaw` both pass `status` checks and can open `https://example.com` on the clean gateway.
+  - Created `/tmp/openclaw-consumer-bench` as a benchmark-only copy with Telegram disabled and stale `plugins.entries.openai` removed.
+  - Added gateway handshake tracing and increased the handshake timeout so slow local connects can be measured instead of failing blind.
+  - Measured the bench gateway handshake at roughly 23 ms end to end, which rules out gateway connect/auth as the current bottleneck.
+- Blocked:
+  - Trivial `agent --local` runs still time out on `openai-codex/gpt-5.1-codex-mini`, even with fresh OAuth and a healthy clean gateway.
+  - `openclaw-agent` is the hot process; samples show heavy filesystem callback churn during startup/bootstrap rather than a gateway wait.
+- Evidence links:
+  - `/tmp/openclaw-consumer-bench/.openclaw/openclaw.json`
+  - `/tmp/openclaw-bench-gateway.log`
+  - `/tmp/openclaw-stage.log`
+  - `/tmp/openclaw-agent-bench.err`
+  - `/tmp/openclaw-agent-bench-minimal.err`
+- Next 3 actions:
+  - Trace the `openclaw-agent` startup path to isolate which bootstrap block is burning the timeout budget.
+  - Keep benchmark/debug runs on `node dist/entry.js ...` until the rebuild-churn path is out of the picture.
+  - Resume the browser matrix only after a trivial local `OK` run finishes reliably on the bench runtime.

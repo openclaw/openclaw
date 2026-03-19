@@ -912,6 +912,7 @@ async function agentCommandInternal(
     );
 
     if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
+      traceAgentCommandStage("agent-command-pre-persist-skills-snapshot");
       const current = sessionEntry ?? {
         sessionId,
         updatedAt: Date.now(),
@@ -929,10 +930,12 @@ async function agentCommandInternal(
         entry: next,
       });
       sessionEntry = next;
+      traceAgentCommandStage("agent-command-post-persist-skills-snapshot");
     }
 
     // Persist explicit /command overrides to the session store when we have a key.
     if (sessionStore && sessionKey) {
+      traceAgentCommandStage("agent-command-pre-persist-overrides");
       const entry = sessionStore[sessionKey] ??
         sessionEntry ?? { sessionId, updatedAt: Date.now() };
       const next: SessionEntry = { ...entry, sessionId, updatedAt: Date.now() };
@@ -947,6 +950,7 @@ async function agentCommandInternal(
         entry: next,
       });
       sessionEntry = next;
+      traceAgentCommandStage("agent-command-post-persist-overrides");
     }
 
     const configuredDefaultRef = resolveDefaultModelForAgent({
@@ -970,7 +974,9 @@ async function agentCommandInternal(
     let allowAnyModel = false;
 
     if (needsModelCatalog) {
+      traceAgentCommandStage("agent-command-pre-load-model-catalog");
       modelCatalog = await loadModelCatalog({ config: cfg });
+      traceAgentCommandStage("agent-command-post-load-model-catalog");
       const allowed = buildAllowedModelSet({
         cfg,
         catalog: modelCatalog,
@@ -1048,7 +1054,9 @@ async function agentCommandInternal(
     if (!resolvedThinkLevel) {
       let catalogForThinking = modelCatalog ?? allowedModelCatalog;
       if (!catalogForThinking || catalogForThinking.length === 0) {
+        traceAgentCommandStage("agent-command-pre-load-thinking-catalog");
         modelCatalog = await loadModelCatalog({ config: cfg });
+        traceAgentCommandStage("agent-command-post-load-thinking-catalog");
         catalogForThinking = modelCatalog;
       }
       resolvedThinkLevel = resolveThinkingDefault({
@@ -1078,6 +1086,7 @@ async function agentCommandInternal(
     }
     let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {
+      traceAgentCommandStage("agent-command-pre-resolve-session-file-store");
       const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey,
@@ -1089,8 +1098,10 @@ async function agentCommandInternal(
       });
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
+      traceAgentCommandStage("agent-command-post-resolve-session-file-store");
     }
     if (!sessionFile) {
+      traceAgentCommandStage("agent-command-pre-resolve-session-file-direct");
       const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey: sessionKey ?? sessionId,
@@ -1100,6 +1111,7 @@ async function agentCommandInternal(
       });
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
+      traceAgentCommandStage("agent-command-post-resolve-session-file-direct");
     }
 
     const startedAt = Date.now();
