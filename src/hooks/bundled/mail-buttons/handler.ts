@@ -6,19 +6,14 @@
  */
 
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { InteractiveReply, InteractiveReplyButton } from "../../../interactive/payload.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveHookConfig } from "../../config.js";
 import type { InternalHookHandler } from "../../hooks.js";
-import type {
-  InteractiveReply,
-  InteractiveReplyButton,
-} from "../../../interactive/payload.js";
-import {
-  isMessageSendingEvent,
-  type MessageSendingHookEvent,
-} from "../../internal-hooks.js";
+import { isMessageSendingEvent } from "../../internal-hooks.js";
 
 const log = createSubsystemLogger("hooks/mail-buttons");
+const HOOK_KEY = "mail-buttons";
 
 /** Gmail thread ID: exactly 16 lowercase hex characters */
 const THREAD_ID_REGEX = /\b([a-f0-9]{16})\b/g;
@@ -29,11 +24,7 @@ type ButtonConfig = {
   label?: string;
 };
 
-const DEFAULT_BUTTONS: ButtonConfig[] = [
-  { text: "📥 Archive", action: "archive" },
-  { text: "✏️ Reply", action: "reply" },
-  { text: "🗑 Delete", action: "delete" },
-];
+const DEFAULT_BUTTONS: ButtonConfig[] = [{ text: "➡️ Next", action: "next" }];
 
 function buildCallbackData(btn: ButtonConfig, threadId: string): string {
   if (btn.action === "label" && btn.label) {
@@ -42,7 +33,10 @@ function buildCallbackData(btn: ButtonConfig, threadId: string): string {
   return `mb:${btn.action}:${threadId}`;
 }
 
-function buildButtons(configuredButtons: ButtonConfig[], threadId: string): InteractiveReplyButton[] {
+function buildButtons(
+  configuredButtons: ButtonConfig[],
+  threadId: string,
+): InteractiveReplyButton[] {
   return configuredButtons.map((btn) => ({
     label: btn.text,
     value: buildCallbackData(btn, threadId),
@@ -70,8 +64,8 @@ const addMailButtons: InternalHookHandler = async (event) => {
     }
 
     // Read hook config — disabled by default if config missing
-    const hookConfig = resolveHookConfig(cfg, "mail-buttons");
-    if (hookConfig?.enabled === false) {
+    const hookConfig = resolveHookConfig(cfg, HOOK_KEY);
+    if (!hookConfig || hookConfig.enabled === false) {
       return;
     }
 
@@ -84,7 +78,8 @@ const addMailButtons: InternalHookHandler = async (event) => {
     const threadId = threadIds[0];
     log.debug("Detected Gmail thread ID, injecting buttons", { threadId });
 
-    const configuredButtons = (hookConfig?.buttons as ButtonConfig[] | undefined) ?? DEFAULT_BUTTONS;
+    const configuredButtons =
+      (hookConfig?.buttons as ButtonConfig[] | undefined) ?? DEFAULT_BUTTONS;
     const buttons = buildButtons(configuredButtons, threadId);
 
     const interactive: InteractiveReply = {

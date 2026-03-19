@@ -1,13 +1,13 @@
 ---
 name: mail-buttons
-description: "Automatically add interactive Gmail action buttons to outbound messages containing mail thread IDs."
+description: "Automatically add a Next button to outbound messages containing Gmail thread IDs."
 homepage: https://docs.openclaw.ai/automation/hooks#mail-buttons
 metadata:
   {
     "openclaw":
       {
         "emoji": "📧",
-        "events": ["message_sending"],
+        "events": ["message:sending"],
         "requires": { "bins": ["gog"] },
         "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
       },
@@ -16,17 +16,16 @@ metadata:
 
 # Mail Buttons Hook
 
-Automatically adds interactive buttons (Archive, Reply, Delete, etc.) to your outgoing messages when they refer to a Gmail thread.
+Automatically adds a Next button to your outgoing messages when they refer to a Gmail thread.
 
 ## How It Works
 
-This hook listens for the `message_sending` event. If it detects a Gmail thread ID pattern in the message text, it automatically attaches interactive buttons based on your configuration.
+This hook listens for the `message:sending` event. If it detects a Gmail thread ID pattern in the message text, it automatically attaches a Next button based on your configuration.
 
 ## Features
 
 - **Automatic Detection**: Recognizes Gmail thread IDs like `19d05a032de0fce7`.
-- **Customizable Buttons**: Configure which actions appear (Archive, Delete, Reply, Star, etc.).
-- **One-Tap Actions**: Perform Gmail operations directly from the chat interface.
+- **Single-Step Triage**: Mark the current thread as read and jump to the next unread thread.
 
 ## Requirements
 
@@ -43,11 +42,7 @@ You can customize the buttons in your `openclaw.json` config file:
       "entries": {
         "mail-buttons": {
           "enabled": true,
-          "buttons": [
-            { "text": "📥 Archive", "action": "archive" },
-            { "text": "✏️ Reply", "action": "reply" },
-            { "text": "🗑 Delete", "action": "delete" }
-          ]
+          "buttons": [{ "text": "➡️ Next", "action": "next" }]
         }
       }
     }

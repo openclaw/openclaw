@@ -1,4 +1,5 @@
 import { createDedupeCache } from "../infra/dedupe.js";
+import { dispatchBuiltInMailButtonsInteractiveHandler } from "./builtins/mail-buttons.js";
 import {
   dispatchDiscordInteractiveHandler,
   dispatchSlackInteractiveHandler,
@@ -194,59 +195,142 @@ export async function dispatchPluginInteractiveHandler(params: {
     | PluginInteractiveSlackHandlerContext["respond"];
 }): Promise<InteractiveDispatchResult> {
   const match = resolveNamespaceMatch(params.channel, params.data);
-  if (!match) {
-    return { matched: false, handled: false, duplicate: false };
-  }
-
   const dedupeKey =
     params.channel === "telegram" ? params.callbackId?.trim() : params.interactionId?.trim();
+  if (match) {
+    if (dedupeKey && callbackDedupe.peek(dedupeKey)) {
+      return { matched: true, handled: true, duplicate: true };
+    }
+
+    let result:
+      | ReturnType<PluginInteractiveTelegramHandlerRegistration["handler"]>
+      | ReturnType<PluginInteractiveDiscordHandlerRegistration["handler"]>
+      | ReturnType<PluginInteractiveSlackHandlerRegistration["handler"]>;
+    if (params.channel === "telegram") {
+      result = dispatchTelegramInteractiveHandler({
+        registration: match.registration as RegisteredInteractiveHandler &
+          PluginInteractiveTelegramHandlerRegistration,
+        data: params.data,
+        namespace: match.namespace,
+        payload: match.payload,
+        ctx: params.ctx as TelegramInteractiveDispatchContext,
+        respond: params.respond as PluginInteractiveTelegramHandlerContext["respond"],
+      });
+    } else if (params.channel === "discord") {
+      result = dispatchDiscordInteractiveHandler({
+        registration: match.registration as RegisteredInteractiveHandler &
+          PluginInteractiveDiscordHandlerRegistration,
+        data: params.data,
+        namespace: match.namespace,
+        payload: match.payload,
+        ctx: params.ctx as DiscordInteractiveDispatchContext,
+        respond: params.respond as PluginInteractiveDiscordHandlerContext["respond"],
+      });
+    } else {
+      result = dispatchSlackInteractiveHandler({
+        registration: match.registration as RegisteredInteractiveHandler &
+          PluginInteractiveSlackHandlerRegistration,
+        data: params.data,
+        namespace: match.namespace,
+        payload: match.payload,
+        ctx: params.ctx as SlackInteractiveDispatchContext,
+        respond: params.respond as PluginInteractiveSlackHandlerContext["respond"],
+      });
+    }
+    const resolved = await result;
+    if (dedupeKey) {
+      callbackDedupe.check(dedupeKey);
+    }
+
+    return {
+      matched: true,
+      handled: resolved?.handled ?? true,
+      duplicate: false,
+    };
+  }
+
+  if (params.channel === "telegram") {
+    const isMailButtonsCallback = params.data.trim().startsWith("mb:");
+    if (!isMailButtonsCallback) {
+      return { matched: false, handled: false, duplicate: false };
+    }
+    if (dedupeKey && callbackDedupe.peek(dedupeKey)) {
+      return { matched: true, handled: true, duplicate: true };
+    }
+    const builtIn = await dispatchBuiltInMailButtonsInteractiveHandler({
+      channel: "telegram",
+      data: params.data,
+      respond: params.respond as PluginInteractiveTelegramHandlerContext["respond"],
+    });
+    if (!builtIn.matched) {
+      return { matched: false, handled: false, duplicate: false };
+    }
+    if (dedupeKey) {
+      if (callbackDedupe.peek(dedupeKey)) {
+        return { matched: true, handled: true, duplicate: true };
+      }
+      callbackDedupe.check(dedupeKey);
+    }
+    return {
+      matched: true,
+      handled: builtIn.handled,
+      duplicate: false,
+    };
+  }
+
+  if (params.channel === "discord") {
+    const isMailButtonsCallback = params.data.trim().startsWith("mb:");
+    if (!isMailButtonsCallback) {
+      return { matched: false, handled: false, duplicate: false };
+    }
+    if (dedupeKey && callbackDedupe.peek(dedupeKey)) {
+      return { matched: true, handled: true, duplicate: true };
+    }
+    const builtIn = await dispatchBuiltInMailButtonsInteractiveHandler({
+      channel: "discord",
+      data: params.data,
+      respond: params.respond as PluginInteractiveDiscordHandlerContext["respond"],
+    });
+    if (!builtIn.matched) {
+      return { matched: false, handled: false, duplicate: false };
+    }
+    if (dedupeKey) {
+      if (callbackDedupe.peek(dedupeKey)) {
+        return { matched: true, handled: true, duplicate: true };
+      }
+      callbackDedupe.check(dedupeKey);
+    }
+    return {
+      matched: true,
+      handled: builtIn.handled,
+      duplicate: false,
+    };
+  }
+
+  const isMailButtonsCallback = params.data.trim().startsWith("mb:");
+  if (!isMailButtonsCallback) {
+    return { matched: false, handled: false, duplicate: false };
+  }
   if (dedupeKey && callbackDedupe.peek(dedupeKey)) {
     return { matched: true, handled: true, duplicate: true };
   }
-
-  let result:
-    | ReturnType<PluginInteractiveTelegramHandlerRegistration["handler"]>
-    | ReturnType<PluginInteractiveDiscordHandlerRegistration["handler"]>
-    | ReturnType<PluginInteractiveSlackHandlerRegistration["handler"]>;
-  if (params.channel === "telegram") {
-    result = dispatchTelegramInteractiveHandler({
-      registration: match.registration as RegisteredInteractiveHandler &
-        PluginInteractiveTelegramHandlerRegistration,
-      data: params.data,
-      namespace: match.namespace,
-      payload: match.payload,
-      ctx: params.ctx as TelegramInteractiveDispatchContext,
-      respond: params.respond as PluginInteractiveTelegramHandlerContext["respond"],
-    });
-  } else if (params.channel === "discord") {
-    result = dispatchDiscordInteractiveHandler({
-      registration: match.registration as RegisteredInteractiveHandler &
-        PluginInteractiveDiscordHandlerRegistration,
-      data: params.data,
-      namespace: match.namespace,
-      payload: match.payload,
-      ctx: params.ctx as DiscordInteractiveDispatchContext,
-      respond: params.respond as PluginInteractiveDiscordHandlerContext["respond"],
-    });
-  } else {
-    result = dispatchSlackInteractiveHandler({
-      registration: match.registration as RegisteredInteractiveHandler &
-        PluginInteractiveSlackHandlerRegistration,
-      data: params.data,
-      namespace: match.namespace,
-      payload: match.payload,
-      ctx: params.ctx as SlackInteractiveDispatchContext,
-      respond: params.respond as PluginInteractiveSlackHandlerContext["respond"],
-    });
+  const builtIn = await dispatchBuiltInMailButtonsInteractiveHandler({
+    channel: "slack",
+    data: params.data,
+    respond: params.respond as PluginInteractiveSlackHandlerContext["respond"],
+  });
+  if (!builtIn.matched) {
+    return { matched: false, handled: false, duplicate: false };
   }
-  const resolved = await result;
   if (dedupeKey) {
+    if (callbackDedupe.peek(dedupeKey)) {
+      return { matched: true, handled: true, duplicate: true };
+    }
     callbackDedupe.check(dedupeKey);
   }
-
   return {
     matched: true,
-    handled: resolved?.handled ?? true,
+    handled: builtIn.handled,
     duplicate: false,
   };
 }

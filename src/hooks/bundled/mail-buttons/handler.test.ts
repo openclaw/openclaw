@@ -54,18 +54,10 @@ describe("mail-buttons hook", () => {
 
     const block = interactive.blocks[0];
     if (block.type !== "buttons") throw new Error("unexpected block type");
-    expect(block.buttons).toHaveLength(3);
+    expect(block.buttons).toHaveLength(1);
     expect(block.buttons[0]).toEqual({
-      label: "📥 Archive",
-      value: "mb:archive:19d05a032de0fce7",
-    });
-    expect(block.buttons[1]).toEqual({
-      label: "✏️ Reply",
-      value: "mb:reply:19d05a032de0fce7",
-    });
-    expect(block.buttons[2]).toEqual({
-      label: "🗑 Delete",
-      value: "mb:delete:19d05a032de0fce7",
+      label: "➡️ Next",
+      value: "mb:next:19d05a032de0fce7",
     });
   });
 
@@ -80,6 +72,15 @@ describe("mail-buttons hook", () => {
 
   it("should NOT inject buttons when hook is disabled", async () => {
     mockedResolveHookConfig.mockReturnValue({ enabled: false });
+
+    const event = createSendingEvent("Thread 19d05a032de0fce7 has new mail.");
+    await handler(event);
+
+    expect(event.context.interactive).toBeUndefined();
+  });
+
+  it("should NOT inject buttons when hook config is missing", async () => {
+    mockedResolveHookConfig.mockReturnValue(undefined);
 
     const event = createSendingEvent("Thread 19d05a032de0fce7 has new mail.");
     await handler(event);
@@ -143,7 +144,7 @@ describe("mail-buttons hook", () => {
     const block = interactive.blocks[0];
     if (block.type !== "buttons") throw new Error("unexpected block type");
     // Should use the first thread ID
-    expect(block.buttons[0].value).toBe("mb:archive:19d05a032de0fce7");
+    expect(block.buttons[0].value).toBe("mb:next:19d05a032de0fce7");
   });
 
   it("should not crash on handler error and leave event unchanged", async () => {

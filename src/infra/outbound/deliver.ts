@@ -21,6 +21,7 @@ import {
 } from "../../config/sessions.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import type { MessageSendingHookContext } from "../../hooks/internal-hooks.js";
 import {
   buildCanonicalSentMessageHookContext,
   toInternalMessageSentContext,
@@ -426,13 +427,13 @@ async function applyMessageSendingHook(params: {
       channelId: params.channel,
       accountId: params.accountId,
       interactive: params.payloadSummary.interactive,
-      metadata: params.payloadSummary.metadata,
+      metadata: params.payload.channelData,
       cfg: params.cfg,
     },
   );
   await triggerInternalHook(internalEvent);
 
-  const internalContext = internalEvent.context as any;
+  const internalContext = internalEvent.context as MessageSendingHookContext;
   const contentAfterInternal = internalContext.content ?? params.payloadSummary.text;
   const interactiveAfterInternal = internalContext.interactive ?? params.payloadSummary.interactive;
 
