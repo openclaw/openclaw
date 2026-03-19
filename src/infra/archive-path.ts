@@ -16,6 +16,11 @@ export function validateArchiveEntryPath(
   if (!entryPath || entryPath === "." || entryPath === "./") {
     return;
   }
+  // Null bytes can truncate filenames at the OS level, potentially bypassing
+  // path-based security checks that operate on the full string.
+  if (entryPath.includes("\0")) {
+    throw new Error("archive entry contains a null byte");
+  }
   if (isWindowsDrivePath(entryPath)) {
     throw new Error(`archive entry uses a drive path: ${entryPath}`);
   }

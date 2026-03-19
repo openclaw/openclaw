@@ -50,6 +50,16 @@ describe("archive path helpers", () => {
       entryPath: "\\\\server\\share.txt",
       message: "archive entry is absolute: \\\\server\\share.txt",
     },
+    {
+      name: "rejects entry names containing null bytes",
+      entryPath: "safe.txt\0.malicious",
+      message: "archive entry contains a null byte",
+    },
+    {
+      name: "rejects entry names with embedded null bytes in directory",
+      entryPath: "dir\0evil/file.txt",
+      message: "archive entry contains a null byte",
+    },
   ])("$name", ({ entryPath, message }) => {
     expect(() =>
       validateArchiveEntryPath(entryPath, {
