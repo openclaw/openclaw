@@ -170,6 +170,10 @@ describe("stripMarkdown", () => {
     expect(stripMarkdown("var_123_end")).toBe("var_123_end");
   });
 
+  it("strips standalone italic between non-Latin words", () => {
+    expect(stripMarkdown("こんにちは _italic_ テスト")).toBe("こんにちは italic テスト");
+  });
+
   it("handles complex markdown", () => {
     const input = `# Title
 
