@@ -22,4 +22,15 @@ describe("resolveAgentRunContext", () => {
 
     expect(context.currentThreadTs).toBe("om_explicit");
   });
+
+  it("does not infer thread context from DM ids that literally end with :thread:<x>", () => {
+    const context = resolveAgentRunContext({
+      message: "status update",
+      sessionKey: "agent:main:telegram:dm:user:thread:abc",
+      to: "dm:user:thread:abc",
+    });
+
+    expect(context.currentThreadTs).toBeUndefined();
+    expect(context.currentChannelId).toBe("dm:user:thread:abc");
+  });
 });

@@ -38,7 +38,9 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     if (!sessionKey) {
       return undefined;
     }
-    const match = sessionKey.match(/:(?:topic|thread):([^:]+)(?::sender:[^:]+)?$/);
+    const match = sessionKey.match(
+      /^(?:agent:[^:]+:)?[^:]+:(?:group|channel):.+:(?:topic|thread):([^:]+)(?::sender:[^:]+)?$/,
+    );
     return match?.[1]?.trim() || undefined;
   })();
 
