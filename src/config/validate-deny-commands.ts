@@ -1,4 +1,7 @@
-import { resolveNodeCommandAllowlist } from "../gateway/node-command-policy.js";
+import {
+  DEFAULT_DANGEROUS_NODE_COMMANDS,
+  resolveNodeCommandAllowlist,
+} from "../gateway/node-command-policy.js";
 import type { OpenClawConfig } from "./config.js";
 
 export interface DenyCommandValidationResult {
@@ -27,6 +30,9 @@ export function collectAllKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
         out.add(trimmed);
       }
     }
+  }
+  for (const command of DEFAULT_DANGEROUS_NODE_COMMANDS) {
+    out.add(command);
   }
   return out;
 }
@@ -59,7 +65,7 @@ function suggestClosest(entry: string, known: Set<string>, maxDistance = 3): str
   const needle = entry.toLowerCase();
   const namespace = needle.split(".")[0] ?? "";
   let best: string | null = null;
-  let bestDistance = maxDistance + 1;
+  let bestDistance = maxDistance;
   let bestSharesNamespace = false;
 
   for (const command of known) {
@@ -130,7 +136,13 @@ export function validateDenyCommandEntries(
     if (!known.has(trimmed)) {
       const suggestion = suggestClosest(trimmed, known);
       const hint = suggestion ? ` Did you mean "${suggestion}"?` : "";
-      const examples = Array.from(known).slice(0, 5).join(", ");
+      const namespace = trimmed.split(".")[0] ?? "";
+      const namespaceMatches = namespace
+        ? Array.from(known).filter((command) => command.startsWith(`${namespace}.`))
+        : [];
+      const examples = (namespaceMatches.length > 0 ? namespaceMatches : Array.from(known))
+        .slice(0, 5)
+        .join(", ");
       errors.push(
         `Unknown command "${trimmed}" in denyCommands.${hint} Known commands include: ${examples}`,
       );

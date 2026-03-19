@@ -11,6 +11,7 @@ describe("validate-deny-commands", () => {
     const known = collectAllKnownNodeCommands({});
     expect(known.has("system.run")).toBe(true);
     expect(known.has("canvas.present")).toBe(true);
+    expect(known.has("camera.snap")).toBe(true);
   });
 
   it("treats custom allowCommands entries as known", () => {
@@ -30,6 +31,19 @@ describe("validate-deny-commands", () => {
     const result = validateDenyCommandEntries(["system.rn"], {});
     expect(result.valid).toBe(false);
     expect(result.errors[0]).toContain('Did you mean "system.run"');
+  });
+
+  it("does not suggest commands beyond the max distance", () => {
+    const result = validateDenyCommandEntries(["system.zzzzzz"], {});
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).not.toContain('Did you mean "');
+  });
+
+  it("shows namespace-matched examples for unknown commands", () => {
+    const result = validateDenyCommandEntries(["camera.zzzzzz"], {});
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain("camera.list");
+    expect(result.errors[0]).not.toContain("canvas.present");
   });
 
   it("detects pattern-like denyCommands entries", () => {
