@@ -36,4 +36,24 @@ describe("createChannelReplyPipeline", () => {
     expect(start).toHaveBeenCalled();
     expect(stop).toHaveBeenCalled();
   });
+
+  it("preserves explicit typing callbacks when a channel needs custom lifecycle hooks", async () => {
+    const onReplyStart = vi.fn(async () => {});
+    const onIdle = vi.fn(() => {});
+    const pipeline = createChannelReplyPipeline({
+      cfg: {},
+      agentId: "main",
+      channel: "bluebubbles",
+      typingCallbacks: {
+        onReplyStart,
+        onIdle,
+      },
+    });
+
+    await pipeline.typingCallbacks?.onReplyStart();
+    pipeline.typingCallbacks?.onIdle?.();
+
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+  });
 });
