@@ -33,9 +33,9 @@ function removeDistPluginNodeModulesSymlinks(rootDir) {
 
 function pruneStaleRuntimeSymlinks() {
   const cwd = process.cwd();
-  // runtime-postbuild links dist/dist-runtime plugin node_modules back into the
-  // source extensions. Remove only those symlinks up front so tsdown's clean
-  // step cannot traverse into the active pnpm install tree on rebuilds.
+  // runtime-postbuild stages plugin-owned node_modules into dist/ and links the
+  // dist-runtime overlay back to that tree. Remove only those symlinks up front
+  // so tsdown's clean step cannot traverse stale runtime overlays on rebuilds.
   removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist"));
   removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist-runtime"));
 }
