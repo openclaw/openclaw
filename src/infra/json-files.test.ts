@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAsyncLock, readJsonFile, writeJsonAtomic, writeTextAtomic } from "./json-files.js";
 
 describe("json file helpers", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("reads valid json and returns null for missing or invalid files", async () => {
     const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-json-files-"));
     const validPath = path.join(base, "valid.json");
@@ -42,6 +46,40 @@ describe("json file helpers", () => {
 
     await writeTextAtomic(filePath, "hello\n", { appendTrailingNewline: true });
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe("hello\n");
+  });
+
+  it("retries and falls back to copy when Windows rename is temporarily blocked", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-json-files-"));
+    const filePath = path.join(base, "nested", "note.txt");
+    const renameSpy = vi.spyOn(fs, "rename");
+    const copyFileSpy = vi.spyOn(fs, "copyFile");
+    let platformRestored = false;
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
+
+    renameSpy.mockRejectedValue(
+      Object.assign(new Error("locked"), {
+        code: "EPERM",
+      }),
+    );
+
+    try {
+      await writeTextAtomic(filePath, "hello");
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("hello");
+      expect(renameSpy).toHaveBeenCalled();
+      expect(copyFileSpy).toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+      platformRestored = true;
+    }
+
+    expect(platformRestored).toBe(true);
   });
 
   it("serializes async lock callers even across rejections", async () => {

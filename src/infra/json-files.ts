@@ -2,6 +2,35 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+function isWindowsFileReplaceError(error: unknown): boolean {
+  if (process.platform !== "win32" || !error || typeof error !== "object") {
+    return false;
+  }
+  const code = "code" in error ? error.code : undefined;
+  return code === "EPERM" || code === "EACCES" || code === "EBUSY";
+}
+
+async function replaceFileWithRetry(tmpPath: string, filePath: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rename(tmpPath, filePath);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isWindowsFileReplaceError(error) || attempt === 4) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
+  if (isWindowsFileReplaceError(lastError)) {
+    await fs.copyFile(tmpPath, filePath);
+    return;
+  }
+  throw lastError;
+}
+
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
@@ -45,7 +74,7 @@ export async function writeTextAtomic(
     } catch {
       // best-effort; ignore on platforms without chmod
     }
-    await fs.rename(tmp, filePath);
+    await replaceFileWithRetry(tmp, filePath);
     try {
       await fs.chmod(filePath, mode);
     } catch {
