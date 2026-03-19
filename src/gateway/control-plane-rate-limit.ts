@@ -10,6 +10,26 @@ type Bucket = {
 
 const controlPlaneBuckets = new Map<string, Bucket>();
 
+// ---------------------------------------------------------------------------
+// Periodic pruning – prevents unbounded Map growth from stale client keys.
+// ---------------------------------------------------------------------------
+
+const CONTROL_PLANE_PRUNE_INTERVAL_MS = 120_000; // every 2 minutes
+
+function pruneControlPlaneBuckets(nowMs?: number): void {
+  const now = nowMs ?? Date.now();
+  for (const [key, bucket] of controlPlaneBuckets) {
+    if (now - bucket.windowStartMs >= CONTROL_PLANE_RATE_LIMIT_WINDOW_MS) {
+      controlPlaneBuckets.delete(key);
+    }
+  }
+}
+
+const _pruneTimer = setInterval(() => pruneControlPlaneBuckets(), CONTROL_PLANE_PRUNE_INTERVAL_MS);
+if (_pruneTimer?.unref) {
+  _pruneTimer.unref();
+}
+
 function normalizePart(value: unknown, fallback: string): string {
   if (typeof value !== "string") {
     return fallback;
@@ -82,5 +102,9 @@ export function consumeControlPlaneWriteBudget(params: {
 export const __testing = {
   resetControlPlaneRateLimitState() {
     controlPlaneBuckets.clear();
+  },
+  pruneControlPlaneBuckets,
+  get bucketCount() {
+    return controlPlaneBuckets.size;
   },
 };
