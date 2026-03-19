@@ -1,4 +1,4 @@
-// Authored by: cc (Claude Code) | 2026-03-18
+// Authored by: cc (Claude Code) | 2026-03-19
 import { Type } from "@sinclair/typebox";
 import type { GatewayRequestHandlerOptions, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { SmsConfigSchema, resolveSmsConfig, type SmsConfigInput } from "./src/config.js";
@@ -19,7 +19,7 @@ const smsPlugin = {
     api.registerService({
       id: "twilio-sms",
       start: async () => {
-        runtime = await createSmsRuntime(config, api.runtime.agent, api.config, api.logger);
+        runtime = await createSmsRuntime(config, api.runtime.subagent, api.logger);
       },
       stop: async () => {
         await runtime?.stop();
