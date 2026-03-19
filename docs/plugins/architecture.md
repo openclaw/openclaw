@@ -979,6 +979,20 @@ Compatibility note:
   them today. Their presence does not by itself mean every exported helper is a
   long-term frozen external contract.
 
+## Message tool schemas
+
+Plugins should own channel-specific `describeMessageTool(...)` schema
+contributions. Keep provider-specific fields in the plugin, not in shared core.
+
+For shared portable schema fragments, reuse the generic helpers exported through
+`openclaw/plugin-sdk/channel-runtime`:
+
+- `createMessageToolButtonsSchema()` for button-grid style payloads
+- `createMessageToolCardSchema()` for structured card payloads
+
+If a schema shape only makes sense for one provider, define it in that plugin's
+own source instead of promoting it into the shared SDK.
+
 ## Channel target resolution
 
 Channel plugins should own channel-specific target semantics. Keep the shared
