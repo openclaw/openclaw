@@ -71,12 +71,12 @@ function buildFilterEntries(
 function panelColSpan(size?: string): string {
   switch (size) {
     case "full":
-      return "col-span-6";
+      return "col-span-2 sm:col-span-4 lg:col-span-6";
     case "third":
-      return "col-span-2";
+      return "col-span-1 sm:col-span-2 lg:col-span-2";
     case "half":
     default:
-      return "col-span-3";
+      return "col-span-2 sm:col-span-2 lg:col-span-3";
   }
 }
 
@@ -316,8 +316,8 @@ export function ReportViewer({ config: propConfig, reportPath }: ReportViewerPro
       )}
 
       {/* Panel grid */}
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="grid grid-cols-6 gap-5">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-6">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-5">
           {config.panels.map((panel) => (
             <PanelCard
               key={panel.id}

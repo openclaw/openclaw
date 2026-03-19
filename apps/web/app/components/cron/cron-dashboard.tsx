@@ -1105,7 +1105,7 @@ function JobRow({ job, onClick, onSendCommand }: { job: CronJob; onClick: () => 
         </div>
       </td>
       <td className="px-4 py-3">
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
           {!job.state.runningAtMs && job.enabled && (
             <button type="button" onClick={(e) => { e.stopPropagation(); onSendCommand?.(`Run cron job "${job.name}" (${job.id}) now with --force`); }}
               className="p-1 rounded cursor-pointer" style={{ color: "var(--color-accent)" }} title="Run now">

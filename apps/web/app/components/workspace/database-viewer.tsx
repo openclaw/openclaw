@@ -405,10 +405,10 @@ export function DatabaseViewer({ dbPath, filename }: DatabaseViewerProps) {
   }
 
   return (
-    <div className="flex h-full">
-      {/* Left panel: Table list */}
+    <div className="flex flex-col md:flex-row h-full">
+      {/* Left panel: Table list — sidebar on desktop, horizontal strip on mobile */}
       <div
-        className="w-56 flex-shrink-0 border-r flex flex-col overflow-hidden"
+        className="hidden md:flex w-56 flex-shrink-0 border-r flex-col overflow-hidden"
         style={{ borderColor: "var(--color-border)", background: "var(--color-surface)" }}
       >
         {/* Database header */}
@@ -486,6 +486,47 @@ export function DatabaseViewer({ dbPath, filename }: DatabaseViewerProps) {
             SQL Query
           </button>
         </div>
+      </div>
+
+      {/* Mobile: horizontal table selector + query toggle */}
+      <div
+        className="flex md:hidden flex-shrink-0 items-center gap-1.5 px-2 py-1.5 border-b overflow-x-auto"
+        style={{ borderColor: "var(--color-border)", background: "var(--color-surface)" }}
+      >
+        {tables.map((t) => {
+          const isView = t.table_name.startsWith("v_");
+          const isActive = selectedTable === t.table_name && !queryMode;
+          return (
+            <button
+              key={t.table_name}
+              type="button"
+              onClick={() => { setSelectedTable(t.table_name); setPage(0); setQueryMode(false); }}
+              className="px-2.5 py-1 text-[11px] rounded-full whitespace-nowrap shrink-0 font-medium flex items-center gap-1"
+              style={{
+                background: isActive ? "var(--color-accent)" : "var(--color-surface-hover)",
+                color: isActive ? "white" : "var(--color-text-muted)",
+                border: isActive ? "none" : "1px solid var(--color-border)",
+              }}
+            >
+              <span className="flex-shrink-0" style={{ color: isActive ? "white" : (isView ? "#60a5fa" : "var(--color-accent)") }}>
+                {isView ? <ViewIcon /> : <TableIcon />}
+              </span>
+              {t.table_name}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => setQueryMode(!queryMode)}
+          className="px-2.5 py-1 text-[11px] rounded-full whitespace-nowrap shrink-0 font-medium flex items-center gap-1"
+          style={{
+            background: queryMode ? "var(--color-accent)" : "var(--color-surface-hover)",
+            color: queryMode ? "white" : "var(--color-text-muted)",
+            border: queryMode ? "none" : "1px solid var(--color-border)",
+          }}
+        >
+          <PlayIcon /> SQL
+        </button>
       </div>
 
       {/* Right panel: Data / Query */}

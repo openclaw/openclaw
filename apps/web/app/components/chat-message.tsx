@@ -732,7 +732,7 @@ function FeedbackButtons({ messageId, sessionId }: { messageId: string; sessionI
 	const btnBase = "p-1 rounded-md transition-colors";
 
 	return (
-		<div ref={triggerRef} className="flex items-center gap-0.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+		<div ref={triggerRef} className="flex items-center gap-0.5 mt-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
 			<button
 				type="button"
 				onClick={() => respond("up")}

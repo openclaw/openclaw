@@ -479,6 +479,8 @@ function WorkspacePageInner() {
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"files" | "chats">("files");
   const [chatSidebarOpen, setChatSidebarOpen] = useState(false);
+  const [mobileChatSessionsOpen, setMobileChatSessionsOpen] = useState(false);
+  const [mobileFileChatOpen, setMobileFileChatOpen] = useState(false);
 
   // Terminal drawer state
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -586,8 +588,12 @@ function WorkspacePageInner() {
         return matchingParentTab.id;
       }
     }
+    if (tabState.activeTabId === HOME_TAB_ID) {
+      const blankTab = mainChatTabs.find((tab) => !tab.sessionId && !tab.sessionKey);
+      if (blankTab) return blankTab.id;
+    }
     return mainChatTabs[0]?.id ?? null;
-  }, [activeTab, activeSessionId, activeSubagentKey, mainChatTabs]);
+  }, [activeTab, activeSessionId, activeSubagentKey, mainChatTabs, tabState.activeTabId]);
 
   useEffect(() => {
     if (!isChatTab(activeTab)) {
@@ -616,8 +622,14 @@ function WorkspacePageInner() {
   }, []);
 
   const handleChatTabSessionChange = useCallback((tabId: string, sessionId: string | null) => {
-    setTabState((prev) => bindParentSessionToChatTab(prev, tabId, sessionId));
-    if (tabState.activeTabId === tabId || visibleMainChatTabId === tabId) {
+    setTabState((prev) => {
+      let next = bindParentSessionToChatTab(prev, tabId, sessionId);
+      if (sessionId && prev.activeTabId === HOME_TAB_ID) {
+        next = activateTab(next, tabId);
+      }
+      return next;
+    });
+    if (tabState.activeTabId === tabId || tabState.activeTabId === HOME_TAB_ID || visibleMainChatTabId === tabId) {
       setActiveSessionId(sessionId);
       setActiveSubagentKey(null);
     }
@@ -1177,7 +1189,18 @@ function WorkspacePageInner() {
   // Tab handler callbacks (defined after loadContent is available)
   const handleTabActivate = useCallback((tabId: string) => {
     if (tabId === HOME_TAB_ID) {
-      setTabState((prev) => activateTab(prev, tabId));
+      setTabState((prev) => {
+        let next = activateTab(prev, tabId);
+        const chatTabs = next.tabs.filter((t) => t.id !== HOME_TAB_ID && isChatTab(t));
+        const hasBlankChat = chatTabs.some((t) => !t.sessionId && !t.sessionKey);
+        if (!hasBlankChat) {
+          const blank = createBlankChatTab();
+          next = { tabs: [...next.tabs, blank], activeTabId: HOME_TAB_ID };
+        }
+        return next;
+      });
+      setActiveSessionId(null);
+      setActiveSubagentKey(null);
       applyActivatedTab(undefined);
       return;
     }
@@ -2194,43 +2217,125 @@ function WorkspacePageInner() {
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {/* Mobile top bar — always visible on mobile */}
             {isMobile && (
-              <div
-                className="px-3 py-2 border-b flex-shrink-0 flex items-center justify-between gap-2"
-                style={{ borderColor: "var(--color-border)", background: "var(--color-surface)" }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setSidebarOpen(true)}
-                  className="p-2 rounded-lg flex-shrink-0"
-                  style={{ color: "var(--color-text-muted)" }}
-                  title="Open sidebar"
+              <>
+                <div
+                  className="px-2 py-1.5 border-b flex-shrink-0 flex items-center gap-1.5"
+                  style={{ borderColor: "var(--color-border)", background: "var(--color-surface)" }}
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="4" x2="20" y1="12" y2="12" /><line x1="4" x2="20" y1="6" y2="6" /><line x1="4" x2="20" y1="18" y2="18" />
-                  </svg>
-                </button>
-                <div className="flex-1 min-w-0 text-sm font-medium truncate" style={{ color: "var(--color-text)" }}>
-                  {activePath ? activePath.split("/").pop() : (context?.organization?.name || "Workspace")}
-                </div>
-                <div className="flex items-center gap-1">
-                  {activePath && content.kind !== "none" && (
+                  <button
+                    type="button"
+                    onClick={() => setSidebarOpen(true)}
+                    className="p-1.5 rounded-lg flex-shrink-0"
+                    style={{ color: "var(--color-text-muted)" }}
+                    title="Open sidebar"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="4" x2="20" y1="12" y2="12" /><line x1="4" x2="20" y1="6" y2="6" /><line x1="4" x2="20" y1="18" y2="18" />
+                    </svg>
+                  </button>
+                  <div className="flex-1 min-w-0 text-sm font-medium truncate" style={{ color: "var(--color-text)" }}>
+                    {activePath ? activePath.split("/").pop() : (context?.organization?.name || "Workspace")}
+                  </div>
+                  <div className="flex items-center gap-0.5">
+                    {activePath && content.kind !== "none" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActivePath(null);
+                          setContent({ kind: "none" });
+                        }}
+                        className="p-1.5 rounded-lg flex-shrink-0"
+                        style={{ color: "var(--color-text-muted)" }}
+                        title="Back to chat"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="m12 19-7-7 7-7" /><path d="M19 12H5" />
+                        </svg>
+                      </button>
+                    )}
+                    {!showMainChat && fileContext && (
+                      <button
+                        type="button"
+                        onClick={() => setMobileFileChatOpen(true)}
+                        className="p-1.5 rounded-lg flex-shrink-0"
+                        style={{ color: "var(--color-text-muted)" }}
+                        title="Chat about this file"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                        </svg>
+                      </button>
+                    )}
+                    {showMainChat && (
+                      <button
+                        type="button"
+                        onClick={() => setMobileChatSessionsOpen(true)}
+                        className="p-1.5 rounded-lg flex-shrink-0"
+                        style={{ color: "var(--color-text-muted)" }}
+                        title="Chat history"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+                        </svg>
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() => {
-                        setActivePath(null);
-                        setContent({ kind: "none" });
-                      }}
-                      className="p-2 rounded-lg flex-shrink-0"
-                      style={{ color: "var(--color-text-muted)" }}
-                      title="Back to chat"
+                      onClick={() => setTerminalOpen((v) => !v)}
+                      className="p-1.5 rounded-lg flex-shrink-0"
+                      style={{ color: terminalOpen ? "var(--color-text)" : "var(--color-text-muted)", background: terminalOpen ? "var(--color-surface-hover)" : "transparent" }}
+                      title="Terminal"
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="m12 19-7-7 7-7" /><path d="M19 12H5" />
+                        <polyline points="4 17 10 11 4 5" /><line x1="12" x2="20" y1="19" y2="19" />
                       </svg>
                     </button>
-                  )}
+                    <button
+                      type="button"
+                      onClick={() => openBlankChatTab()}
+                      className="p-1.5 rounded-lg flex-shrink-0"
+                      style={{ color: "var(--color-text-muted)" }}
+                      title="New chat"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 5v14" /><path d="M5 12h14" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
-              </div>
+                {/* Mobile tab strip */}
+                {tabState.tabs.length > 1 && (
+                  <div
+                    className="flex-shrink-0 flex items-center gap-1 px-2 py-1 overflow-x-auto border-b"
+                    style={{ borderColor: "var(--color-border)", background: "var(--color-surface)" }}
+                  >
+                    {tabState.tabs.map((tab) => {
+                      const isActive = tab.id === tabState.activeTabId;
+                      const isLive = liveChatTabIds.has(tab.id);
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => handleTabActivate(tab.id)}
+                          className="px-2.5 py-1 text-[11px] rounded-full whitespace-nowrap shrink-0 font-medium flex items-center gap-1.5"
+                          style={{
+                            background: isActive ? "var(--color-accent)" : "var(--color-surface-hover)",
+                            color: isActive ? "white" : "var(--color-text-muted)",
+                            border: isActive ? "none" : "1px solid var(--color-border)",
+                          }}
+                        >
+                          {isLive && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
+                          )}
+                          <span className="truncate max-w-[120px]">
+                            {tab.title.length > 20 ? tab.title.slice(0, 20) + "..." : tab.title}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
 
             {/* Tab bar (desktop only, always visible -- home tab is always present) */}
@@ -2516,6 +2621,59 @@ function WorkspacePageInner() {
             </aside>
           )}
         </div>
+
+        {/* Mobile chat sessions drawer */}
+        {isMobile && mobileChatSessionsOpen && (
+          <ChatSessionsSidebar
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            activeSessionTitle={activeSessionTitle}
+            streamingSessionIds={streamingSessionIds}
+            subagents={subagents}
+            activeSubagentKey={activeSubagentKey}
+            loading={sessionsLoading}
+            onSelectSession={(sessionId) => {
+              const session = sessions.find((entry) => entry.id === sessionId);
+              openSessionChatTab(sessionId, session?.title);
+              setMobileChatSessionsOpen(false);
+            }}
+            onNewSession={() => {
+              openBlankChatTab();
+              setMobileChatSessionsOpen(false);
+            }}
+            onSelectSubagent={(key) => {
+              handleSelectSubagent(key);
+              setMobileChatSessionsOpen(false);
+            }}
+            onDeleteSession={handleDeleteSession}
+            onRenameSession={handleRenameSession}
+            onStopSession={(sessionId) => { void stopParentSession(sessionId); }}
+            onStopSubagent={(sessionKey) => { void stopSubagentSession(sessionKey); }}
+            mobile
+            width={280}
+            onClose={() => setMobileChatSessionsOpen(false)}
+          />
+        )}
+
+        {/* Mobile file-context chat drawer */}
+        {isMobile && mobileFileChatOpen && fileContext && (
+          <div className="drawer-backdrop" onClick={() => setMobileFileChatOpen(false)}>
+            {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+            <div onClick={(e) => e.stopPropagation()} className="fixed inset-y-0 right-0 z-50 drawer-right" style={{ width: "min(85vw, 360px)" }}>
+              <div className="flex flex-col h-full" style={{ background: "var(--color-bg)" }}>
+                <ChatPanel
+                  ref={compactChatRef}
+                  compact
+                  fileContext={fileContext}
+                  initialSessionId={fileChatSessionId ?? undefined}
+                  onFileChanged={handleFileChanged}
+                  onFilePathClick={(path) => { handleFilePathClickFromChat(path); setMobileFileChatOpen(false); }}
+                  onActiveSessionChange={setFileChatSessionId}
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Terminal drawer (Cmd+J) */}
         {terminalOpen && (

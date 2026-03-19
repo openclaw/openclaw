@@ -934,7 +934,7 @@ function AddEntryModal({
 			style={{ background: "rgba(0, 0, 0, 0.5)", backdropFilter: "blur(2px)" }}
 		>
 			<div
-				className="relative mt-12 mb-12 w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl flex flex-col"
+				className="relative mt-4 mb-4 mx-3 md:mt-12 md:mb-12 md:mx-0 w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl flex flex-col"
 				style={{
 					background: "var(--color-bg)",
 					border: "1px solid var(--color-border)",

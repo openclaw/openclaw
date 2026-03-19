@@ -15,13 +15,21 @@ import "@xterm/xterm/css/xterm.css";
 const MIN_DRAWER_HEIGHT = 180;
 const MAX_DRAWER_HEIGHT_RATIO = 0.75;
 const DEFAULT_DRAWER_HEIGHT = 280;
+const MOBILE_MAX_DRAWER_HEIGHT_RATIO = 0.6;
+const MOBILE_DEFAULT_DRAWER_HEIGHT_RATIO = 0.5;
 const STORAGE_KEY = "dench-terminal-height";
 const DEFAULT_WS_PORT = 3101;
 const MAX_TERMINALS = 8;
 
+function isMobileViewport(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.innerWidth < 768;
+}
+
 function maxDrawerHeight(): number {
   if (typeof window === "undefined") return DEFAULT_DRAWER_HEIGHT;
-  return Math.max(MIN_DRAWER_HEIGHT, Math.floor(window.innerHeight * MAX_DRAWER_HEIGHT_RATIO));
+  const ratio = isMobileViewport() ? MOBILE_MAX_DRAWER_HEIGHT_RATIO : MAX_DRAWER_HEIGHT_RATIO;
+  return Math.max(MIN_DRAWER_HEIGHT, Math.floor(window.innerHeight * ratio));
 }
 
 function clampHeight(height: number): number {
@@ -31,6 +39,9 @@ function clampHeight(height: number): number {
 
 function loadHeight(): number {
   if (typeof window === "undefined") return DEFAULT_DRAWER_HEIGHT;
+  if (isMobileViewport()) {
+    return clampHeight(Math.floor(window.innerHeight * MOBILE_DEFAULT_DRAWER_HEIGHT_RATIO));
+  }
   const raw = window.localStorage.getItem(STORAGE_KEY);
   if (!raw) return DEFAULT_DRAWER_HEIGHT;
   const parsed = Number(raw);
@@ -631,7 +642,7 @@ export default function TerminalDrawer({ onClose, cwd }: TerminalDrawerProps) {
                       {hasMultiple && (
                         <button
                           type="button"
-                          className="inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100"
+                          className="inline-flex items-center justify-center rounded md:opacity-0 md:group-hover:opacity-100"
                           style={{
                             width: 14,
                             height: 14,

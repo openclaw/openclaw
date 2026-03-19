@@ -76,12 +76,12 @@ type PanelData = {
 function panelColSpan(size?: string): string {
   switch (size) {
     case "full":
-      return "col-span-6";
+      return "col-span-2 sm:col-span-4 lg:col-span-6";
     case "third":
-      return "col-span-2";
+      return "col-span-1 sm:col-span-2 lg:col-span-2";
     case "half":
     default:
-      return "col-span-3";
+      return "col-span-2 sm:col-span-2 lg:col-span-3";
   }
 }
 
@@ -298,7 +298,7 @@ export function ReportCard({ config }: ReportCardProps) {
             transition={{ duration: 0.25, ease: "easeInOut" }}
             className="overflow-hidden"
           >
-            <div className="grid grid-cols-6 gap-3 p-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 p-3">
               {config.panels.map((panel) => (
                 <ExpandedPanelCard
                   key={panel.id}

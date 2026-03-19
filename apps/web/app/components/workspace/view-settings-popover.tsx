@@ -343,7 +343,7 @@ export function ViewSettingsPopover({
 
 			{open && (
 				<div
-					className="absolute right-0 top-full mt-1 z-50 rounded-lg border shadow-lg p-3 min-w-[240px] flex flex-col gap-3"
+					className="absolute right-0 top-full mt-1 z-50 rounded-lg border shadow-lg p-3 min-w-[200px] sm:min-w-[240px] max-w-[calc(100vw-2rem)] flex flex-col gap-3"
 					style={{
 						borderColor: "var(--color-border)",
 						background: "var(--color-surface)",

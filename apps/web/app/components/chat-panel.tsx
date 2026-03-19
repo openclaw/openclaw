@@ -397,14 +397,14 @@ function QueueItem({
 				</div>
 			)}
 			{!editing && (
-				<div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-					{/* Edit */}
-					<button
-						type="button"
-						className="rounded-md p-1 transition-colors hover:bg-stone-100 dark:hover:bg-stone-800"
-						title="Edit message"
-						onClick={() => { setDraft(msg.text); setEditing(true); }}
-					>
+			<div className="flex items-center gap-1 shrink-0 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+				{/* Edit */}
+				<button
+					type="button"
+					className="rounded-md p-1 transition-colors hover:bg-stone-100 dark:hover:bg-stone-800"
+					title="Edit message"
+					onClick={() => { setDraft(msg.text); setEditing(true); }}
+				>
 						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-stone-400">
 							<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
 							<path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" />
@@ -485,7 +485,7 @@ function AttachmentStrip({
 								onClick={() =>
 									onRemove(af.id)
 								}
-								className="absolute top-1 right-1 z-10 w-[18px] h-[18px] rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+								className="absolute top-1 right-1 z-10 w-[18px] h-[18px] rounded-full flex items-center justify-center md:opacity-0 md:group-hover:opacity-100 transition-opacity"
 								style={{
 									background:
 										"rgba(0,0,0,0.55)",
@@ -2005,7 +2005,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		});
 		const showStreamActivity = isStreaming && !!streamActivityLabel;
 
-		const showHeroState = messages.length === 0 && !compact && !isSubagentMode && !loadingSession;
+		const showHeroState = messages.length === 0 && (!compact || !fileContext) && !isSubagentMode && !loadingSession;
 
 		// ── Input bar content (shared between hero and bottom positions) ──
 
@@ -2371,13 +2371,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							</div>
 						</div>
 					) : (showHeroState && !mounted) ? (
-						<div className="flex items-center justify-center h-full min-h-[60vh]" />
+						<div className={`flex items-center justify-center h-full ${compact ? "min-h-[40vh]" : "min-h-[60vh]"}`} />
 					) : showHeroState ? (
-						<div className="flex flex-col items-center justify-center min-h-[75vh] py-12">
+						<div className={`flex flex-col items-center justify-center py-8 md:py-12 ${compact ? "min-h-[60vh]" : "min-h-[75vh]"}`}>
 							{/* Hero greeting */}
 							{greeting && (
 								<h1
-									className="text-4xl md:text-5xl font-light tracking-normal font-instrument mb-10 text-center"
+									className="text-3xl md:text-5xl font-light tracking-normal font-instrument mb-6 md:mb-10 text-center px-4"
 									style={{ color: "var(--color-text)" }}
 								>
 									{greeting}
@@ -2385,21 +2385,21 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 							)}
 
 							{/* Centered input bar */}
-							<div className="w-full max-w-[720px] mx-auto px-4">
+							<div className="w-full max-w-[720px] mx-auto px-3 md:px-4">
 								{inputBarContainer(handleInputDragOver, handleInputDragLeave, handleInputDrop)}
 							</div>
 
 							{/* Prompt suggestion pills */}
-							<div className="mt-6 flex flex-col gap-2.5 w-full max-w-[720px] mx-auto px-4">
-								<div className="flex items-center justify-center gap-2 flex-wrap">
-									{visiblePrompts.slice(0, 3).map((template) => {
+							<div className={`mt-4 md:mt-6 flex flex-col gap-2 md:gap-2.5 w-full max-w-[720px] mx-auto ${compact ? "px-2" : "px-4"}`}>
+								<div className="flex items-center justify-center gap-2 flex-wrap overflow-x-auto">
+									{visiblePrompts.slice(0, compact ? 4 : 3).map((template) => {
 										const Icon = template.icon;
 										return (
 											<button
 												key={template.id}
 												type="button"
 												onClick={() => handlePromptClick(template.id)}
-												className="group flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium whitespace-nowrap rounded-xl transition-all duration-200 border"
+												className="group flex items-center gap-1.5 px-3 md:px-3.5 py-1.5 md:py-2 text-[11px] md:text-xs font-medium whitespace-nowrap rounded-xl transition-all duration-200 border shrink-0"
 												style={{
 													background: "var(--color-surface)",
 													borderColor: "var(--color-border)",
@@ -2412,15 +2412,15 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 										);
 									})}
 								</div>
-								<div className="flex items-center justify-center gap-2 flex-wrap">
-									{visiblePrompts.slice(3, 7).map((template) => {
+								<div className="flex items-center justify-center gap-2 flex-wrap overflow-x-auto">
+									{visiblePrompts.slice(compact ? 4 : 3, 7).map((template) => {
 										const Icon = template.icon;
 										return (
 											<button
 												key={template.id}
 												type="button"
 												onClick={() => handlePromptClick(template.id)}
-												className="group flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium whitespace-nowrap rounded-xl transition-all duration-200 border"
+												className="group flex items-center gap-1.5 px-3 md:px-3.5 py-1.5 md:py-2 text-[11px] md:text-xs font-medium whitespace-nowrap rounded-xl transition-all duration-200 border shrink-0"
 												style={{
 													background: "var(--color-surface)",
 													borderColor: "var(--color-border)",

@@ -146,7 +146,7 @@ function Dropdown({
 			<div onClick={() => onOpenChange(!open)}>{trigger}</div>
 			{open && (
 				<div
-					className="absolute z-50 mt-1 rounded-lg shadow-lg border py-1 min-w-[200px] max-h-[320px] overflow-y-auto"
+					className="absolute z-50 mt-1 rounded-lg shadow-lg border py-1 min-w-[160px] sm:min-w-[200px] max-w-[calc(100vw-2rem)] max-h-[320px] overflow-y-auto"
 					style={{
 						background: "var(--color-surface)",
 						borderColor: "var(--color-border)",
@@ -215,7 +215,7 @@ function TextValueEditor({
 			value={value}
 			onChange={(e) => onChange(e.target.value)}
 			placeholder={placeholder ?? "Value..."}
-			className="px-2 py-1 rounded-md text-xs outline-none min-w-[120px]"
+			className="px-2 py-1 rounded-md text-xs outline-none min-w-[80px] sm:min-w-[120px]"
 			style={{
 				background: "var(--color-bg)",
 				border: "1px solid var(--color-border)",
@@ -776,7 +776,7 @@ export function ObjectFilterBar({
 					return (
 						<span
 							key={rule.id}
-							className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] max-w-[250px] truncate"
+							className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] max-w-[180px] sm:max-w-[250px] truncate"
 							style={{
 								background: "var(--color-accent-light, rgba(99,102,241,0.1))",
 								color: "var(--color-accent)",
@@ -912,7 +912,7 @@ export function ObjectFilterBar({
 									e.stopPropagation();
 									onDeleteView(view.name);
 								}}
-								className="px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+								className="px-2 py-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity cursor-pointer"
 								style={{ color: "var(--color-text-muted)" }}
 								title="Delete view"
 							>
