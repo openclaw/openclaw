@@ -538,12 +538,10 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       const RATE_LIMIT_ERROR =
         '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limited"}}';
 
-      // Set up many profiles so profile rotation cycles through them
-      // without exhausting advanceAuthProfile before the retry limit.
-      // With 4 profiles: retry limit = max(32, 24 + 4*8) = 56.
-      // Each profile cycles once per 4 iterations, so after 4 rotations
-      // the profiles re-enter cooldown and the loop continues until the
-      // retry limit is hit.
+      // Set up enough profiles that profile rotation keeps cycling without
+      // exhausting advanceAuthProfile before MAX_RUN_LOOP_ITERATIONS is reached.
+      // With 4 primary profiles the retry limit is well above the number of
+      // per-profile rotation slots, so the loop will always hit the ceiling.
       await fs.writeFile(
         path.join(agentDir, "auth-profiles.json"),
         JSON.stringify({
