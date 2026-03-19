@@ -1,5 +1,5 @@
 import { format } from "node:util";
-import { redactSensitiveText, type RuntimeLogger } from "openclaw/plugin-sdk/matrix";
+import { redactSensitiveText, type RuntimeLogger } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 
 export type Logger = {

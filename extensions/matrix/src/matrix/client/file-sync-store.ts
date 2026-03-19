@@ -7,7 +7,7 @@ import {
   type ISyncResponse,
   type IStoredClientOpts,
 } from "matrix-js-sdk";
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk/matrix";
+import { writeJsonFileAtomically } from "../../runtime-api.js";
 import { LogService } from "../sdk/logger.js";
 
 const STORE_VERSION = 1;

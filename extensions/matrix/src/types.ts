@@ -1,4 +1,4 @@
-import type { DmPolicy, GroupPolicy, SecretInput } from "openclaw/plugin-sdk/matrix";
+import type { DmPolicy, GroupPolicy, SecretInput } from "./runtime-api.js";
 export type { DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all";

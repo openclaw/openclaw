@@ -1,16 +1,4 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import type { DmPolicy } from "openclaw/plugin-sdk/matrix";
-import {
-  addWildcardAllowFrom,
-  formatDocsLink,
-  mergeAllowFromEntries,
-  moveSingleAccountChannelSectionToDefaultAccount,
-  normalizeAccountId,
-  promptChannelAccessConfig,
-  promptAccountId,
-  type RuntimeEnv,
-  type WizardPrompter,
-} from "openclaw/plugin-sdk/matrix";
 import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizardAdapter,
@@ -31,6 +19,18 @@ import {
 } from "./matrix/config-update.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
+import type { DmPolicy } from "./runtime-api.js";
+import {
+  addWildcardAllowFrom,
+  formatDocsLink,
+  mergeAllowFromEntries,
+  moveSingleAccountChannelSectionToDefaultAccount,
+  normalizeAccountId,
+  promptChannelAccessConfig,
+  promptAccountId,
+  type RuntimeEnv,
+  type WizardPrompter,
+} from "./runtime-api.js";
 import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
 import type { CoreConfig } from "./types.js";
 

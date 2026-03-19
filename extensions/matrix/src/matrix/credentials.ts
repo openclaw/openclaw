@@ -2,11 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk/matrix";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../account-selection.js";
+import { writeJsonFileAtomically } from "../runtime-api.js";
 import { getMatrixRuntime } from "../runtime.js";
 import {
   resolveMatrixCredentialsDir as resolveSharedMatrixCredentialsDir,

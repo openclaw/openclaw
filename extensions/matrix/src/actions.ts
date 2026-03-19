@@ -1,4 +1,6 @@
 import { Type } from "@sinclair/typebox";
+import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
+import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
 import {
   createActionGate,
   readNumberParam,
@@ -8,9 +10,7 @@ import {
   type ChannelMessageActionName,
   type ChannelMessageToolDiscovery,
   type ChannelToolSend,
-} from "openclaw/plugin-sdk/matrix";
-import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
-import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
+} from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const MATRIX_PLUGIN_HANDLED_ACTIONS = new Set<ChannelMessageActionName>([
