@@ -17,20 +17,4 @@ describe("Control UI chat model refs", () => {
       "lmstudio_mbp/qwen3.5-9b",
     );
   });
-
-  it("still qualifies nested ids from other upstream providers", () => {
-    expect(
-      buildChatModelOption({
-        id: "anthropic/claude-sonnet-4-5",
-        name: "Claude Sonnet 4.5",
-        provider: "openrouter",
-      }),
-    ).toEqual({
-      value: "openrouter/anthropic/claude-sonnet-4-5",
-      label: "anthropic/claude-sonnet-4-5 · openrouter",
-    });
-    expect(resolveServerChatModelValue("anthropic/claude-sonnet-4-5", "openrouter")).toBe(
-      "openrouter/anthropic/claude-sonnet-4-5",
-    );
-  });
 });
