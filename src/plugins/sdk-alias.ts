@@ -12,25 +12,65 @@ export type LoaderModuleResolveParams = {
   moduleUrl?: string;
 };
 
+type PluginSdkPackageJson = {
+  exports?: Record<string, unknown>;
+  bin?: string | Record<string, unknown>;
+};
+
 function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string {
   return params.modulePath ?? fileURLToPath(params.moduleUrl ?? import.meta.url);
 }
 
-function readPluginSdkSubpathsFromPackageRoot(packageRoot: string): string[] | null {
+function readPluginSdkPackageJson(packageRoot: string): PluginSdkPackageJson | null {
   try {
     const pkgRaw = fs.readFileSync(path.join(packageRoot, "package.json"), "utf-8");
-    const pkg = JSON.parse(pkgRaw) as {
-      exports?: Record<string, unknown>;
-    };
-    const subpaths = Object.keys(pkg.exports ?? {})
-      .filter((key) => key.startsWith("./plugin-sdk/"))
-      .map((key) => key.slice("./plugin-sdk/".length))
-      .filter((subpath) => Boolean(subpath) && !subpath.includes("/"))
-      .toSorted();
-    return subpaths.length > 0 ? subpaths : null;
+    return JSON.parse(pkgRaw) as PluginSdkPackageJson;
   } catch {
     return null;
   }
+}
+
+function listPluginSdkSubpathsFromPackageJson(pkg: PluginSdkPackageJson): string[] {
+  return Object.keys(pkg.exports ?? {})
+    .filter((key) => key.startsWith("./plugin-sdk/"))
+    .map((key) => key.slice("./plugin-sdk/".length))
+    .filter((subpath) => Boolean(subpath) && !subpath.includes("/"))
+    .toSorted();
+}
+
+function hasTrustedOpenClawRootIndicator(params: {
+  packageRoot: string;
+  packageJson: PluginSdkPackageJson;
+}): boolean {
+  const packageExports = params.packageJson.exports ?? {};
+  const hasPluginSdkRootExport = Object.prototype.hasOwnProperty.call(
+    packageExports,
+    "./plugin-sdk",
+  );
+  if (!hasPluginSdkRootExport) {
+    return false;
+  }
+  const hasCliEntryExport = Object.prototype.hasOwnProperty.call(packageExports, "./cli-entry");
+  const hasOpenClawBin =
+    (typeof params.packageJson.bin === "string" &&
+      params.packageJson.bin.toLowerCase().includes("openclaw")) ||
+    (typeof params.packageJson.bin === "object" &&
+      params.packageJson.bin !== null &&
+      typeof params.packageJson.bin.openclaw === "string");
+  const hasOpenClawEntrypoint = fs.existsSync(path.join(params.packageRoot, "openclaw.mjs"));
+  return hasCliEntryExport || hasOpenClawBin || hasOpenClawEntrypoint;
+}
+
+function readPluginSdkSubpathsFromPackageRoot(packageRoot: string): string[] | null {
+  const pkg = readPluginSdkPackageJson(packageRoot);
+  if (!pkg) {
+    return null;
+  }
+  if (!hasTrustedOpenClawRootIndicator({ packageRoot, packageJson: pkg })) {
+    return null;
+  }
+  const subpaths = listPluginSdkSubpathsFromPackageJson(pkg);
+  return subpaths.length > 0 ? subpaths : null;
 }
 
 function findNearestPluginSdkPackageRoot(startDir: string, maxDepth = 12): string | null {
