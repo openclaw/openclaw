@@ -59,13 +59,14 @@ function normalizeMediaAllowedRoot(root: string): string {
   if (!trimmed) {
     return trimmed;
   }
-  if (trimmed === "~") {
+  const normalized = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+  if (normalized === "~") {
     return os.homedir();
   }
-  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
-    return path.join(os.homedir(), trimmed.slice(2));
+  if (normalized.startsWith("~/") || normalized.startsWith("~\\")) {
+    return path.join(os.homedir(), normalized.slice(2));
   }
-  return path.resolve(trimmed);
+  return path.resolve(normalized);
 }
 
 export function resolveMediaToolLocalRoots(
