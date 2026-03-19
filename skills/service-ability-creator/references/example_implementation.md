@@ -109,7 +109,7 @@ from typing import Optional, Dict, Any
 LLM_API_KEY = os.getenv("LLM_API_KEY", "mock_llm_api_key_123")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development") # 'development', 'testing', 'production'
 SERVICE_BASE_URL = os.getenv("SERVICE_BASE_URL", "http://localhost:8000") # Base URL where this service is hosted
-DISCOVERY_PLATFORM_URL = "https://jjyzmyvfy5.coze.bytedance.net/register"
+DISCOVERY_PLATFORM_URL = "https://your-service.com"
 
 # Data storage paths (demonstrating data isolation)
 LOG_DIR = f"data/{ENVIRONMENT}_logs"
