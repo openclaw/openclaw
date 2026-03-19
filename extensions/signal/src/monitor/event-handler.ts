@@ -1,4 +1,5 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/channel-runtime";
 import {
   createChannelInboundDebouncer,
@@ -7,9 +8,7 @@ import {
 import { logInboundDrop, logTypingFailure } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-runtime";
 import { normalizeSignalMessagingTarget } from "openclaw/plugin-sdk/channel-runtime";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
-import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
@@ -258,36 +257,35 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
       cfg: deps.cfg,
       agentId: route.agentId,
       channel: "signal",
       accountId: route.accountId,
-    });
-
-    const typingCallbacks = createTypingCallbacks({
-      start: async () => {
-        if (!ctxPayload.To) {
-          return;
-        }
-        await sendTypingSignal(ctxPayload.To, {
-          baseUrl: deps.baseUrl,
-          account: deps.account,
-          accountId: deps.accountId,
-        });
-      },
-      onStartError: (err) => {
-        logTypingFailure({
-          log: logVerbose,
-          channel: "signal",
-          target: ctxPayload.To ?? undefined,
-          error: err,
-        });
+      typing: {
+        start: async () => {
+          if (!ctxPayload.To) {
+            return;
+          }
+          await sendTypingSignal(ctxPayload.To, {
+            baseUrl: deps.baseUrl,
+            account: deps.account,
+            accountId: deps.accountId,
+          });
+        },
+        onStartError: (err) => {
+          logTypingFailure({
+            log: logVerbose,
+            channel: "signal",
+            target: ctxPayload.To ?? undefined,
+            error: err,
+          });
+        },
       },
     });
 
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-      ...prefixOptions,
+      ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
       deliver: async (payload) => {

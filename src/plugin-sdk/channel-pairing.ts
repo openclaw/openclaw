@@ -13,6 +13,23 @@ export type ChannelPairingController = ScopedPairingAccess & {
   ) => ReturnType<typeof issuePairingChallenge>;
 };
 
+export function createChannelPairingChallengeIssuer(params: {
+  channel: ChannelId;
+  upsertPairingRequest: Parameters<typeof issuePairingChallenge>[0]["upsertPairingRequest"];
+}) {
+  return (
+    challenge: Omit<
+      Parameters<typeof issuePairingChallenge>[0],
+      "channel" | "upsertPairingRequest"
+    >,
+  ) =>
+    issuePairingChallenge({
+      channel: params.channel,
+      upsertPairingRequest: params.upsertPairingRequest,
+      ...challenge,
+    });
+}
+
 export function createChannelPairingController(params: {
   core: PluginRuntime;
   channel: ChannelId;
@@ -21,11 +38,9 @@ export function createChannelPairingController(params: {
   const access = createScopedPairingAccess(params);
   return {
     ...access,
-    issueChallenge: (challenge) =>
-      issuePairingChallenge({
-        channel: params.channel,
-        upsertPairingRequest: access.upsertPairingRequest,
-        ...challenge,
-      }),
+    issueChallenge: createChannelPairingChallengeIssuer({
+      channel: params.channel,
+      upsertPairingRequest: access.upsertPairingRequest,
+    }),
   };
 }
