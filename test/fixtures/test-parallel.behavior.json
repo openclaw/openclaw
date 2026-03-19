@@ -52,6 +52,10 @@
         "reason": "Snapshot redaction coverage produced a large retained heap jump in unit-fast on Linux CI."
       },
       {
+        "file": "src/config/redact-snapshot.restore.test.ts",
+        "reason": "Snapshot restore coverage retains a broad schema/redaction graph and is safer outside the shared lane."
+      },
+      {
         "file": "src/infra/outbound/message-action-runner.media.test.ts",
         "reason": "Outbound media action coverage retained a large media/plugin graph in unit-fast."
       },
