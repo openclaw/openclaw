@@ -15,6 +15,19 @@ if command -v git >/dev/null; then
   exit 1
 fi
 
+echo "==> Pre-flight: ensure supported Node is already present"
+node -e '
+  const version = process.versions.node.split(".").map(Number);
+  const ok =
+    version.length >= 2 &&
+    (version[0] > 22 || (version[0] === 22 && version[1] >= 16));
+  if (!ok) {
+    process.stderr.write(`unsupported node ${process.versions.node}\n`);
+    process.exit(1);
+  }
+'
+command -v npm >/dev/null
+
 echo "==> Run installer (non-root user)"
 curl -fsSL "$INSTALL_URL" | bash
 
