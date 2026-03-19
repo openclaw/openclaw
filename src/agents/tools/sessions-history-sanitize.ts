@@ -95,7 +95,8 @@ export function sanitizeHistoryMessage(message: unknown): {
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) => sanitizeHistoryContentBlock(block));
     const kept = updated.filter((item) => !item.omitted).map((item) => item.block);
-    entry.content = kept.length > 0 ? kept : [{ type: "text", text: "" }];
+    const needsAssistantPlaceholder = entry.role === "assistant" && kept.length === 0;
+    entry.content = needsAssistantPlaceholder ? [{ type: "text", text: "" }] : kept;
     truncated ||= updated.some((item) => item.truncated);
     redacted ||= updated.some((item) => item.redacted);
   }

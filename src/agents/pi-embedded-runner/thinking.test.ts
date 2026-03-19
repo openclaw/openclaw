@@ -61,11 +61,14 @@ describe("dropThinkingBlocks", () => {
     expect(assistant.content).toEqual([{ type: "text", text: "" }]);
   });
 
-  it("drops redacted_thinking blocks while preserving non-reasoning content", () => {
+  it("preserves redacted_thinking blocks for provider-owned continuations", () => {
     const { assistant } = dropSingleAssistantContent([
       { type: "redacted_thinking", data: "sealed" },
       { type: "text", text: "final" },
     ]);
-    expect(assistant.content).toEqual([{ type: "text", text: "final" }]);
+    expect(assistant.content).toEqual([
+      { type: "redacted_thinking", data: "sealed" },
+      { type: "text", text: "final" },
+    ]);
   });
 });

@@ -39,4 +39,20 @@ describe("sanitizeHistoryMessage", () => {
       content: [{ type: "text", text: "" }],
     });
   });
+
+  it("preserves empty non-assistant content arrays after stripping reasoning blocks", () => {
+    const result = sanitizeHistoryMessage({
+      role: "toolResult",
+      content: [
+        { type: "thinking", thinking: "private chain of thought" },
+        { type: "redacted_thinking", data: "sealed" },
+      ],
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.message).toEqual({
+      role: "toolResult",
+      content: [],
+    });
+  });
 });
