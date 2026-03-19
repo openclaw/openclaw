@@ -25,6 +25,12 @@ const env = {
   NODE_ENV: "production",
 };
 
+const SUPPRESSED_EVAL_WARNING_PATHS = [
+  "@protobufjs/inquire/index.js",
+  "bottleneck/lib/IORedisConnection.js",
+  "bottleneck/lib/RedisConnection.js",
+] as const;
+
 function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
@@ -45,7 +51,7 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
       return false;
     }
     const haystack = [log.message, log.id, log.importer].filter(Boolean).join("\n");
-    return haystack.includes("@protobufjs/inquire/index.js");
+    return SUPPRESSED_EVAL_WARNING_PATHS.some((path) => haystack.includes(path));
   }
 
   return {
