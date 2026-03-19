@@ -384,6 +384,11 @@ export class DiscordExecApprovalHandler {
       return false;
     }
 
+    const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase();
+    if (turnSourceChannel && turnSourceChannel !== "discord") {
+      return false;
+    }
+
     const requestAccountId = resolveExecApprovalAccountId({
       cfg: this.opts.cfg,
       request,
@@ -393,11 +398,6 @@ export class DiscordExecApprovalHandler {
       if (normalizeAccountId(requestAccountId) !== handlerAccountId) {
         return false;
       }
-    }
-
-    const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase();
-    if (turnSourceChannel && turnSourceChannel !== "discord") {
-      return false;
     }
 
     // Check agent filter
