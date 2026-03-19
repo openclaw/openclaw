@@ -518,11 +518,56 @@ function resolveActiveSessionRow(state: AppViewState) {
   return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
 }
 
+function toProviderQualifiedModelRef(
+  model: string | null | undefined,
+  provider?: string | null,
+): string {
+  const trimmedModel = typeof model === "string" ? model.trim() : "";
+  if (!trimmedModel) {
+    return "";
+  }
+  const trimmedProvider = typeof provider === "string" ? provider.trim() : "";
+  if (!trimmedProvider) {
+    return trimmedModel;
+  }
+  return trimmedModel.toLowerCase().startsWith(`${trimmedProvider.toLowerCase()}/`)
+    ? trimmedModel
+    : `${trimmedProvider}/${trimmedModel}`;
+}
+
+function isProviderQualifiedModelRef(modelRef: string | null | undefined): boolean {
+  const trimmed = typeof modelRef === "string" ? modelRef.trim() : "";
+  const slash = trimmed.indexOf("/");
+  return slash > 0 && slash < trimmed.length - 1;
+}
+
+function normalizeModelRefWithCatalog(
+  catalog: ModelCatalogEntry[],
+  modelRef: string | null | undefined,
+): string {
+  const trimmed = typeof modelRef === "string" ? modelRef.trim() : "";
+  if (!trimmed) {
+    return "";
+  }
+  if (isProviderQualifiedModelRef(trimmed)) {
+    return trimmed;
+  }
+  const matches = Array.from(
+    new Set(
+      catalog
+        .filter((entry) => entry.id.trim().toLowerCase() === trimmed.toLowerCase())
+        .map((entry) => toProviderQualifiedModelRef(entry.id, entry.provider?.trim())),
+    ),
+  );
+  return matches.length === 1 ? matches[0] : trimmed;
+}
+
 function resolveModelOverrideValue(state: AppViewState): string {
+  const catalog = state.chatModelCatalog ?? [];
   // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
   const cached = state.chatModelOverrides[state.sessionKey];
   if (typeof cached === "string") {
-    return cached.trim();
+    return normalizeModelRefWithCatalog(catalog, cached);
   }
   // cached === null means explicitly cleared to default.
   if (cached === null) {
@@ -531,7 +576,10 @@ function resolveModelOverrideValue(state: AppViewState): string {
   // No local override recorded yet — fall back to server data.
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow) {
-    return typeof activeRow.model === "string" ? activeRow.model.trim() : "";
+    return normalizeModelRefWithCatalog(
+      catalog,
+      toProviderQualifiedModelRef(activeRow.model, activeRow.modelProvider),
+    );
   }
   return "";
 }
@@ -544,7 +592,6 @@ function resolveDefaultModelValue(state: AppViewState): string {
 function buildChatModelOptions(
   catalog: ModelCatalogEntry[],
   currentOverride: string,
-  defaultModel: string,
 ): Array<{ value: string; label: string }> {
   const seen = new Set<string>();
   const options: Array<{ value: string; label: string }> = [];
@@ -563,14 +610,12 @@ function buildChatModelOptions(
 
   for (const entry of catalog) {
     const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    const value = toProviderQualifiedModelRef(entry.id, provider);
+    addOption(value, provider ? `${entry.id} · ${provider}` : entry.id);
   }
 
-  if (currentOverride) {
+  if (isProviderQualifiedModelRef(currentOverride)) {
     addOption(currentOverride);
-  }
-  if (defaultModel) {
-    addOption(defaultModel);
   }
   return options;
 }
@@ -578,11 +623,7 @@ function buildChatModelOptions(
 function renderChatModelSelect(state: AppViewState) {
   const currentOverride = resolveModelOverrideValue(state);
   const defaultModel = resolveDefaultModelValue(state);
-  const options = buildChatModelOptions(
-    state.chatModelCatalog ?? [],
-    currentOverride,
-    defaultModel,
-  );
+  const options = buildChatModelOptions(state.chatModelCatalog ?? [], currentOverride);
   const defaultLabel = defaultModel ? `Default (${defaultModel})` : "Default model";
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;

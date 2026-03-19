@@ -22,19 +22,42 @@ function createSessions(): SessionsListResult {
 function createChatHeaderState(
   overrides: {
     model?: string | null;
+    modelProvider?: string | null;
     models?: ModelCatalogEntry[];
     omitSessionFromList?: boolean;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
+  let currentModelProvider = overrides.modelProvider ?? null;
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
   const catalog = overrides.models ?? [
     { id: "gpt-5", name: "GPT-5", provider: "openai" },
     { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
   ];
+  const buildSessionRow = () => ({
+    key: "main",
+    kind: "direct",
+    updatedAt: null,
+    model: currentModel,
+    ...(currentModelProvider ? { modelProvider: currentModelProvider } : {}),
+  });
   const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
     if (method === "sessions.patch") {
-      currentModel = (params.model as string | null | undefined) ?? null;
+      const nextModel = (params.model as string | null | undefined) ?? null;
+      if (typeof nextModel === "string") {
+        const trimmed = nextModel.trim();
+        const slash = trimmed.indexOf("/");
+        if (slash > 0) {
+          currentModelProvider = trimmed.slice(0, slash);
+          currentModel = trimmed.slice(slash + 1);
+        } else {
+          currentModelProvider = null;
+          currentModel = trimmed;
+        }
+      } else {
+        currentModel = null;
+        currentModelProvider = null;
+      }
       return { ok: true, key: "main" };
     }
     if (method === "chat.history") {
@@ -46,9 +69,7 @@ function createChatHeaderState(
         path: "",
         count: omitSessionFromList ? 0 : 1,
         defaults: { model: "gpt-5", contextTokens: null },
-        sessions: omitSessionFromList
-          ? []
-          : [{ key: "main", kind: "direct", updatedAt: null, model: currentModel }],
+        sessions: omitSessionFromList ? [] : [buildSessionRow()],
       };
     }
     if (method === "models.list") {
@@ -65,9 +86,7 @@ function createChatHeaderState(
       path: "",
       count: omitSessionFromList ? 0 : 1,
       defaults: { model: "gpt-5", contextTokens: null },
-      sessions: omitSessionFromList
-        ? []
-        : [{ key: "main", kind: "direct", updatedAt: null, model: currentModel }],
+      sessions: omitSessionFromList ? [] : [buildSessionRow()],
     },
     chatModelOverrides: {},
     chatModelCatalog: catalog,
@@ -565,16 +584,62 @@ describe("chat view", () => {
     expect(modelSelect).not.toBeNull();
     expect(modelSelect?.value).toBe("");
 
-    modelSelect!.value = "gpt-5-mini";
+    modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
-      model: "gpt-5-mini",
+      model: "openai/gpt-5-mini",
     });
     expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
+    expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps same-id models from different providers distinct in the chat header picker", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state, request } = createChatHeaderState({
+      models: [
+        { id: "baseline-model", name: "Baseline Model", provider: "provider-main" },
+        { id: "shared-model", name: "Shared Model", provider: "provider-alpha" },
+        { id: "shared-model", name: "Shared Model", provider: "provider-beta" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+
+    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+    expect(optionValues).toContain("provider-alpha/shared-model");
+    expect(optionValues).toContain("provider-beta/shared-model");
+    expect(optionValues).not.toContain("shared-model");
+
+    modelSelect!.value = "provider-beta/shared-model";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+    render(renderChatSessionSelect(state), container);
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "provider-beta/shared-model",
+    });
+    const rerendered = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(rerendered?.value).toBe("provider-beta/shared-model");
     vi.unstubAllGlobals();
   });
 
@@ -593,7 +658,7 @@ describe("chat view", () => {
       'select[data-chat-model-select="true"]',
     );
     expect(modelSelect).not.toBeNull();
-    expect(modelSelect?.value).toBe("gpt-5-mini");
+    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
 
     modelSelect!.value = "";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -637,7 +702,7 @@ describe("chat view", () => {
     );
     expect(modelSelect).not.toBeNull();
 
-    modelSelect!.value = "gpt-5-mini";
+    modelSelect!.value = "openai/gpt-5-mini";
     modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushTasks();
     render(renderChatSessionSelect(state), container);
@@ -645,7 +710,7 @@ describe("chat view", () => {
     const rerendered = container.querySelector<HTMLSelectElement>(
       'select[data-chat-model-select="true"]',
     );
-    expect(rerendered?.value).toBe("gpt-5-mini");
+    expect(rerendered?.value).toBe("openai/gpt-5-mini");
     vi.unstubAllGlobals();
   });
 
