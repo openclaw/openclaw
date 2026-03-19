@@ -37,14 +37,26 @@ import ai.openclaw.app.ui.mobileCodeBorder
 import ai.openclaw.app.ui.mobileCodeText
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material3.Icon
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.sp
 
 private const val TAG = "AdaptiveCard"
 
 /**
  * Renders an Adaptive Card from a parsed JSON map inline in a chat bubble.
  * Supports TextBlock, FactSet, ColumnSet, Container, Image (placeholder),
- * Table, RichTextBlock, CodeBlock, ActionSet, ImageSet, Rating, ProgressBar,
- * Action.Submit, Action.Execute, and Action.OpenUrl.
+ * Table, RichTextBlock, CodeBlock, ActionSet, Icon, List, ImageSet, Rating,
+ * ProgressBar, Action.Submit, Action.Execute, and Action.OpenUrl.
  * Unknown element types are silently skipped.
  */
 @Composable
@@ -96,6 +108,8 @@ private fun RenderElement(element: Map<String, Any>) {
     "RichTextBlock" -> RenderRichTextBlock(element)
     "CodeBlock" -> RenderCodeBlock(element)
     "ActionSet" -> RenderActionSet(element)
+    "Icon" -> RenderIcon(element)
+    "List" -> RenderList(element)
     "ImageSet" -> RenderImageSet(element)
     "Rating" -> RenderRating(element)
     "ProgressBar" -> RenderProgressBar(element)
@@ -346,6 +360,85 @@ private fun RenderActionSet(element: Map<String, Any>) {
   }
 }
 
+@Composable
+private fun RenderIcon(element: Map<String, Any>) {
+  val name = element["name"] as? String ?: return
+  val size = element["size"] as? String
+  val color = element["color"] as? String
+  val style = element["style"] as? String // "regular" or "filled"
+
+  val iconSize = when (size?.lowercase()) {
+    "small" -> 16.dp
+    "large" -> 32.dp
+    else -> 20.dp // medium / default
+  }
+
+  val iconColor = when (color?.lowercase()) {
+    "accent" -> mobileAccent
+    "good", "green" -> Color(0xFF4CAF50)
+    "warning", "yellow" -> Color(0xFFFFC107)
+    "attention", "red" -> Color(0xFFF44336)
+    else -> mobileText
+  }
+
+  // Map well-known icon names to Material icons; fall back to text label
+  val isFilled = style?.lowercase() == "filled"
+  val imageVector = when (name.lowercase()) {
+    "info", "information" -> if (isFilled) Icons.Filled.Info else Icons.Outlined.Info
+    "warning", "alert" -> if (isFilled) Icons.Filled.Warning else Icons.Outlined.Warning
+    "checkmark", "check", "success" -> if (isFilled) Icons.Filled.CheckCircle else Icons.Outlined.CheckCircle
+    else -> null
+  }
+
+  if (imageVector != null) {
+    Icon(
+      imageVector = imageVector,
+      contentDescription = name,
+      tint = iconColor,
+      modifier = Modifier.size(iconSize),
+    )
+  } else {
+    // Fallback: render icon name as a small styled label
+    Text(
+      text = "[$name]",
+      style = mobileCaption1,
+      color = iconColor,
+    )
+  }
+}
+
+@Composable
+private fun RenderList(element: Map<String, Any>) {
+  val items = element.typedList("items")
+  if (items.isEmpty()) return
+
+  val style = element["style"] as? String // "ordered" or "unordered"
+  val isOrdered = style?.lowercase() == "ordered"
+
+  Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    for ((index, item) in items.withIndex()) {
+      val text = item["text"] as? String ?: continue
+      val icon = item.typedMap("icon")
+      val prefix = if (isOrdered) "${index + 1}. " else "\u2022 "
+
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        if (icon != null) {
+          // Render inline icon before the list item text
+          RenderIcon(icon)
+        }
+        Text(
+          text = "$prefix$text",
+          style = mobileCallout,
+          color = mobileText,
+        )
+      }
+    }
+  }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RenderImageSet(element: Map<String, Any>) {
@@ -470,4 +563,10 @@ private fun Map<String, Any>.typedList(key: String): List<Map<String, Any>> {
     ?.filterIsInstance<Map<*, *>>()
     ?.map { it as Map<String, Any> }
     ?: emptyList()
+}
+
+/** Safely cast a nested map value from a loosely-typed map to Map<String, Any>?. */
+@Suppress("UNCHECKED_CAST")
+private fun Map<String, Any>.typedMap(key: String): Map<String, Any>? {
+  return this[key] as? Map<String, Any>
 }
