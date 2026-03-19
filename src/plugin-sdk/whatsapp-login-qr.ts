@@ -1,1 +1,4 @@
-export { startWebLoginWithQr, waitForWebLogin } from "../../extensions/whatsapp/login-qr-api.js";
+export {
+  startWebLoginWithQr,
+  waitForWebLogin,
+} from "../plugins/runtime/runtime-whatsapp-boundary.js";

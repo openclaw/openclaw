@@ -248,6 +248,8 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof whatsappSdk.WhatsAppConfigSchema).toBe("object");
     expect(typeof whatsappSdk.resolveWhatsAppOutboundTarget).toBe("function");
     expect(typeof whatsappSdk.resolveWhatsAppMentionStripRegexes).toBe("function");
+    expect(typeof whatsappSdk.sendMessageWhatsApp).toBe("function");
+    expect(typeof whatsappSdk.loadWebMedia).toBe("function");
   });
 
   it("exports WhatsApp QR login helpers from the dedicated subpath", () => {

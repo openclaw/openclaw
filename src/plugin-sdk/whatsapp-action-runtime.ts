@@ -1,1 +1,1 @@
-export { handleWhatsAppAction } from "../../extensions/whatsapp/action-runtime-api.js";
+export { handleWhatsAppAction } from "../plugins/runtime/runtime-whatsapp-boundary.js";
