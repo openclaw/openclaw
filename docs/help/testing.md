@@ -308,7 +308,7 @@ This is the “common models” run we expect to keep working:
 
 - OpenAI (non-Codex): `openai/gpt-5.2` (optional: `openai/gpt-5.1`)
 - OpenAI Codex: `openai-codex/gpt-5.4`
-- Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-5`)
+- Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google (Gemini API): `google/gemini-3.1-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-6-thinking` and `google-antigravity/gemini-3-flash`
 - Z.AI (GLM): `zai/glm-4.7`
@@ -322,7 +322,7 @@ Run gateway smoke with tools + image:
 Pick at least one per provider family:
 
 - OpenAI: `openai/gpt-5.2` (or `openai/gpt-5-mini`)
-- Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-5`)
+- Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google: `google/gemini-3-flash-preview` (or `google/gemini-3.1-pro-preview`)
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/minimax-m2.5`

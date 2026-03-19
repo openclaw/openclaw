@@ -7,8 +7,6 @@ title: "Gateway Architecture"
 
 # Gateway architecture
 
-Last updated: 2026-01-22
-
 ## Overview
 
 - A single long‑lived **Gateway** owns all messaging surfaces (WhatsApp via

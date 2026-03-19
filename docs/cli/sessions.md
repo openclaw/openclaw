@@ -46,7 +46,7 @@ JSON examples:
   "activeMinutes": null,
   "sessions": [
     { "agentId": "main", "key": "agent:main:main", "model": "gpt-5" },
-    { "agentId": "work", "key": "agent:work:main", "model": "claude-opus-4-5" }
+    { "agentId": "work", "key": "agent:work:main", "model": "claude-opus-4-6" }
   ]
 }
 ```
