@@ -22,7 +22,7 @@ export const DEEPINFRA_MODEL_CATALOG: DeepInfraModelCatalogEntry[] = [
     id: DEEPINFRA_DEFAULT_MODEL_ID,
     name: DEEPINFRA_DEFAULT_MODEL_NAME,
     reasoning: true,
-    input: ["text", "image"],
+    input: ["text"],
     contextWindow: 131072,
     maxTokens: 131072,
   },
