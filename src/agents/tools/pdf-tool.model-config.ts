@@ -96,7 +96,7 @@ export function resolvePdfModelConfigForTool(params: {
           (model) =>
             Boolean(model?.id?.trim()) &&
             Array.isArray(model?.input) &&
-            model.input.includes("image"),
+            model?.input?.includes("image"),
         )
         ?.id?.trim();
       if (!modelId) {

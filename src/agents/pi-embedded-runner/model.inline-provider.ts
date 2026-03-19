@@ -157,7 +157,7 @@ export function buildInlineProviderModels(
             provider: trimmed,
             modelId: model.id,
             modelName: model.name,
-            input: model.input,
+            input: model?.input,
           }),
           provider: trimmed,
           baseUrl: requestConfig.baseUrl ?? transport.baseUrl,

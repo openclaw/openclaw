@@ -123,6 +123,41 @@ describe("bundle plugin hooks", () => {
     expect(event.messages).toContain("bundle-hook-ok");
   });
 
+  it("keeps bundle hook files anchored to the canonical base dir across path aliases", async () => {
+    const canonicalWorkspaceDir = workspaceDir;
+    const aliasedWorkspaceDir = path.join(fixtureRoot, `alias-${caseId++}`);
+    await fsp.symlink(
+      canonicalWorkspaceDir,
+      aliasedWorkspaceDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    workspaceDir = aliasedWorkspaceDir;
+
+    await writeBundleHookFixture();
+
+    const entries = loadWorkspaceHookEntries(workspaceDir, {
+      config: createConfig(true),
+    });
+
+    expect(entries).toHaveLength(1);
+    const hook = entries[0]?.hook;
+    expect(hook?.baseDir).toBe(
+      fs.realpathSync.native(
+        path.join(
+          canonicalWorkspaceDir,
+          ".openclaw",
+          "extensions",
+          "sample-bundle",
+          "hooks",
+          "bundle-hook",
+        ),
+      ),
+    );
+    expect(hook?.filePath).toBe(path.join(hook?.baseDir ?? "", "HOOK.md"));
+    expect(hook?.handlerPath).toBe(path.join(hook?.baseDir ?? "", "handler.js"));
+    expect(entries[0]?.metadata?.events).toEqual(["command:new"]);
+  });
+
   it("skips disabled bundle hooks", async () => {
     await writeBundleHookFixture();
 

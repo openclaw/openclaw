@@ -251,7 +251,7 @@ function convertAnthropicMessages(
               },
             },
       );
-      let filteredBlocks = model.input.includes("image")
+      let filteredBlocks = model?.input?.includes("image")
         ? blocks
         : blocks.filter((block) => block.type !== "image");
       filteredBlocks = filteredBlocks.filter(

@@ -299,7 +299,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
                 },
               },
         )
-        .filter((item) => model.input.includes("image") || !("inlineData" in item));
+        .filter((item) => model?.input?.includes("image") || !("inlineData" in item));
       if (parts.length > 0) {
         contents.push({ role: "user", parts });
       }
@@ -364,7 +364,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
         )
         .map((item) => item.text)
         .join("\n");
-      const imageContent = model.input.includes("image")
+      const imageContent = model?.input?.includes("image")
         ? msg.content.filter(
             (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
               item.type === "image",

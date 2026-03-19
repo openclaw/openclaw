@@ -103,6 +103,7 @@ function loadHookFromDir(params: {
 
     const handlerCandidates = ["handler.ts", "handler.js", "index.ts", "index.js"];
     let handlerPath: string | undefined;
+    let handlerFileName: string | undefined;
     for (const candidate of handlerCandidates) {
       const candidatePath = path.join(params.hookDir, candidate);
       const safeCandidatePath = resolveBoundaryFilePath({
@@ -112,6 +113,7 @@ function loadHookFromDir(params: {
       });
       if (safeCandidatePath) {
         handlerPath = safeCandidatePath;
+        handlerFileName = candidate;
         break;
       }
     }
@@ -134,9 +136,11 @@ function loadHookFromDir(params: {
         description,
         source: params.source,
         pluginId: params.pluginId,
-        filePath: hookMdPath,
+        // Keep all hook-local paths anchored to the same canonical baseDir so
+        // boundary checks do not trip over Windows short-path aliases.
+        filePath: path.join(baseDir, "HOOK.md"),
         baseDir,
-        handlerPath,
+        handlerPath: handlerFileName ? path.join(baseDir, handlerFileName) : handlerPath,
       },
       frontmatter,
     };

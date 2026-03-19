@@ -170,6 +170,16 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   }
 
   for (const payload of payloads) {
+    // Skip error-only payloads that contain runtime JavaScript errors
+    // (e.g. TypeError from model resolution). These are internal and
+    // should not be surfaced to the user or delivered to channels.
+    if (
+      (payload as { isError?: boolean }).isError &&
+      typeof payload.text === "string" &&
+      /^(Cannot read properties|TypeError|ReferenceError|SyntaxError)/.test(payload.text)
+    ) {
+      continue;
+    }
     const out = formatPayloadForLog(payload);
     if (out) {
       runtime.log(out);

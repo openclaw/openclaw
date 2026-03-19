@@ -257,7 +257,7 @@ function convertResponsesMessages(
                   image_url: `data:${item.mimeType};base64,${item.data}`,
                 },
           ) as ResponseInputMessageContentList
-        ).filter((item) => model.input.includes("image") || item.type !== "input_image");
+        ).filter((item) => model?.input?.includes("image") || item.type !== "input_image");
         if (content.length > 0) {
           messages.push({ role: "user", content });
         }
@@ -316,7 +316,7 @@ function convertResponsesMessages(
         type: "function_call_output",
         call_id: callId,
         output:
-          hasImages && model.input.includes("image")
+          hasImages && model?.input?.includes("image")
             ? ([
                 ...(textResult
                   ? [{ type: "input_text", text: sanitizeTransportPayloadText(textResult) }]

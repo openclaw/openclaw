@@ -76,7 +76,7 @@ function resolveConfiguredImageProviderModel(params: {
       (model) =>
         Boolean(normalizeOptionalString(model?.id)) &&
         Array.isArray(model?.input) &&
-        model.input.includes("image"),
+        model?.input?.includes("image"),
     );
     return normalizeOptionalString(match?.id);
   }
@@ -132,7 +132,7 @@ export function resolveAutoMediaKeyProviders(params: {
       const normalizedProviderId = normalizeMediaProviderId(providerKey);
       const models = providerCfg?.models ?? [];
       const hasImageModel = models.some(
-        (model) => Array.isArray(model?.input) && model.input.includes("image"),
+        (model) => Array.isArray(model?.input) && model?.input?.includes("image"),
       );
       if (hasImageModel && !merged.includes(normalizedProviderId)) {
         merged.push(normalizedProviderId);
