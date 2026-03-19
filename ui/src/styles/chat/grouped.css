@@ -416,8 +416,7 @@ img.chat-avatar {
 }
 
 .chat-delete-confirm {
-  position: absolute;
-  bottom: calc(100% + 6px);
+  position: fixed;
   background: var(--card, #1a1a1a);
   border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
   border-radius: var(--radius-md, 8px);
@@ -430,11 +429,19 @@ img.chat-avatar {
 }
 
 .chat-delete-confirm--left {
-  right: 0;
+  transform-origin: bottom right;
 }
 
 .chat-delete-confirm--right {
-  left: 0;
+  transform-origin: bottom left;
+}
+
+.chat-delete-confirm--below.chat-delete-confirm--left {
+  transform-origin: top right;
+}
+
+.chat-delete-confirm--below.chat-delete-confirm--right {
+  transform-origin: top left;
 }
 
 .chat-delete-confirm__text {

@@ -6,6 +6,7 @@ import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderChatSessionSelect } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
+import { resolveDeleteConfirmViewportPosition } from "../chat/grouped-render.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -673,6 +674,52 @@ describe("chat view", () => {
     );
     expect(confirm).not.toBeNull();
     expect(confirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
+  });
+
+  it("keeps delete confirm anchored above the trigger when there is room", () => {
+    expect(
+      resolveDeleteConfirmViewportPosition(
+        {
+          left: 260,
+          right: 284,
+          top: 220,
+          bottom: 244,
+          width: 24,
+          height: 24,
+        } as DOMRect,
+        { width: 200, height: 96 } as DOMRect,
+        "left",
+        320,
+        480,
+      ),
+    ).toEqual({
+      left: 84,
+      top: 118,
+      placement: "above",
+    });
+  });
+
+  it("flips delete confirm below the trigger when there is no room above", () => {
+    expect(
+      resolveDeleteConfirmViewportPosition(
+        {
+          left: 8,
+          right: 32,
+          top: 18,
+          bottom: 42,
+          width: 24,
+          height: 24,
+        } as DOMRect,
+        { width: 200, height: 96 } as DOMRect,
+        "right",
+        320,
+        480,
+      ),
+    ).toEqual({
+      left: 12,
+      top: 48,
+      placement: "below",
+    });
   });
 
   it("patches the current session model from the chat header picker", async () => {
