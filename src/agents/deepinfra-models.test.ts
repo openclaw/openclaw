@@ -18,7 +18,7 @@ function makeModelEntry(overrides: Record<string, unknown> = {}) {
         output_tokens: 15.0,
         cache_read_tokens: 0.3,
       },
-      tags: ["vision", "reasoning_effort", "prompt_cache"],
+      tags: ["vision", "reasoning_effort", "prompt_cache", "reasoning"],
     },
     ...overrides,
   };

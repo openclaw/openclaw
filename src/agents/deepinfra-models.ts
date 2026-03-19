@@ -29,7 +29,7 @@ interface DeepInfraModelMetadata {
   context_length?: number;
   max_tokens?: number;
   pricing?: DeepInfraModelPricing;
-  /** e.g. ["vision", "reasoning_effort", "prompt_cache"] */
+  /** e.g. ["vision", "reasoning_effort", "prompt_cache", "reasoning"] */
   tags?: string[];
 }
 
@@ -54,7 +54,9 @@ function parseModality(metadata: DeepInfraModelMetadata): Array<"text" | "image"
 }
 
 function parseReasoning(metadata: DeepInfraModelMetadata): boolean {
-  return metadata.tags?.includes("reasoning_effort") ?? false;
+  return (
+    (metadata.tags?.includes("reasoning_effort") || metadata.tags?.includes("reasoning")) ?? false
+  );
 }
 
 function toModelDefinition(entry: DeepInfraModelEntry): ModelDefinitionConfig {
