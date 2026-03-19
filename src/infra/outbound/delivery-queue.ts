@@ -337,7 +337,7 @@ function normalizeQueuedDelivery(raw: unknown, fallbackId: string): QueuedDelive
 
   const mirrorRecord =
     record.mirror && typeof record.mirror === "object"
-      ? (record.mirror as Partial<DeliveryMirrorPayload>)
+      ? (record.mirror as Partial<OutboundMirror>)
       : null;
   const mirrorSessionKey = asTrimmedString(mirrorRecord?.sessionKey);
   const mirror =
@@ -347,7 +347,9 @@ function normalizeQueuedDelivery(raw: unknown, fallbackId: string): QueuedDelive
           agentId: asTrimmedString(mirrorRecord?.agentId) ?? undefined,
           text: typeof mirrorRecord?.text === "string" ? mirrorRecord.text : undefined,
           mediaUrls: Array.isArray(mirrorRecord?.mediaUrls)
-            ? mirrorRecord.mediaUrls.filter((url): url is string => typeof url === "string")
+            ? mirrorRecord.mediaUrls.filter(
+                (url: unknown): url is string => typeof url === "string",
+              )
             : undefined,
         }
       : undefined;
