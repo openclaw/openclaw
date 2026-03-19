@@ -141,9 +141,9 @@ export function createSmsPlugin() {
       deliveryMode: "gateway" as const,
       textChunkLimit: 1600,
 
-      sendText: async ({ to, text }: any) => {
-        await sendSms(to, text);
-        return { channel: CHANNEL_ID, messageId: `sms-${Date.now()}`, chatId: to };
+      sendText: async ({ text }: any) => {
+        await sendSms(text);
+        return { channel: CHANNEL_ID, messageId: `sms-${Date.now()}`, chatId: "sms" };
       },
     },
 
@@ -168,13 +168,21 @@ export function createSmsPlugin() {
             const rt = getSmsRuntime();
             const currentCfg = await rt.config.loadConfig();
 
+            // Resolve canonical session key via the routing system
+            const route = rt.channel.routing.resolveAgentRoute({
+              cfg: currentCfg,
+              channel: CHANNEL_ID,
+              accountId: account.accountId,
+              peer: { kind: "direct" as const, id: msg.from },
+            });
+
             const msgCtx = rt.channel.reply.finalizeInboundContext({
               Body: msg.body,
               RawBody: msg.body,
               CommandBody: msg.body,
               From: `sms:${msg.from}`,
               To: `sms:${msg.from}`,
-              SessionKey: msg.sessionKey,
+              SessionKey: route.sessionKey,
               AccountId: account.accountId,
               OriginatingChannel: CHANNEL_ID,
               OriginatingTo: `sms:${msg.from}`,
@@ -195,7 +203,7 @@ export function createSmsPlugin() {
                 deliver: async (payload: { text?: string; body?: string }) => {
                   const text = payload?.text ?? payload?.body;
                   if (text) {
-                    await sendSms(msg.from, text);
+                    await sendSms(text);
                   }
                 },
                 onReplyStart: () => {

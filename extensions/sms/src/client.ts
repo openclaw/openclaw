@@ -18,7 +18,7 @@ function getGatewayToken(): string {
   return token;
 }
 
-export async function sendSms(to: string, content: string): Promise<Record<string, unknown>> {
+export async function sendSms(content: string): Promise<Record<string, unknown>> {
   const hubUrl = getHubUrl();
   const token = getGatewayToken();
 
@@ -28,7 +28,7 @@ export async function sendSms(to: string, content: string): Promise<Record<strin
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ to, text: content }),
+    body: JSON.stringify({ text: content }),
   });
 
   if (!res.ok) {

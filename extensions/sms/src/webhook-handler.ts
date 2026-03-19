@@ -47,7 +47,6 @@ export interface SmsWebhookHandlerDeps {
     from: string;
     provider: string;
     chatType: string;
-    sessionKey: string;
     accountId: string;
     commandAuthorized: boolean;
   }) => Promise<string | null>;
@@ -114,14 +113,12 @@ export function createSmsWebhookHandler(deps: SmsWebhookHandlerDeps) {
     respondJson(res, 200, { ok: true });
 
     // Deliver to agent asynchronously
-    const sessionKey = `sms:${fromPhone}`;
     try {
       await deliver({
         body: text,
         from: fromPhone,
         provider: "sms",
         chatType: "direct",
-        sessionKey,
         accountId: "default",
         commandAuthorized: true,
       });
