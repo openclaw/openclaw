@@ -38,7 +38,7 @@ Healthy baseline:
 | Group messages ignored          | Check `requireMention` + mention patterns in config | Mention the bot or relax mention policy for that group. |
 | Random disconnect/relogin loops | `openclaw channels status --probe` + logs           | Re-login and verify credentials directory is healthy.   |
 
-Full troubleshooting: [/channels/whatsapp#troubleshooting-quick](/channels/whatsapp#troubleshooting-quick)
+Full troubleshooting: [/channels/whatsapp#troubleshooting](/channels/whatsapp#troubleshooting)
 
 ## Telegram
 
@@ -90,7 +90,7 @@ Full troubleshooting: [/channels/slack#troubleshooting](/channels/slack#troubles
 
 Full troubleshooting:
 
-- [/channels/imessage#troubleshooting-macos-privacy-and-security-tcc](/channels/imessage#troubleshooting-macos-privacy-and-security-tcc)
+- [/channels/imessage#troubleshooting](/channels/imessage#troubleshooting)
 - [/channels/bluebubbles#troubleshooting](/channels/bluebubbles#troubleshooting)
 
 ## Signal
