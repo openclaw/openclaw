@@ -97,6 +97,15 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
                 return
             }
             if params.allowTOFU {
+                // Require standard trust evaluation before accepting a first-use
+                // certificate.  Without this gate an attacker on the network can
+                // present a self-signed certificate on the very first connection
+                // and it would be permanently pinned (TOFU bypass, CVSS 9.0).
+                var trustError: CFError?
+                guard SecTrustEvaluateWithError(trust, &trustError) else {
+                    completionHandler(.cancelAuthenticationChallenge, nil)
+                    return
+                }
                 if let storeKey = params.storeKey {
                     GatewayTLSStore.saveFingerprint(fingerprint, stableID: storeKey)
                 }
