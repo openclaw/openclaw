@@ -1,6 +1,36 @@
+import type { IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import { resolveConnectAuthDecision, type ConnectAuthState } from "./auth-context.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  type AuthRateLimiter,
+} from "../../auth-rate-limit.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import {
+  resolveConnectAuthDecision,
+  resolveConnectAuthState,
+  type ConnectAuthState,
+} from "./auth-context.js";
+
+vi.mock("../../auth.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../auth.js")>();
+  return {
+    ...original,
+    authorizeWsControlUiGatewayConnect: vi.fn<() => Promise<GatewayAuthResult>>(),
+    authorizeHttpGatewayConnect: vi.fn<() => Promise<GatewayAuthResult>>(),
+  };
+});
+
+async function importMockedAuth() {
+  const mod = await import("../../auth.js");
+  return {
+    authorizeWsControlUiGatewayConnect: mod.authorizeWsControlUiGatewayConnect as ReturnType<
+      typeof vi.fn<() => Promise<GatewayAuthResult>>
+    >,
+    authorizeHttpGatewayConnect: mod.authorizeHttpGatewayConnect as ReturnType<
+      typeof vi.fn<() => Promise<GatewayAuthResult>>
+    >,
+  };
+}
 
 type VerifyDeviceTokenFn = Parameters<typeof resolveConnectAuthDecision>[0]["verifyDeviceToken"];
 type VerifyBootstrapTokenFn = Parameters<
@@ -187,5 +217,157 @@ describe("resolveConnectAuthDecision", () => {
     expect(decision.authOk).toBe(true);
     expect(decision.authMethod).toBe("token");
     expect(verifyDeviceToken).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveConnectAuthState – shared-secret rate limiting with device identity", () => {
+  const fakeReq = {} as IncomingMessage;
+  const fakeResolvedAuth: ResolvedGatewayAuth = {
+    mode: "token",
+    token: "real-token",
+    allowTailscale: false,
+  };
+
+  function createMockRateLimiter(): {
+    limiter: AuthRateLimiter;
+    recordFailure: ReturnType<typeof vi.fn>;
+    check: ReturnType<typeof vi.fn>;
+    reset: ReturnType<typeof vi.fn>;
+  } {
+    const recordFailure = vi.fn();
+    const check = vi.fn(() => ({ allowed: true, remaining: 10, retryAfterMs: 0 }));
+    const reset = vi.fn();
+    return {
+      limiter: { check, recordFailure, reset, size: () => 0, prune: () => {}, dispose: () => {} },
+      recordFailure,
+      check,
+      reset,
+    };
+  }
+
+  it("records shared-secret failure when hasDeviceIdentity is true and auth fails", async () => {
+    const { authorizeWsControlUiGatewayConnect, authorizeHttpGatewayConnect } =
+      await importMockedAuth();
+
+    authorizeWsControlUiGatewayConnect.mockResolvedValue({
+      ok: false,
+      reason: "token_mismatch",
+    });
+    authorizeHttpGatewayConnect.mockResolvedValue({
+      ok: false,
+      reason: "token_mismatch",
+    });
+
+    const mock = createMockRateLimiter();
+    const state = await resolveConnectAuthState({
+      resolvedAuth: fakeResolvedAuth,
+      connectAuth: { token: "wrong-token", deviceToken: "some-device-token" },
+      hasDeviceIdentity: true,
+      req: fakeReq,
+      trustedProxies: [],
+      allowRealIpFallback: false,
+      rateLimiter: mock.limiter,
+      clientIp: "203.0.113.50",
+    });
+
+    expect(state.authOk).toBe(false);
+    expect(mock.recordFailure).toHaveBeenCalledWith(
+      "203.0.113.50",
+      AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+    );
+  });
+
+  it("does NOT record failure when hasDeviceIdentity is false (normal path)", async () => {
+    const { authorizeWsControlUiGatewayConnect, authorizeHttpGatewayConnect } =
+      await importMockedAuth();
+
+    authorizeWsControlUiGatewayConnect.mockResolvedValue({
+      ok: false,
+      reason: "token_mismatch",
+    });
+    authorizeHttpGatewayConnect.mockResolvedValue({
+      ok: false,
+      reason: "token_mismatch",
+    });
+
+    const mock = createMockRateLimiter();
+    await resolveConnectAuthState({
+      resolvedAuth: fakeResolvedAuth,
+      connectAuth: { token: "wrong-token" },
+      hasDeviceIdentity: false,
+      req: fakeReq,
+      trustedProxies: [],
+      allowRealIpFallback: false,
+      rateLimiter: mock.limiter,
+      clientIp: "203.0.113.51",
+    });
+
+    // The rate limiter was passed directly to authorizeWsControlUiGatewayConnect,
+    // so recordFailure is handled inside that function, not in the else branch.
+    expect(mock.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("resets rate limiter on success with device identity (existing behavior preserved)", async () => {
+    const { authorizeWsControlUiGatewayConnect, authorizeHttpGatewayConnect } =
+      await importMockedAuth();
+
+    authorizeWsControlUiGatewayConnect.mockResolvedValue({
+      ok: true,
+      method: "token",
+    });
+    authorizeHttpGatewayConnect.mockResolvedValue({
+      ok: true,
+      method: "token",
+    });
+
+    const mock = createMockRateLimiter();
+    const state = await resolveConnectAuthState({
+      resolvedAuth: fakeResolvedAuth,
+      connectAuth: { token: "real-token", deviceToken: "some-device-token" },
+      hasDeviceIdentity: true,
+      req: fakeReq,
+      trustedProxies: [],
+      allowRealIpFallback: false,
+      rateLimiter: mock.limiter,
+      clientIp: "203.0.113.52",
+    });
+
+    expect(state.authOk).toBe(true);
+    expect(mock.recordFailure).not.toHaveBeenCalled();
+    expect(mock.reset).toHaveBeenCalledWith("203.0.113.52", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+  });
+
+  it("records failure with shared-token-fallback device candidate", async () => {
+    const { authorizeWsControlUiGatewayConnect, authorizeHttpGatewayConnect } =
+      await importMockedAuth();
+
+    // When only token is provided (no explicit deviceToken), the token is reused
+    // as a shared-token-fallback device candidate.
+    authorizeWsControlUiGatewayConnect.mockResolvedValue({
+      ok: false,
+      reason: "token_mismatch",
+    });
+    authorizeHttpGatewayConnect.mockResolvedValue({
+      ok: false,
+      reason: "token_mismatch",
+    });
+
+    const mock = createMockRateLimiter();
+    const state = await resolveConnectAuthState({
+      resolvedAuth: fakeResolvedAuth,
+      connectAuth: { token: "wrong-token" },
+      hasDeviceIdentity: true,
+      req: fakeReq,
+      trustedProxies: [],
+      allowRealIpFallback: false,
+      rateLimiter: mock.limiter,
+      clientIp: "203.0.113.53",
+    });
+
+    expect(state.authOk).toBe(false);
+    expect(mock.recordFailure).toHaveBeenCalledWith(
+      "203.0.113.53",
+      AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+    );
   });
 });

@@ -131,6 +131,12 @@ export async function resolveConnectAuthState(params: {
     } else {
       params.rateLimiter.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
     }
+  } else if (hasDeviceTokenCandidate && !authResult.ok && params.rateLimiter) {
+    // Record shared-secret failures that were missed because the rate limiter
+    // was not passed to the primary auth call (deferred for device-token flows).
+    // Without this, an attacker including a device field bypasses brute-force
+    // protection on the shared secret entirely.
+    params.rateLimiter.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
   }
 
   const sharedAuthResult =
