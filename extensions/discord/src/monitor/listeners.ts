@@ -224,8 +224,11 @@ export class DiscordMessageListener extends MessageCreateListener {
 }
 
 export class DiscordReactionListener extends MessageReactionAddListener {
-  constructor(private params: DiscordReactionListenerParams) {
+  private readonly params: DiscordReactionListenerParams;
+
+  constructor(params: DiscordReactionListenerParams) {
     super();
+    this.params = params;
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
@@ -242,8 +245,11 @@ export class DiscordReactionListener extends MessageReactionAddListener {
 }
 
 export class DiscordReactionRemoveListener extends MessageReactionRemoveListener {
-  constructor(private params: DiscordReactionListenerParams) {
+  private readonly params: DiscordReactionListenerParams;
+
+  constructor(params: DiscordReactionListenerParams) {
     super();
+    this.params = params;
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {

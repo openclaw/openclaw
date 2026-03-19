@@ -861,8 +861,11 @@ export class DiscordVoiceManager {
 }
 
 export class DiscordVoiceReadyListener extends ReadyListener {
-  constructor(private manager: DiscordVoiceManager) {
+  private readonly manager: DiscordVoiceManager;
+
+  constructor(manager: DiscordVoiceManager) {
     super();
+    this.manager = manager;
   }
 
   async handle() {
