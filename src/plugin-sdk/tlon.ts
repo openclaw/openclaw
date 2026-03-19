@@ -15,7 +15,7 @@ export type {
   ChannelSetupInput,
 } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createChannelReplyPipeline, createReplyPrefixOptions } from "./channel-reply-pipeline.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
