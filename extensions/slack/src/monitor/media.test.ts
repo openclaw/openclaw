@@ -303,6 +303,83 @@ describe("resolveSlackMedia", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("falls back to files.info when url_private is missing but file id is available", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/dm-file.jpg", "image/jpeg"),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from("image data"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+
+    const mockClient = {
+      files: {
+        info: vi.fn().mockResolvedValue({
+          file: {
+            id: "F123",
+            name: "dm-file.jpg",
+            mimetype: "image/jpeg",
+            url_private_download: "https://files.slack.com/fresh-download.jpg",
+          },
+        }),
+      },
+    } as unknown as import("@slack/web-api").WebClient;
+
+    const result = await resolveSlackMedia({
+      files: [{ id: "F123", name: "dm-file.jpg", mimetype: "image/jpeg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+      client: mockClient,
+    });
+
+    expect(mockClient.files.info).toHaveBeenCalledWith({ file: "F123" });
+    expect(result).not.toBeNull();
+    expect(result).toHaveLength(1);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://files.slack.com/fresh-download.jpg",
+      expect.anything(),
+    );
+  });
+
+  it("skips file when files.info also has no download URL", async () => {
+    const mockClient = {
+      files: {
+        info: vi.fn().mockResolvedValue({ file: { id: "F123", name: "dm-file.jpg" } }),
+      },
+    } as unknown as import("@slack/web-api").WebClient;
+
+    const result = await resolveSlackMedia({
+      files: [{ id: "F123", name: "dm-file.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+      client: mockClient,
+    });
+
+    expect(mockClient.files.info).toHaveBeenCalledWith({ file: "F123" });
+    expect(result).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("skips file when files.info call fails", async () => {
+    const mockClient = {
+      files: {
+        info: vi.fn().mockRejectedValue(new Error("slack_api_error")),
+      },
+    } as unknown as import("@slack/web-api").WebClient;
+
+    const result = await resolveSlackMedia({
+      files: [{ id: "F123", name: "dm-file.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+      client: mockClient,
+    });
+
+    expect(result).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("rejects HTML auth pages for non-HTML files", async () => {
     const saveMediaBufferMock = vi.spyOn(mediaStore, "saveMediaBuffer");
     mockFetch.mockResolvedValueOnce(

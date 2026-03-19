@@ -556,6 +556,7 @@ export async function prepareSlackMessage(params: {
     isBotMessage,
     botToken: ctx.botToken,
     mediaMaxBytes: ctx.mediaMaxBytes,
+    client: ctx.app.client,
   });
   if (!resolvedMessageContent) {
     return null;
