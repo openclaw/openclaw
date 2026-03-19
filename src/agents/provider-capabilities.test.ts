@@ -174,6 +174,12 @@ describe("resolveProviderCapabilities", () => {
         modelId: "claude-3.7-sonnet",
       }),
     ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "qianfan",
+        modelId: "baiduqianfancodingplan/qianfan-code-latest",
+      }),
+    ).toBe(true);
   });
 
   it("forwards config and workspace context to plugin capability lookup", () => {
