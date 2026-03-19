@@ -1,6 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
+import { createDeepInfraSystemCacheWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { applyDeepInfraConfig, DEEPINFRA_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildDeepInfraProviderWithDiscovery } from "./provider-catalog.js";
 
@@ -65,6 +66,7 @@ export default definePluginEntry({
         geminiThoughtSignatureModelHints: ["gemini"],
         dropThinkingBlockModelHints: ["claude"],
       },
+      wrapStreamFn: (ctx) => createDeepInfraSystemCacheWrapper(ctx.streamFn),
       isCacheTtlEligible: (ctx) => isDeepInfraCacheTtlModel(ctx.modelId),
     });
   },

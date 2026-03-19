@@ -9,9 +9,11 @@ export {
   sanitizeGoogleThinkingPayload,
 } from "../agents/pi-embedded-runner/google-stream-wrappers.js";
 export {
+  createDeepInfraSystemCacheWrapper,
   createKilocodeWrapper,
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
+  createSystemCacheWrapper,
   isProxyReasoningUnsupported,
 } from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
 export {
