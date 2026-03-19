@@ -4,8 +4,10 @@ services:
     runtime: docker
     plan: standard
     healthCheckPath: /health
-    dockerCommand: "node --max-old-space-size=1536 openclaw.mjs gateway --allow-unconfigured --bind lan --port 8080"
+    dockerCommand: "node openclaw.mjs gateway --allow-unconfigured --bind lan --port 8080"
     envVars:
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=1536"
       - key: PORT
         value: "8080"
       - key: SETUP_PASSWORD
