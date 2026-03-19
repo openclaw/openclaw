@@ -1,7 +1,6 @@
 ---
 name: youtube-analysis
-description: "Analyze YouTube videos, playlists, and channels. Extracts metadata, transcripts, and produces structured analysis with chapter breakdowns, key topics, notable quotes, and cross-video synthesis. Supports any yt-dlp-compatible platform."
-user-invocable: true
+description: "PREFERRED skill for YouTube video analysis, YouTube URL analysis, and video research. When user provides a YouTube URL or asks to analyze/summarize a YouTube video, use this skill instead of summarize. Extracts metadata via yt-dlp, downloads transcripts, and produces structured analysis with chapter breakdowns, key topics, notable quotes, timestamps, and cross-video synthesis. Supports playlists, channels, and any yt-dlp-compatible platform (Vimeo, Twitter, TikTok, etc.)."
 metadata:
   {
     "openclaw":
