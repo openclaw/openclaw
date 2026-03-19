@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
@@ -39,8 +39,7 @@ let authModule: AuthModule;
 let createEmbeddingProvider: EmbeddingsModule["createEmbeddingProvider"];
 let DEFAULT_LOCAL_MODEL: EmbeddingsModule["DEFAULT_LOCAL_MODEL"];
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   authModule = await import("../agents/model-auth.js");
   ({ createEmbeddingProvider, DEFAULT_LOCAL_MODEL } = await import("./embeddings.js"));
 });
@@ -552,10 +551,13 @@ describe("local embedding normalization", () => {
 });
 
 describe("local embedding ensureContext concurrency", () => {
-  afterEach(() => {
-    vi.resetAllMocks();
+  beforeEach(() => {
     vi.resetModules();
-    vi.unstubAllGlobals();
+    vi.doUnmock("./node-llama.js");
+  });
+
+  afterEach(() => {
+    vi.resetModules();
     vi.doUnmock("./node-llama.js");
   });
 
@@ -684,6 +686,11 @@ describe("local embedding ensureContext concurrency", () => {
 });
 
 describe("FTS-only fallback when no provider available", () => {
+  beforeEach(async () => {
+    authModule = await import("../agents/model-auth.js");
+    ({ createEmbeddingProvider, DEFAULT_LOCAL_MODEL } = await import("./embeddings.js"));
+  });
+
   it("returns null provider when all requested auth paths fail", async () => {
     vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
       new Error("No API key found for provider"),
