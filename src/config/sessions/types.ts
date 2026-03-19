@@ -118,6 +118,14 @@ export type SessionEntry = {
   lastNonAutoModel?: string;
   /** Auto model routing status for session. */
   autoModelRoutingStatus?: unknown;
+  /** Current run id when a run is active. */
+  currentRunId?: string | null;
+  /** Effective thinking level for current run. */
+  effectiveThink?: string | null;
+  /** Last effective thinking level. */
+  lastEffectiveThink?: string | null;
+  /** Last run id (for lifecycle). */
+  lastRunId?: string | null;
   fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
