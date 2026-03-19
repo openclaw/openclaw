@@ -585,9 +585,11 @@ async function resolveSubagentCompletionOrigin(params: {
   if (route.mode === "bound" && route.binding) {
     const bindingConversationId = String(route.binding.conversation.conversationId).trim();
     if (route.binding.conversation.channel === "telegram") {
+      const bindingConversationLooksLikeTopic = /:topic:\d+$/.test(bindingConversationId);
       const canDecodeBindingTopic =
         Boolean(bindingConversationId) &&
-        (!parentConversationId || bindingConversationId !== parentConversationId);
+        (bindingConversationLooksLikeTopic ||
+          (Boolean(threadId) && bindingConversationId === threadId));
       const parsedTopic = canDecodeBindingTopic
         ? parseTelegramTopicConversation({
             conversationId: bindingConversationId,
@@ -613,7 +615,14 @@ async function resolveSubagentCompletionOrigin(params: {
         to: `channel:${bindingConversationId}`,
         threadId: route.binding.conversation.channel === "telegram" ? undefined : threadId,
       },
-      requesterOrigin,
+      route.binding.conversation.channel === "telegram"
+        ? requesterOrigin
+          ? (() => {
+              const { threadId: _threadId, ...rest } = requesterOrigin;
+              return rest;
+            })()
+          : requesterOrigin
+        : requesterOrigin,
     );
   }
 

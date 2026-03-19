@@ -1022,6 +1022,68 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.threadId).toBeUndefined();
   });
 
+  it("keeps bound telegram plain destinations threadless even when requester is in a topic", async () => {
+    sendSpy.mockClear();
+    agentSpy.mockClear();
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-telegram-plain-bound",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-telegram-topic-bound",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "default",
+      listBySession: (targetSessionKey: string) =>
+        targetSessionKey === "agent:main:subagent:test"
+          ? [
+              {
+                bindingId: "telegram:default:24680",
+                targetSessionKey,
+                targetKind: "subagent",
+                conversation: {
+                  channel: "telegram",
+                  accountId: "default",
+                  conversationId: "24680",
+                },
+                status: "active",
+                boundAt: Date.now(),
+              },
+            ]
+          : [],
+      resolveByConversation: () => null,
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-telegram-plain-bound",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "channel:-1003852453363",
+        accountId: "default",
+        threadId: "761",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("channel:24680");
+    expect(call?.params?.threadId).toBeUndefined();
+  });
+
   it("routes manual completion announce agent delivery for telegram forum topics", async () => {
     sendSpy.mockClear();
     agentSpy.mockClear();
