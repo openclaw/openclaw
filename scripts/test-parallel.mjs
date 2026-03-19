@@ -5,6 +5,11 @@ import path from "node:path";
 import { channelTestPrefixes } from "../vitest.channel-paths.mjs";
 import { isUnitConfigTestFile } from "../vitest.unit-paths.mjs";
 import {
+  appendCapturedOutput,
+  hasFatalTestRunOutput,
+  resolveTestRunExitCode,
+} from "./test-parallel-utils.mjs";
+import {
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
   packFilesByDuration,
@@ -740,10 +745,13 @@ const runOnce = (entry, extraArgs = []) =>
     const resolvedNodeOptions = heapFlag
       ? `${nextNodeOptions} ${heapFlag}`.trim()
       : nextNodeOptions;
+    let output = "";
+    let fatalSeen = false;
+    let childError = null;
     let child;
     try {
       child = spawn(pnpm, args, {
-        stdio: "inherit",
+        stdio: ["inherit", "pipe", "pipe"],
         env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: resolvedNodeOptions },
         shell: isWindows,
       });
@@ -753,17 +761,29 @@ const runOnce = (entry, extraArgs = []) =>
       return;
     }
     children.add(child);
+    child.stdout?.on("data", (chunk) => {
+      const text = chunk.toString();
+      fatalSeen ||= hasFatalTestRunOutput(`${output}${text}`);
+      output = appendCapturedOutput(output, text);
+      process.stdout.write(chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      const text = chunk.toString();
+      fatalSeen ||= hasFatalTestRunOutput(`${output}${text}`);
+      output = appendCapturedOutput(output, text);
+      process.stderr.write(chunk);
+    });
     child.on("error", (err) => {
+      childError = err;
       console.error(`[test-parallel] child error: ${String(err)}`);
     });
-    child.on("exit", (code, signal) => {
+    child.on("close", (code, signal) => {
       children.delete(child);
+      const resolvedCode = resolveTestRunExitCode({ code, signal, output, fatalSeen, childError });
       console.log(
-        `[test-parallel] done ${entry.name} code=${String(code ?? (signal ? 1 : 0))} elapsed=${formatElapsedMs(
-          Date.now() - startedAt,
-        )}`,
+        `[test-parallel] done ${entry.name} code=${String(resolvedCode)} elapsed=${formatElapsedMs(Date.now() - startedAt)}`,
       );
-      resolve(code ?? (signal ? 1 : 0));
+      resolve(resolvedCode);
     });
   });
 

@@ -48,6 +48,18 @@
   },
   "redirects": [
     {
+      "source": "/brave-search",
+      "destination": "/tools/brave-search"
+    },
+    {
+      "source": "/perplexity",
+      "destination": "/tools/perplexity-search"
+    },
+    {
+      "source": "/tts",
+      "destination": "/tools/tts"
+    },
+    {
       "source": "/messages",
       "destination": "/concepts/messages"
     },
@@ -825,16 +837,8 @@
             "tab": "Get started",
             "groups": [
               {
-                "group": "Home",
-                "pages": ["index"]
-              },
-              {
                 "group": "Overview",
-                "pages": ["start/showcase"]
-              },
-              {
-                "group": "Core concepts",
-                "pages": ["concepts/features"]
+                "pages": ["index", "start/showcase", "concepts/features"]
               },
               {
                 "group": "First steps",
@@ -860,7 +864,7 @@
             "groups": [
               {
                 "group": "Install overview",
-                "pages": ["install/index", "install/installer"]
+                "pages": ["install/index", "install/installer", "install/node"]
               },
               {
                 "group": "Other install methods",
@@ -880,6 +884,7 @@
                 "group": "Hosting and deployment",
                 "pages": [
                   "vps",
+                  "install/docker-vm-runtime",
                   "install/kubernetes",
                   "install/fly",
                   "install/hetzner",
@@ -951,7 +956,6 @@
               {
                 "group": "Fundamentals",
                 "pages": [
-                  "pi",
                   "concepts/architecture",
                   "concepts/agent",
                   "concepts/agent-loop",
@@ -959,12 +963,9 @@
                   "concepts/context",
                   "concepts/context-engine",
                   "concepts/agent-workspace",
-                  "concepts/oauth"
+                  "concepts/oauth",
+                  "start/bootstrapping"
                 ]
-              },
-              {
-                "group": "Bootstrapping",
-                "pages": ["start/bootstrapping"]
               },
               {
                 "group": "Sessions and memory",
@@ -1002,7 +1003,7 @@
                 "group": "Built-in tools",
                 "pages": [
                   "tools/apply-patch",
-                  "brave-search",
+                  "tools/brave-search",
                   "tools/btw",
                   "tools/diffs",
                   "tools/elevated",
@@ -1013,7 +1014,7 @@
                   "tools/lobster",
                   "tools/loop-detection",
                   "tools/pdf",
-                  "perplexity",
+                  "tools/perplexity-search",
                   "tools/reactions",
                   "tools/thinking",
                   "tools/web"
@@ -1024,7 +1025,8 @@
                 "pages": [
                   "tools/browser",
                   "tools/browser-login",
-                  "tools/browser-linux-troubleshooting"
+                  "tools/browser-linux-troubleshooting",
+                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
                 ]
               },
               {
@@ -1044,7 +1046,8 @@
                   "tools/skills",
                   "tools/skills-config",
                   "tools/clawhub",
-                  "tools/plugin"
+                  "tools/plugin",
+                  "prose"
                 ]
               },
               {
@@ -1058,8 +1061,7 @@
                   "plugins/zalouser",
                   "plugins/manifest",
                   "plugins/agent-tools",
-                  "tools/capability-cookbook",
-                  "prose"
+                  "tools/capability-cookbook"
                 ]
               },
               {
@@ -1087,7 +1089,7 @@
                   "nodes/talk",
                   "nodes/voicewake",
                   "nodes/location-command",
-                  "tts"
+                  "tools/tts"
                 ]
               }
             ]
@@ -1100,12 +1102,8 @@
                 "pages": ["providers/index", "providers/models"]
               },
               {
-                "group": "Model concepts",
-                "pages": ["concepts/models"]
-              },
-              {
-                "group": "Configuration",
-                "pages": ["concepts/model-providers", "concepts/model-failover"]
+                "group": "Concepts and configuration",
+                "pages": ["concepts/models", "concepts/model-providers", "concepts/model-failover"]
               },
               {
                 "group": "Providers",
@@ -1117,6 +1115,7 @@
                   "providers/deepgram",
                   "providers/github-copilot",
                   "providers/google",
+                  "providers/groq",
                   "providers/huggingface",
                   "providers/kilocode",
                   "providers/litellm",
@@ -1211,6 +1210,7 @@
                       "gateway/heartbeat",
                       "gateway/doctor",
                       "gateway/logging",
+                      "logging",
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/multiple-gateways",
@@ -1241,6 +1241,7 @@
                   {
                     "group": "Networking and discovery",
                     "pages": [
+                      "network",
                       "gateway/network-model",
                       "gateway/pairing",
                       "gateway/discovery",
@@ -1274,51 +1275,76 @@
                 "group": "CLI commands",
                 "pages": [
                   "cli/index",
-                  "cli/acp",
-                  "cli/agent",
-                  "cli/agents",
-                  "cli/approvals",
-                  "cli/browser",
-                  "cli/channels",
-                  "cli/clawbot",
-                  "cli/completion",
-                  "cli/config",
-                  "cli/configure",
-                  "cli/cron",
-                  "cli/daemon",
-                  "cli/dashboard",
-                  "cli/devices",
-                  "cli/directory",
-                  "cli/dns",
-                  "cli/docs",
-                  "cli/doctor",
-                  "cli/gateway",
-                  "cli/health",
-                  "cli/hooks",
-                  "cli/logs",
-                  "cli/memory",
-                  "cli/message",
-                  "cli/models",
-                  "cli/node",
-                  "cli/nodes",
-                  "cli/onboard",
-                  "cli/pairing",
-                  "cli/plugins",
-                  "cli/qr",
-                  "cli/reset",
-                  "cli/sandbox",
-                  "cli/secrets",
-                  "cli/security",
-                  "cli/sessions",
-                  "cli/setup",
-                  "cli/skills",
-                  "cli/status",
-                  "cli/system",
-                  "cli/tui",
-                  "cli/uninstall",
-                  "cli/update",
-                  "cli/voicecall",
-                  "cli/webhooks"
+                  {
+                    "group": "Gateway and service",
+                    "pages": [
+                      "cli/backup",
+                      "cli/daemon",
+                      "cli/doctor",
+                      "cli/gateway",
+                      "cli/health",
+                      "cli/logs",
+                      "cli/onboard",
+                      "cli/reset",
+                      "cli/secrets",
+                      "cli/security",
+                      "cli/setup",
+                      "cli/status",
+                      "cli/uninstall",
+                      "cli/update"
+                    ]
+                  },
+                  {
+                    "group": "Agents and sessions",
+                    "pages": [
+                      "cli/agent",
+                      "cli/agents",
+                      "cli/hooks",
+                      "cli/memory",
+                      "cli/message",
+                      "cli/models",
+                      "cli/sessions",
+                      "cli/system"
+                    ]
+                  },
+                  {
+                    "group": "Channels and messaging",
+                    "pages": [
+                      "cli/channels",
+                      "cli/devices",
+                      "cli/directory",
+                      "cli/pairing",
+                      "cli/qr",
+                      "cli/voicecall"
+                    ]
+                  },
+                  {
+                    "group": "Tools and execution",
+                    "pages": [
+                      "cli/approvals",
+                      "cli/browser",
+                      "cli/cron",
+                      "cli/node",
+                      "cli/nodes",
+                      "cli/sandbox"
+                    ]
+                  },
+                  {
+                    "group": "Configuration",
+                    "pages": ["cli/config", "cli/configure", "cli/webhooks"]
+                  },
+                  {
+                    "group": "Plugins and skills",
+                    "pages": ["cli/plugins", "cli/skills"]
+                  },
+                  {
+                    "group": "Interfaces",
+                    "pages": ["cli/dashboard", "cli/tui"]
+                  },
+                  {
+                    "group": "Utility",
+                    "pages": ["cli/acp", "cli/clawbot", "cli/completion", "cli/dns", "cli/docs"]
+                  }
                 ]
               },
               {
@@ -1342,12 +1368,14 @@
               {
                 "group": "Technical reference",
                 "pages": [
+                  "pi",
                   "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
                   "reference/prompt-caching",
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
+                  "reference/memory-config",
                   "date-time"
                 ]
               },
@@ -1392,10 +1420,6 @@
                   "debug/node-issue",
                   "diagnostics/flags"
                 ]
-              },
-              {
-                "group": "Node runtime",
-                "pages": ["install/node"]
               },
               {
                 "group": "Compaction internals",
