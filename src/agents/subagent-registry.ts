@@ -819,7 +819,10 @@ function resolveSubagentWaitTimeoutMs(
   cfg: ReturnType<typeof loadConfig>,
   runTimeoutSeconds?: number,
 ) {
-  return resolveAgentTimeoutMs({ cfg, overrideSeconds: runTimeoutSeconds ?? 0 });
+  // When runTimeoutSeconds is undefined, pass undefined so
+  // resolveAgentTimeoutMs falls back to the global default (600s)
+  // instead of treating 0 as "no timeout" (#25992).
+  return resolveAgentTimeoutMs({ cfg, overrideSeconds: runTimeoutSeconds });
 }
 
 function startSweeper() {
