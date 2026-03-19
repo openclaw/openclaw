@@ -70,10 +70,14 @@
 - Format check: `pnpm format` (oxfmt --check)
 - Format fix: `pnpm format:fix` (oxfmt --write)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
-- Hard gate: before any commit, `pnpm check` MUST be run and MUST pass for the change being committed.
-- Hard gate: before any push to `main`, `pnpm check` MUST be run and MUST pass, and `pnpm test` MUST be run and MUST pass.
+- Default landing bar: before any commit, run `pnpm check` and prefer a passing result for the change being committed.
+- For narrowly scoped changes, run narrowly scoped tests that directly validate the touched behavior; this is required proof for the change before commit and push decisions. If no meaningful scoped test exists, say so explicitly and use the next most direct validation available.
+- Default landing bar: before any push to `main`, run `pnpm check` and `pnpm test` and prefer a green result.
+- Scoped tests prove the change itself. `pnpm test` remains the default `main` landing bar; scoped tests do not replace full-suite gates by default.
 - Hard gate: if the change can affect build output, packaging, lazy-loading/module boundaries, or published surfaces, `pnpm build` MUST be run and MUST pass before pushing `main`.
-- Hard gate: do not commit or push with failing format, lint, type, build, or required test checks.
+- Default rule: do not commit or push with failing format, lint, type, build, or required test checks when those failures are caused by the change or plausibly related to the touched surface.
+- For narrowly scoped changes, if unrelated failures already exist on latest `origin/main`, state that clearly, report the scoped tests you ran, and ask before broadening scope into unrelated fixes or landing despite those failures.
+- Do not use scoped tests as permission to ignore plausibly related failures.
 
 ## Coding Style & Naming Conventions
 
