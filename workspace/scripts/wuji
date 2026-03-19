@@ -5,8 +5,41 @@ wuji — unified CLI for managing OpenClaw agents.
 Usage:
     wuji list                     List all configured agents
     wuji overview                 Global situational awareness
+    wuji dashboard                Global dashboard (services, sentinel, db, agents)
     wuji search <query>           Cross-agent knowledge search
     wuji pulse                    Infrastructure health check
+    wuji experience <query>       Search experience memory
+    wuji digest [--date D]        Generate cross-agent daily digest
+    wuji sessions                 Show active Claude Code sessions
+    wuji audit [agent]            Validate agent workspace structure
+    wuji bulletin [show|add|...]  Manage shared bulletin board
+    wuji tg list                  List synced chats (interactive bridge select)
+    wuji tg --bridge dufu list    List chats (non-interactive, dufu/andrew)
+    wuji tg join @handle          Join public channel (default: dufu bridge)
+    wuji tg <chat> [N]            Show last N messages (default 50)
+    wuji tg <chat> --my           Show only MY messages
+    wuji tg <chat> --search Q     Search in a specific chat
+    wuji tg search <query>        Search across ALL chats
+    wuji tg sm "msg"              Draft to Andrew SM
+    wuji tg sm -d "msg"           Draft to 杜甫 SM
+    wuji tg send <contact> "msg"  Send to contact (bridge auto-bound)
+    wuji tg send sm --at 18:00 "msg"    Scheduled send
+    wuji tg forward <id> <to>     Forward SM msg to contact
+    wuji tg contacts              List contacts + bridges
+    wuji tg digest <river>        Digest river's new messages → atoms
+    wuji tg digest --all          Digest all active rivers
+    wuji tg rivers                Show all rivers + digestion status
+    wuji tg atoms [river] [type]  Show extracted atoms
+    wuji tg entity [name]         Entity profile / timeline
+    wuji tg think "question"      Cross-river reasoning (Sonnet)
+    wuji tg decisions [status]    Track decision lifecycle
+    wuji db query "SQL"           Query local BG666 SQLite
+    wuji db status                Show sync status
+    wuji db sync --date D         Sync a specific date
+    wuji db sync --backfill       Full backfill from earliest
+    wuji db tables                List tables and columns
+    wuji <agent> dashboard        Agent dashboard (all panels)
+    wuji <agent> dashboard <p>    Specific panel only
     wuji <agent> <command> ...    Run command for an agent
     wuji <agent>                  Show agent help
 """
@@ -25,10 +58,12 @@ sys.path.insert(0, str(WORKSPACE))
 
 from lib.agent_base import (
     GENERIC_COMMANDS,
+    GENERIC_PANELS,
     _find_agent,
     _load_openclaw,
     _workspace_path,
     cross_agent_recent,
+    load_agent_dashboard,
     parse_tasks_md,
     print_agent_help,
     run_generic,
@@ -159,17 +194,26 @@ def cmd_overview():
     except Exception:
         bindings = []
 
-    print(f"\n  ── Agents ({len(agents)}) {'─' * 44}")
+    # Classify agents into active (has bindings) vs dormant
+    active = []
+    dormant = []
     for aid in sorted(agents):
         a = agents[aid]
+        n_groups = len([b for b in bindings if b.get("agentId") == aid])
+        if n_groups > 0:
+            active.append((aid, a, n_groups))
+        else:
+            dormant.append(aid)
+
+    # ── Active Agents ──
+    print(f"\n  ── Active Agents ({len(active)}) {'─' * 42}")
+    for aid, a, n_groups in active:
         model_raw = a.get("model", {}).get("primary", "-")
-        # Shorten model name: "anthropic/claude-sonnet-4-5" → "sonnet-4.5"
         model = model_raw.split("/")[-1] if "/" in model_raw else model_raw
         if len(model) > 18:
             model = model[:18]
 
-        n_groups = len([b for b in bindings if b.get("agentId") == aid])
-        grp_str = f"{n_groups} group{'s' if n_groups != 1 else ''}" if n_groups else "(no binding)"
+        grp_str = f"{n_groups} group{'s' if n_groups != 1 else ''}"
 
         # Last modified file
         ws = _workspace_path(a)
@@ -186,8 +230,22 @@ def cmd_overview():
             except Exception:
                 pass
 
-        binding_marker = "✦" if n_groups > 0 else " "
-        print(f"  {aid:<14} {binding_marker} {model:<18} {grp_str:<14} {last_str}")
+        print(f"  {aid:<16} ✦ {model:<18} {grp_str:<14} {last_str}")
+
+    # ── Dormant ──
+    if dormant:
+        print(f"\n  ── Dormant ({len(dormant)}) {'─' * 45}")
+        # Show compactly, multiple names per line
+        line = "  "
+        for i, aid in enumerate(dormant):
+            if i > 0:
+                line += "  "
+            line += aid
+            if len(line) > 68:
+                print(line)
+                line = "  "
+        if line.strip():
+            print(line)
 
     # ── Tasks ──
     tasks = parse_tasks_md()
@@ -272,23 +330,21 @@ def cmd_overview():
     except Exception as e:
         print(f"  ⚠️  launchctl error: {e}")
 
-    # ── Experience Memory ──
-    exp_script = os.path.expanduser("~/Clawd/workspace/experience-memory/search_experience")
-    if os.path.exists(exp_script):
-        print(f"\n  ── Experience Memory {'─' * 41}")
-        try:
-            out = subprocess.run(
-                [exp_script, "--stats"],
-                capture_output=True, text=True, timeout=10
-            ).stdout
-            for line in out.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                if "Total:" in line or "By severity:" in line:
-                    print(f"  {line}")
-        except Exception as e:
-            print(f"  ⚠️  {e}")
+    # ── Memory (LanceDB Pro) ──
+    print(f"\n  ── Memory (LanceDB Pro) {'─' * 38}")
+    try:
+        out = subprocess.run(
+            ["openclaw", "memory-pro", "stats"],
+            capture_output=True, text=True, timeout=15
+        ).stdout
+        for line in out.splitlines():
+            line = line.strip()
+            if not line or line.startswith("[") or line.startswith("🦞"):
+                continue
+            if any(k in line for k in ["Total", "scope", "category", "Retrieval", "FTS"]):
+                print(f"  {line}")
+    except Exception as e:
+        print(f"  ⚠️  memory-pro stats: {e}")
 
     print()
 
@@ -329,22 +385,22 @@ def cmd_search(query):
         except Exception:
             pass
 
-    # 2. Experience memory
-    exp_script = os.path.expanduser("~/Clawd/workspace/experience-memory/search_experience")
-    if os.path.exists(exp_script):
-        try:
-            result = subprocess.run(
-                [exp_script, query],
-                capture_output=True, text=True, timeout=15
-            )
-            out = result.stdout.strip()
-            if out and "No results" not in out and "0 results" not in out:
-                print(f"\n  ── experience-memory {'─' * 41}")
-                for line in out.splitlines()[:15]:
-                    print(f"  {line}")
-                found_any = True
-        except Exception:
-            pass
+    # 2. Memory (LanceDB Pro)
+    try:
+        result = subprocess.run(
+            ["openclaw", "memory-pro", "search", query],
+            capture_output=True, text=True, timeout=15
+        )
+        out = result.stdout.strip()
+        # Filter plugin boot lines
+        lines = [l for l in out.splitlines() if not l.strip().startswith("[") and "🦞" not in l and l.strip()]
+        if lines:
+            print(f"\n  ── memory-lancedb-pro {'─' * 40}")
+            for line in lines[:15]:
+                print(f"  {line}")
+            found_any = True
+    except Exception:
+        pass
 
     # 3. Agent memory/ directories (recent 7 days only)
     cutoff = datetime.now() - timedelta(days=7)
@@ -410,6 +466,256 @@ def cmd_search(query):
     if not found_any:
         print(f"\n  No results for \"{query}\"")
     print()
+
+
+def cmd_experience(args):
+    """Search memory (LanceDB Pro)."""
+    query = " ".join(args)
+    if not query:
+        print("  usage: wuji experience <query>")
+        return
+    result = subprocess.run(
+        ["openclaw", "memory-pro", "search", query],
+        capture_output=True, text=True, timeout=15
+    )
+    # Filter plugin boot noise (ANSI color codes + plugin lines)
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            print()
+        elif "[plugins]" in stripped or "🦞" in stripped or "plugin registered" in stripped or "hook registered" in stripped or "session-strategy" in stripped or "mdMirror" in stripped or "diagnostic build" in stripped or "smart extraction enabled" in stripped:
+            continue
+        else:
+            print(line)
+
+
+def cmd_digest(args):
+    """Generate cross-agent daily digest."""
+    script = WORKSPACE / "scripts" / "cross-digest.py"
+    if not script.exists():
+        print("  cross-digest.py not found")
+        return
+    cmd = [sys.executable, str(script)] + args
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.stdout.strip():
+        print(result.stdout)
+    if result.stderr.strip():
+        print(result.stderr)
+
+
+def cmd_sessions(args):
+    """Show active Claude Code sessions."""
+    script = WORKSPACE / "scripts" / "session-log"
+    if not script.exists():
+        print("  session-log not found")
+        return
+    sub = args[0] if args else "active"
+    cmd = [sys.executable, str(script), sub] + args[1:]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    if result.stdout.strip():
+        print(result.stdout)
+    if result.stderr.strip():
+        print(result.stderr)
+
+
+def cmd_audit(args):
+    """Validate agent workspace structure."""
+    script = WORKSPACE / "scripts" / "bootstrap-audit.py"
+    if not script.exists():
+        print("  bootstrap-audit.py not found")
+        return
+    cmd = [sys.executable, str(script)] + args
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    if result.stdout.strip():
+        print(result.stdout)
+
+
+def cmd_bulletin(args):
+    """Manage shared bulletin board."""
+    script = WORKSPACE / "scripts" / "bulletin"
+    if not script.exists():
+        print("  bulletin script not found")
+        return
+    sub = args if args else ["show"]
+    cmd = [sys.executable, str(script)] + sub
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    if result.stdout.strip():
+        print(result.stdout)
+
+
+def cmd_radar(args):
+    """動態態勢感知 — 每個 session 啟動時跑一次，取代靜態 CLAUDE.md。
+    輸出 markdown 格式，Claude Code 直接讀。
+    """
+    import sqlite3 as _sqlite3
+
+    out = []
+    out.append("# 無極雷達 — 即時態勢")
+    out.append(f"_生成時間: {datetime.now():%Y-%m-%d %H:%M}_\n")
+
+    # ── 1. 我是誰 ──
+    cwd = Path.cwd()
+    agent_id = None
+    for part in cwd.parts:
+        agent_dir = WORKSPACE / "agents" / part
+        if agent_dir.exists():
+            agent_id = part
+            break
+    if not agent_id and (WORKSPACE / "agents").resolve() in cwd.resolve().parents:
+        try:
+            agent_id = cwd.resolve().relative_to((WORKSPACE / "agents").resolve()).parts[0]
+        except (ValueError, IndexError):
+            pass
+
+    if agent_id:
+        out.append(f"## 你的身份: {agent_id}")
+        soul_path = WORKSPACE / "agents" / agent_id / "SOUL.md"
+        if soul_path.exists():
+            first_lines = soul_path.read_text()[:200].strip()
+            out.append(f"```\n{first_lines}\n```\n")
+    else:
+        out.append("## 你在母艦（無固定部門）\n")
+
+    # ── 2. 活著的神經 ──
+    out.append("## 基礎設施")
+    ports = {"Gateway": 18789, "Bridge-杜甫": 18796, "Bridge-Andrew": 18795, "Bridge-Eric": 18797}
+    for name, port in ports.items():
+        try:
+            r = subprocess.run(["lsof", "-i", f":{port}", "-sTCP:LISTEN", "-t"],
+                               capture_output=True, text=True, timeout=3)
+            status = "✅" if r.stdout.strip() else "❌"
+        except Exception:
+            status = "⚠️"
+        out.append(f"- {name} (:{port}): {status}")
+
+    # Docker tg-bot-api
+    try:
+        r = subprocess.run(["docker", "ps", "--filter", "name=tg-bot-api", "--format", "{{.Status}}"],
+                           capture_output=True, text=True, timeout=5)
+        docker_status = r.stdout.strip() if r.stdout.strip() else "not running"
+        out.append(f"- TG Local Server: {docker_status}")
+    except Exception:
+        out.append("- TG Local Server: ⚠️ docker not available")
+
+    # Sentinel
+    try:
+        r = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=3)
+        sentinel_up = "sentinel" in r.stdout.lower()
+        out.append(f"- Sentinel: {'✅' if sentinel_up else '❌'}")
+    except Exception:
+        out.append("- Sentinel: ⚠️")
+
+    out.append("")
+
+    # ── 3. 活躍 Agent ──
+    out.append("## 部門地圖")
+    agents = discover_agents()
+    try:
+        cfg = _load_openclaw()
+        bindings = cfg.get("bindings", [])
+    except Exception:
+        bindings = []
+
+    active = []
+    for aid in sorted(agents):
+        a = agents[aid]
+        n_groups = len([b for b in bindings if b.get("agentId") == aid])
+        if n_groups > 0:
+            ws = _workspace_path(a)
+            last = ""
+            try:
+                files = [f for f in ws.rglob("*") if f.is_file()
+                         and not any(p.startswith(".") or p == "__pycache__"
+                                     for p in f.relative_to(ws).parts)]
+                if files:
+                    newest = max(files, key=lambda f: f.stat().st_mtime)
+                    mtime = datetime.fromtimestamp(newest.stat().st_mtime)
+                    last = f"(last: {mtime:%m-%d %H:%M})"
+            except Exception:
+                pass
+            active.append(f"- **{aid}** — {n_groups} group{'s' if n_groups != 1 else ''} {last}")
+
+    out.extend(active[:15])
+    dormant_count = len(agents) - len(active)
+    if dormant_count > 0:
+        out.append(f"- _{dormant_count} dormant agents_")
+    out.append("")
+
+    # ── 4. 公告欄最新 ──
+    out.append("## 公告欄 (最新 5 條)")
+    bulletin_path = WORKSPACE / "BULLETIN.md"
+    if bulletin_path.exists():
+        lines = bulletin_path.read_text().strip().splitlines()
+        # 找最近的條目（以 - 或 * 開頭的行）
+        entries = [l for l in lines if l.strip().startswith(("-", "*", "📌", "⚠️", "🔔", "📢"))]
+        for entry in entries[-5:]:
+            out.append(entry)
+    else:
+        out.append("_（空）_")
+    out.append("")
+
+    # ── 5. TG 未讀 ──
+    out.append("## TG 未讀摘要")
+    for bridge_name, bridge_label in [("dufu", "杜甫"), ("andrew", "Andrew"), ("eric", "Eric")]:
+        try:
+            import urllib.request
+            url = BRIDGE_URLS[bridge_name]
+            req = urllib.request.Request(f"{url}/chats", headers=_bridge_headers())
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                chats = json.loads(resp.read()).get("chats", [])
+            unread_chats = [(c["name"][:25], c["unread"]) for c in chats if c.get("unread", 0) > 0]
+            if unread_chats:
+                total = sum(u for _, u in unread_chats)
+                top3 = sorted(unread_chats, key=lambda x: -x[1])[:3]
+                top3_str = ", ".join(f"{n}({u})" for n, u in top3)
+                out.append(f"- {bridge_label}: {total} 未讀 — {top3_str}")
+            else:
+                out.append(f"- {bridge_label}: 0 未讀")
+        except Exception:
+            out.append(f"- {bridge_label}: ⚠️ bridge 離線")
+    out.append("")
+
+    # ── 6. 記憶塔狀態 ──
+    out.append("## 記憶塔")
+    exp_script = Path.home() / "Clawd" / "workspace" / "experience-memory" / "search_experience"
+    if exp_script.exists():
+        try:
+            r = subprocess.run([str(exp_script), "--stats"],
+                               capture_output=True, text=True, timeout=10)
+            stats_lines = [l for l in r.stdout.splitlines() if l.strip()][:5]
+            out.extend(stats_lines)
+        except Exception:
+            out.append("_無法取得統計_")
+    else:
+        out.append("_experience-memory 未安裝_")
+    out.append("")
+
+    # ── 7. 操作指南（精簡） ──
+    out.append("## 快速操作")
+    out.append("```")
+    out.append("wuji <agent> status     # 看某部門")
+    out.append("wuji tg --bridge X list # TG 操作 (dufu/andrew/eric)")
+    out.append("wuji experience '關鍵字' # 搜記憶塔")
+    out.append("wuji bulletin           # 看公告欄")
+    out.append("```")
+    out.append("")
+
+    # ── 8. 身份隔離提醒 ──
+    out.append("## ⚠️ 身份隔離鐵律")
+    out.append("杜甫=BG666 | Andrew=24Bet | Eric=求職協議號 | Cruz=絕不對外暴露")
+    out.append("混淆=開除級錯誤。不要在 BG666 的事裡提 24Bet，反之亦然。")
+    out.append("")
+
+    # Output
+    result = "\n".join(out)
+
+    # --md 參數：輸出到檔案
+    if args and args[0] == "--md":
+        outpath = Path(args[1]) if len(args) > 1 else WORKSPACE.parent / "RADAR.md"
+        outpath.write_text(result)
+        print(f"  雷達已寫入: {outpath}")
+    else:
+        print(result)
 
 
 def cmd_pulse():
@@ -507,6 +813,1182 @@ def cmd_pulse():
     print()
 
 
+def cmd_global_dashboard():
+    """Global dashboard — services, sentinel, db, agents, disk."""
+    print()
+
+    # ── Services ──
+    print(f"  ── Services {'─' * 49}")
+    ports = {"Gateway (18789)": 18789, "Telethon-dufu (18796)": 18796, "Telethon-andrew (18795)": 18795}
+    for label, port in ports.items():
+        try:
+            result = subprocess.run(
+                ["lsof", "-i", f":{port}", "-sTCP:LISTEN", "-t"],
+                capture_output=True, text=True, timeout=5
+            )
+            pid = result.stdout.strip().split("\n")[0] if result.stdout.strip() else ""
+            if pid:
+                print(f"  ✅ {label:<26} pid {pid}")
+            else:
+                print(f"  ❌ {label:<26} not listening")
+        except Exception:
+            print(f"  ⚠️  {label:<26} check failed")
+
+    # Sentinel launchd
+    try:
+        result = subprocess.run(
+            ["launchctl", "list", "com.clawd.sentinel"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            print(f"  ✅ {'Sentinel (launchd)':<26} loaded")
+        else:
+            print(f"  ❌ {'Sentinel (launchd)':<26} not loaded")
+    except Exception:
+        print(f"  ⚠️  {'Sentinel (launchd)':<26} check failed")
+
+    # ── Load state.json once ──
+    state_path = WORKSPACE.parent / "sentinel" / "state.json"
+    st = {}
+    if state_path.exists():
+        try:
+            with open(state_path) as f:
+                st = json.load(f)
+        except Exception:
+            pass
+
+    # ── Sentinel ──
+    sentinel_state = st.get("sentinel", {})
+    if sentinel_state:
+        print(f"\n  ── Sentinel Tasks {'─' * 44}")
+        for task_name, task_data in sorted(sentinel_state.items()):
+            if isinstance(task_data, dict) and "last_run" in task_data:
+                last = task_data["last_run"]
+                status = task_data.get("status", "?")
+                marker = "✅" if status == "ok" else "⚠️ "
+                print(f"  {marker} {task_name:<22} last: {last}")
+
+    # ── DB Sync ──
+    db_path = WORKSPACE / "bg666" / "bg666.db"
+    if db_path.exists():
+        print(f"\n  ── DB Sync {'─' * 50}")
+        size_mb = db_path.stat().st_size / (1024 * 1024)
+        mtime = datetime.fromtimestamp(db_path.stat().st_mtime)
+        print(f"  bg666.db  {size_mb:.0f} MB  modified: {mtime:%Y-%m-%d %H:%M}")
+        ds = sentinel_state.get("db_sync", {})
+        if ds.get("last_synced_date"):
+            print(f"  Last synced date: {ds['last_synced_date']}")
+        print(f"  (use 'wuji db status' for full table stats)")
+
+    # ── Agents ──
+    agents = discover_agents()
+    try:
+        cfg = _load_openclaw()
+        all_bindings = cfg.get("bindings", [])
+    except Exception:
+        all_bindings = []
+
+    # Also read sentinel config for group names
+    sentinel_cfg_path = WORKSPACE.parent / "sentinel" / "config.json"
+    sentinel_groups = {}
+    try:
+        with open(sentinel_cfg_path) as f:
+            sentinel_groups = json.load(f).get("groups", {})
+    except Exception:
+        pass
+
+    active_agents = []
+    for aid in sorted(agents):
+        a = agents[aid]
+        n_groups = len([b for b in all_bindings if b.get("agentId") == aid])
+        n_sentinel = len([g for g in sentinel_groups.values() if g.get("agent_id") == aid])
+        total_groups = max(n_groups, n_sentinel)
+        if total_groups > 0:
+            ws = _workspace_path(a)
+            last_str = ""
+            if ws.exists():
+                try:
+                    files = [f for f in ws.rglob("*") if f.is_file()
+                             and not any(p.startswith(".") or p == "__pycache__"
+                                         for p in f.relative_to(ws).parts)]
+                    if files:
+                        newest = max(files, key=lambda f: f.stat().st_mtime)
+                        mtime = datetime.fromtimestamp(newest.stat().st_mtime)
+                        last_str = f"{mtime:%m-%d %H:%M}"
+                except Exception:
+                    pass
+            active_agents.append((aid, total_groups, last_str))
+
+    if active_agents:
+        print(f"\n  ── Agents {'─' * 51}")
+        for aid, n_groups, last_str in active_agents:
+            print(f"  {aid:<16} {n_groups:>2} groups   last: {last_str}")
+
+    # ── Disk ──
+    print(f"\n  ── Disk {'─' * 53}")
+    try:
+        result = subprocess.run(
+            ["df", "-h", "/"],
+            capture_output=True, text=True, timeout=5
+        )
+        lines = result.stdout.strip().splitlines()
+        if len(lines) >= 2:
+            parts = lines[1].split()
+            avail = parts[3] if len(parts) > 3 else "?"
+            capacity = parts[4] if len(parts) > 4 else "?"
+            print(f"  {avail} free ({capacity} used)")
+    except Exception:
+        print(f"  ⚠️  check failed")
+
+    print()
+
+
+def cmd_chat(args):
+    """Query conversations.db — synced group + DM messages.
+    Legacy entrypoint; now routed through cmd_tg."""
+    _tg_chat(args)
+
+
+def _get_my_sender_names():
+    """Return set of sender names that belong to our bridge identities."""
+    names = set()
+    for bridge_name in BRIDGE_URLS:
+        uid = _resolve_self_id(bridge_name)
+        if uid:
+            names.add(uid)
+    # Also add known display names from bridge health
+    import urllib.request
+    for bridge_name, url in BRIDGE_URLS.items():
+        try:
+            req = urllib.request.Request(f"{url}/health")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                result = json.loads(resp.read())
+                for key in ("user", "first_name", "username", "display_name"):
+                    if result.get(key):
+                        names.add(result[key])
+        except Exception:
+            pass
+    return names
+
+
+def _tg_chat(args):
+    """Query conversations.db — synced group + DM messages."""
+    import sqlite3 as _sqlite3
+
+    # Parse --bridge flag (non-interactive bridge selection)
+    bridge_override = None
+    bridge_map = {"1": "andrew", "2": "dufu", "3": "eric", "andrew": "andrew", "杜甫": "dufu", "dufu": "dufu", "eric": "eric"}
+    cleaned_args = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--bridge" and i + 1 < len(args):
+            bridge_override = bridge_map.get(args[i + 1].lower())
+            if not bridge_override:
+                print(f"  Unknown bridge: {args[i + 1]}  (use: andrew, dufu)")
+                return
+            i += 2
+        else:
+            cleaned_args.append(args[i])
+            i += 1
+    args = cleaned_args
+
+    # Handle 'join' subcommand
+    if args and args[0] == "join":
+        channels = args[1:]
+        if not channels:
+            print("  usage: wuji tg join <@username or t.me link> [--bridge dufu]")
+            return
+        bridge_name = bridge_override or "dufu"
+        url = BRIDGE_URLS[bridge_name]
+        headers = _bridge_headers({"Content-Type": "application/json"})
+        import urllib.request
+        for ch in channels:
+            try:
+                body = json.dumps({"channel": ch}).encode()
+                req = urllib.request.Request(f"{url}/join", data=body, headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    result = json.loads(resp.read())
+                if result.get("ok"):
+                    print(f"  ✅ Joined: {result.get('joined', ch)}")
+                else:
+                    print(f"  ❌ {ch}: {result.get('error', 'unknown error')}")
+            except Exception as e:
+                print(f"  ❌ {ch}: {e}")
+        return
+
+    db_path = WORKSPACE.parent / "sentinel" / "data" / "conversations.db"
+    if not db_path.exists():
+        print(f"  conversations.db not found: {db_path}")
+        return
+
+    conn = _sqlite3.connect(str(db_path))
+
+    if not args or args[0] == "list":
+        if bridge_override:
+            bridge_name = bridge_override
+        else:
+            # Ask which bridge to query
+            print("\n  Which bridge?")
+            print("    1) Andrew  (G9/24Bet)")
+            print("    2) 杜甫    (BG666)")
+            print("    3) Eric    (求職協議號)")
+            try:
+                choice = input("  > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+            bridge_name = bridge_map.get(choice.lower())
+        if not bridge_name:
+            print(f"  Unknown choice")
+            conn.close()
+            return
+
+        # Query bridge API for live chat list
+        import urllib.request
+        url = BRIDGE_URLS[bridge_name]
+        headers = _bridge_headers()
+        try:
+            req = urllib.request.Request(f"{url}/chats", headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+            chats = data.get("chats", [])
+            identity = BRIDGE_IDENTITY.get(bridge_name, bridge_name)
+            print(f"\n  [{identity}] {len(chats)} chats:\n")
+            print(f"  {'Name':<35} {'ID':<20} {'Type':<10} {'Unread':>6}")
+            print(f"  {'─' * 35} {'─' * 20} {'─' * 10} {'─' * 6}")
+            for c in chats:
+                name = (c.get("name") or "?")[:35]
+                cid = str(c.get("id", ""))
+                ctype = c.get("type", "?")
+                unread = c.get("unread", 0)
+                print(f"  {name:<35} {cid:<20} {ctype:<10} {unread:>6}")
+            print()
+        except Exception as e:
+            print(f"  Bridge error ({bridge_name}): {e}")
+        conn.close()
+        return
+
+    if args[0] == "search":
+        # Cross-chat search
+        query = " ".join(args[1:])
+        if not query:
+            print("  usage: wuji tg search <query>")
+            return
+        rows = conn.execute(
+            "SELECT timestamp, chat_name, sender_name, text "
+            "FROM messages WHERE text LIKE ? ORDER BY timestamp DESC LIMIT 30",
+            (f"%{query}%",)
+        ).fetchall()
+        if not rows:
+            print(f"  No results for: {query}")
+        else:
+            print(f"\n  Found {len(rows)} results for '{query}':\n")
+            for ts, chat, sender, text in reversed(rows):
+                ts_short = str(ts)[:16].replace("T", " ")
+                text_preview = (text or "").replace("\n", " ")[:120]
+                print(f"  [{ts_short}] {chat} | {sender}: {text_preview}")
+        conn.close()
+        print()
+        return
+
+    # Chat name lookup — fuzzy match
+    chat_name = args[0]
+    limit = 50
+    search_query = None
+    my_only = False
+
+    rest = args[1:]
+    while rest:
+        if rest[0] == "--search" and len(rest) > 1:
+            search_query = " ".join(rest[1:])
+            break
+        elif rest[0] == "--my":
+            my_only = True
+            rest = rest[1:]
+        elif rest[0].isdigit():
+            limit = int(rest[0])
+            rest = rest[1:]
+        else:
+            # Maybe part of chat name
+            chat_name += " " + rest[0]
+            rest = rest[1:]
+
+    # Find matching chat
+    rows = conn.execute(
+        "SELECT DISTINCT chat_id, chat_name FROM messages WHERE chat_name LIKE ? COLLATE NOCASE",
+        (f"%{chat_name}%",)
+    ).fetchall()
+
+    if not rows:
+        # Fallback: try bridge API directly (for chats not synced to conversations.db)
+        _bridge = bridge_override
+        _bridges_to_try = [_bridge] if _bridge else ["dufu", "andrew"]
+        _bridge = None  # reset; will be set if match found
+        for _try_bridge in _bridges_to_try:
+            try:
+                import urllib.request
+                _url = BRIDGE_URLS[_try_bridge]
+                _req = urllib.request.Request(f"{_url}/chats", headers=_bridge_headers())
+                with urllib.request.urlopen(_req, timeout=8) as _resp:
+                    _chats = json.loads(_resp.read()).get("chats", [])
+                for _c in _chats:
+                    _cname = _c.get("name", "")
+                    _cid = str(_c.get("id", ""))
+                    if chat_name.lstrip("-").isdigit() and _cid == chat_name:
+                        _bridge = _try_bridge
+                        break
+                    if chat_name.lower() in _cname.lower():
+                        _bridge = _try_bridge
+                        chat_name = _cid  # use exact ID for API call
+                        break
+                if _bridge:
+                    break
+            except Exception:
+                continue
+        if _bridge:
+            # Read messages via bridge API
+            import urllib.request
+            _url = BRIDGE_URLS[_bridge]
+            _chat_param = chat_name
+            try:
+                import urllib.parse
+                _req = urllib.request.Request(
+                    f"{_url}/messages?chat={urllib.parse.quote(str(_chat_param))}&limit={limit}",
+                    headers=_bridge_headers()
+                )
+                with urllib.request.urlopen(_req, timeout=15) as _resp:
+                    _data = json.loads(_resp.read())
+                _msgs = _data.get("messages", [])
+                _chat_title = _data.get("chat_name", _chat_param)
+                identity = BRIDGE_IDENTITY.get(_bridge, _bridge)
+                print(f"\n  {_chat_title} [{identity}] — {len(_msgs)} messages (live from bridge):\n")
+                for _m in _msgs:
+                    _ts = str(_m.get("date", ""))[:16].replace("T", " ")
+                    _sender = _m.get("sender_name", "?")
+                    _text = (_m.get("text", "") or "").replace("\n", " ")[:200]
+                    _media = " 📎" if _m.get("has_media") else ""
+                    print(f"  [{_ts}] {_sender}: {_text}{_media}")
+                print()
+                conn.close()
+                return
+            except Exception as e:
+                print(f"  Bridge fallback error: {e}")
+        print(f"  No chat matching: {chat_name}")
+        print(f"  Run 'wuji tg list' to see available chats.")
+        conn.close()
+        return
+
+    if len(rows) > 1:
+        print(f"  Multiple chats match '{chat_name}':")
+        for cid, cname in rows:
+            print(f"    {cname}")
+        print(f"  Be more specific.")
+        conn.close()
+        return
+
+    chat_id, matched_name = rows[0]
+
+    # Resolve my sender names for --my filter
+    my_names = _get_my_sender_names() if my_only else set()
+
+    if search_query:
+        # Search within this chat
+        msgs = conn.execute(
+            "SELECT timestamp, sender_name, text "
+            "FROM messages WHERE chat_id = ? AND text LIKE ? "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (chat_id, f"%{search_query}%", limit)
+        ).fetchall()
+        if my_only:
+            msgs = [m for m in msgs if _sender_is_me(m[1], my_names)]
+        print(f"\n  Search '{search_query}' in {matched_name} ({len(msgs)} results):\n")
+        for ts, sender, text in reversed(msgs):
+            ts_short = str(ts)[:16].replace("T", " ")
+            text_clean = (text or "").replace("\n", " ")[:200]
+            print(f"  [{ts_short}] {sender}: {text_clean}")
+    else:
+        # Show last N messages
+        if my_only:
+            # Fetch more to compensate for filtering
+            msgs = conn.execute(
+                "SELECT timestamp, sender_name, text, has_media FROM messages "
+                "WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ?",
+                (chat_id, limit * 10)
+            ).fetchall()
+            msgs = [m for m in msgs if _sender_is_me(m[1], my_names)][:limit]
+        else:
+            msgs = conn.execute(
+                "SELECT timestamp, sender_name, text, has_media FROM messages "
+                "WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ?",
+                (chat_id, limit)
+            ).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ?", (chat_id,)).fetchone()[0]
+        my_tag = " (my messages only)" if my_only else ""
+        print(f"\n  {matched_name} — last {len(msgs)} of {total} messages{my_tag}:\n")
+        for ts, sender, text, has_media in reversed(msgs):
+            ts_short = str(ts)[:16].replace("T", " ")
+            media_tag = " 📎" if has_media else ""
+            text_clean = (text or "").replace("\n", " ")[:200]
+            if not text_clean and has_media:
+                text_clean = "(media)"
+            print(f"  [{ts_short}] {sender}{media_tag}: {text_clean}")
+
+    conn.close()
+    print()
+
+
+def _sender_is_me(sender_name, my_names):
+    """Check if sender_name matches any of our bridge identities."""
+    if not sender_name:
+        return False
+    for name in my_names:
+        if name.lower() in sender_name.lower() or sender_name.lower() in name.lower():
+            return True
+    return False
+
+
+def cmd_db(args):
+    """BG666 local database commands."""
+    if not args:
+        print("  usage: wuji db <command>")
+        print("    query \"SQL\"    Query local BG666 SQLite")
+        print("    status         Show sync status (tables, row counts, DB size)")
+        print("    sync           Sync missing dates (or --date D, --backfill)")
+        print("    tables         List all tables and their columns")
+        return
+
+    sub = args[0]
+    rest = args[1:]
+
+    db_sync_mod = WORKSPACE.parent / "sentinel" / "tasks" / "db_sync.py"
+    db_path = WORKSPACE / "bg666" / "bg666.db"
+
+    if sub == "status":
+        # Show sync status
+        if not db_path.exists():
+            print(f"  DB not found: {db_path}")
+            print(f"  Run: wuji db sync --date <YYYY-MM-DD>  to start syncing")
+            return
+
+        import sqlite3 as _sqlite3
+        conn = _sqlite3.connect(str(db_path))
+        size_mb = db_path.stat().st_size / (1024 * 1024)
+
+        print(f"\n  BG666 Local DB: {db_path}")
+        print(f"  Size: {size_mb:.1f} MB")
+
+        # Show last sync state from state.json
+        state_path = WORKSPACE.parent / "sentinel" / "state.json"
+        if state_path.exists():
+            with open(state_path) as f:
+                st = json.load(f)
+            ds = st.get("sentinel", {}).get("db_sync", {})
+            if ds.get("last_synced_date"):
+                print(f"  Last synced date: {ds['last_synced_date']}")
+            if ds.get("last_run"):
+                print(f"  Last run: {ds['last_run']}")
+        print()
+
+        tables = [
+            "player_change_record", "player_statistics_day",
+            "player_game_statistics", "player_recharge_order",
+            "player_withdraw_order",
+        ]
+        print(f"  {'Table':<30} {'Rows':>12}  Date range")
+        print(f"  {'─' * 30} {'─' * 12}  {'─' * 30}")
+        for table in tables:
+            try:
+                cur = conn.execute(f'SELECT COUNT(*) FROM "{table}"')
+                count = cur.fetchone()[0]
+                # Try to get date range
+                date_col = "create_time" if table not in ("player_statistics_day", "player_game_statistics") else "statistics_day"
+                cur = conn.execute(f'SELECT MIN("{date_col}"), MAX("{date_col}") FROM "{table}"')
+                min_d, max_d = cur.fetchone()
+                if min_d and max_d:
+                    # Truncate to date only
+                    min_d = str(min_d)[:10]
+                    max_d = str(max_d)[:10]
+                    print(f"  {table:<30} {count:>12,}  {min_d} → {max_d}")
+                else:
+                    print(f"  {table:<30} {count:>12,}")
+            except _sqlite3.OperationalError:
+                print(f"  {table:<30} {'[not synced]':>12}")
+        conn.close()
+        print()
+
+    elif sub == "query":
+        sql = " ".join(rest)
+        if not sql:
+            print("  usage: wuji db query \"SELECT ...\"")
+            return
+        if not db_path.exists():
+            print(f"  DB not found: {db_path}")
+            return
+
+        import sqlite3 as _sqlite3
+        conn = _sqlite3.connect(str(db_path))
+        conn.row_factory = _sqlite3.Row
+        try:
+            cur = conn.execute(sql)
+            rows = cur.fetchall()
+            if not rows:
+                print("  (no results)")
+                return
+
+            # Get column names
+            cols = [desc[0] for desc in cur.description]
+
+            # Determine column widths
+            widths = [len(c) for c in cols]
+            str_rows = []
+            for row in rows[:200]:  # Cap at 200 rows for display
+                sr = []
+                for i, v in enumerate(row):
+                    s = str(v) if v is not None else "NULL"
+                    if len(s) > 50:
+                        s = s[:47] + "..."
+                    sr.append(s)
+                    widths[i] = max(widths[i], len(s))
+                str_rows.append(sr)
+
+            # Print header
+            header = "  ".join(c.ljust(widths[i]) for i, c in enumerate(cols))
+            print(f"\n  {header}")
+            print(f"  {'  '.join('─' * w for w in widths)}")
+
+            # Print rows
+            for sr in str_rows:
+                line = "  ".join(sr[i].ljust(widths[i]) for i in range(len(cols)))
+                print(f"  {line}")
+
+            if len(rows) > 200:
+                print(f"\n  ... showing 200 of {len(rows)} rows")
+            print(f"\n  {len(rows)} row(s)\n")
+        except _sqlite3.Error as e:
+            print(f"  SQL error: {e}")
+        finally:
+            conn.close()
+
+    elif sub == "sync":
+        cmd = [sys.executable, str(db_sync_mod)] + rest
+        result = subprocess.run(cmd, timeout=3600)  # 1h timeout for backfill
+
+    elif sub == "tables":
+        if not db_path.exists():
+            print(f"  DB not found: {db_path}")
+            return
+
+        import sqlite3 as _sqlite3
+        conn = _sqlite3.connect(str(db_path))
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        tables = [row[0] for row in cur.fetchall()]
+
+        if not tables:
+            print("  (no tables yet)")
+            return
+
+        print()
+        for table in tables:
+            cur = conn.execute(f'PRAGMA table_info("{table}")')
+            cols = cur.fetchall()
+            col_names = [c[1] for c in cols]
+            print(f"  {table} ({len(col_names)} columns)")
+            # Show columns in compact form
+            line = "    "
+            for cn in col_names:
+                if cn == "_synced_at":
+                    continue
+                if len(line) + len(cn) + 2 > 80:
+                    print(line)
+                    line = "    "
+                line += cn + ", "
+            if line.strip().endswith(","):
+                line = line.rstrip(", ")
+            if line.strip():
+                print(line)
+            print()
+        conn.close()
+
+    else:
+        print(f"  Unknown db command: {sub}")
+        print("  Available: query, status, sync, tables")
+
+
+# ── Telegram messaging commands ──────────────────────────────────
+
+SENTINEL_ROOT = Path(__file__).resolve().parent.parent.parent / "sentinel"
+
+# Contact aliases → (chat_id, bridge)
+# CRITICAL: Andrew = G9/24Bet employee, 杜甫 = BG666 employee
+# These identities must NEVER cross. Each contact is bound to exactly one bridge.
+CONTACTS = {
+    # Andrew identity (G9/24Bet)
+    "sm":       ("me",          "andrew"),   # Andrew's Saved Messages
+    "sm-a":     ("me",          "andrew"),   # alias
+    "jack":     ("@JackDv88818","andrew"),
+    "kim":      ("@KimPlatM",   "andrew"),   # placeholder, update with real handle
+    "g9":       ("-4835848224", "andrew"),
+    "g9-test":  ("-1003275304229","andrew"),
+    "g9-data":  ("-4993518397", "andrew"),
+    "lolo":     ("-4745247300", "andrew"),
+    "g9-考勤":  ("-1002860663272","andrew"),
+    # 跨身份共用群（杜甫 bridge 發送）
+    "戰情室":   ("-1003705093111","dufu"),  # Channel ID (supergroup)
+    # 杜甫 identity (BG666)
+    "sm-d":     ("me",          "dufu"),     # 杜甫's Saved Messages
+    "albert":   ("5308534717",  "dufu"),
+    "brandon":  ("5038335338",  "dufu"),
+    "66":       ("-1003573583957","dufu"),
+    "meihui":   ("-5210796129", "dufu"),
+    "bita":     ("-1003849990504","dufu"),
+    "考勤":     ("-1003886841948","dufu"),
+    "項目組":   ("-5000326699",  "dufu"),
+}
+
+BRIDGE_URLS = {
+    "andrew": "http://127.0.0.1:18795",
+    "dufu":   "http://127.0.0.1:18796",
+    "eric":   "http://127.0.0.1:18797",
+    "wuji":   "http://127.0.0.1:18789",  # 無極 Gateway Bot API
+}
+
+_BRIDGE_TOKEN = None
+_BRIDGE_TOKEN_LOADED = False
+
+def _get_bridge_token():
+    """Load bridge_token from config.json (cached)."""
+    global _BRIDGE_TOKEN, _BRIDGE_TOKEN_LOADED
+    if _BRIDGE_TOKEN_LOADED:
+        return _BRIDGE_TOKEN
+    _BRIDGE_TOKEN_LOADED = True
+    cfg_path = Path(__file__).resolve().parent.parent.parent / "skills" / "telegram-userbot" / "config.json"
+    try:
+        cfg = json.loads(cfg_path.read_text())
+        _BRIDGE_TOKEN = cfg.get("bridge_token")
+    except Exception:
+        pass
+    return _BRIDGE_TOKEN
+
+def _bridge_headers(extra=None):
+    """Build request headers with auth token."""
+    headers = {}
+    if extra:
+        headers.update(extra)
+    token = _get_bridge_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+BRIDGE_IDENTITY = {
+    "andrew": "Andrew-Plat-D (G9/24Bet)",
+    "dufu":   "杜甫-Data (BG666)",
+    "eric":   "Eric (求職協議號)",
+}
+
+
+def _parse_schedule(val):
+    """Parse schedule value → unix timestamp.
+
+    Formats:
+        30m / 1h / 2h30m  → relative delay
+        18:00 / 14:30     → today at that time (or tomorrow if past)
+        2026-03-09 10:00  → absolute datetime
+    """
+    from datetime import datetime, timedelta, timezone
+    tz = timezone(timedelta(hours=8))
+    now = datetime.now(tz)
+
+    # Relative: 30m, 1h, 2h30m
+    import re
+    rel = re.match(r'^(?:(\d+)h)?(?:(\d+)m)?$', val)
+    if rel and (rel.group(1) or rel.group(2)):
+        hours = int(rel.group(1) or 0)
+        mins = int(rel.group(2) or 0)
+        ts = now + timedelta(hours=hours, minutes=mins)
+        return int(ts.timestamp()), ts.strftime("%H:%M")
+
+    # Time only: 18:00
+    time_match = re.match(r'^(\d{1,2}):(\d{2})$', val)
+    if time_match:
+        h, m = int(time_match.group(1)), int(time_match.group(2))
+        ts = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if ts <= now:
+            ts += timedelta(days=1)
+        return int(ts.timestamp()), ts.strftime("%m/%d %H:%M")
+
+    # Absolute: 2026-03-09 10:00
+    try:
+        ts = datetime.strptime(val, "%Y-%m-%d %H:%M").replace(tzinfo=tz)
+        return int(ts.timestamp()), ts.strftime("%m/%d %H:%M")
+    except ValueError:
+        return None, None
+
+
+def _no_proxy_opener():
+    """Create urllib opener that bypasses system proxy for local connections."""
+    import urllib.request
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _resolve_self_id(bridge_name):
+    """Get the user_id of the bridge account (for Saved Messages)."""
+    import urllib.request
+    url = BRIDGE_URLS[bridge_name]
+    try:
+        req = urllib.request.Request(f"{url}/health")
+        with _no_proxy_opener().open(req, timeout=5) as resp:
+            result = json.loads(resp.read())
+            return str(result.get("user_id", ""))
+    except Exception:
+        return None
+
+
+def _tg_send(bridge_name, chat_id, text, file_path=None, schedule=None):
+    """Send message via specified bridge. Returns (ok, result_dict)."""
+    import urllib.request
+    url = BRIDGE_URLS[bridge_name]
+    # Resolve "me" to actual user_id
+    if chat_id == "me":
+        chat_id = _resolve_self_id(bridge_name)
+        if not chat_id:
+            return False, {"error": f"{bridge_name} bridge unreachable"}
+    payload = {"chat": str(chat_id), "text": text}
+    if file_path:
+        payload["file"] = str(file_path)
+    if schedule:
+        payload["schedule"] = schedule
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        f"{url}/send", data=data,
+        headers=_bridge_headers({"Content-Type": "application/json"}), method="POST"
+    )
+    try:
+        with _no_proxy_opener().open(req, timeout=15) as resp:
+            result = json.loads(resp.read())
+            return result.get("ok", False), result
+    except Exception as e:
+        return False, {"error": str(e)}
+
+
+def _resolve_contact(name):
+    """Resolve contact alias → (chat_id, bridge_name) or None."""
+    name_lower = name.lower()
+    if name_lower in CONTACTS:
+        return CONTACTS[name_lower]
+    # Try matching from sentinel config groups
+    try:
+        config = json.loads((SENTINEL_ROOT / "config.json").read_text())
+        for gid, info in config.get("groups", {}).items():
+            if name_lower in info.get("name", "").lower():
+                return (gid, info["bridge"])
+        for uid, info in config.get("private_chats", {}).get("dufu", {}).items():
+            if name_lower in info.get("name", "").lower():
+                return (uid, "dufu")
+    except Exception:
+        pass
+    return None
+
+
+def _parse_msg_args(args, allow_bridge_flag=False):
+    """Parse common args: --file, --at, [-d], message parts.
+
+    Returns (file_path, schedule_ts, schedule_display, bridge_override, msg_parts).
+    """
+    file_path = None
+    schedule_ts = None
+    schedule_display = None
+    bridge_override = None
+    msg_parts = []
+
+    i = 0
+    while i < len(args):
+        if allow_bridge_flag and args[i] == "-d":
+            bridge_override = "dufu"
+        elif args[i] == "--file" and i + 1 < len(args):
+            file_path = args[i + 1]
+            i += 1
+        elif args[i] == "--at" and i + 1 < len(args):
+            schedule_ts, schedule_display = _parse_schedule(args[i + 1])
+            if schedule_ts is None:
+                print(f"  Invalid schedule format: {args[i + 1]}")
+                print("  Formats: 30m, 1h, 2h30m, 18:00, 2026-03-09 10:00")
+                return None
+            i += 1
+        else:
+            msg_parts.append(args[i])
+        i += 1
+
+    return file_path, schedule_ts, schedule_display, bridge_override, msg_parts
+
+
+def cmd_sm(args):
+    """wuji sm [-d] [--file F] [--at TIME] "message" — Draft to Saved Messages.
+    Default: Andrew's SM. Use -d for 杜甫's SM."""
+    parsed = _parse_msg_args(args, allow_bridge_flag=True)
+    if parsed is None:
+        return
+    file_path, schedule_ts, schedule_display, bridge_override, msg_parts = parsed
+    bridge = bridge_override or "andrew"
+
+    if not msg_parts:
+        print("Usage: wuji sm [-d] [--file F] [--at TIME] \"message\"")
+        print("  -d          Use 杜甫 SM (BG666)")
+        print("  --file F    Attach file")
+        print("  --at TIME   Schedule: 30m, 1h, 18:00, 2026-03-09 10:00")
+        return
+
+    text = " ".join(msg_parts)
+    sched_info = f" (scheduled: {schedule_display})" if schedule_ts else ""
+    print(f"  Sending to {BRIDGE_IDENTITY[bridge]} Saved Messages...{sched_info}")
+    ok, result = _tg_send(bridge, "me", text, file_path, schedule_ts)
+    if ok:
+        print(f"  OK  msg_id={result.get('message_id')}{sched_info}")
+    else:
+        print(f"  FAIL  {result.get('error', result)}")
+
+
+def cmd_send(args):
+    """wuji send <contact> [--file F] [--at TIME] "message" — Send to contact."""
+    if len(args) < 2:
+        print("Usage: wuji send <contact> [--file F] [--at TIME] \"message\"")
+        print("  wuji send sm \"hello\"")
+        print("  wuji send 考勤 --at 30m \"1\"             # 30分钟后发")
+        print("  wuji send 項目組 --at 18:00 \"日报\"       # 今天18:00发")
+        print("  wuji send sm --file report.csv \"see attached\"")
+        print("  wuji contacts   — list available contacts")
+        return
+
+    target = args[0]
+    resolved = _resolve_contact(target)
+    if not resolved:
+        print(f"  Unknown contact: {target}")
+        print(f"  Run 'wuji contacts' to see available contacts.")
+        return
+
+    chat_id, bridge = resolved
+    parsed = _parse_msg_args(args[1:])
+    if parsed is None:
+        return
+    file_path, schedule_ts, schedule_display, _, msg_parts = parsed
+
+    if not schedule_ts:
+        print("  必须指定 --at 排程时间。直接发送已禁用。")
+        print("  例: wuji tg send 項目組 --at 5m \"内容\"")
+        return
+
+    if not msg_parts:
+        print("  No message provided.")
+        return
+
+    text = " ".join(msg_parts)
+    sched_info = f" (scheduled: {schedule_display})"
+    print(f"  [{BRIDGE_IDENTITY[bridge]}] → {target} ({chat_id}){sched_info}")
+    ok, result = _tg_send(bridge, chat_id, text, file_path, schedule_ts)
+    if ok:
+        print(f"  OK  msg_id={result.get('message_id')}{sched_info}")
+    else:
+        print(f"  FAIL  {result.get('error', result)}")
+
+
+def cmd_forward(args):
+    """wuji forward <msg_id> <contact> — Forward SM message to contact."""
+    if len(args) < 2:
+        print("Usage: wuji forward <msg_id> <contact>")
+        print("  Forward a Saved Message to a contact.")
+        return
+
+    msg_id = args[0]
+    target = args[1]
+    resolved = _resolve_contact(target)
+    if not resolved:
+        print(f"  Unknown contact: {target}")
+        return
+
+    chat_id, bridge = resolved
+    # Read the SM message first, then re-send
+    import urllib.request
+    url = BRIDGE_URLS[bridge]
+    try:
+        req = urllib.request.Request(f"{url}/messages?chat=me&limit=50", headers=_bridge_headers())
+        with _no_proxy_opener().open(req, timeout=10) as resp:
+            messages = json.loads(resp.read())
+        # Find the message by ID
+        msg = None
+        for m in messages:
+            if str(m.get("id")) == str(msg_id):
+                msg = m
+                break
+        if not msg:
+            print(f"  Message {msg_id} not found in recent SM.")
+            return
+
+        text = msg.get("text", "")
+        # Check for media/file
+        file_path = None
+        if msg.get("media"):
+            # Download media first
+            dl_req = urllib.request.Request(f"{url}/download?chat=me&msg={msg_id}", headers=_bridge_headers())
+            with _no_proxy_opener().open(dl_req, timeout=30) as dl_resp:
+                dl_result = json.loads(dl_resp.read())
+                file_path = dl_result.get("path")
+
+        print(f"  [{BRIDGE_IDENTITY[bridge]}] forwarding msg {msg_id} → {target} ({chat_id})")
+        ok, result = _tg_send(bridge, chat_id, text, file_path)
+        if ok:
+            print(f"  OK  msg_id={result.get('message_id')}")
+        else:
+            print(f"  FAIL  {result.get('error', result)}")
+    except Exception as e:
+        print(f"  Error: {e}")
+
+
+def cmd_tg(args):
+    """wuji tg — Unified Telegram operations.
+
+    Subcommands:
+        list                     List synced chats
+        search <query>           Search across all chats
+        <chat> [N] [--my]        Show last N messages (--my = only mine)
+        <chat> --search Q        Search in a specific chat
+        sm [-d] [--file F] "msg" Draft to Saved Messages
+        send <contact> "msg"     Send to contact
+        forward <msg_id> <to>    Forward SM message
+        contacts                 List contact aliases
+    """
+    if not args:
+        print("  wuji tg — Telegram operations + knowledge digestion")
+        print()
+        print("  History:")
+        print("    wuji tg list                 List synced chats")
+        print("    wuji tg search <query>       Search across ALL chats")
+        print("    wuji tg <chat> [N]           Show last N messages")
+        print("    wuji tg <chat> --my          Show only MY messages")
+        print("    wuji tg <chat> --search Q    Search in a chat")
+        print()
+        print("  Messaging:")
+        print("    wuji tg sm \"msg\"              Draft to Andrew SM")
+        print("    wuji tg sm -d \"msg\"            Draft to 杜甫 SM")
+        print("    wuji tg send <contact> \"msg\"  Send to contact")
+        print("    wuji tg send sm --at 18:00 \"test\"")
+        print("    wuji tg forward <msg_id> <to>  Forward SM msg")
+        print("    wuji tg contacts              List contacts + bridges")
+        print()
+        print("  River (knowledge digestion):")
+        print("    wuji tg digest <river>       Digest a river's new messages")
+        print("    wuji tg digest --all         Digest all active rivers")
+        print("    wuji tg digest --date D <r>  Digest specific date")
+        print("    wuji tg rivers               Show all rivers + status")
+        print("    wuji tg atoms [river] [type] Show extracted atoms")
+        print("    wuji tg entity [name]        Entity profile / list")
+        print("    wuji tg think \"question\"      Cross-river reasoning")
+        print("    wuji tg think --auto          Auto-detect contradictions")
+        print("    wuji tg decisions [status]    Track decision lifecycle")
+        return
+
+    sub = args[0]
+
+    # Messaging subcommands
+    if sub == "sm":
+        cmd_sm(args[1:])
+        return
+    if sub == "send":
+        cmd_send(args[1:])
+        return
+    if sub == "forward":
+        cmd_forward(args[1:])
+        return
+    if sub == "contacts":
+        cmd_contacts(args[1:])
+        return
+
+    # River (knowledge digestion) subcommands
+    RIVER_DIR = WORKSPACE / "river"
+    if sub == "digest":
+        subprocess.run([sys.executable, str(RIVER_DIR / "engine.py"), "digest"] + args[1:])
+        return
+    if sub == "rivers":
+        subprocess.run([sys.executable, str(RIVER_DIR / "engine.py"), "status"])
+        return
+    if sub == "atoms":
+        _tg_atoms(args[1:])
+        return
+    if sub == "entity":
+        _tg_entity(args[1:])
+        return
+    if sub == "think":
+        _tg_think(args[1:])
+        return
+    if sub == "decisions":
+        _tg_decisions(args[1:])
+        return
+    if sub == "compress":
+        RIVER_DIR = WORKSPACE / "river"
+        subprocess.run([sys.executable, str(RIVER_DIR / "engine.py"), "compress"] + args[1:])
+        return
+
+    # Everything else → chat history query
+    _tg_chat(args)
+
+
+def _tg_atoms(args):
+    """Show extracted atoms for a river."""
+    import sqlite3 as _sqlite3
+    db_path = WORKSPACE / "river" / "data" / "river.db"
+    if not db_path.exists():
+        print("  River DB not found. Run: wuji tg digest --all")
+        return
+
+    conn = _sqlite3.connect(str(db_path))
+    conn.row_factory = _sqlite3.Row
+
+    if not args:
+        # Show recent atoms across all rivers
+        rows = conn.execute(
+            "SELECT * FROM atoms ORDER BY created_at DESC LIMIT 30"
+        ).fetchall()
+    else:
+        river_id = args[0]
+        atom_type = args[1] if len(args) > 1 else None
+        q = "SELECT * FROM atoms WHERE river_id LIKE ?"
+        params = [f"%{river_id}%"]
+        if atom_type:
+            q += " AND type = ?"
+            params.append(atom_type)
+        q += " ORDER BY created_at DESC LIMIT 50"
+        rows = conn.execute(q, params).fetchall()
+
+    if not rows:
+        print("  No atoms found.")
+        conn.close()
+        return
+
+    print(f"\n  {'Type':<10} {'Actor':<15} {'Content':<80} {'River'}")
+    print(f"  {'─'*10} {'─'*15} {'─'*80} {'─'*20}")
+    for r in rows:
+        actor = (r["actor"] or "")[:14]
+        content = (r["content"] or "").replace("\n", " ")[:79]
+        print(f"  {r['type']:<10} {actor:<15} {content:<80} {r['river_id']}")
+    conn.close()
+    print()
+
+
+def _tg_entity(args):
+    """Show entity profile."""
+    import sqlite3 as _sqlite3
+    db_path = WORKSPACE / "river" / "data" / "river.db"
+    if not db_path.exists():
+        print("  River DB not found.")
+        return
+    conn = _sqlite3.connect(str(db_path))
+    conn.row_factory = _sqlite3.Row
+
+    if not args:
+        # List all entities
+        rows = conn.execute("SELECT * FROM entities ORDER BY last_seen DESC LIMIT 30").fetchall()
+        if not rows:
+            print("  No entities yet. Entities are built after atoms are extracted.")
+            conn.close()
+            return
+        print(f"\n  {'Name':<20} {'Type':<12} {'First Seen':<12} {'Last Seen':<12} {'Summary'}")
+        print(f"  {'─'*20} {'─'*12} {'─'*12} {'─'*12} {'─'*40}")
+        for r in rows:
+            fs = (r["first_seen"] or "")[:10]
+            ls = (r["last_seen"] or "")[:10]
+            summary = (r["summary"] or "")[:40]
+            print(f"  {r['name']:<20} {r['type']:<12} {fs:<12} {ls:<12} {summary}")
+    else:
+        name = " ".join(args)
+        rows = conn.execute(
+            "SELECT * FROM entities WHERE name LIKE ? COLLATE NOCASE", (f"%{name}%",)
+        ).fetchall()
+        if not rows:
+            print(f"  No entity matching: {name}")
+        else:
+            for r in rows:
+                print(f"\n  Entity: {r['name']} ({r['type']})")
+                print(f"  Summary: {r['summary'] or '(none)'}")
+                print(f"  First seen: {r['first_seen'] or '?'}")
+                print(f"  Last seen: {r['last_seen'] or '?'}")
+                aliases = json.loads(r["aliases"])
+                if aliases:
+                    print(f"  Aliases: {', '.join(aliases)}")
+                # Show related atoms
+                atoms = conn.execute(
+                    "SELECT * FROM atoms WHERE actor LIKE ? OR target LIKE ? ORDER BY created_at DESC LIMIT 10",
+                    (f"%{r['name']}%", f"%{r['name']}%")
+                ).fetchall()
+                if atoms:
+                    print(f"\n  Recent atoms:")
+                    for a in atoms:
+                        content = (a["content"] or "").replace("\n", " ")[:100]
+                        print(f"    ({a['type']}) {content}")
+    conn.close()
+    print()
+
+
+def _tg_think(args):
+    """Cross-river reasoning."""
+    RIVER_DIR = WORKSPACE / "river"
+    if not args:
+        print("  Usage:")
+        print("    wuji tg think \"问题\"")
+        print("    wuji tg think --auto")
+        return
+    subprocess.run([sys.executable, str(RIVER_DIR / "think.py")] + args)
+
+
+def _tg_decisions(args):
+    """Show tracked decisions."""
+    import sqlite3 as _sqlite3
+    db_path = WORKSPACE / "river" / "data" / "river.db"
+    if not db_path.exists():
+        print("  River DB not found.")
+        return
+    conn = _sqlite3.connect(str(db_path))
+    conn.row_factory = _sqlite3.Row
+
+    status_filter = args[0] if args else None
+    q = "SELECT * FROM decisions"
+    params = []
+    if status_filter:
+        q += " WHERE status = ?"
+        params.append(status_filter)
+    q += " ORDER BY created_at DESC LIMIT 30"
+
+    rows = conn.execute(q, params).fetchall()
+    if not rows:
+        print("  No decisions tracked yet.")
+        conn.close()
+        return
+
+    print(f"\n  {'Status':<12} {'By':<12} {'Title':<50} {'Date'}")
+    print(f"  {'─'*12} {'─'*12} {'─'*50} {'─'*12}")
+    for r in rows:
+        dt = (r["proposed_at"] or r["created_at"] or "")[:10]
+        by = (r["proposed_by"] or "?")[:11]
+        title = (r["title"] or "")[:49]
+        print(f"  {r['status']:<12} {by:<12} {title:<50} {dt}")
+    conn.close()
+    print()
+
+
+def cmd_contacts(args=None):
+    """wuji contacts — List all contact aliases."""
+    print("  Contact aliases (hardcoded bridge binding):")
+    print()
+    print("  === Andrew (G9/24Bet) ===")
+    for name, (cid, bridge) in sorted(CONTACTS.items()):
+        if bridge == "andrew":
+            print(f"    {name:12s} → {cid}")
+    print()
+    print("  === 杜甫 (BG666) ===")
+    for name, (cid, bridge) in sorted(CONTACTS.items()):
+        if bridge == "dufu":
+            print(f"    {name:12s} → {cid}")
+    print()
+    print("  CRITICAL: Bridges are identity-bound. No cross-sending allowed.")
+
+
 def main():
     args = sys.argv[1:]
 
@@ -528,8 +2010,68 @@ def main():
         cmd_search(query)
         return
 
+    if args[0] == "radar":
+        cmd_radar(args[1:])
+        return
+
     if args[0] == "pulse":
         cmd_pulse()
+        return
+
+    if args[0] == "experience":
+        cmd_experience(args[1:])
+        return
+
+    if args[0] == "digest":
+        cmd_digest(args[1:])
+        return
+
+    if args[0] == "sessions":
+        cmd_sessions(args[1:])
+        return
+
+    if args[0] == "audit":
+        cmd_audit(args[1:])
+        return
+
+    if args[0] == "bulletin":
+        cmd_bulletin(args[1:])
+        return
+
+    if args[0] == "dashboard":
+        cmd_global_dashboard()
+        return
+
+    if args[0] == "tg":
+        cmd_tg(args[1:])
+        return
+
+    if args[0] == "chat":
+        cmd_chat(args[1:])
+        return
+
+    if args[0] == "db":
+        cmd_db(args[1:])
+        return
+
+    if args[0] == "jarvis":
+        subprocess.run([sys.executable, str(Path(__file__).parent / "jarvis-status")])
+        return
+
+    if args[0] == "sm":
+        cmd_sm(args[1:])
+        return
+
+    if args[0] == "send":
+        cmd_send(args[1:])
+        return
+
+    if args[0] == "forward":
+        cmd_forward(args[1:])
+        return
+
+    if args[0] == "contacts":
+        cmd_contacts(args[1:])
         return
 
     # Agent dispatch

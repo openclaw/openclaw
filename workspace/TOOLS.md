@@ -13,17 +13,33 @@ Things like:
 - Device nicknames
 - Anything environment-specific
 
-## 群組讀取 SOP（鐵規則）
+## wuji tg CLI — Telegram 讀寫主工具（鐵規則）
 
-當有人說「看看 XX 群的消息」「讀一下 XX 群」：
+**所有 Telegram 讀取操作用 `wuji tg`，不要用 raw HTTP bridge。**
 
-1. **先查 CHANNELS.md** — 用群名關鍵字比對 chatId
-2. **找不到？用 `GET /chats` 搜索** — `curl -s http://localhost:18790/chats`，用關鍵字 grep 出 chatId
-3. **找到 chatId 後直接 `GET /messages?chat=<id>&limit=30`** — 讀訊息、整理摘要、回覆
-4. **絕對不要問用戶要 chatId** — 你有 /chats API，自己查
+```bash
+# 讀取
+exec python3 ~/clawd/workspace/scripts/wuji tg list                  # 列出所有已同步群組
+exec python3 ~/clawd/workspace/scripts/wuji tg search "關鍵字"         # 跨群搜索
+exec python3 ~/clawd/workspace/scripts/wuji tg <群名> [N]              # 看某群最後 N 則（模糊匹配群名）
+exec python3 ~/clawd/workspace/scripts/wuji tg <群名> --my             # 只看我的訊息
+exec python3 ~/clawd/workspace/scripts/wuji tg <群名> --search "關鍵字"  # 群內搜索
 
-❌ 錯誤示範：「你能幫我確認群組ID嗎？」「在群裡 @ 我我就能找到」
-✅ 正確做法：直接 /chats 搜索 → /messages 讀取 → 整理回覆
+# 發送
+exec python3 ~/clawd/workspace/scripts/wuji tg send <contact> "msg"   # 發訊息
+exec python3 ~/clawd/workspace/scripts/wuji tg contacts               # 列出聯絡人 + bridges
+
+# River（知識消化）
+exec python3 ~/clawd/workspace/scripts/wuji tg digest <river>         # 消化某條 river 的新訊息
+exec python3 ~/clawd/workspace/scripts/wuji tg rivers                 # 看所有 rivers
+exec python3 ~/clawd/workspace/scripts/wuji tg think "問題"            # 跨 river 推理
+```
+
+**群名模糊匹配** — 打「666運營」就能匹配到「666運營咨詢」，不需要完整群名或 chat ID。
+
+**絕對不要問用戶要 chatId** — `wuji tg list` 和 `wuji tg search` 自己找。
+
+**t.me 連結解析** — `t.me/c/3506161262/2284` → chat_id `-1003506161262`，msg_id `2284`。直接 `wuji tg` 用群名讀取即可。
 
 ## Local Services
 
@@ -96,6 +112,68 @@ Things like:
 
 - Preferred voice: OpenAI "echo"
 - Edge TTS: zh-TW-YunJheNeural
+
+## Threads Reply System（Threads 留言回覆管理）
+
+**路徑**: `~/clawd/workspace/tools/threads-reply/`
+**CLI**: `python3 ~/clawd/workspace/tools/threads-reply/threads_reply.py <command>`
+
+**⚠️ 鐵律：所有 Threads 操作都用 `exec` 跑 Python CLI，絕對不要開瀏覽器。** API token 已設定在 `.env`，不需要瀏覽器登入。
+
+### 指令表
+
+| 指令                                | 用途                                      |
+| ----------------------------------- | ----------------------------------------- |
+| `scan`                              | 拉最新貼文 + 留言入 DB，自動標記已回/未回 |
+| `pending [post_id]`                 | 列出未回覆的留言                          |
+| `dive <username>`                   | 深挖用戶 profile（🥃 敬酒型專用）         |
+| `draft <comment_id> <text>`         | 建立草稿                                  |
+| `review`                            | 列出待審草稿                              |
+| `approve <draft_id> [revised_text]` | 批准草稿（可附修改版）                    |
+| `reject <draft_id>`                 | 退回草稿                                  |
+| `send [--dry-run]`                  | 發送所有 pending replies                  |
+| `quick <comment_id> <text>`         | 快速回覆（跳過草稿直接 pending）          |
+| `status`                            | 看整體狀態                                |
+
+### 回覆骨架（Cruz 教的鐵律）
+
+**Phase 1: SCAN** → `scan` 拉最新數據
+**Phase 2: CLASSIFY** → 看 `pending`，每則分類：
+
+- 🎯 經營型（同路人/認同/提問/技術討論）→ profile 快掃
+- 🥃 敬酒型（嗆/酸/沒讀懂就來留言）→ `dive` 深挖全部
+
+**Phase 3: DRAFT** → 核心原則：
+
+1. **字數反比定律** — 對方越短你越短。一句嗆配一句回，不解釋
+2. **料要隱形** — profile 情報不是展示「我查過你」，而是讓那一句話精準到他心裡發毛
+3. **冷笑語感** — 想像站在他右後方，耳邊一句話就走。不是正面對決
+4. 🎯 經營型：正常篇幅，profile 快掃
+5. 🥃 敬酒型：深挖全部，但產出反而最短，一兩句帶走
+
+**Phase 4: REVIEW** → 草稿整批呈給 Cruz，Cruz 可以：
+
+- ✅ 「發」→ `approve` + `send`
+- ✏️ 給修改版 → `approve <id> "修改版文字"`
+- ❌ 「不要」→ `reject`
+
+**Phase 5: SEND** → `send` 發送，自動 30 秒 cooldown 間隔
+
+### 資料庫
+
+SQLite: `~/clawd/workspace/tools/threads-reply/threads.db`
+
+- `posts` — 貼文
+- `comments` — 留言（含 replied_to 追蹤）
+- `profiles` — 用戶側寫
+- `replies` — 已發送/待發送的回覆
+- `drafts` — 草稿審核流
+
+### Threads API
+
+- Token 在 `.env`
+- `config.json` 有 user_id、reply rules
+- 用 conversation endpoint（不是 replies）才能拿到 replied_to parent-child 關係
 
 ## Why Separate?
 

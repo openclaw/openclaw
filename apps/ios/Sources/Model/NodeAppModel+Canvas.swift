@@ -60,7 +60,8 @@ extension NodeAppModel {
 
     private static func probeTCP(url: URL, timeoutSeconds: Double) async -> Bool {
         guard let host = url.host, !host.isEmpty else { return false }
-        let portInt = url.port ?? ((url.scheme ?? "").lowercased() == "wss" ? 443 : 80)
+        let scheme = (url.scheme ?? "").lowercased()
+        let portInt = url.port ?? (scheme == "https" || scheme == "wss" ? 443 : 80)
         guard portInt >= 1, portInt <= 65535 else { return false }
         guard let nwPort = NWEndpoint.Port(rawValue: UInt16(portInt)) else { return false }
 

@@ -1,10 +1,11 @@
 """
-agent_base.py — generic commands + cross-agent intelligence helpers.
+agent_base.py — generic commands + dashboard panels + cross-agent intelligence helpers.
 
-Commands: status, files, read, log, config, exp
+Commands: status, files, read, log, config, exp, dashboard
 Cross-agent: cross_agent_recent(), parse_tasks_md()
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -14,6 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 OPENCLAW_CONFIG = os.path.expanduser("~/.openclaw/openclaw.json")
+SENTINEL_CONFIG = Path(__file__).resolve().parent.parent.parent / "sentinel" / "config.json"
 WORKSPACE_ROOT = Path(__file__).resolve().parent.parent  # workspace/
 
 
@@ -452,6 +454,170 @@ def _inject_via_gateway(agent, message):
         print(f"  gateway: {e}")
 
 
+# ── dashboard panels ───────────────────────────────────────────────
+
+
+def _panel_workspace(agent, args):
+    """Workspace overview: files, size, recent changes, model, groups."""
+    ws = _workspace_path(agent)
+    if not ws.exists():
+        return [f"workspace not found: {ws}"]
+
+    all_files = [f for f in ws.rglob("*") if f.is_file()
+                 and not any(p.startswith(".") or p == "__pycache__"
+                             for p in f.relative_to(ws).parts)]
+    total_size = sum(f.stat().st_size for f in all_files)
+
+    lines = [
+        f"Files: {len(all_files)}   Size: {total_size / 1024:.0f} KB",
+    ]
+
+    model = agent.get("model", {}).get("primary", "default")
+    lines.append(f"Model: {model}")
+
+    bindings = _bindings_for(agent["id"])
+    groups = [b["match"]["peer"]["id"] for b in bindings if "peer" in b.get("match", {})]
+    if groups:
+        lines.append(f"Groups: {len(groups)}")
+
+    # Recent 5 files
+    if all_files:
+        all_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        lines.append("")
+        lines.append("Recent:")
+        for f in all_files[:5]:
+            mtime = datetime.fromtimestamp(f.stat().st_mtime)
+            rel = f.relative_to(ws)
+            lines.append(f"  {mtime:%m-%d %H:%M}  {rel}")
+
+    return lines
+
+
+def _panel_groups(agent, args):
+    """Telegram groups bound to this agent."""
+    lines = []
+    try:
+        with open(SENTINEL_CONFIG) as f:
+            sentinel_cfg = json.load(f)
+        groups = sentinel_cfg.get("groups", {})
+    except Exception:
+        groups = {}
+
+    agent_groups = {gid: g for gid, g in groups.items()
+                    if g.get("agent_id") == agent["id"]}
+
+    if not agent_groups:
+        return ["(no groups bound)"]
+
+    for gid, g in sorted(agent_groups.items(), key=lambda x: x[1].get("priority", "z")):
+        prio = g.get("priority", "-")
+        name = g.get("name", gid)
+        lines.append(f"  {prio:<6}  {name}  ({gid})")
+
+    return lines
+
+
+def _panel_memory(agent, args):
+    """Memory directory stats."""
+    ws = _workspace_path(agent)
+    mem_dir = ws / "memory"
+    if not mem_dir.exists():
+        return ["(no memory/ directory)"]
+
+    files = [f for f in mem_dir.rglob("*") if f.is_file()]
+    total_size = sum(f.stat().st_size for f in files)
+
+    lines = [f"Files: {len(files)}   Size: {total_size / 1024:.0f} KB"]
+
+    if files:
+        files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        lines.append("")
+        lines.append("Recent:")
+        for f in files[:3]:
+            mtime = datetime.fromtimestamp(f.stat().st_mtime)
+            rel = f.relative_to(mem_dir)
+            lines.append(f"  {mtime:%m-%d %H:%M}  {rel}")
+
+    return lines
+
+
+GENERIC_PANELS = {
+    "workspace": _panel_workspace,
+    "groups": _panel_groups,
+    "memory": _panel_memory,
+}
+
+
+def load_agent_dashboard(agent):
+    """Load agent-specific dashboard.py if it exists. Returns PANELS dict or None."""
+    aid = agent["id"]
+    candidates = [
+        WORKSPACE_ROOT / aid / "dashboard.py",
+        WORKSPACE_ROOT / "agents" / aid / "dashboard.py",
+    ]
+    ws = _workspace_path(agent)
+    ws_dash = ws / "dashboard.py"
+    if ws_dash not in candidates:
+        candidates.append(ws_dash)
+
+    dash_path = None
+    for c in candidates:
+        if c.exists():
+            dash_path = c
+            break
+
+    if dash_path is None:
+        return None
+
+    spec = importlib.util.spec_from_file_location(f"agent_dash_{aid}", dash_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return getattr(mod, "PANELS", None)
+
+
+def cmd_dashboard(agent, args):
+    """Agent dashboard — show all panels or a specific one."""
+    # Merge generic + agent panels (agent can override)
+    panels = dict(GENERIC_PANELS)
+    agent_panels = load_agent_dashboard(agent)
+    if agent_panels:
+        panels.update(agent_panels)
+
+    # Specific panel requested?
+    if args:
+        name = args[0]
+        panel_args = args[1:]
+        fn = panels.get(name)
+        if fn is None:
+            print(f"  Unknown panel: {name}")
+            print(f"  Available: {', '.join(panels.keys())}")
+            return
+        lines = fn(agent, panel_args)
+        _render_panel(name, lines, fn)
+        return
+
+    # Run all panels
+    for name, fn in panels.items():
+        try:
+            lines = fn(agent, [])
+        except Exception as e:
+            lines = [f"error: {e}"]
+        _render_panel(name, lines, fn)
+
+
+def _render_panel(name, lines, fn):
+    """Print a panel with header."""
+    doc = (fn.__doc__ or "").strip().split("\n")[0]
+    header = f"  ── {name}"
+    if doc:
+        header += f" ({doc})"
+    header += f" {'─' * max(1, 60 - len(header))}"
+    print(header)
+    for line in (lines or []):
+        print(f"  {line}")
+    print()
+
+
 # ── registry ────────────────────────────────────────────────────────
 
 GENERIC_COMMANDS = {
@@ -462,6 +628,7 @@ GENERIC_COMMANDS = {
     "config": cmd_config,
     "exp": cmd_exp,
     "inject": cmd_inject,
+    "dashboard": cmd_dashboard,
 }
 
 

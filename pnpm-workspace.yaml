@@ -3,6 +3,7 @@ packages:
   - ui
   - packages/*
   - extensions/*
+  - sentinel/wuji-empire
 
 onlyBuiltDependencies:
   - "@lydell/node-pty"

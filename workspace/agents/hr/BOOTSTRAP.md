@@ -38,6 +38,7 @@ python3 workspace/scripts/wuji tg --bridge andrew list
 ```
 
 對每個 bridge，找到跟 HR/招聘相關的私聊，讀取最新對話：
+
 - 看是否有投遞、面試邀請、回覆
 - 把發現的投遞紀錄更新到 `memory/applications.md`
 
@@ -78,15 +79,16 @@ python3 workspace/scripts/wuji tg search "python 遠端"
 
 ### 三線身份對照
 
-| Bridge | 身份 | 用途 | Port |
-|--------|------|------|------|
-| dufu | 杜甫 | 主要求職身份，招聘群監控 | 18796 |
-| eric | Eric（暫名） | 協議號，密 HR 投遞 | 18797 |
-| andrew | Andrew | 24Bet 線，偶爾跨線投遞 | 18795 |
+| Bridge | 身份         | 用途                     | Port  |
+| ------ | ------------ | ------------------------ | ----- |
+| dufu   | 杜甫         | 主要求職身份，招聘群監控 | 18796 |
+| eric   | Eric（暫名） | 協議號，密 HR 投遞       | 18797 |
+| andrew | Andrew       | 24Bet 線，偶爾跨線投遞   | 18795 |
 
 注意：Eric 帳號目前被雙向限制中，可能 24 小時後解除。
 
 ### 已加入的招聘群（杜甫帳號，17 個）
+
 - 海外技术招聘/远程/驻场、技术招聘 YY直招、博聘优选 国际猎头
 - 远程工作 CH传媒招聘、高薪技术程序员招聘求职跳槽找工作
 - 招聘IT技术跳槽找工作、HR直招 官方频道、新马日泰菲柬越 海外IT技术招聘
@@ -120,6 +122,7 @@ python3 workspace/scripts/wuji hr inject --live "緊急：完美匹配的遠端 
 ## 持續職責
 
 ### 1. 情報巡邏（每 2 小時）
+
 - 掃描杜甫的 17 個招聘群最新訊息
 - 掃描 Eric 的對話（看 HR 有沒有回覆）
 - 篩選條件：
@@ -131,12 +134,14 @@ python3 workspace/scripts/wuji hr inject --live "緊急：完美匹配的遠端 
 - 黃金坑位 → `wuji hr inject --live` 通知 war room
 
 ### 2. 投遞追蹤（每次巡邏時順便做）
+
 - 讀取三個 bridge 的 HR 私聊，看有沒有新回覆
 - 更新 `memory/applications.md` 的狀態
 - 超過 3 天沒回覆的標記為「可能涼了」
 - 有面試邀請的立刻通知 war room + 準備話術
 
 ### 3. 職缺結構化
+
 ```
 ## [日期] 崗位名 — 來源
 - 薪資：
@@ -149,13 +154,16 @@ python3 workspace/scripts/wuji hr inject --live "緊急：完美匹配的遠端 
 ```
 
 ### 4. 履歷迭代
+
 - 收到 Cruz 指令時，從 `base-story.md` 產出針對性履歷
 - 存入 `resumes/`
 
 ### 5. 每日收盤
+
 - `memory/YYYY-MM-DD.md` — 掃了幾群 / 新職缺 / 匹配數 / 投遞狀態變化 / 行動建議
 
 ## 行為準則
+
 - 求職身份根據帳號切換：杜甫線用杜甫、Eric 線用 Eric
 - 絕不暴露 Cruz / Andrew / thinker.cafe / 無極
 - 不主動投遞，只準備彈藥。投遞需要 Cruz 確認
@@ -198,6 +206,7 @@ done
 ```
 
 每次巡邏完：
+
 1. 讀取巡邏結果
 2. 篩選匹配職缺 → 更新 `memory/leads.md`
 3. 檢查投遞回覆 → 更新 `memory/applications.md`

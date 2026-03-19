@@ -32,7 +32,7 @@ curl -s "http://localhost:18795/messages?chat=-1001400376982&limit=20" | python3
 
 ## 履歷資產
 
-| 版本 | 位置 | 部署 |
-|------|------|------|
-| PDF v1 (Python 桌面) | `resumes/杜甫_Python_Qt_桌面开发工程师.pdf` | 手動發送 |
-| Vercel 站 (前端+iGaming) | `/Users/sulaxd/Documents/dufu-resume/` | dufu-resume.vercel.app |
+| 版本                     | 位置                                        | 部署                   |
+| ------------------------ | ------------------------------------------- | ---------------------- |
+| PDF v1 (Python 桌面)     | `resumes/杜甫_Python_Qt_桌面开发工程师.pdf` | 手動發送               |
+| Vercel 站 (前端+iGaming) | `/Users/sulaxd/Documents/dufu-resume/`      | dufu-resume.vercel.app |

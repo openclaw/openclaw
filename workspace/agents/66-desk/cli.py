@@ -9,6 +9,7 @@ Layer 0: 能看 + 能跑
   health   — 部署健康度檢查
 """
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -17,7 +18,10 @@ from pathlib import Path
 
 DESK_WS = Path(__file__).resolve().parent
 WORKSPACE = DESK_WS.parent.parent  # workspace/
+REPORTS_DIR = DESK_WS / "reports"
 SHEETS_RUNNER = DESK_WS / "sheets-runner.py"
+DAILY_REPORT_GEN = DESK_WS / "scripts" / "daily_report_gen.py"
+TG_SHEET_SYNC = DESK_WS / "tg-sheet-sync.py"
 QUERY_RUNNER = WORKSPACE / "agents" / "vivi-tutor" / "query-runner.py"
 PROJECT_DIR = Path(os.path.expanduser("~/Documents/two"))
 
@@ -55,11 +59,12 @@ def sheets_cmd(agent, args):
 # ── query ───────────────────────────────────────────────────────────
 
 def query_cmd(agent, args):
-    """Delegate to query-runner.py (bg666/matomo SQL queries)."""
+    """Delegate to query-runner.py (bg666/bg666-local/matomo SQL queries)."""
     if not args:
-        print("  usage: wuji 66-desk query <bg666|matomo> <SQL>")
+        print("  usage: wuji 66-desk query <bg666|bg666-local|matomo> <SQL>")
         print("  examples:")
-        print('    wuji 66-desk query bg666 "SELECT COUNT(*) FROM sys_player"')
+        print('    wuji 66-desk query bg666-local "SELECT COUNT(*) FROM player_statistics_day"  # 本地快')
+        print('    wuji 66-desk query bg666 "SELECT COUNT(*) FROM sys_player"                   # 遠端')
         print('    wuji 66-desk query bg666 "SELECT ..." --format table')
         return
 
@@ -280,20 +285,35 @@ def _run_script(script, args, cwd=None, label=None):
 
 
 def report_cmd(agent, args):
-    """Generate reports (daily, hourly, weekly)."""
+    """Generate reports (daily, hourly, weekly, or template-based)."""
     if not args:
-        print("  usage: wuji 66-desk report <daily|hourly|weekly> [options]")
+        print("  usage: wuji 66-desk report <type> [options]")
         print()
+        print("  ── Pipeline reports ──")
         print("  daily                  Generate yesterday's daily report")
         print("  daily 2026-02-27       Generate for specific date")
-        print("  daily --dry-run        Generate without sending to Telegram")
         print("  hourly                 Generate current hourly snapshot")
         print("  weekly                 Generate weekly PDF")
+        print()
+        print("  ── Template reports ──")
+        print("  <name> [extract|render|open]  Generate/render analysis report")
+        print("  <name>                        Full pipeline: extract → render → open")
+        print("  <name> extract                Run SQL → YAML only")
+        print("  <name> render                 Render YAML → HTML only")
+        print("  <name> open                   Open HTML in browser")
+        print()
+        # List available template reports
+        instances = REPORTS_DIR / "instances"
+        if instances.exists():
+            names = [d.name for d in instances.iterdir() if d.is_dir() and (d / "extract.py").exists()]
+            if names:
+                print(f"  available templates: {', '.join(sorted(names))}")
         return
 
     sub = args[0]
     rest = args[1:]
 
+    # Pipeline reports (legacy)
     if sub == "daily":
         _run_script(DAILY_REPORT, rest, label="Daily Report")
     elif sub == "hourly":
@@ -301,8 +321,57 @@ def report_cmd(agent, args):
     elif sub == "weekly":
         _run_script(WEEKLY_REPORT, rest, label="Weekly Report")
     else:
-        print(f"  unknown report type: {sub}")
-        print("  available: daily, hourly, weekly")
+        # Template-based reports
+        _report_template(sub, rest)
+
+
+def _report_template(name, args):
+    """Handle template-based report: extract → render → open."""
+    instance_dir = REPORTS_DIR / "instances" / name
+    extract_script = instance_dir / "extract.py"
+    yaml_path = instance_dir / "report_data.yaml"
+    render_script = REPORTS_DIR / "engine" / "render.py"
+    html_path = instance_dir / "report_data.html"
+
+    if not extract_script.exists():
+        print(f"  report template not found: {name}")
+        instances = REPORTS_DIR / "instances"
+        if instances.exists():
+            avail = [d.name for d in instances.iterdir() if d.is_dir()]
+            if avail:
+                print(f"  available: {', '.join(sorted(avail))}")
+        return
+
+    # Determine which steps to run
+    step = args[0] if args else "all"
+
+    if step in ("all", "extract"):
+        print(f"  ── Extract: {name} ──")
+        ok = _run_script(extract_script, ["--output", str(yaml_path)], cwd=str(instance_dir))
+        if not ok and step == "all":
+            return
+        if step == "extract":
+            return
+
+    if step in ("all", "render"):
+        if not yaml_path.exists():
+            print(f"  YAML not found: {yaml_path}")
+            print("  Run extract first: wuji 66-desk report {name} extract")
+            return
+        print(f"  ── Render: {name} ──")
+        ok = _run_script(render_script, [str(yaml_path), str(html_path)])
+        if not ok and step == "all":
+            return
+        if step == "render":
+            return
+
+    if step in ("all", "open"):
+        if not html_path.exists():
+            print(f"  HTML not found: {html_path}")
+            print(f"  Run render first: wuji 66-desk report {name} render")
+            return
+        print(f"  ── Opening: {html_path} ──")
+        subprocess.run(["open", str(html_path)])
 
 
 # ── track ───────────────────────────────────────────────────────────
@@ -363,9 +432,57 @@ def health_cmd(agent, args):
     subprocess.run(["bash", str(HEALTH_CHECK)], cwd=str(PROJECT_DIR))
 
 
+# ── daily-report ───────────────────────────────────────────────────
+
+def daily_report_cmd(agent, args):
+    """Generate Cruz's daily work report draft."""
+    if not DAILY_REPORT_GEN.exists():
+        print(f"  daily_report_gen.py not found at {DAILY_REPORT_GEN}")
+        return
+    cmd = [sys.executable, str(DAILY_REPORT_GEN)] + list(args)
+    subprocess.run(cmd, cwd=str(DESK_WS))
+
+
+# ── sync ───────────────────────────────────────────────────────────
+
+def sync_cmd(agent, args):
+    """TG ↔ Google Sheet 日報同步 (tg-sheet-sync.py)."""
+    if not args:
+        print("  usage: wuji 66-desk sync <sync|parse|status|backfill> [options]")
+        print()
+        print("  sync [--date 2026-03-07] [--dry-run]   同步指定日期到 Sheet")
+        print("  sync --range 2026-03-05:2026-03-09     同步日期範圍")
+        print("  parse [--date 2026-03-07]              只解析 TG 日報，不寫入")
+        print("  status                                 看 TG vs Sheet 差距")
+        print("  backfill [--dry-run]                   補齊所有缺漏")
+        return
+
+    if not TG_SHEET_SYNC.exists():
+        print(f"  tg-sheet-sync.py not found at {TG_SHEET_SYNC}")
+        return
+
+    cmd = [sys.executable, str(TG_SHEET_SYNC)] + list(args)
+    subprocess.run(cmd, cwd=str(DESK_WS))
+
+
+# ── progress (sheets-progress.py) ──────────────────────────────────
+
+def progress_cmd(agent, args):
+    """Task progress management for BG666 Sheet."""
+    progress_path = DESK_WS / "sheets-progress.py"
+    if not progress_path.exists():
+        print(f"  sheets-progress.py not found at {progress_path}")
+        return
+    spec = importlib.util.spec_from_file_location("sheets_progress", str(progress_path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.progress_dispatch(agent, args)
+
+
 # ── COMMANDS registry ───────────────────────────────────────────────
 
 COMMANDS = {
+    "progress": progress_cmd,
     "sheets": sheets_cmd,
     "query": query_cmd,
     "project": project_cmd,
@@ -373,4 +490,6 @@ COMMANDS = {
     "track": track_cmd,
     "generate": generate_cmd,
     "health": health_cmd,
+    "daily-report": daily_report_cmd,
+    "sync": sync_cmd,
 }

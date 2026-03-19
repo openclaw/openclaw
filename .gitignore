@@ -14,6 +14,8 @@ __pycache__/
 .worktrees/
 .DS_Store
 **/.DS_Store
+Icon?
+**/Icon?
 ui/src/ui/__screenshots__/
 ui/playwright-report/
 ui/test-results/
@@ -83,3 +85,69 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 local/
+
+# Workspace — runtime data (never commit)
+workspace/.*.lock
+workspace/.*_state.json
+workspace/.env.bak*
+workspace/.openclaw/
+workspace/.learnings/
+
+# Workspace — media & exports
+workspace/*.mp3
+workspace/*.opus
+workspace/*.png
+workspace/*.jpg
+workspace/*.csv
+workspace/*.pdf
+workspace/*.html
+workspace/line-rich-image.png
+workspace/rich-menu.png
+workspace/rich_menu_*.jpg
+
+# Workspace — generated output & temp
+workspace/exports/
+workspace/output/
+workspace/reports/
+workspace/tmp/
+workspace/logs/
+workspace/diagnostics/
+workspace/drafts/
+workspace/video-edit/
+workspace/podcast/
+workspace/inbox/
+
+# Workspace — project venvs & data
+workspace/projects/
+workspace/line-news-proxy/
+workspace/experience-memory/data/
+
+# Workspace — n8n exports
+workspace/n8n-*.json
+
+# Workspace — one-off docs (not tracked)
+workspace/ARCHITECTURE.md
+workspace/AUTO_SKILL_INTEGRATION.md
+workspace/BRIEFING.md
+workspace/BUILD_LOG.md
+workspace/CRON_INSTRUCTIONS.md
+workspace/DAEMONS.md
+workspace/GENESIS.md
+workspace/REFLECTION_LAYERS.md
+workspace/WORKFLOW_AUTOMATION.md
+workspace/thinker-news-refactor-prompt.md
+
+# Workspace — p0 & wool puller data
+workspace/p0_*/
+workspace/p0_master_new.csv
+workspace/r12_win/
+workspace/wool_puller*
+
+# Other local files
+.env.soul
+apply-feedback-integration.sh
+media/
+skills/channel-growth/
+skills/local-places/
+skills/tw-traffic/
+workspace/24bet
