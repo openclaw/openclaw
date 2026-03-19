@@ -1,10 +1,8 @@
 import {
   createAccountActionGate,
   createAccountListHelpers,
-} from "openclaw/plugin-sdk/account-helpers";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import {
+  normalizeAccountId,
+  resolveAccountEntry,
   type OpenClawConfig,
   type DiscordAccountConfig,
   type DiscordActionConfig,
