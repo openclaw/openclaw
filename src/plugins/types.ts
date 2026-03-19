@@ -1350,9 +1350,11 @@ export type OpenClawPluginApi = {
     handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>,
   ) => void;
   /**
-   * Register a custom command that bypasses the LLM agent.
+   * Register a custom command that runs before the LLM agent.
    * Plugin commands are processed before built-in commands and before agent invocation.
-   * Use this for simple state-toggling or status commands that don't need AI reasoning.
+   * By default the command reply is the final response (no agent run). Set
+   * `shouldContinue: true` in the returned `PluginCommandResult` to hand off
+   * to the agent instead (e.g., after granting a permission or loading context).
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
   /** Register a context engine implementation (exclusive slot — only one active at a time). */

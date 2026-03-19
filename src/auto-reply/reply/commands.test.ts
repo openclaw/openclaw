@@ -2,12 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
-import {
-  addSubagentRunForTests,
-  listSubagentRunsForRequester,
-  resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
@@ -1499,7 +1493,7 @@ describe("handleCommands plugin commands", () => {
     const commandResult = await handleCommands(buildParams("/state-change", pluginCfg));
 
     expect(commandResult.shouldContinue).toBe(true);
-    expect(commandResult.reply?.text).toBe("Done.");
+    expect(commandResult.reply).toBeUndefined();
     expect("shouldContinue" in (commandResult.reply ?? {})).toBe(false);
   });
 });
