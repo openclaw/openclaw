@@ -4,6 +4,7 @@ import {
   mergeUsageDailyLatency,
   mergeUsageLatency,
 } from "../../../../src/shared/usage-aggregates.js";
+import { formatCost as formatUiCost } from "../format.ts";
 import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -258,8 +259,14 @@ function renderUsageMosaic(
   `;
 }
 
-function formatCost(n: number, decimals = 2): string {
-  return `$${n.toFixed(decimals)}`;
+function formatCost(n: number, decimals?: number): string {
+  if (!Number.isFinite(n)) {
+    return "$0.00";
+  }
+  if (typeof decimals === "number") {
+    return `$${n.toFixed(decimals)}`;
+  }
+  return formatUiCost(n);
 }
 
 function formatIsoDate(date: Date): string {

@@ -4,6 +4,7 @@ import {
   CHART_BAR_WIDTH_RATIO,
   CHART_MAX_BAR_WIDTH,
 } from "./usage-render-details.ts";
+import { formatCost } from "./usage-metrics.ts";
 import type { TimeSeriesPoint, UsageSessionEntry } from "./usageTypes.ts";
 
 function makePoint(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
@@ -132,5 +133,23 @@ describe("chart bar sizing", () => {
         expect(barGap).toBeGreaterThanOrEqual(0);
       }
     }
+  });
+});
+
+describe("usage cost formatting", () => {
+  it("preserves sub-cent cache costs instead of rounding them to zero", () => {
+    expect(formatCost(0.0047)).toBe("$0.0047");
+  });
+
+  it("keeps three decimals for costs below one dollar by default", () => {
+    expect(formatCost(0.125)).toBe("$0.125");
+  });
+
+  it("allows explicit precision overrides for derived metrics", () => {
+    expect(formatCost(0.125, 4)).toBe("$0.1250");
+  });
+
+  it("falls back to a zero-dollar string for invalid values", () => {
+    expect(formatCost(Number.NaN)).toBe("$0.00");
   });
 });
