@@ -1,0 +1,641 @@
+import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
+import type { OpenClawConfig } from "../config/config.js";
+import {
+  formatSlackStreamingBooleanMigrationMessage,
+  formatSlackStreamModeMigrationMessage,
+  resolveDiscordPreviewStreamMode,
+  resolveSlackNativeStreaming,
+  resolveSlackStreamingMode,
+  resolveTelegramPreviewStreamMode,
+} from "../config/discord-preview-streaming.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+
+export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const changes: string[] = [];
+  const NANO_BANANA_SKILL_KEY = "nano-banana-pro";
+  const NANO_BANANA_MODEL = "google/gemini-3-pro-image-preview";
+  let next: OpenClawConfig = cfg;
+
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+  const normalizeDmAliases = (params: {
+    provider: "slack" | "discord";
+    entry: Record<string, unknown>;
+    pathPrefix: string;
+  }): { entry: Record<string, unknown>; changed: boolean } => {
+    let changed = false;
+    let updated: Record<string, unknown> = params.entry;
+    const rawDm = updated.dm;
+    const dm = isRecord(rawDm) ? structuredClone(rawDm) : null;
+    let dmChanged = false;
+
+    const allowFromEqual = (a: unknown, b: unknown): boolean => {
+      if (!Array.isArray(a) || !Array.isArray(b)) {
+        return false;
+      }
+      const na = a.map((v) => String(v).trim()).filter(Boolean);
+      const nb = b.map((v) => String(v).trim()).filter(Boolean);
+      if (na.length !== nb.length) {
+        return false;
+      }
+      return na.every((v, i) => v === nb[i]);
+    };
+
+    const topDmPolicy = updated.dmPolicy;
+    const legacyDmPolicy = dm?.policy;
+    if (topDmPolicy === undefined && legacyDmPolicy !== undefined) {
+      updated = { ...updated, dmPolicy: legacyDmPolicy };
+      changed = true;
+      if (dm) {
+        delete dm.policy;
+        dmChanged = true;
+      }
+      changes.push(`Moved ${params.pathPrefix}.dm.policy → ${params.pathPrefix}.dmPolicy.`);
+    } else if (topDmPolicy !== undefined && legacyDmPolicy !== undefined) {
+      if (topDmPolicy === legacyDmPolicy) {
+        if (dm) {
+          delete dm.policy;
+          dmChanged = true;
+          changes.push(`Removed ${params.pathPrefix}.dm.policy (dmPolicy already set).`);
+        }
+      }
+    }
+
+    const topAllowFrom = updated.allowFrom;
+    const legacyAllowFrom = dm?.allowFrom;
+    if (topAllowFrom === undefined && legacyAllowFrom !== undefined) {
+      updated = { ...updated, allowFrom: legacyAllowFrom };
+      changed = true;
+      if (dm) {
+        delete dm.allowFrom;
+        dmChanged = true;
+      }
+      changes.push(`Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`);
+    } else if (topAllowFrom !== undefined && legacyAllowFrom !== undefined) {
+      if (allowFromEqual(topAllowFrom, legacyAllowFrom)) {
+        if (dm) {
+          delete dm.allowFrom;
+          dmChanged = true;
+          changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
+        }
+      }
+    }
+
+    if (dm && isRecord(rawDm) && dmChanged) {
+      const keys = Object.keys(dm);
+      if (keys.length === 0) {
+        if (updated.dm !== undefined) {
+          const { dm: _ignored, ...rest } = updated;
+          updated = rest;
+          changed = true;
+          changes.push(`Removed empty ${params.pathPrefix}.dm after migration.`);
+        }
+      } else {
+        updated = { ...updated, dm };
+        changed = true;
+      }
+    }
+
+    return { entry: updated, changed };
+  };
+
+  const normalizePreviewStreamingAliases = (params: {
+    entry: Record<string, unknown>;
+    pathPrefix: string;
+    resolveStreaming: (entry: Record<string, unknown>) => string;
+  }): { entry: Record<string, unknown>; changed: boolean } => {
+    let updated = params.entry;
+    const hadLegacyStreamMode = updated.streamMode !== undefined;
+    const beforeStreaming = updated.streaming;
+    const resolved = params.resolveStreaming(updated);
+    const shouldNormalize =
+      hadLegacyStreamMode ||
+      typeof beforeStreaming === "boolean" ||
+      (typeof beforeStreaming === "string" && beforeStreaming !== resolved);
+    if (!shouldNormalize) {
+      return { entry: updated, changed: false };
+    }
+
+    let changed = false;
+    if (beforeStreaming !== resolved) {
+      updated = { ...updated, streaming: resolved };
+      changed = true;
+    }
+    if (hadLegacyStreamMode) {
+      const { streamMode: _ignored, ...rest } = updated;
+      updated = rest;
+      changed = true;
+      changes.push(
+        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
+      );
+    }
+    if (typeof beforeStreaming === "boolean") {
+      changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
+    } else if (typeof beforeStreaming === "string" && beforeStreaming !== resolved) {
+      changes.push(
+        `Normalized ${params.pathPrefix}.streaming (${beforeStreaming}) → (${resolved}).`,
+      );
+    }
+
+    return { entry: updated, changed };
+  };
+
+  const normalizeSlackStreamingAliases = (params: {
+    entry: Record<string, unknown>;
+    pathPrefix: string;
+  }): { entry: Record<string, unknown>; changed: boolean } => {
+    let updated = params.entry;
+    const hadLegacyStreamMode = updated.streamMode !== undefined;
+    const legacyStreaming = updated.streaming;
+    const beforeStreaming = updated.streaming;
+    const beforeNativeStreaming = updated.nativeStreaming;
+    const resolvedStreaming = resolveSlackStreamingMode(updated);
+    const resolvedNativeStreaming = resolveSlackNativeStreaming(updated);
+    const shouldNormalize =
+      hadLegacyStreamMode ||
+      typeof legacyStreaming === "boolean" ||
+      (typeof legacyStreaming === "string" && legacyStreaming !== resolvedStreaming);
+    if (!shouldNormalize) {
+      return { entry: updated, changed: false };
+    }
+
+    let changed = false;
+    if (beforeStreaming !== resolvedStreaming) {
+      updated = { ...updated, streaming: resolvedStreaming };
+      changed = true;
+    }
+    if (
+      typeof beforeNativeStreaming !== "boolean" ||
+      beforeNativeStreaming !== resolvedNativeStreaming
+    ) {
+      updated = { ...updated, nativeStreaming: resolvedNativeStreaming };
+      changed = true;
+    }
+    if (hadLegacyStreamMode) {
+      const { streamMode: _ignored, ...rest } = updated;
+      updated = rest;
+      changed = true;
+      changes.push(formatSlackStreamModeMigrationMessage(params.pathPrefix, resolvedStreaming));
+    }
+    if (typeof legacyStreaming === "boolean") {
+      changes.push(
+        formatSlackStreamingBooleanMigrationMessage(params.pathPrefix, resolvedNativeStreaming),
+      );
+    } else if (typeof legacyStreaming === "string" && legacyStreaming !== resolvedStreaming) {
+      changes.push(
+        `Normalized ${params.pathPrefix}.streaming (${legacyStreaming}) → (${resolvedStreaming}).`,
+      );
+    }
+
+    return { entry: updated, changed };
+  };
+
+  const normalizeStreamingAliasesForProvider = (params: {
+    provider: "telegram" | "slack" | "discord";
+    entry: Record<string, unknown>;
+    pathPrefix: string;
+  }): { entry: Record<string, unknown>; changed: boolean } => {
+    if (params.provider === "telegram") {
+      return normalizePreviewStreamingAliases({
+        entry: params.entry,
+        pathPrefix: params.pathPrefix,
+        resolveStreaming: resolveTelegramPreviewStreamMode,
+      });
+    }
+    if (params.provider === "discord") {
+      return normalizePreviewStreamingAliases({
+        entry: params.entry,
+        pathPrefix: params.pathPrefix,
+        resolveStreaming: resolveDiscordPreviewStreamMode,
+      });
+    }
+    return normalizeSlackStreamingAliases({
+      entry: params.entry,
+      pathPrefix: params.pathPrefix,
+    });
+  };
+
+  const normalizeProvider = (provider: "telegram" | "slack" | "discord") => {
+    const channels = next.channels as Record<string, unknown> | undefined;
+    const rawEntry = channels?.[provider];
+    if (!isRecord(rawEntry)) {
+      return;
+    }
+
+    let updated = rawEntry;
+    let changed = false;
+    if (provider !== "telegram") {
+      const base = normalizeDmAliases({
+        provider,
+        entry: rawEntry,
+        pathPrefix: `channels.${provider}`,
+      });
+      updated = base.entry;
+      changed = base.changed;
+    }
+    const providerStreaming = normalizeStreamingAliasesForProvider({
+      provider,
+      entry: updated,
+      pathPrefix: `channels.${provider}`,
+    });
+    updated = providerStreaming.entry;
+    changed = changed || providerStreaming.changed;
+
+    const rawAccounts = updated.accounts;
+    if (isRecord(rawAccounts)) {
+      let accountsChanged = false;
+      const accounts = { ...rawAccounts };
+      for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
+        if (!isRecord(rawAccount)) {
+          continue;
+        }
+        let accountEntry = rawAccount;
+        let accountChanged = false;
+        if (provider !== "telegram") {
+          const res = normalizeDmAliases({
+            provider,
+            entry: rawAccount,
+            pathPrefix: `channels.${provider}.accounts.${accountId}`,
+          });
+          accountEntry = res.entry;
+          accountChanged = res.changed;
+        }
+        const accountStreaming = normalizeStreamingAliasesForProvider({
+          provider,
+          entry: accountEntry,
+          pathPrefix: `channels.${provider}.accounts.${accountId}`,
+        });
+        accountEntry = accountStreaming.entry;
+        accountChanged = accountChanged || accountStreaming.changed;
+        if (accountChanged) {
+          accounts[accountId] = accountEntry;
+          accountsChanged = true;
+        }
+      }
+      if (accountsChanged) {
+        updated = { ...updated, accounts };
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      next = {
+        ...next,
+        channels: {
+          ...next.channels,
+          [provider]: updated as unknown,
+        },
+      };
+    }
+  };
+
+  const normalizeLegacyBrowserProfiles = () => {
+    const rawBrowser = next.browser;
+    if (!isRecord(rawBrowser)) {
+      return;
+    }
+
+    const browser = structuredClone(rawBrowser);
+    let browserChanged = false;
+
+    if ("relayBindHost" in browser) {
+      delete browser.relayBindHost;
+      browserChanged = true;
+      changes.push(
+        "Removed browser.relayBindHost (legacy Chrome extension relay setting; host-local Chrome now uses Chrome MCP existing-session attach).",
+      );
+    }
+
+    const rawProfiles = browser.profiles;
+    if (!isRecord(rawProfiles)) {
+      if (!browserChanged) {
+        return;
+      }
+      next = { ...next, browser };
+      return;
+    }
+
+    const profiles = { ...rawProfiles };
+    let profilesChanged = false;
+    for (const [profileName, rawProfile] of Object.entries(rawProfiles)) {
+      if (!isRecord(rawProfile)) {
+        continue;
+      }
+      const rawDriver = typeof rawProfile.driver === "string" ? rawProfile.driver.trim() : "";
+      if (rawDriver !== "extension") {
+        continue;
+      }
+      profiles[profileName] = {
+        ...rawProfile,
+        driver: "existing-session",
+      };
+      profilesChanged = true;
+      changes.push(
+        `Moved browser.profiles.${profileName}.driver "extension" → "existing-session" (Chrome MCP attach).`,
+      );
+    }
+
+    if (profilesChanged) {
+      browser.profiles = profiles;
+      browserChanged = true;
+    }
+
+    if (!browserChanged) {
+      return;
+    }
+
+    next = {
+      ...next,
+      browser,
+    };
+  };
+
+  const seedMissingDefaultAccountsFromSingleAccountBase = () => {
+    const channels = next.channels as Record<string, unknown> | undefined;
+    if (!channels) {
+      return;
+    }
+
+    let channelsChanged = false;
+    const nextChannels = { ...channels };
+    for (const [channelId, rawChannel] of Object.entries(channels)) {
+      if (!isRecord(rawChannel)) {
+        continue;
+      }
+      const rawAccounts = rawChannel.accounts;
+      if (!isRecord(rawAccounts)) {
+        continue;
+      }
+      const accountKeys = Object.keys(rawAccounts);
+      if (accountKeys.length === 0) {
+        continue;
+      }
+      const hasDefault = accountKeys.some((key) => key.trim().toLowerCase() === DEFAULT_ACCOUNT_ID);
+      if (hasDefault) {
+        continue;
+      }
+
+      const keysToMove = Object.entries(rawChannel)
+        .filter(
+          ([key, value]) =>
+            key !== "accounts" &&
+            key !== "enabled" &&
+            value !== undefined &&
+            shouldMoveSingleAccountChannelKey({ channelKey: channelId, key }),
+        )
+        .map(([key]) => key);
+      if (keysToMove.length === 0) {
+        continue;
+      }
+
+      const defaultAccount: Record<string, unknown> = {};
+      for (const key of keysToMove) {
+        const value = rawChannel[key];
+        defaultAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
+      }
+      const nextChannel: Record<string, unknown> = {
+        ...rawChannel,
+      };
+      for (const key of keysToMove) {
+        delete nextChannel[key];
+      }
+      nextChannel.accounts = {
+        ...rawAccounts,
+        [DEFAULT_ACCOUNT_ID]: defaultAccount,
+      };
+
+      nextChannels[channelId] = nextChannel;
+      channelsChanged = true;
+      changes.push(
+        `Moved channels.${channelId} single-account top-level values into channels.${channelId}.accounts.default.`,
+      );
+    }
+
+    if (!channelsChanged) {
+      return;
+    }
+    next = {
+      ...next,
+      channels: nextChannels as OpenClawConfig["channels"],
+    };
+  };
+
+  normalizeProvider("telegram");
+  normalizeProvider("slack");
+  normalizeProvider("discord");
+  seedMissingDefaultAccountsFromSingleAccountBase();
+  normalizeLegacyBrowserProfiles();
+
+  const normalizeBrowserSsrFPolicyAlias = () => {
+    const rawBrowser = next.browser;
+    if (!isRecord(rawBrowser)) {
+      return;
+    }
+    const rawSsrFPolicy = rawBrowser.ssrfPolicy;
+    if (!isRecord(rawSsrFPolicy) || !("allowPrivateNetwork" in rawSsrFPolicy)) {
+      return;
+    }
+
+    const legacyAllowPrivateNetwork = rawSsrFPolicy.allowPrivateNetwork;
+    const currentDangerousAllowPrivateNetwork = rawSsrFPolicy.dangerouslyAllowPrivateNetwork;
+
+    let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
+    if (
+      typeof legacyAllowPrivateNetwork === "boolean" ||
+      typeof currentDangerousAllowPrivateNetwork === "boolean"
+    ) {
+      // Preserve runtime behavior while collapsing to the canonical key.
+      resolvedDangerousAllowPrivateNetwork =
+        legacyAllowPrivateNetwork === true || currentDangerousAllowPrivateNetwork === true;
+    } else if (currentDangerousAllowPrivateNetwork === undefined) {
+      resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
+    }
+
+    const nextSsrFPolicy: Record<string, unknown> = { ...rawSsrFPolicy };
+    delete nextSsrFPolicy.allowPrivateNetwork;
+    if (resolvedDangerousAllowPrivateNetwork !== undefined) {
+      nextSsrFPolicy.dangerouslyAllowPrivateNetwork = resolvedDangerousAllowPrivateNetwork;
+    }
+
+    const migratedBrowser = { ...next.browser } as Record<string, unknown>;
+    migratedBrowser.ssrfPolicy = nextSsrFPolicy;
+
+    next = {
+      ...next,
+      browser: migratedBrowser as OpenClawConfig["browser"],
+    };
+    changes.push(
+      `Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (${String(resolvedDangerousAllowPrivateNetwork)}).`,
+    );
+  };
+
+  const normalizeLegacyNanoBananaSkill = () => {
+    type ModelProviderEntry = Partial<
+      NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
+    >;
+    type ModelsConfigPatch = Partial<NonNullable<OpenClawConfig["models"]>>;
+
+    const rawSkills = next.skills;
+    if (!isRecord(rawSkills)) {
+      return;
+    }
+
+    let skillsChanged = false;
+    let skills = structuredClone(rawSkills);
+
+    if (Array.isArray(skills.allowBundled)) {
+      const allowBundled = skills.allowBundled.filter(
+        (value) => typeof value !== "string" || value.trim() !== NANO_BANANA_SKILL_KEY,
+      );
+      if (allowBundled.length !== skills.allowBundled.length) {
+        if (allowBundled.length === 0) {
+          delete skills.allowBundled;
+          changes.push(`Removed skills.allowBundled entry for ${NANO_BANANA_SKILL_KEY}.`);
+        } else {
+          skills.allowBundled = allowBundled;
+          changes.push(`Removed ${NANO_BANANA_SKILL_KEY} from skills.allowBundled.`);
+        }
+        skillsChanged = true;
+      }
+    }
+
+    const rawEntries = skills.entries;
+    if (!isRecord(rawEntries)) {
+      if (skillsChanged) {
+        next = { ...next, skills };
+      }
+      return;
+    }
+
+    const rawLegacyEntry = rawEntries[NANO_BANANA_SKILL_KEY];
+    if (!isRecord(rawLegacyEntry)) {
+      if (skillsChanged) {
+        next = { ...next, skills };
+      }
+      return;
+    }
+
+    const existingImageGenerationModel = next.agents?.defaults?.imageGenerationModel;
+    if (existingImageGenerationModel === undefined) {
+      next = {
+        ...next,
+        agents: {
+          ...next.agents,
+          defaults: {
+            ...next.agents?.defaults,
+            imageGenerationModel: {
+              primary: NANO_BANANA_MODEL,
+            },
+          },
+        },
+      };
+      changes.push(
+        `Moved skills.entries.${NANO_BANANA_SKILL_KEY} → agents.defaults.imageGenerationModel.primary (${NANO_BANANA_MODEL}).`,
+      );
+    }
+
+    const legacyEnv = isRecord(rawLegacyEntry.env) ? rawLegacyEntry.env : undefined;
+    const legacyEnvApiKey =
+      typeof legacyEnv?.GEMINI_API_KEY === "string" ? legacyEnv.GEMINI_API_KEY.trim() : "";
+    const legacyApiKey =
+      legacyEnvApiKey ||
+      (typeof rawLegacyEntry.apiKey === "string"
+        ? rawLegacyEntry.apiKey.trim()
+        : rawLegacyEntry.apiKey && isRecord(rawLegacyEntry.apiKey)
+          ? structuredClone(rawLegacyEntry.apiKey)
+          : undefined);
+
+    const rawModels = (
+      isRecord(next.models) ? structuredClone(next.models) : {}
+    ) as ModelsConfigPatch;
+    const rawProviders = (
+      isRecord(rawModels.providers) ? { ...rawModels.providers } : {}
+    ) as Record<string, ModelProviderEntry>;
+    const rawGoogle = (
+      isRecord(rawProviders.google) ? { ...rawProviders.google } : {}
+    ) as ModelProviderEntry;
+    const hasGoogleApiKey = rawGoogle.apiKey !== undefined;
+    if (!hasGoogleApiKey && legacyApiKey) {
+      rawGoogle.apiKey = legacyApiKey;
+      rawProviders.google = rawGoogle;
+      rawModels.providers = rawProviders as NonNullable<OpenClawConfig["models"]>["providers"];
+      next = {
+        ...next,
+        models: rawModels as OpenClawConfig["models"],
+      };
+      changes.push(
+        `Moved skills.entries.${NANO_BANANA_SKILL_KEY}.${legacyEnvApiKey ? "env.GEMINI_API_KEY" : "apiKey"} → models.providers.google.apiKey.`,
+      );
+    }
+
+    const entries = { ...rawEntries };
+    delete entries[NANO_BANANA_SKILL_KEY];
+    if (Object.keys(entries).length === 0) {
+      delete skills.entries;
+      changes.push(`Removed legacy skills.entries.${NANO_BANANA_SKILL_KEY}.`);
+    } else {
+      skills.entries = entries;
+      changes.push(`Removed legacy skills.entries.${NANO_BANANA_SKILL_KEY}.`);
+    }
+    skillsChanged = true;
+
+    if (Object.keys(skills).length === 0) {
+      const { skills: _ignored, ...rest } = next;
+      next = rest;
+      return;
+    }
+
+    if (skillsChanged) {
+      next = {
+        ...next,
+        skills,
+      };
+    }
+  };
+
+  normalizeBrowserSsrFPolicyAlias();
+  normalizeLegacyNanoBananaSkill();
+
+  const legacyAckReaction = cfg.messages?.ackReaction?.trim();
+  const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;
+  if (legacyAckReaction && hasWhatsAppConfig) {
+    const hasWhatsAppAck = cfg.channels?.whatsapp?.ackReaction !== undefined;
+    if (!hasWhatsAppAck) {
+      const legacyScope = cfg.messages?.ackReactionScope ?? "group-mentions";
+      let direct = true;
+      let group: "always" | "mentions" | "never" = "mentions";
+      if (legacyScope === "all") {
+        direct = true;
+        group = "always";
+      } else if (legacyScope === "direct") {
+        direct = true;
+        group = "never";
+      } else if (legacyScope === "group-all") {
+        direct = false;
+        group = "always";
+      } else if (legacyScope === "group-mentions") {
+        direct = false;
+        group = "mentions";
+      }
+      next = {
+        ...next,
+        channels: {
+          ...next.channels,
+          whatsapp: {
+            ...next.channels?.whatsapp,
+            ackReaction: { emoji: legacyAckReaction, direct, group },
+          },
+        },
+      };
+      changes.push(
+        `Copied messages.ackReaction → channels.whatsapp.ackReaction (scope: ${legacyScope}).`,
+      );
+    }
+  }
+
+  return { config: next, changes };
+}
