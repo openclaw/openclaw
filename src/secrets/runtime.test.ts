@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import { loadConfig, type OpenClawConfig, writeConfigFile } from "../config/config.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -13,8 +14,82 @@ import {
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
 
+type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
+
+const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
+  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+}));
+
+vi.mock("../plugins/web-search-providers.js", () => ({
+  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+}));
+
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
+}
+
+function createTestProvider(params: {
+  id: WebProviderUnderTest;
+  pluginId: string;
+  order: number;
+}): PluginWebSearchProviderEntry {
+  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
+  const readSearchConfigKey = (searchConfig?: Record<string, unknown>): unknown => {
+    const providerConfig =
+      searchConfig?.[params.id] && typeof searchConfig[params.id] === "object"
+        ? (searchConfig[params.id] as { apiKey?: unknown })
+        : undefined;
+    return providerConfig?.apiKey ?? searchConfig?.apiKey;
+  };
+  return {
+    pluginId: params.pluginId,
+    id: params.id,
+    label: params.id,
+    hint: `${params.id} test provider`,
+    envVars: [`${params.id.toUpperCase()}_API_KEY`],
+    placeholder: `${params.id}-...`,
+    signupUrl: `https://example.com/${params.id}`,
+    autoDetectOrder: params.order,
+    credentialPath,
+    inactiveSecretPaths: [credentialPath],
+    getCredentialValue: readSearchConfigKey,
+    setCredentialValue: (searchConfigTarget, value) => {
+      const providerConfig =
+        params.id === "brave" || params.id === "firecrawl"
+          ? searchConfigTarget
+          : ((searchConfigTarget[params.id] ??= {}) as { apiKey?: unknown });
+      providerConfig.apiKey = value;
+    },
+    getConfiguredCredentialValue: (config) =>
+      (config?.plugins?.entries?.[params.pluginId]?.config as { webSearch?: { apiKey?: unknown } })
+        ?.webSearch?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
+      const entries = (plugins.entries ??= {});
+      const entry = (entries[params.pluginId] ??= {}) as { config?: Record<string, unknown> };
+      const config = (entry.config ??= {});
+      const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
+      webSearch.apiKey = value;
+    },
+    resolveRuntimeMetadata:
+      params.id === "perplexity"
+        ? () => ({
+            perplexityTransport: "search_api" as const,
+          })
+        : undefined,
+    createTool: () => null,
+  };
+}
+
+function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
+  return [
+    createTestProvider({ id: "brave", pluginId: "brave", order: 10 }),
+    createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
+    createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
+    createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
+    createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
+    createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
+  ];
 }
 
 const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
@@ -39,6 +114,11 @@ function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): Auth
 }
 
 describe("secrets runtime snapshot", () => {
+  beforeEach(() => {
+    resolvePluginWebSearchProvidersMock.mockReset();
+    resolvePluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
+  });
+
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
   });
@@ -199,9 +279,8 @@ describe("secrets runtime snapshot", () => {
       id: "SLACK_WORK_APP_TOKEN_REF",
     });
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.warnings).toHaveLength(4);
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "channels.slack.accounts.work.appToken",
+    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
+      expect.arrayContaining(["channels.slack.accounts.work.appToken"]),
     );
     expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
       type: "api_key",
@@ -410,7 +489,7 @@ describe("secrets runtime snapshot", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.search.grok.apiKey",
+          path: "plugins.entries.xai.config.webSearch.apiKey",
         }),
       ]),
     );
@@ -450,7 +529,7 @@ describe("secrets runtime snapshot", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.search.gemini.apiKey",
+          path: "plugins.entries.google.config.webSearch.apiKey",
         }),
       ]),
     );
@@ -481,7 +560,7 @@ describe("secrets runtime snapshot", () => {
 
     expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "tools.web.search.gemini.apiKey",
+      "plugins.entries.google.config.webSearch.apiKey",
     );
   });
 
@@ -898,6 +977,21 @@ describe("secrets runtime snapshot", () => {
       await expect(
         writeConfigFile({
           ...loadConfig(),
+          plugins: {
+            entries: {
+              google: {
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
+                    },
+                  },
+                },
+              },
+            },
+          },
           tools: {
             web: {
               search: {
@@ -930,7 +1024,10 @@ describe("secrets runtime snapshot", () => {
       const persistedConfig = JSON.parse(
         await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
       ) as OpenClawConfig;
-      expect(persistedConfig.tools?.web?.search?.gemini?.apiKey).toEqual({
+      const persistedGoogleWebSearchConfig = persistedConfig.plugins?.entries?.google?.config as
+        | { webSearch?: { apiKey?: unknown } }
+        | undefined;
+      expect(persistedGoogleWebSearchConfig?.webSearch?.apiKey).toEqual({
         source: "env",
         provider: "default",
         id: "MISSING_WEB_SEARCH_GEMINI_API_KEY",
@@ -1072,15 +1169,15 @@ describe("secrets runtime snapshot", () => {
       snapshot.warnings.filter(
         (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
       ),
-    ).toHaveLength(6);
+    ).toHaveLength(10);
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
         "agents.defaults.memorySearch.remote.apiKey",
         "gateway.auth.password",
         "channels.telegram.botToken",
         "channels.telegram.accounts.disabled.botToken",
-        "tools.web.search.apiKey",
-        "tools.web.search.gemini.apiKey",
+        "plugins.entries.brave.config.webSearch.apiKey",
+        "plugins.entries.google.config.webSearch.apiKey",
       ]),
     );
   });

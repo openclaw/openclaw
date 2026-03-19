@@ -1,4 +1,3 @@
-import type { TopLevelComponents } from "@buape/carbon";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -276,12 +275,16 @@ export type ChannelStreamingAdapter = {
   };
 };
 
+// Keep core transport-agnostic. Plugins can carry richer component types on
+// their side and cast at the boundary.
+export type ChannelStructuredComponents = unknown[];
+
 export type ChannelCrossContextComponentsFactory = (params: {
   originLabel: string;
   message: string;
   cfg: OpenClawConfig;
   accountId?: string | null;
-}) => TopLevelComponents[];
+}) => ChannelStructuredComponents;
 
 export type ChannelReplyTransport = {
   replyToId?: string | null;

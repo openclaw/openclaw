@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
@@ -59,7 +60,6 @@ const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
   textFragmentGapMs: 30,
 } as const;
-const EMPTY_REPLY_COUNTS = { block: 0, final: 0, tool: 0 } as const;
 
 describe("createTelegramBot", () => {
   beforeAll(() => {
@@ -389,7 +389,7 @@ describe("createTelegramBot", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
       async ({ dispatcherOptions }) => {
         await dispatcherOptions.typingCallbacks?.onReplyStart?.();
-        return { queuedFinal: false, counts: { ...EMPTY_REPLY_COUNTS } };
+        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
       },
     );
     createTelegramBot({ token: "tok" });
@@ -1464,7 +1464,7 @@ describe("createTelegramBot", () => {
       dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         dispatchCall = params as typeof dispatchCall;
         await params.dispatcherOptions.typingCallbacks?.onReplyStart?.();
-        return { queuedFinal: false, counts: { ...EMPTY_REPLY_COUNTS } };
+        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
       });
       loadConfig.mockReturnValue({
         channels: {
@@ -1479,10 +1479,11 @@ describe("createTelegramBot", () => {
       await handler(makeForumGroupMessageCtx({ threadId: testCase.threadId }));
 
       const payload = dispatchCall?.ctx;
+      expect(payload).toBeDefined();
+      if (!payload) {
+        continue;
+      }
       if (testCase.assertTopicMetadata) {
-        if (!payload) {
-          throw new Error("Expected forum dispatch payload");
-        }
         expect(payload.SessionKey).toContain("telegram:group:-1001234567890:topic:99");
         expect(payload.From).toBe("telegram:group:-1001234567890:topic:99");
         expect(payload.MessageThreadId).toBe(99);
@@ -1794,7 +1795,7 @@ describe("createTelegramBot", () => {
       | undefined;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
       dispatchCall = params as typeof dispatchCall;
-      return { queuedFinal: false, counts: { ...EMPTY_REPLY_COUNTS } };
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
     });
     loadConfig.mockReturnValue({
       channels: {
@@ -1823,8 +1824,9 @@ describe("createTelegramBot", () => {
     await handler(makeForumGroupMessageCtx({ threadId: 99 }));
 
     const payload = dispatchCall?.ctx;
+    expect(payload).toBeDefined();
     if (!payload) {
-      throw new Error("Expected topic dispatch payload");
+      return;
     }
     expect(payload.GroupSystemPrompt).toBe("Group prompt\n\nTopic prompt");
     expect(dispatchCall?.replyOptions?.skillFilter).toEqual([]);
@@ -1861,7 +1863,7 @@ describe("createTelegramBot", () => {
   });
   it("skips tool summaries for native slash commands", async () => {
     commandSpy.mockClear();
-    replySpy.mockImplementation(async (_ctx, opts) => {
+    replySpy.mockImplementation(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({ text: "tool update" });
       return { text: "final reply" };
     });
