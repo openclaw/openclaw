@@ -155,6 +155,7 @@ Docs: https://docs.openclaw.ai
 - Google Chat/runtime API: thin the private runtime barrel onto the curated public SDK surface while keeping public Google Chat exports intact. (#49504) Thanks @scoootscooob.
 - WhatsApp: stabilize inbound monitor and setup tests (#50007) Thanks @joshavant.
 - Matrix: make onboarding status runtime-safe (#49995) Thanks @joshavant.
+- WhatsApp/active-listener: pin the active listener registry to a `globalThis` singleton so split WhatsApp bundle chunks share one listener map and outbound sends stop missing the registered session. (#47433) Thanks @clawdia67.
 
 ### Breaking
 
