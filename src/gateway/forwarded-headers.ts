@@ -1,5 +1,5 @@
 import { normalizeIpAddress } from "../shared/net/ip.js";
-import { extractNormalizedHeader, isTrustedProxyAddress } from "./net.js";
+import { isTrustedProxyAddress } from "./net.js";
 
 export interface ForwardedHeader {
   for?: string;
@@ -160,104 +160,6 @@ function isTrustedProxy(ip: string, trustedProxies: string[]): boolean {
   return isTrustedProxyAddress(ip, trustedProxies);
 }
 
-export function extractCloudflareHeaders(headers: Record<string, string | string[] | undefined>): {
-  connectingIp?: string;
-  ipCountry?: string;
-  visitor?: string;
-} {
-  const cfConnectingIp = extractNormalizedHeader(headers, "cf-connecting-ip");
-  const cfIpCountry = extractNormalizedHeader(headers, "cf-ipcountry");
-  const cfVisitor = extractNormalizedHeader(headers, "cf-visitor");
-
-  let visitorIp: string | undefined;
-  if (typeof cfVisitor === "string") {
-    try {
-      const parsed = JSON.parse(cfVisitor);
-      visitorIp = parsed?.ip;
-    } catch {
-      // Invalid JSON, ignore
-    }
-  }
-
-  return {
-    connectingIp: typeof cfConnectingIp === "string" ? cfConnectingIp : undefined,
-    ipCountry: typeof cfIpCountry === "string" ? cfIpCountry : undefined,
-    visitor: visitorIp,
-  };
-}
-
-export function resolveClientIpModern(params: {
-  remoteAddr?: string;
-  headers: Record<string, string | string[] | undefined>;
-  trustedProxies?: string[];
-  trustCloudflare?: boolean;
-  allowRealIpFallback?: boolean;
-}): string | undefined {
-  const {
-    remoteAddr,
-    headers,
-    trustedProxies = [],
-    trustCloudflare = false,
-    allowRealIpFallback = false,
-  } = params;
-
-  const normalizedRemote = normalizeIpAddress(remoteAddr);
-  if (!normalizedRemote) {
-    return undefined;
-  }
-
-  if (!isTrustedProxy(normalizedRemote, trustedProxies)) {
-    return normalizedRemote;
-  }
-
-  if (trustCloudflare) {
-    const cf = extractCloudflareHeaders(headers);
-    if (cf.connectingIp) {
-      const normalized = normalizeIpAddress(cf.connectingIp);
-      if (normalized && !isTrustedProxy(normalized, trustedProxies)) {
-        return normalized;
-      }
-    }
-  }
-
-  const forwardedHeader = extractNormalizedHeader(headers, "forwarded");
-  const xForwardedFor = extractNormalizedHeader(headers, "x-forwarded-for");
-  const xForwardedHost = extractNormalizedHeader(headers, "x-forwarded-host");
-  const xForwardedProto = extractNormalizedHeader(headers, "x-forwarded-proto");
-
-  const chain = parseForwardedChain({
-    forwardedHeader,
-    xForwardedFor,
-    xForwardedHost,
-    xForwardedProto,
-    trustedProxies,
-  });
-
-  if (chain.clientIp) {
-    return chain.clientIp;
-  }
-
-  if (allowRealIpFallback) {
-    const realIp = extractNormalizedHeader(headers, "x-real-ip");
-    if (typeof realIp === "string") {
-      return normalizeIpAddress(realIp);
-    }
-  }
-
-  return undefined;
-}
-
-export function normalizeProto(proto: string | undefined): "http" | "https" | undefined {
-  if (!proto) {
-    return undefined;
-  }
-  const normalized = proto.trim().toLowerCase();
-  if (normalized === "http" || normalized === "https") {
-    return normalized;
-  }
-  return undefined;
-}
-
 export function validateProtoMismatch(params: {
   originProto: string;
   forwardedProto?: string;
@@ -292,5 +194,3 @@ export function validateProtoMismatch(params: {
 
   return { ok: true };
 }
-
-export const MAX_CHAIN_DEPTH = MAX_PROXY_CHAIN_DEPTH;

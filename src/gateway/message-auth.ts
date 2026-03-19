@@ -98,14 +98,3 @@ export function authorizeMessage(
     missingCapability: messageCapability,
   };
 }
-
-export function filterMessageCapabilities(
-  ctx: MessageAuthorizationContext,
-  availableMessages: string[],
-  config?: Partial<MessageAuthConfig>,
-): string[] {
-  return availableMessages.filter((msgType) => {
-    const result = authorizeMessage(ctx, msgType, config);
-    return result.ok;
-  });
-}

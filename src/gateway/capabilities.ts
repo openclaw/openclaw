@@ -62,19 +62,3 @@ export function validateCapabilityAccess(
   }
   return { ok: true };
 }
-
-export function filterCapabilities(
-  available: readonly string[],
-  allowed: readonly string[],
-): string[] {
-  return available.filter((cap) => {
-    if (allowed.includes("*") || allowed.includes("internal:*")) {
-      return true;
-    }
-    if (allowed.includes(cap)) {
-      return true;
-    }
-    const [namespace] = cap.split(":");
-    return allowed.includes(`${namespace}:*`);
-  });
-}
