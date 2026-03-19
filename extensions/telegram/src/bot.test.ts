@@ -570,7 +570,7 @@ describe("createTelegramBot", () => {
       session: {
         store: storePath,
       },
-    };
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 
     await rm(storePath, { force: true });
     try {
