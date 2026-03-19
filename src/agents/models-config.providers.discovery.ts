@@ -61,7 +61,7 @@ async function discoverOllamaModels(
     });
     if (!response.ok) {
       if (!opts?.quiet) {
-        log.warn(`Failed to discover Ollama models: ${response.status}`);
+        log.debug(`Failed to discover Ollama models: ${response.status}`);
       }
       return [];
     }
@@ -90,7 +90,7 @@ async function discoverOllamaModels(
     }));
   } catch (error) {
     if (!opts?.quiet) {
-      log.warn(`Failed to discover Ollama models: ${String(error)}`);
+      log.debug(`Failed to discover Ollama models: ${String(error)}`);
     }
     return [];
   }
