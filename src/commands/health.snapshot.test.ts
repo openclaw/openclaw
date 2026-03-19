@@ -21,11 +21,21 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 vi.mock("../config/sessions.js", () => ({
   resolveStorePath: () => "/tmp/sessions.json",
+  resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
   loadSessionStore: () => testStore,
+  saveSessionStore: vi.fn().mockResolvedValue(undefined),
   readSessionUpdatedAt: vi.fn(() => undefined),
   recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
   updateLastRoute: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock("../../extensions/telegram/src/fetch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../extensions/telegram/src/fetch.js")>();
+  return {
+    ...actual,
+    resolveTelegramFetch: () => fetch,
+  };
+});
 
 vi.mock("../../extensions/whatsapp/src/auth-store.js", () => ({
   webAuthExists: vi.fn(async () => true),
