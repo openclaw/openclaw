@@ -11,6 +11,7 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
+import { canWriteAccountScopedSoulFile } from "../channel-soul-file-config.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
 import { channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
@@ -21,6 +22,8 @@ export type ChannelsAddOptions = {
   initialSyncLimit?: number | string;
   groupChannels?: string;
   dmAllowlist?: string;
+  /** Custom SOUL file for this channel account (e.g., "SOUL.fin.md") */
+  soul?: string;
 } & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
 
 function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
@@ -328,6 +331,43 @@ export async function channelsAddCommand(
     input,
     plugin,
   });
+
+  if (opts.soul?.trim()) {
+    if (!canWriteAccountScopedSoulFile({ channel, accountId })) {
+      runtime.error(
+        `Channel ${channel} does not support account-scoped SOUL files via --soul in its current config shape.`,
+      );
+      runtime.exit(1);
+      return;
+    }
+
+    const soulFile = opts.soul.trim();
+    nextConfig = {
+      ...nextConfig,
+      channels: {
+        ...nextConfig.channels,
+        [channel]: {
+          ...nextConfig.channels?.[channel as keyof typeof nextConfig.channels],
+          accounts: {
+            ...(
+              nextConfig.channels?.[channel as keyof typeof nextConfig.channels] as {
+                accounts?: Record<string, unknown>;
+              }
+            )?.accounts,
+            [accountId]: {
+              ...((
+                nextConfig.channels?.[channel as keyof typeof nextConfig.channels] as {
+                  accounts?: Record<string, unknown>;
+                }
+              )?.accounts?.[accountId] as Record<string, unknown> | undefined),
+              soulFile,
+            },
+          },
+        },
+      },
+    };
+  }
+
   await plugin.lifecycle?.onAccountConfigChanged?.({
     prevCfg: prevConfig,
     nextCfg: nextConfig,

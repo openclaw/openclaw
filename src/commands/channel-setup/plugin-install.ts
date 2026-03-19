@@ -28,6 +28,10 @@ type InstallResult = {
   pluginId?: string;
 };
 
+type ChannelSetupPluginRegistrySnapshot = PluginRegistry & {
+  channelSetups: PluginRegistry["channelSetups"];
+};
+
 function hasGitWorkspace(workspaceDir?: string): boolean {
   const candidates = new Set<string>();
   candidates.add(path.join(process.cwd(), ".git"));
@@ -263,8 +267,6 @@ export function reloadChannelSetupPluginRegistryForChannel(params: {
   workspaceDir?: string;
 }): void {
   const activeRegistry = getActivePluginRegistry();
-  // On low-memory hosts, the empty-registry fallback should only recover the selected
-  // plugin instead of importing every bundled extension during setup.
   const onlyPluginIds = activeRegistry?.plugins.length
     ? undefined
     : [params.pluginId ?? params.channel];
@@ -280,10 +282,14 @@ export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   channel: string;
   pluginId?: string;
   workspaceDir?: string;
-}): PluginRegistry {
-  return loadChannelSetupPluginRegistry({
+}): ChannelSetupPluginRegistrySnapshot {
+  const registry = loadChannelSetupPluginRegistry({
     ...params,
     onlyPluginIds: [params.pluginId ?? params.channel],
     activate: false,
   });
+  return {
+    ...registry,
+    channelSetups: registry.channelSetups,
+  };
 }
