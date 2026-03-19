@@ -87,21 +87,28 @@ function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
 export class DiscordVoiceManager {
   private sessions = new Map<string, VoiceSessionEntry>();
   private botUserId?: string;
+  private readonly params: {
+    client: Client;
+    cfg: OpenClawConfig;
+    discordConfig: DiscordAccountConfig;
+    accountId: string;
+    runtime: RuntimeEnv;
+    botUserId?: string;
+  };
   private readonly voiceEnabled: boolean;
   private autoJoinTask: Promise<void> | null = null;
   private readonly ownerAllowFrom?: string[];
   private readonly speakerContext: DiscordVoiceSpeakerContextResolver;
 
-  constructor(
-    private params: {
-      client: Client;
-      cfg: OpenClawConfig;
-      discordConfig: DiscordAccountConfig;
-      accountId: string;
-      runtime: RuntimeEnv;
-      botUserId?: string;
-    },
-  ) {
+  constructor(params: {
+    client: Client;
+    cfg: OpenClawConfig;
+    discordConfig: DiscordAccountConfig;
+    accountId: string;
+    runtime: RuntimeEnv;
+    botUserId?: string;
+  }) {
+    this.params = params;
     this.botUserId = params.botUserId;
     this.voiceEnabled = resolveDiscordVoiceEnabled(params.discordConfig.voice);
     this.ownerAllowFrom =
@@ -692,8 +699,11 @@ export class DiscordVoiceManager {
 }
 
 export class DiscordVoiceReadyListener extends ReadyListener {
-  constructor(private manager: DiscordVoiceManager) {
+  private readonly manager: DiscordVoiceManager;
+
+  constructor(manager: DiscordVoiceManager) {
     super();
+    this.manager = manager;
   }
 
   async handle(_data: unknown, _client: Client): Promise<void> {
@@ -702,8 +712,11 @@ export class DiscordVoiceReadyListener extends ReadyListener {
 }
 
 export class DiscordVoiceResumedListener extends ResumedListener {
-  constructor(private manager: DiscordVoiceManager) {
+  private readonly manager: DiscordVoiceManager;
+
+  constructor(manager: DiscordVoiceManager) {
     super();
+    this.manager = manager;
   }
 
   async handle(_data: unknown, _client: Client): Promise<void> {
