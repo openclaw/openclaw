@@ -16,6 +16,7 @@
 
 #include <gio/gio.h>
 #include <glib.h>
+#include <glib/gstdio.h>
 #include <string.h>
 #include "state.h"
 
@@ -23,10 +24,69 @@ static GDBusProxy *manager_proxy = NULL;
 static GDBusProxy *unit_proxy = NULL;
 static gchar *cached_exec_start = NULL;
 static gchar **cached_environment = NULL;
+static gchar *cached_unit_name = NULL;
 static guint properties_changed_signal_id = 0;
 
 static void fetch_unit_properties(void);
 extern void systemd_refresh(void);
+
+static const gchar* discover_canonical_unit_name(void) {
+    if (cached_unit_name) return cached_unit_name;
+
+    const gchar *home_dir = g_get_home_dir();
+    if (!home_dir) {
+        cached_unit_name = g_strdup("openclaw-gateway.service");
+        return cached_unit_name;
+    }
+
+    g_autofree gchar *systemd_user_dir = g_build_filename(home_dir, ".config", "systemd", "user", NULL);
+    
+    GDir *dir = g_dir_open(systemd_user_dir, 0, NULL);
+    if (!dir) {
+        cached_unit_name = g_strdup("openclaw-gateway.service");
+        return cached_unit_name;
+    }
+
+    const gchar *filename;
+    GPtrArray *marked_units = g_ptr_array_new_with_free_func(g_free);
+
+    while ((filename = g_dir_read_name(dir)) != NULL) {
+        if (!g_str_has_suffix(filename, ".service")) continue;
+
+        g_autofree gchar *filepath = g_build_filename(systemd_user_dir, filename, NULL);
+        gchar *contents = NULL;
+        if (g_file_get_contents(filepath, &contents, NULL, NULL)) {
+            if (strstr(contents, "OPENCLAW_SERVICE_MARKER=openclaw")) {
+                g_ptr_array_add(marked_units, g_strdup(filename));
+            }
+            g_free(contents);
+        }
+    }
+    g_dir_close(dir);
+
+    if (marked_units->len == 1) {
+        cached_unit_name = g_strdup(g_ptr_array_index(marked_units, 0));
+    } else if (marked_units->len > 1) {
+        gboolean found_default = FALSE;
+        for (guint i = 0; i < marked_units->len; i++) {
+            if (g_strcmp0((const gchar *)g_ptr_array_index(marked_units, i), "openclaw-gateway.service") == 0) {
+                found_default = TRUE;
+                break;
+            }
+        }
+        if (found_default) {
+            cached_unit_name = g_strdup("openclaw-gateway.service");
+        } else {
+            g_warning("Ambiguous OpenClaw systemd units found. Falling back to default 'openclaw-gateway.service'");
+            cached_unit_name = g_strdup("openclaw-gateway.service");
+        }
+    } else {
+        cached_unit_name = g_strdup("openclaw-gateway.service");
+    }
+
+    g_ptr_array_free(marked_units, TRUE);
+    return cached_unit_name;
+}
 
 static void extract_service_config_from_file(gchar **exec_start_out, gchar ***environment_out) {
     *exec_start_out = NULL;
@@ -35,7 +95,8 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
     const gchar *home_dir = g_get_home_dir();
     if (!home_dir) return;
 
-    g_autofree gchar *unit_path = g_build_filename(home_dir, ".config", "systemd", "user", "openclaw-gateway.service", NULL);
+    const gchar *unit_name = discover_canonical_unit_name();
+    g_autofree gchar *unit_path = g_build_filename(home_dir, ".config", "systemd", "user", unit_name, NULL);
     
     g_autofree gchar *contents = NULL;
     g_autoptr(GError) error = NULL;
@@ -75,6 +136,42 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
                         g_ptr_array_add(env_array, g_strdup(argv[j]));
                     }
                     g_strfreev(argv);
+                }
+            } else if (g_str_has_prefix(line, "EnvironmentFile=")) {
+                gchar *env_file = g_strstrip(line + 16);
+                gboolean is_optional = FALSE;
+                if (env_file[0] == '-') {
+                    is_optional = TRUE;
+                    env_file++;
+                    env_file = g_strstrip(env_file);
+                }
+                
+                gchar *file_contents = NULL;
+                if (g_file_get_contents(env_file, &file_contents, NULL, NULL)) {
+                    gchar **env_lines = g_strsplit(file_contents, "\n", -1);
+                    for (gint j = 0; env_lines[j] != NULL; j++) {
+                        gchar *env_line = g_strstrip(env_lines[j]);
+                        if (env_line[0] == '#' || env_line[0] == ';' || env_line[0] == '\0') continue;
+                        
+                        gchar *eq = strchr(env_line, '=');
+                        if (eq) {
+                            gchar *key = g_strndup(env_line, eq - env_line);
+                            gchar *val = g_strstrip(eq + 1);
+                            gsize val_len = strlen(val);
+                            if (val_len >= 2 && ((val[0] == '"' && val[val_len-1] == '"') ||
+                                                 (val[0] == '\'' && val[val_len-1] == '\''))) {
+                                val[val_len-1] = '\0';
+                                val++;
+                            }
+                            gchar *merged = g_strdup_printf("%s=%s", g_strstrip(key), val);
+                            g_ptr_array_add(env_array, merged);
+                            g_free(key);
+                        }
+                    }
+                    g_strfreev(env_lines);
+                    g_free(file_contents);
+                } else if (!is_optional) {
+                    g_warning("Failed to read EnvironmentFile: %s", env_file);
                 }
             }
         }
@@ -281,7 +378,7 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
     // 3. Fetch runtime unit path asynchronously
     g_dbus_proxy_call(
         manager_proxy, "GetUnit",
-        g_variant_new("(s)", "openclaw-gateway.service"),
+        g_variant_new("(s)", discover_canonical_unit_name()),
         G_DBUS_CALL_FLAGS_NONE, -1, NULL,
         on_get_unit_ready, NULL);
 }
@@ -289,10 +386,14 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
 void systemd_refresh(void) {
     if (!manager_proxy) return;
 
+    g_free(cached_unit_name);
+    cached_unit_name = NULL;
+    const gchar *unit_name = discover_canonical_unit_name();
+
     // 1. Start async check if unit file exists/is installed at all
     g_dbus_proxy_call(
         manager_proxy, "GetUnitFileState",
-        g_variant_new("(s)", "openclaw-gateway.service"),
+        g_variant_new("(s)", unit_name),
         G_DBUS_CALL_FLAGS_NONE, -1, NULL,
         on_get_unit_file_state_ready, NULL);
 }
@@ -301,7 +402,7 @@ void systemd_start_gateway(void) {
     if (!manager_proxy) return;
     g_dbus_proxy_call(
         manager_proxy, "StartUnit",
-        g_variant_new("(ss)", "openclaw-gateway.service", "replace"),
+        g_variant_new("(ss)", discover_canonical_unit_name(), "replace"),
         G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL); 
 }
 
@@ -309,7 +410,7 @@ void systemd_stop_gateway(void) {
     if (!manager_proxy) return;
     g_dbus_proxy_call(
         manager_proxy, "StopUnit",
-        g_variant_new("(ss)", "openclaw-gateway.service", "replace"),
+        g_variant_new("(ss)", discover_canonical_unit_name(), "replace"),
         G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
 }
 
@@ -317,6 +418,6 @@ void systemd_restart_gateway(void) {
     if (!manager_proxy) return;
     g_dbus_proxy_call(
         manager_proxy, "RestartUnit",
-        g_variant_new("(ss)", "openclaw-gateway.service", "replace"),
+        g_variant_new("(ss)", discover_canonical_unit_name(), "replace"),
         G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
 }
