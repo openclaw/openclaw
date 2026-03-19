@@ -262,7 +262,9 @@ export class TelegramPollingSession {
         return;
       }
       const elapsed = Date.now() - lastGetUpdatesAt;
-      if (elapsed > pollStallThresholdMs && runner.isRunning()) {
+      const hasPendingUpdates =
+        typeof runner.size === "function" ? Number(runner.size()) > 0 : false;
+      if (elapsed > pollStallThresholdMs && runner.isRunning() && !hasPendingUpdates) {
         stalledRestart = true;
         this.opts.log(
           `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,

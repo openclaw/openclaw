@@ -93,12 +93,14 @@ type RunnerStub = {
   task: () => Promise<void>;
   stop: ReturnType<typeof vi.fn<() => void | Promise<void>>>;
   isRunning: () => boolean;
+  size: () => number;
 };
 
 const makeRunnerStub = (overrides: Partial<RunnerStub> = {}): RunnerStub => ({
   task: overrides.task ?? (() => Promise.resolve()),
   stop: overrides.stop ?? vi.fn<() => void | Promise<void>>(),
   isRunning: overrides.isRunning ?? (() => false),
+  size: overrides.size ?? (() => 0),
 });
 
 function makeRecoverableFetchError() {
@@ -728,6 +730,45 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(runSpy).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("does not force-restart stalled polling while updates are still in flight", async () => {
+    const { monitorTelegramProvider } = await import("./monitor.js");
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    let running = true;
+    const stop = vi.fn(async () => {
+      running = false;
+    });
+    runSpy.mockImplementationOnce(() =>
+      makeRunnerStub({
+        task: () =>
+          new Promise<void>((resolve) => {
+            abort.signal.addEventListener(
+              "abort",
+              () => {
+                running = false;
+                resolve();
+              },
+              { once: true },
+            );
+          }),
+        stop,
+        isRunning: () => running,
+        size: () => 1,
+      }),
+    );
+
+    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+    await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
+
+    vi.advanceTimersByTime(150_000);
+    await Promise.resolve();
+
+    expect(stop).not.toHaveBeenCalled();
+    abort.abort();
+    await monitor;
     vi.useRealTimers();
   });
 
