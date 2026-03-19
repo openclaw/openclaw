@@ -639,6 +639,75 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("falls back to defaultReplyToId when reply.replyToId is absent and replyToMode is all", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      defaultReplyToId: 999,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({ reply_to_message_id: 999 }),
+    );
+  });
+
+  it("prefers reply.replyToId over defaultReplyToId", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      defaultReplyToId: 999,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({ reply_to_message_id: 500 }),
+    );
+  });
+
+  it("does not use defaultReplyToId when replyToMode is off", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there" }],
+      runtime,
+      bot,
+      replyToMode: "off",
+      defaultReplyToId: 999,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.not.objectContaining({ reply_to_message_id: 999 }),
+    );
+  });
+
   it("falls back to text when sendVoice fails with VOICE_MESSAGES_FORBIDDEN", async () => {
     const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
       voiceError: createVoiceMessagesForbiddenError(),
