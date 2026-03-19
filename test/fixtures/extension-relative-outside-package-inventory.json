@@ -1,0 +1,146 @@
+[
+  {
+    "file": "extensions/googlechat/src/channel.ts",
+    "line": 23,
+    "kind": "import",
+    "specifier": "../../shared/channel-status-summary.js",
+    "resolvedPath": "extensions/shared/channel-status-summary.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/imessage/src/channel.ts",
+    "line": 9,
+    "kind": "import",
+    "specifier": "../../shared/channel-status-summary.js",
+    "resolvedPath": "extensions/shared/channel-status-summary.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/irc/src/channel.ts",
+    "line": 17,
+    "kind": "import",
+    "specifier": "../../shared/passive-monitor.js",
+    "resolvedPath": "extensions/shared/passive-monitor.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/irc/src/config-schema.ts",
+    "line": 2,
+    "kind": "import",
+    "specifier": "../../shared/config-schema-helpers.js",
+    "resolvedPath": "extensions/shared/config-schema-helpers.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/irc/src/monitor.ts",
+    "line": 1,
+    "kind": "import",
+    "specifier": "../../shared/runtime.js",
+    "resolvedPath": "extensions/shared/runtime.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/matrix/src/channel.ts",
+    "line": 19,
+    "kind": "import",
+    "specifier": "../../shared/channel-status-summary.js",
+    "resolvedPath": "extensions/shared/channel-status-summary.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/mattermost/src/channel.ts",
+    "line": 15,
+    "kind": "import",
+    "specifier": "../../shared/channel-status-summary.js",
+    "resolvedPath": "extensions/shared/channel-status-summary.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/mattermost/src/config-schema.ts",
+    "line": 2,
+    "kind": "import",
+    "specifier": "../../shared/config-schema-helpers.js",
+    "resolvedPath": "extensions/shared/config-schema-helpers.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/nextcloud-talk/src/channel.ts",
+    "line": 13,
+    "kind": "import",
+    "specifier": "../../shared/passive-monitor.js",
+    "resolvedPath": "extensions/shared/passive-monitor.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/nextcloud-talk/src/config-schema.ts",
+    "line": 2,
+    "kind": "import",
+    "specifier": "../../shared/config-schema-helpers.js",
+    "resolvedPath": "extensions/shared/config-schema-helpers.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/nextcloud-talk/src/monitor.ts",
+    "line": 3,
+    "kind": "import",
+    "specifier": "../../shared/runtime.js",
+    "resolvedPath": "extensions/shared/runtime.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/nostr/src/channel.ts",
+    "line": 9,
+    "kind": "import",
+    "specifier": "../../shared/channel-status-summary.js",
+    "resolvedPath": "extensions/shared/channel-status-summary.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/slack/src/channel.ts",
+    "line": 20,
+    "kind": "import",
+    "specifier": "../../shared/channel-status-summary.js",
+    "resolvedPath": "extensions/shared/channel-status-summary.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/twitch/src/plugin.ts",
+    "line": 8,
+    "kind": "import",
+    "specifier": "../../shared/channel-status-summary.js",
+    "resolvedPath": "extensions/shared/channel-status-summary.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/zalo/src/status-issues.ts",
+    "line": 1,
+    "kind": "import",
+    "specifier": "../../shared/status-issues.js",
+    "resolvedPath": "extensions/shared/status-issues.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/zalouser/src/channel.ts",
+    "line": 10,
+    "kind": "import",
+    "specifier": "../../shared/channel-status-summary.js",
+    "resolvedPath": "extensions/shared/channel-status-summary.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/zalouser/src/monitor.ts",
+    "line": 13,
+    "kind": "import",
+    "specifier": "../../shared/deferred.js",
+    "resolvedPath": "extensions/shared/deferred.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/zalouser/src/status-issues.ts",
+    "line": 1,
+    "kind": "import",
+    "specifier": "../../shared/status-issues.js",
+    "resolvedPath": "extensions/shared/status-issues.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  }
+]

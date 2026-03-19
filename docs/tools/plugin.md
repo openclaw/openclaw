@@ -181,12 +181,20 @@ OpenClaw scans, in order:
 
 4. Bundled extensions (shipped with OpenClaw; mixed default-on/default-off)
 
-- `<openclaw>/extensions/*`
+- `<openclaw>/dist/extensions/*` in packaged installs
+- `<workspace>/dist-runtime/extensions/*` in local built checkouts
+- `<workspace>/extensions/*` in source/Vitest workflows
 
 Many bundled provider plugins are enabled by default so model catalogs/runtime
 hooks stay available without extra setup. Others still require explicit
 enablement via `plugins.entries.<id>.enabled` or
 `openclaw plugins enable <id>`.
+
+Bundled plugin runtime dependencies are owned by each plugin package. Packaged
+builds stage opted-in bundled dependencies under
+`dist/extensions/<id>/node_modules` instead of requiring mirrored copies in the
+root package. npm artifacts ship the built `dist/extensions/*` tree; source
+`extensions/*` directories stay in source checkouts only.
 
 Installed plugins are enabled by default, but can be disabled the same way.
 
