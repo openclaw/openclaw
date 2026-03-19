@@ -1,0 +1,28 @@
+{
+  "id": "diagnostics-sentry",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "dsn": {
+        "type": "string"
+      },
+      "environment": {
+        "type": "string"
+      },
+      "release": {
+        "type": "string"
+      },
+      "serverName": {
+        "type": "string"
+      },
+      "flushTimeoutMs": {
+        "type": "number",
+        "minimum": 1
+      }
+    }
+  }
+}

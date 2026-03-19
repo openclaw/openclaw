@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/diagnostics-sentry",
+  "version": "2026.3.14",
+  "description": "OpenClaw diagnostics Sentry exporter",
+  "type": "module",
+  "dependencies": {
+    "@sentry/node": "^10.22.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "release": {
+      "publishToNpm": true
+    }
+  }
+}
