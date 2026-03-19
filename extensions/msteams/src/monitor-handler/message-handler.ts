@@ -29,6 +29,13 @@ import {
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
+  resolveGraphToken,
+  fetchChannelMessage,
+  fetchThreadReplies,
+  stripHtmlTags,
+  resolveTeamGroupId,
+} from "../graph.js";
+import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
   normalizeMSTeamsConversationId,
@@ -46,7 +53,6 @@ import {
 import { extractMSTeamsPollVote } from "../polls.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
 import { getMSTeamsRuntime } from "../runtime.js";
-import { resolveGraphToken, fetchChannelMessage, fetchThreadReplies, stripHtmlTags, resolveTeamGroupId } from "../graph.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
@@ -487,7 +493,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         const teamObj = channelData?.team as Record<string, unknown> | undefined;
         let graphTeamId = (teamObj?.aadGroupId as string) ?? "";
         if (!graphTeamId) {
-          graphTeamId = await resolveTeamGroupId(graphToken, teamId) ?? "";
+          graphTeamId = (await resolveTeamGroupId(graphToken, teamId)) ?? "";
           log.debug?.("resolved team group ID", { graphTeamId: graphTeamId || "FAILED" });
         }
         if (!graphTeamId) {
@@ -525,7 +531,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           }
         }
         if (threadMessages.length > 0) {
-          threadContextBody = "\n\n--- Thread context (earlier messages) ---\n" + threadMessages.join("\n") + "\n--- End thread context ---\n\n";
+          threadContextBody =
+            "\n\n--- Thread context (earlier messages) ---\n" +
+            threadMessages.join("\n") +
+            "\n--- End thread context ---\n\n";
         }
         log.debug?.("fetched thread context", {
           parentMessageId: conversationMessageId,
