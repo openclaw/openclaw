@@ -7,7 +7,6 @@ const hoisted = vi.hoisted(() => {
     hasPersistedSyncState: vi.fn(() => false),
   };
   const createMatrixRoomMessageHandler = vi.fn(() => vi.fn());
-  let startClientError: Error | null = null;
   const resolveTextChunkLimit = vi.fn<
     (cfg: unknown, channel: unknown, accountId?: unknown) => number
   >(() => 4000);
@@ -27,7 +26,7 @@ const hoisted = vi.hoisted(() => {
     logger,
     resolveTextChunkLimit,
     setActiveMatrixClient,
-    startClientError,
+    startClientError: null as Error | null,
     stopSharedClientInstance,
     stopThreadBindingManager,
   };
