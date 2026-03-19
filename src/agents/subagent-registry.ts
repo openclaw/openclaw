@@ -819,9 +819,8 @@ function resolveSubagentWaitTimeoutMs(
   cfg: ReturnType<typeof loadConfig>,
   runTimeoutSeconds?: number,
 ) {
-  // When runTimeoutSeconds is undefined, pass undefined so
-  // resolveAgentTimeoutMs falls back to the global default (600s)
-  // instead of treating 0 as "no timeout" (#25992).
+  // Pass undefined through so resolveAgentTimeoutMs falls back to the
+  // global default (600s) instead of treating 0 as "no timeout" (#25992).
   return resolveAgentTimeoutMs({ cfg, overrideSeconds: runTimeoutSeconds });
 }
 
@@ -1289,7 +1288,7 @@ export function replaceSubagentRunAfterSteer(params: {
       : archiveAfterMs
         ? now + archiveAfterMs
         : undefined;
-  const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
+  const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const preserveFrozenResultFallback = params.preserveFrozenResultFallback === true;
   const sessionStartedAt = resolveSubagentSessionStartedAt(source) ?? now;
@@ -1366,7 +1365,7 @@ export function registerSubagentRun(params: {
       : archiveAfterMs
         ? now + archiveAfterMs
         : undefined;
-  const runTimeoutSeconds = params.runTimeoutSeconds ?? 0;
+  const runTimeoutSeconds = params.runTimeoutSeconds;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   subagentRuns.set(params.runId, {
