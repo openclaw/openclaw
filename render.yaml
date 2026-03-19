@@ -16,8 +16,7 @@ services:
         value: /data/workspace
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true
-    envVarGroups:
-      - Sophia-Claw
+      - fromGroup: Sophia-Claw
     disk:
       name: openclaw-data
       mountPath: /data
