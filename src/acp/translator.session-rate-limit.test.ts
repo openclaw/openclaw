@@ -15,9 +15,7 @@ import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
-type SelectSessionConfigOption = SessionConfigOption & {
-  options: Array<{ value: string }>;
-};
+type SelectSessionConfigOption = SessionConfigOption & { options: Array<{ value: string }> };
 
 function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
   return {
@@ -46,12 +44,6 @@ function createPromptRequest(
     prompt: [{ type: "text", text }],
     _meta: meta,
   } as unknown as PromptRequest;
-}
-
-function isSelectConfigOption(
-  option: SessionConfigOption,
-): option is SelectSessionConfigOption {
-  return "options" in option && Array.isArray(option.options);
 }
 
 function createSetSessionModeRequest(sessionId: string, modeId: string): SetSessionModeRequest {
@@ -316,7 +308,7 @@ describe("acp session UX bridge behavior", () => {
     const result = await agent.loadSession(createLoadSessionRequest("robot-session"));
     const thoughtLevelOption = result.configOptions?.find(
       (option): option is SelectSessionConfigOption =>
-        option.id === "thought_level" && isSelectConfigOption(option),
+        option.id === "thought_level" && "options" in option,
     );
 
     expect(result.modes?.availableModes.map((mode) => mode.id)).toContain("xhigh");
