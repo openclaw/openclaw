@@ -1,4 +1,4 @@
-import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
+import { computeBackoff, readErrorName, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -44,6 +44,10 @@ function isMessageNotModifiedError(err: unknown): boolean {
  */
 function isMissingPreviewMessageError(err: unknown): boolean {
   return MESSAGE_NOT_FOUND_RE.test(extractErrorText(err));
+}
+
+function isAbortError(err: unknown): boolean {
+  return readErrorName(err) === "AbortError";
 }
 
 export type LaneName = "answer" | "reasoning";
@@ -321,6 +325,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           }
           params.log(
             `telegram: ${args.laneName} preview final edit target missing with no alternate preview; falling back to standard send (${String(err)})`,
+          );
+          return "fallback";
+        }
+        if (isAbortError(err)) {
+          params.log(
+            `telegram: ${args.laneName} preview final edit aborted before completion; falling back to standard send (${String(err)})`,
           );
           return "fallback";
         }
