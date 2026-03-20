@@ -23,6 +23,7 @@ import { enrichMessageWithUrlContent } from "./content-fetcher.js";
 
 const TIMEOUT_MS = 90_000; // Bumped to 90s — content extraction + Claude response
 const CONTENT_FETCH_TIMEOUT_MS = 15_000;
+const GIPHY_API_KEY = "GlVGYHkr3WSBnllca54iNt0yFbjz7L39"; // Giphy beta key
 
 // Mac Mini node/claude paths (launchd doesn't inherit shell PATH)
 const HOME_DIR = process.env.HOME ?? "/Users/soundchain";
@@ -112,10 +113,13 @@ export async function generateReply(senderName: string, message: string): Promis
       }
     };
 
-    proc.on("close", (code) => {
+    proc.on("close", async (code) => {
       cleanup();
       if (code === 0 && stdout.trim()) {
-        resolve(stdout.trim());
+        // Post-process: if reply mentions GIF vibes, try to attach one
+        let reply = stdout.trim();
+        reply = await maybeAttachGif(reply);
+        resolve(reply);
       } else {
         console.error(`[FURL responder] exit code ${code}, stderr: ${stderr.slice(0, 300)}`);
         resolve(
@@ -187,4 +191,64 @@ function generateReplyInline(senderName: string, message: string): Promise<strin
       );
     });
   });
+}
+
+/**
+ * Search Giphy and attach a GIF if the reply has strong vibes.
+ * Triggers on hype words, celebrations, or when FURL explicitly wants to send one.
+ */
+async function maybeAttachGif(reply: string): Promise<string> {
+  // Already has a giphy URL? Don't double up
+  if (reply.includes("giphy.com")) return reply;
+
+  // Detect vibe keywords that warrant a GIF
+  const vibeMap: Record<string, string> = {
+    "let's go": "lets go celebration",
+    lfg: "hype celebration",
+    fire: "fire lit",
+    "🔥": "fire flames",
+    thanos: "thanos infinity stones",
+    "infinity stone": "thanos snap",
+    cooking: "cooking chef",
+    vibing: "vibing music",
+    hype: "hype excited",
+    congrats: "congratulations celebration",
+    welcome: "welcome aboard",
+    dope: "dope cool",
+    legendary: "legendary epic",
+    insane: "mind blown",
+  };
+
+  const lowerReply = reply.toLowerCase();
+  let searchTerm: string | null = null;
+
+  for (const [keyword, search] of Object.entries(vibeMap)) {
+    if (lowerReply.includes(keyword)) {
+      searchTerm = search;
+      break;
+    }
+  }
+
+  // Only attach GIF ~30% of the time to keep it fresh
+  if (!searchTerm || Math.random() > 0.3) return reply;
+
+  try {
+    const url = `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(searchTerm)}&limit=10&rating=pg-13`;
+    const res = await fetch(url);
+    if (!res.ok) return reply;
+    const data = (await res.json()) as {
+      data?: Array<{ images?: { downsized_medium?: { url?: string } } }>;
+    };
+    const gifs = data.data ?? [];
+    if (gifs.length === 0) return reply;
+
+    // Pick a random GIF from results
+    const gif = gifs[Math.floor(Math.random() * gifs.length)];
+    const gifUrl = gif?.images?.downsized_medium?.url;
+    if (!gifUrl) return reply;
+
+    return `${reply}\n\n${gifUrl}`;
+  } catch {
+    return reply; // Silently fail — text reply is fine
+  }
 }
