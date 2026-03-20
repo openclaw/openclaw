@@ -40,6 +40,7 @@ export function buildSystemdUnit({
   programArguments,
   workingDirectory,
   environment,
+  resourceLimits,
 }: GatewayServiceRenderArgs): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
   const descriptionValue = description?.trim() || "OpenClaw Gateway";
@@ -49,6 +50,13 @@ export function buildSystemdUnit({
     ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
     : null;
   const envLines = renderEnvLines(environment);
+  const resourceLines: string[] = [];
+  if (resourceLimits?.memoryHigh) {
+    resourceLines.push(`MemoryHigh=${resourceLimits.memoryHigh}`);
+  }
+  if (resourceLimits?.memoryMax) {
+    resourceLines.push(`MemoryMax=${resourceLimits.memoryMax}`);
+  }
   return [
     "[Unit]",
     descriptionLine,
@@ -67,6 +75,7 @@ export function buildSystemdUnit({
     "KillMode=control-group",
     workingDirLine,
     ...envLines,
+    ...resourceLines,
     "",
     "[Install]",
     "WantedBy=default.target",

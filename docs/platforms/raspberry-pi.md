@@ -246,6 +246,35 @@ random-I/O bottlenecks during cold starts.
 How `Restart=` policies help automated recovery:
 [systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
 
+### Adaptive Resource Profile
+
+OpenClaw automatically detects available memory and adjusts its behavior:
+
+| Profile      | RAM   | Behavior                                                  |
+| ------------ | ----- | --------------------------------------------------------- |
+| **low**      | < 2GB | Smaller image resize grids, lower concurrency, less cache |
+| **standard** | 2-8GB | Balanced defaults                                         |
+| **high**     | > 8GB | Full grids, max concurrency                               |
+
+Override with the `OPENCLAW_RESOURCE_PROFILE` environment variable:
+
+```bash
+# Force low-resource mode (useful for testing or shared Pis)
+export OPENCLAW_RESOURCE_PROFILE=low
+```
+
+Additional resource-tuning env vars:
+
+| Variable                         | Default (low profile) | Description                        |
+| -------------------------------- | --------------------- | ---------------------------------- |
+| `OPENCLAW_RESOURCE_PROFILE`      | auto-detected         | Force `low`, `standard`, or `high` |
+| `OPENCLAW_MEDIA_MAX_BUFFER`      | 4MB (low) / 10MB      | FFmpeg child process buffer limit  |
+| `OPENCLAW_EMBEDDING_CONCURRENCY` | 1 (low) / 4           | Parallel embedding index workers   |
+
+When the resource profile is `low`, the generated systemd service file automatically
+includes `MemoryHigh=80%` and `MemoryMax=90%` cgroup limits. This throttles the
+gateway before it can OOM-kill the entire system on 1-2 GB Pi boards.
+
 ### Reduce Memory Usage
 
 ```bash
@@ -285,7 +314,32 @@ Most OpenClaw features work on ARM64, but some external binaries may need ARM bu
 | gog (Gmail CLI)    | ⚠️           | Check for ARM release               |
 | Chromium (browser) | ✅           | `sudo apt install chromium-browser` |
 
+**Chromium / Playwright note:** Chromium adds ~300 MB of disk and memory overhead.
+On Pi models with 1-2 GB RAM, avoid installing it unless you specifically need the
+browser tool. Playwright installs Chromium on demand at first use, so you can skip
+the `OPENCLAW_INSTALL_BROWSER` flag in Docker or simply never invoke browser-dependent
+skills to keep resource usage low.
+
 If a skill fails, check if its binary has an ARM build. Many Go/Rust tools do; some don't.
+
+### Verify ARM Optimizations
+
+Check that native dependencies use ARM NEON/SVE instructions for best performance:
+
+```bash
+# Verify Sharp (image processing) uses ARM-optimized libvips
+node -e "const s = require('sharp'); console.log(s.versions)"
+
+# Verify Node.js uses hardware-accelerated crypto (ARM crypto extensions)
+node -e "console.log('openssl_no_asm:', process.config?.variables?.openssl_no_asm)"
+# Should be undefined or false
+
+# Verify NEON support on your Pi
+grep -q neon /proc/cpuinfo && echo "NEON supported" || echo "No NEON"
+
+# Check FFmpeg hardware acceleration
+ffmpeg -hwaccels 2>/dev/null
+```
 
 ### 32-bit vs 64-bit
 

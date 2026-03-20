@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 type CreateJiti = typeof import("jiti").createJiti;
 
@@ -75,7 +75,11 @@ function mkdirSafe(dir: string) {
 const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-"));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
+const EMPTY_PLUGIN_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {},
+};
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
 const BUNDLED_TELEGRAM_PLUGIN_BODY = `module.exports = {
@@ -693,6 +697,24 @@ afterEach(() => {
 });
 
 describe("bundle plugins", () => {
+  // Skip scanning the repo's real extensions/ directory (57+ plugins) during discovery.
+  // Without this, realpathSync + boundary checks on each extension can exceed the test timeout.
+  let prevBundledDirBundle: string | undefined;
+  beforeAll(() => {
+    prevBundledDirBundle = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+  });
+  beforeEach(() => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+  });
+  afterAll(() => {
+    if (prevBundledDirBundle === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDirBundle;
+    }
+  });
+
   it("reports Codex bundles as loaded bundle plugins without importing runtime code", () => {
     useNoBundledPlugins();
     const workspaceDir = makeTempDir();

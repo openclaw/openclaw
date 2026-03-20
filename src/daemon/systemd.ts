@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { detectResourceProfile } from "../infra/platform-profile.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -13,6 +14,7 @@ import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
+import type { SystemdResourceLimits } from "./service-types.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceControlArgs,
@@ -449,6 +451,21 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }
 
+function resolveResourceLimits(
+  environment?: Record<string, string | undefined>,
+): SystemdResourceLimits | undefined {
+  // Check service environment first, then fall back to host detection
+  const envProfile = environment?.OPENCLAW_RESOURCE_PROFILE;
+  const profile =
+    envProfile === "low" || envProfile === "standard" || envProfile === "high"
+      ? envProfile
+      : detectResourceProfile();
+  if (profile !== "low") {
+    return undefined;
+  }
+  return { memoryHigh: "80%", memoryMax: "90%" };
+}
+
 export async function installSystemdService({
   env,
   stdout,
@@ -473,12 +490,17 @@ export async function installSystemdService({
     // File does not exist yet — nothing to back up.
   }
 
-  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const serviceDescription = resolveGatewayServiceDescription({
+    env,
+    environment,
+    description,
+  });
   const unit = buildSystemdUnit({
     description: serviceDescription,
     programArguments,
     workingDirectory,
     environment,
+    resourceLimits: resolveResourceLimits(environment),
   });
   await fs.writeFile(unitPath, unit, "utf8");
 

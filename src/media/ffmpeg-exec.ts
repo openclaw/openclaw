@@ -1,9 +1,9 @@
 import { execFile, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
 import {
-  MEDIA_FFMPEG_MAX_BUFFER_BYTES,
   MEDIA_FFMPEG_TIMEOUT_MS,
   MEDIA_FFPROBE_TIMEOUT_MS,
+  getMediaFfmpegMaxBufferBytes,
 } from "./ffmpeg-limits.js";
 
 const execFileAsync = promisify(execFile);
@@ -19,7 +19,7 @@ function resolveExecOptions(
 ): ExecFileOptions {
   return {
     timeout: options?.timeoutMs ?? defaultTimeoutMs,
-    maxBuffer: options?.maxBufferBytes ?? MEDIA_FFMPEG_MAX_BUFFER_BYTES,
+    maxBuffer: options?.maxBufferBytes ?? getMediaFfmpegMaxBufferBytes(),
   };
 }
 

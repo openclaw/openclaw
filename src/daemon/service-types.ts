@@ -33,9 +33,15 @@ export type GatewayServiceCommandConfig = {
   sourcePath?: string;
 };
 
+export type SystemdResourceLimits = {
+  memoryHigh?: string;
+  memoryMax?: string;
+};
+
 export type GatewayServiceRenderArgs = {
   description?: string;
   programArguments: string[];
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
+  resourceLimits?: SystemdResourceLimits;
 };
