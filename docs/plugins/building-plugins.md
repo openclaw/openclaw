@@ -365,5 +365,5 @@ patterns is strongly recommended.
 - [Plugin SDK Migration](/plugins/sdk-migration) — migrating from deprecated compat surfaces
 - [Plugin Architecture](/plugins/architecture) — internals and capability model
 - [Plugin Manifest](/plugins/manifest) — full manifest schema
-- [Plugin Agent Tools](/plugins/agent-tools) — adding agent tools in a plugin
+- [Plugin Agent Tools](/plugins/building-plugins#registering-agent-tools) — adding agent tools in a plugin
 - [Community Plugins](/plugins/community) — listing and quality bar

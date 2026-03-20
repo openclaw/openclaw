@@ -21,6 +21,9 @@ export {
 export {
   createWhatsAppOutboundBase,
   isWhatsAppGroupJid,
+  looksLikeWhatsAppTargetId,
+  normalizeWhatsAppAllowFromEntries,
+  normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
   resolveWhatsAppHeartbeatRecipients,
   resolveWhatsAppMentionStripRegexes,
@@ -29,10 +32,5 @@ export {
   type GroupPolicy,
   type WhatsAppAccountConfig,
 } from "../../../src/plugin-sdk/whatsapp-shared.js";
-export {
-  looksLikeWhatsAppTargetId,
-  normalizeWhatsAppAllowFromEntries,
-  normalizeWhatsAppMessagingTarget,
-} from "../../../src/channels/plugins/normalize/whatsapp.js";
 
 export { monitorWebChannel } from "./channel.runtime.js";

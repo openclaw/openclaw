@@ -1,5 +1,5 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
