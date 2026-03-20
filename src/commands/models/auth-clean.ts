@@ -72,20 +72,22 @@ function collectMediaProfileIds(cfg: Awaited<ReturnType<typeof loadModelsConfig>
  *   - Bare ESC:      ESC at end of string    e.g. "myprofile\x1b"
  */
 function sanitizeProfileId(id: string): string {
-  return id
-    .replace(
-      // Strip 7-bit ESC-prefixed ANSI/VT control sequences (CSI, OSC, DCS, APC, PM, SOS,
-      // private-use, and bare ESC + any char) to prevent terminal injection via profile IDs.
+  return (
+    id
+      .replace(
+        // Strip 7-bit ESC-prefixed ANSI/VT control sequences (CSI, OSC, DCS, APC, PM, SOS,
+        // private-use, and bare ESC + any char) to prevent terminal injection via profile IDs.
+        // eslint-disable-next-line no-control-regex
+        /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[\s\S]?)/g,
+        "",
+      )
+      // Strip C1 8-bit control codes (U+0080–U+009F), including \x9b (C1 CSI), which can
+      // construct terminal colour/cursor sequences on xterm-compatible terminals without
+      // a leading ESC byte, bypassing the 7-bit escape strip above (Greptile concern).
       // eslint-disable-next-line no-control-regex
-      /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[\s\S]?)/g,
-      "",
-    )
-    // Strip C1 8-bit control codes (U+0080–U+009F), including \x9b (C1 CSI), which can
-    // construct terminal colour/cursor sequences on xterm-compatible terminals without
-    // a leading ESC byte, bypassing the 7-bit escape strip above (Greptile concern).
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\x80-\x9f]/g, "")
-    .replace(/[\r\n]/g, "");
+      .replace(/[\x80-\x9f]/g, "")
+      .replace(/[\r\n]/g, "")
+  );
 }
 
 /**
