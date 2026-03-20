@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ObjectiveC
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
@@ -362,6 +363,16 @@ final class WebChatSwiftUIWindowController {
             window.minSize = WebChatSwiftUILayout.windowMinSize
             window.contentView?.wantsLayer = true
             window.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
+
+            // Add toolbar with gear menu
+            let toolbar = NSToolbar(identifier: "OpenClawChatToolbar")
+            toolbar.displayMode = .iconOnly
+            let toolbarDelegate = ChatWindowToolbarDelegate()
+            toolbar.delegate = toolbarDelegate
+            window.toolbar = toolbar
+            // Retain the delegate (toolbar doesn't retain its delegate)
+            objc_setAssociatedObject(window, &chatToolbarDelegateKey, toolbarDelegate, .OBJC_ASSOCIATION_RETAIN)
+
             return window
         case .panel:
             let panel = WebChatPanel(
@@ -454,5 +465,137 @@ final class WebChatSwiftUIWindowController {
 
     private static func color(fromHex raw: String?) -> Color? {
         ColorHexSupport.color(fromHex: raw)
+    }
+}
+
+
+// MARK: - Chat window toolbar
+
+private var chatToolbarDelegateKey: UInt8 = 0
+
+private extension NSToolbarItem.Identifier {
+    static let chatGearMenu = NSToolbarItem.Identifier("chatGearMenu")
+}
+
+@MainActor
+final class ChatWindowToolbarDelegate: NSObject, NSToolbarDelegate {
+    func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem?
+    {
+        guard itemIdentifier == .chatGearMenu else { return nil }
+
+        let item = NSMenuToolbarItem(itemIdentifier: itemIdentifier)
+        item.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")
+        item.label = "Settings"
+        item.toolTip = "App settings and Talk Mode"
+        item.menu = self.buildGearMenu()
+        item.showsIndicator = true
+        return item
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.flexibleSpace, .chatGearMenu]
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.flexibleSpace, .chatGearMenu]
+    }
+
+    private func buildGearMenu() -> NSMenu {
+        let menu = NSMenu()
+
+        // Talk Mode toggle
+        let talkItem = NSMenuItem(
+            title: AppStateStore.shared.talkEnabled ? "Stop Talk Mode" : "Talk Mode",
+            action: #selector(toggleTalkMode),
+            keyEquivalent: "")
+        talkItem.target = self
+        talkItem.state = AppStateStore.shared.talkEnabled ? .on : .off
+        talkItem.image = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: nil)
+        if !voiceWakeSupported {
+            talkItem.isEnabled = false
+        }
+        menu.addItem(talkItem)
+
+        menu.addItem(.separator())
+
+        // Canvas toggle
+        let canvasItem = NSMenuItem(
+            title: AppStateStore.shared.canvasPanelVisible ? "Close Canvas" : "Open Canvas",
+            action: #selector(toggleCanvas),
+            keyEquivalent: "")
+        canvasItem.target = self
+        canvasItem.image = NSImage(
+            systemSymbolName: "rectangle.inset.filled.on.rectangle",
+            accessibilityDescription: nil)
+        menu.addItem(canvasItem)
+
+        menu.addItem(.separator())
+
+        // Settings
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettings),
+            keyEquivalent: ",")
+        settingsItem.keyEquivalentModifierMask = .command
+        settingsItem.target = self
+        settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        menu.addItem(settingsItem)
+
+        menu.addItem(.separator())
+
+        // Quit
+        let quitItem = NSMenuItem(
+            title: "Quit OpenClaw",
+            action: #selector(quitApp),
+            keyEquivalent: "q")
+        quitItem.keyEquivalentModifierMask = .command
+        quitItem.target = self
+        menu.addItem(quitItem)
+
+        // Refresh menu items each time it opens
+        menu.delegate = self
+
+        return menu
+    }
+
+    @objc private func toggleTalkMode() {
+        Task { await AppStateStore.shared.setTalkEnabled(!AppStateStore.shared.talkEnabled) }
+    }
+
+    @objc private func toggleCanvas() {
+        Task {
+            if AppStateStore.shared.canvasPanelVisible {
+                CanvasManager.shared.hideAll()
+            } else {
+                let sessionKey = await GatewayConnection.shared.mainSessionKey()
+                _ = try? CanvasManager.shared.show(sessionKey: sessionKey, path: nil)
+            }
+        }
+    }
+
+    @objc private func openSettings() {
+        SettingsWindowOpener.shared.open()
+    }
+
+    @objc private func quitApp() {
+        NSApp.terminate(nil)
+    }
+}
+
+extension ChatWindowToolbarDelegate: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        // Update Talk Mode item state
+        if let talkItem = menu.items.first(where: { $0.action == #selector(toggleTalkMode) }) {
+            let enabled = AppStateStore.shared.talkEnabled
+            talkItem.title = enabled ? "Stop Talk Mode" : "Talk Mode"
+            talkItem.state = enabled ? .on : .off
+        }
+        // Update Canvas item
+        if let canvasItem = menu.items.first(where: { $0.action == #selector(toggleCanvas) }) {
+            canvasItem.title = AppStateStore.shared.canvasPanelVisible ? "Close Canvas" : "Open Canvas"
+        }
     }
 }
