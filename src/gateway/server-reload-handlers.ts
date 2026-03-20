@@ -14,6 +14,7 @@ import {
   emitGatewayRestart,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
+import type { SessionHealthRunner } from "../infra/session-health-runner.js";
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -29,6 +30,7 @@ type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   hookClientIpConfig: HookClientIpConfig;
   heartbeatRunner: HeartbeatRunner;
+  sessionHealthRunner?: SessionHealthRunner;
   cronState: GatewayCronState;
   browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
   channelHealthMonitor: ChannelHealthMonitor | null;
@@ -76,6 +78,9 @@ export function createGatewayReloadHandlers(params: {
     if (plan.restartHeartbeat) {
       nextState.heartbeatRunner.updateConfig(nextConfig);
     }
+
+    // Session health collector follows config changes (always safe to update).
+    nextState.sessionHealthRunner?.updateConfig(nextConfig);
 
     resetDirectoryCache();
 
