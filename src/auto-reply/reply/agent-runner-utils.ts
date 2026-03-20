@@ -121,10 +121,18 @@ export function resolveCompactionModelFallbackOptions(run: FollowupRun["run"]) {
     const provider = override.slice(0, slashIdx).trim();
     const model = override.slice(slashIdx + 1).trim();
     if (provider && model) {
+      const fallbacksOverride = resolved.fallbacksOverride?.map((fallback) => {
+        const trimmed = fallback.trim();
+        if (!trimmed || trimmed.includes("/")) {
+          return trimmed;
+        }
+        return `${provider}/${trimmed}`;
+      });
       return {
         ...resolved,
         provider,
         model,
+        fallbacksOverride,
       };
     }
   }

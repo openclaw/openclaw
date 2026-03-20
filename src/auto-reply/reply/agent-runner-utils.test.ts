@@ -98,8 +98,28 @@ describe("agent-runner-utils", () => {
       provider: "openrouter",
       model: "anthropic/claude-sonnet-4-5",
       agentDir: run.agentDir,
-      fallbacksOverride: ["fallback-model"],
+      fallbacksOverride: ["openrouter/fallback-model"],
     });
+  });
+
+  it("rebases model-only fallbacks onto the compaction provider", () => {
+    const run = makeRun({
+      sessionKey: "agent:agent-1:main",
+      config: {
+        agents: {
+          list: [{ id: "agent-1", model: { fallbacks: ["fallback-model", "anthropic/haiku"] } }],
+          defaults: {
+            compaction: {
+              model: "openrouter/anthropic/claude-sonnet-4-5",
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveCompactionModelFallbackOptions(run);
+
+    expect(resolved.fallbacksOverride).toEqual(["openrouter/fallback-model", "anthropic/haiku"]);
   });
 
   it("keeps the primary provider when compaction model override omits a provider", () => {

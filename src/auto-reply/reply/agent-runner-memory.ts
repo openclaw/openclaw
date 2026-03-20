@@ -483,13 +483,14 @@ export async function runMemoryFlushIfNeeded(params: {
     return sandboxCfg.workspaceAccess === "rw";
   })();
 
-  const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
+  const compactionFallbackOptions = resolveCompactionModelFallbackOptions(params.followupRun.run);
+  const isCli = isCliProvider(compactionFallbackOptions.provider, params.cfg);
   const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
   let entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
-    modelId: params.followupRun.run.model ?? params.defaultModel,
+    modelId: compactionFallbackOptions.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
 
@@ -679,7 +680,7 @@ export async function runMemoryFlushIfNeeded(params: {
   let postCompactionSessionId: string | undefined;
   try {
     await runWithModelFallback({
-      ...resolveCompactionModelFallbackOptions(params.followupRun.run),
+      ...compactionFallbackOptions,
       runId: flushRunId,
       run: async (provider, model, runOptions) => {
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
