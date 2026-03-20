@@ -109,7 +109,7 @@ type TryUpdatePreviewParams = {
   previewTextSnapshot?: string;
 };
 
-type PreviewEditResult = "edited" | "retained" | "fallback";
+type PreviewEditResult = "edited" | "retained" | "regressive-skipped" | "fallback";
 
 type ConsumeArchivedAnswerPreviewParams = {
   lane: DraftLaneState;
@@ -340,7 +340,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       });
       if (shouldSkipRegressive) {
         params.markDelivered();
-        return "edited";
+        return "regressive-skipped";
       }
       return editPreview(
         previewMessageId,
@@ -430,6 +430,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       });
       if (finalized === "edited") {
         params.onPreviewDelivered?.(text, archivedPreview.messageId);
+        return "preview-finalized";
+      }
+      if (finalized === "regressive-skipped") {
+        // Kept the longer preview; emit hook with actual visible content.
+        const visibleText = archivedPreview.textSnapshot ?? text;
+        params.onPreviewDelivered?.(visibleText, archivedPreview.messageId);
         return "preview-finalized";
       }
       if (finalized === "retained") {
@@ -530,6 +536,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           params.onPreviewDelivered?.(text, previewMessageId ?? lane.stream?.messageId());
           return "preview-finalized";
         }
+        if (finalized === "regressive-skipped") {
+          markActivePreviewComplete(laneName);
+          // The final text was shorter than the visible preview, so we kept the
+          // preview. Emit the hook with the actual visible content (lastPartialText).
+          const visibleText = lane.lastPartialText ?? text;
+          params.onPreviewDelivered?.(visibleText, previewMessageId ?? lane.stream?.messageId());
+          return "preview-finalized";
+        }
         if (finalized === "retained") {
           markActivePreviewComplete(laneName);
           // Do not emit onPreviewDelivered for retained paths — the edit
@@ -575,7 +589,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         skipRegressive: "always",
         context: "update",
       });
-      if (updated === "edited") {
+      if (updated === "edited" || updated === "regressive-skipped") {
         return "preview-updated";
       }
     }

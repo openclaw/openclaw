@@ -616,4 +616,20 @@ describe("createLaneTextDeliverer", () => {
     expect(result).toBe("sent");
     expect(harness.onPreviewDelivered).not.toHaveBeenCalled();
   });
+
+  it("calls onPreviewDelivered with visible preview text on regressive-skip", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.lanes.answer.lastPartialText = "Recovered final answer.";
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Recovered final answer",
+      payload: { text: "Recovered final answer" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("preview-finalized");
+    // Hook receives the longer visible preview text, not the shorter final text.
+    expect(harness.onPreviewDelivered).toHaveBeenCalledWith("Recovered final answer.", 999);
+  });
 });
