@@ -563,7 +563,7 @@ export function ChatSessionsSidebar({
 			});
 		}
 		for (const [channel, channelSessions] of gatewayByChannel.entries()) {
-			if (channelOrder.includes(channel) || channel === "cron") continue;
+			if (channelOrder.includes(channel) || channel === "cron" || channel === "unknown") continue;
 			const meta = CHANNEL_META[channel];
 			result.push({
 				id: channel,

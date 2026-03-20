@@ -41,7 +41,7 @@ function deriveChannelFromKey(sessionKey: string, lastChannel?: string): string 
   const parts = sessionKey.split(":");
   if (parts.length >= 3) {
     const segment = parts[2];
-    if (segment === "web") return "webchat";
+    if (segment === "web" || segment === "main") return "webchat";
     if (segment === "cron") return "cron";
     if (segment === "telegram" || segment === "whatsapp" || segment === "discord"
       || segment === "slack" || segment === "signal" || segment === "imessage"
@@ -67,7 +67,7 @@ export function readGatewaySessionsForAgent(agentId: string): GatewaySessionEntr
     if (key.includes(":subagent:")) continue;
 
     const channel = deriveChannelFromKey(key, val.lastChannel as string | undefined);
-    if (channel === "webchat") continue;
+    if (channel === "webchat" || channel === "unknown") continue;
 
     const origin = (val.origin ?? {}) as Record<string, unknown>;
     entries.push({
