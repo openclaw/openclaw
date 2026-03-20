@@ -130,8 +130,11 @@ function resolveExplicitXHighOverride(
 
 function collectExplicitXHighRefs(
   source?: ThinkingSupportSource,
-): Array<{ ref: string; supported: boolean }> {
-  const out = new Map<string, { ref: string; supported: boolean }>();
+): Array<{ provider?: string | null; model?: string | null; ref: string; supported: boolean }> {
+  const out = new Map<
+    string,
+    { provider?: string | null; model?: string | null; ref: string; supported: boolean }
+  >();
 
   const add = (provider?: string | null, model?: string | null, supported?: unknown) => {
     if (typeof supported !== "boolean") {
@@ -141,7 +144,7 @@ function collectExplicitXHighRefs(
     if (!ref) {
       return;
     }
-    out.set(ref, { ref, supported });
+    out.set(ref, { provider, model, ref, supported });
   };
 
   const providers = source?.config?.models?.providers;
@@ -179,7 +182,7 @@ function collectExplicitXHighRefs(
 
 function listSupportedXHighModelRefs(source?: ThinkingSupportSource): string[] {
   return collectExplicitXHighRefs(source)
-    .filter((entry) => entry.supported)
+    .filter((entry) => entry.supported && !isBinaryThinkingProvider(entry.provider, entry.model))
     .map((entry) => entry.ref);
 }
 

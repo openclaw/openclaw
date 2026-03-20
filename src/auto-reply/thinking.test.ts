@@ -168,6 +168,7 @@ describe("listThinkingLevels", () => {
     expect(supportsXHighThinking("zai", "gpt-5.4", source)).toBe(false);
     expect(listThinkingLevels("zai", "gpt-5.4", source)).not.toContain("xhigh");
     expect(listThinkingLevelLabels("zai", "gpt-5.4", source)).toEqual(["off", "on"]);
+    expect(formatXHighModelHint(source)).toBe(formatXHighModelHint());
   });
 
   it("always includes adaptive", () => {
