@@ -108,6 +108,7 @@ func startDocsPiClient(ctx context.Context, options docsPiClientOptions) (*docsP
 		// stdin and stdout were acquired but stderr failed -- close both
 		// to prevent leaking their pipe file descriptors.
 		_ = stdin.Close()
+		_ = stdout.Close()
 		return nil, err
 	}
 
@@ -121,10 +122,9 @@ func startDocsPiClient(ctx context.Context, options docsPiClientOptions) (*docsP
 	if err := process.Start(); err != nil {
 		// All three pipes were acquired but the process failed to start.
 		// Close stdin (the only caller-owned WriteCloser) to release its
-		// FD. stdout and stderr are ReadClosers owned by the Cmd and will
-		// be cleaned up when the Cmd is garbage collected, but closing
-		// stdin eagerly prevents holding the write end of the pipe open
-		// indefinitely.
+		// FD. Go's Start() error path calls closeDescriptors internally,
+		// which releases the stdout/stderr read ends, so no additional
+		// cleanup is needed for those here.
 		_ = stdin.Close()
 		return nil, err
 	}
