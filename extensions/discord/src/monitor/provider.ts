@@ -763,7 +763,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         baseUrl: "http://localhost",
         deploySecret: "a",
         clientId: applicationId,
-        commandDeploymentMode: "reconcile",
         publicKey: "a",
         token,
         autoDeploy: false,
