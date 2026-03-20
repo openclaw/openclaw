@@ -689,8 +689,12 @@ function warnAboutUntrackedLoadedPlugins(params: {
   logger: PluginLogger;
   env: NodeJS.ProcessEnv;
 }) {
+  const warned = new Set<string>();
   for (const plugin of params.registry.plugins) {
     if (plugin.status !== "loaded" || plugin.origin === "bundled") {
+      continue;
+    }
+    if (warned.has(plugin.id)) {
       continue;
     }
     if (
@@ -703,6 +707,7 @@ function warnAboutUntrackedLoadedPlugins(params: {
     ) {
       continue;
     }
+    warned.add(plugin.id);
     const message =
       "loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records";
     params.registry.diagnostics.push({
