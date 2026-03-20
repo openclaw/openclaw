@@ -426,8 +426,8 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
-  it("drops forged metadata-only mentions before agent routing", async () => {
-    const { handler, recordInboundSession, resolveAgentRoute } = createMatrixHandlerTestHarness({
+  it("drops forged metadata-only mentions without processing", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       mentionRegexes: [/@bot/i],
       getMemberDisplayName: async () => "sender",
@@ -442,7 +442,6 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
@@ -477,9 +476,6 @@ describe("matrix monitor handler pairing account scope", () => {
     } as MatrixRawEvent);
 
     expect(downloadContent).not.toHaveBeenCalled();
-    expect(getMemberDisplayName).not.toHaveBeenCalled();
-    expect(getRoomInfo).not.toHaveBeenCalled();
-    expect(resolveAgentRoute).not.toHaveBeenCalled();
   });
 
   it("skips poll snapshot fetches for unmentioned group poll responses", async () => {
@@ -987,5 +983,37 @@ describe("matrix monitor handler pairing account scope", () => {
     );
 
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-resolves mentions with agent-level patterns after route resolution (#51082)", async () => {
+    const buildMentionRegexes = vi.fn((_cfg: unknown, agentId?: string) => {
+      if (!agentId) return [];
+      return [/@mybot/i];
+    });
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { final: 0, block: 0, tool: 0 },
+    }));
+    const { handler } = createMatrixHandlerTestHarness({
+      mentionRegexes: [],
+      buildMentionRegexes,
+      roomsConfig: {
+        "!room:example.org": { requireMention: true },
+      },
+      isDirectMessage: false,
+      groupPolicy: "open",
+      dispatchReplyFromConfig,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$agent-mention",
+        body: "hey @mybot can you help?",
+      }),
+    );
+
+    expect(buildMentionRegexes).toHaveBeenCalledWith(expect.anything(), "ops");
+    expect(dispatchReplyFromConfig).toHaveBeenCalled();
   });
 });

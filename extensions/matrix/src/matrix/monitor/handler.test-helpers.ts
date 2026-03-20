@@ -27,6 +27,7 @@ type MatrixHandlerTestHarnessOptions = {
   accountAllowBots?: boolean | "mentions";
   configuredBotUserIds?: Set<string>;
   mentionRegexes?: MatrixMonitorHandlerParams["mentionRegexes"];
+  buildMentionRegexes?: MatrixMonitorHandlerParams["core"]["channel"]["mentions"]["buildMentionRegexes"];
   groupPolicy?: "open" | "allowlist" | "disabled";
   replyToMode?: ReplyToMode;
   threadReplies?: "off" | "inbound" | "always";
@@ -141,6 +142,9 @@ export function createMatrixHandlerTestHarness(
             })),
           resolveHumanDelayConfig: options.resolveHumanDelayConfig ?? (() => undefined),
           dispatchReplyFromConfig,
+        },
+        mentions: {
+          buildMentionRegexes: options.buildMentionRegexes ?? (() => []),
         },
         reactions: {
           shouldAckReaction: options.shouldAckReaction ?? (() => false),

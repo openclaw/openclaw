@@ -494,7 +494,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
-      const { wasMentioned, hasExplicitMention } = resolveMentions({
+      let { wasMentioned, hasExplicitMention } = resolveMentions({
         content,
         userId: selfUserId,
         text: mentionPrecheckText,
@@ -554,10 +554,21 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         commandAuthorized &&
         hasControlCommandInMessage;
       const canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
-      if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
+      // When there is message text, defer mention drop until after route
+      // resolution so agent-level mentionPatterns are checked (#51082).
+      // Media-only/poll events have no text - drop them immediately.
+      if (
+        isRoom &&
+        shouldRequireMention &&
+        !wasMentioned &&
+        !shouldBypassMention &&
+        !mentionPrecheckText
+      ) {
         logger.info("skipping room message", { roomId, reason: "no-mention" });
         return;
       }
+      const mentionDropDeferred =
+        isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention;
 
       if (isPollEvent) {
         const pollSnapshot = await fetchMatrixPollSnapshot(client, roomId, event).catch((err) => {
@@ -661,6 +672,28 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         eventTs: eventTs ?? undefined,
         resolveAgentRoute: core.channel.routing.resolveAgentRoute,
       });
+
+      // Re-resolve mentions with agent-specific mentionPatterns now that the
+      // route (and agentId) is known (#51082).
+      if (mentionDropDeferred) {
+        const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
+        if (agentMentionRegexes.length > 0) {
+          const agentMentionResult = resolveMentions({
+            content,
+            userId: selfUserId,
+            text: mentionPrecheckText,
+            mentionRegexes: agentMentionRegexes,
+          });
+          if (agentMentionResult.wasMentioned) {
+            wasMentioned = true;
+          }
+        }
+        if (!wasMentioned) {
+          logger.info("skipping room message", { roomId, reason: "no-mention" });
+          return;
+        }
+      }
+
       if (configuredBinding) {
         const ensured = await ensureConfiguredAcpBindingReady({
           cfg,
