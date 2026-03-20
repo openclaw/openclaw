@@ -27,6 +27,29 @@ import {
 
 const channel = "telegram" as const;
 
+function shouldShowTelegramDmAccessWarning(cfg: OpenClawConfig, accountId: string): boolean {
+  const merged = mergeTelegramAccountConfig(cfg, accountId);
+  const policy = merged.dmPolicy ?? "pairing";
+  const hasAllowFrom =
+    Array.isArray(merged.allowFrom) && merged.allowFrom.some((e) => String(e).trim());
+  return policy === "pairing" && !hasAllowFrom;
+}
+
+function buildTelegramDmAccessWarningLines(accountId: string): string[] {
+  const configBase =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? "channels.telegram"
+      : `channels.telegram.accounts.${accountId}`;
+  return [
+    "Your bot is using DM policy: pairing.",
+    "Any Telegram user who discovers the bot can send pairing requests.",
+    "For private use, configure an allowlist with your Telegram user id:",
+    "  " + formatCliCommand(`openclaw config set ${configBase}.dmPolicy "allowlist"`),
+    "  " + formatCliCommand(`openclaw config set ${configBase}.allowFrom "[YOUR_USER_ID]"`),
+    `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
+  ];
+}
+
 const dmPolicy: ChannelSetupDmPolicy = {
   label: "Telegram",
   channel,
@@ -109,23 +132,14 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         patch: { dmPolicy: "allowlist", allowFrom },
       }),
   }),
-  completionNote: {
-    title: "Telegram DM access warning",
-    lines: [
-      "Your bot is using the default DM policy (pairing).",
-      "Any Telegram user who discovers the bot can send pairing requests.",
-      "For private use, configure an allowlist with your Telegram user id:",
-      `  ${formatCliCommand('openclaw config set channels.telegram.dmPolicy "allowlist"')}`,
-      `  ${formatCliCommand('openclaw config set channels.telegram.allowFrom "[YOUR_USER_ID]"')}`,
-      `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
-    ],
-    shouldShow: ({ cfg, accountId }) => {
-      const merged = mergeTelegramAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
-      const policy = merged.dmPolicy ?? "pairing";
-      const hasAllowFrom =
-        Array.isArray(merged.allowFrom) && merged.allowFrom.some((e) => String(e).trim());
-      return policy === "pairing" && !hasAllowFrom;
-    },
+  finalize: async ({ cfg, accountId, prompter }) => {
+    if (!shouldShowTelegramDmAccessWarning(cfg, accountId)) {
+      return;
+    }
+    await prompter.note(
+      buildTelegramDmAccessWarningLines(accountId).join("\n"),
+      "Telegram DM access warning",
+    );
   },
   dmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
