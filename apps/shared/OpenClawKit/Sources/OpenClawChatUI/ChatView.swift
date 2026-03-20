@@ -17,6 +17,7 @@ public struct OpenClawChatView: View {
     @State private var hasPerformedInitialScroll = false
     @State private var isPinnedToBottom = true
     @State private var lastUserMessageID: UUID?
+    @State private var composerHeight: CGFloat = 120
     private let showsSessionSwitcher: Bool
     private let style: Style
     private let markdownVariant: ChatMarkdownVariant
@@ -68,16 +69,47 @@ public struct OpenClawChatView: View {
                     .ignoresSafeArea()
             }
 
-            VStack(spacing: Layout.stackSpacing) {
-                self.messageList
-                    .padding(.horizontal, Layout.outerPaddingHorizontal)
-                OpenClawChatComposer(
-                    viewModel: self.viewModel,
-                    style: self.style,
-                    showsSessionSwitcher: self.showsSessionSwitcher)
-                    .padding(.horizontal, Layout.composerPaddingHorizontal)
+            GeometryReader { geo in
+                VStack(spacing: 0) {
+                    self.messageList
+                        .padding(.horizontal, Layout.outerPaddingHorizontal)
+                        .frame(maxHeight: .infinity)
+
+                    // Draggable divider
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.12))
+                        .frame(height: 1)
+                        .padding(.vertical, 3)
+                        .frame(height: 8)
+                        .contentShape(Rectangle())
+                        #if os(macOS)
+                        .onHover { inside in
+                            if inside {
+                                NSCursor.resizeUpDown.push()
+                            } else {
+                                NSCursor.pop()
+                            }
+                        }
+                        #endif
+                        .gesture(
+                            DragGesture(minimumDistance: 1)
+                                .onChanged { value in
+                                    let minH: CGFloat = 60
+                                    let maxH: CGFloat = geo.size.height * 0.6
+                                    let proposed = self.composerHeight - value.translation.height
+                                    self.composerHeight = min(maxH, max(minH, proposed))
+                                }
+                        )
+
+                    OpenClawChatComposer(
+                        viewModel: self.viewModel,
+                        style: self.style,
+                        showsSessionSwitcher: self.showsSessionSwitcher)
+                        .padding(.horizontal, Layout.composerPaddingHorizontal)
+                        .frame(height: self.composerHeight)
+                }
+                .padding(.vertical, Layout.outerPaddingVertical)
             }
-            .padding(.vertical, Layout.outerPaddingVertical)
             .frame(maxWidth: .infinity)
             .frame(maxHeight: .infinity, alignment: .top)
         }

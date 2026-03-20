@@ -367,6 +367,11 @@ final class WebChatSwiftUIWindowController {
             // Add toolbar with gear menu
             let toolbar = NSToolbar(identifier: "OpenClawChatToolbar")
             toolbar.displayMode = .iconOnly
+            if #available(macOS 26.0, *) {
+                window.toolbarStyle = .unifiedCompact
+            } else {
+                window.toolbarStyle = .unified
+            }
             let toolbarDelegate = ChatWindowToolbarDelegate()
             toolbar.delegate = toolbarDelegate
             window.toolbar = toolbar
@@ -487,7 +492,9 @@ final class ChatWindowToolbarDelegate: NSObject, NSToolbarDelegate {
         guard itemIdentifier == .chatGearMenu else { return nil }
 
         let item = NSMenuToolbarItem(itemIdentifier: itemIdentifier)
-        item.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+        item.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")?
+            .withSymbolConfiguration(config)
         item.label = "Settings"
         item.toolTip = "App settings and Talk Mode"
         item.menu = self.buildGearMenu()
@@ -518,19 +525,6 @@ final class ChatWindowToolbarDelegate: NSObject, NSToolbarDelegate {
             talkItem.isEnabled = false
         }
         menu.addItem(talkItem)
-
-        menu.addItem(.separator())
-
-        // Canvas toggle
-        let canvasItem = NSMenuItem(
-            title: AppStateStore.shared.canvasPanelVisible ? "Close Canvas" : "Open Canvas",
-            action: #selector(toggleCanvas),
-            keyEquivalent: "")
-        canvasItem.target = self
-        canvasItem.image = NSImage(
-            systemSymbolName: "rectangle.inset.filled.on.rectangle",
-            accessibilityDescription: nil)
-        menu.addItem(canvasItem)
 
         menu.addItem(.separator())
 
@@ -593,9 +587,6 @@ extension ChatWindowToolbarDelegate: NSMenuDelegate {
             talkItem.title = enabled ? "Stop Talk Mode" : "Talk Mode"
             talkItem.state = enabled ? .on : .off
         }
-        // Update Canvas item
-        if let canvasItem = menu.items.first(where: { $0.action == #selector(toggleCanvas) }) {
-            canvasItem.title = AppStateStore.shared.canvasPanelVisible ? "Close Canvas" : "Open Canvas"
-        }
+
     }
 }
