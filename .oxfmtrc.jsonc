@@ -9,6 +9,7 @@
   "ignorePatterns": [
     "apps/",
     "assets/",
+    "CLAUDE.md",
     "dist/",
     "docs/_layouts/",
     "node_modules/",

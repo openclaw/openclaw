@@ -348,8 +348,7 @@ describe("runReplyAgent execution-task interim retry", () => {
 
     expect(result).toMatchObject({
       isError: true,
-      text:
-        "I could not keep the executor running in the background because starting the follow-up run failed. Please retry the task.",
+      text: "I could not keep the executor running in the background because starting the follow-up run failed. Please retry the task.",
     });
   });
 

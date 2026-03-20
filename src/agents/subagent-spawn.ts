@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import {
@@ -6,17 +7,16 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import { registerSubagentRun } from "./subagent-registry.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
+import { registerSubagentRun } from "./subagent-registry.js";
 import {
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "./tools/sessions-helpers.js";
-import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 
 export type SpawnSubagentRunParams = {
   task: string;
@@ -215,7 +215,7 @@ export async function spawnSubagentRun(
   });
 
   const childIdem = crypto.randomUUID();
-  let childRunId = childIdem;
+  let childRunId: string = childIdem;
   try {
     const response = await callGateway<{ runId: string }>({
       method: "agent",
@@ -225,16 +225,16 @@ export async function spawnSubagentRun(
         channel: requesterOrigin?.channel,
         to: requesterOrigin?.to ?? undefined,
         accountId: requesterOrigin?.accountId ?? undefined,
-        threadId:
-          requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+        threadId: requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
         idempotencyKey: childIdem,
         deliver: false,
         lane: AGENT_LANE_SUBAGENT,
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
-        timeout: params.runTimeoutSeconds && params.runTimeoutSeconds > 0
-          ? params.runTimeoutSeconds
-          : undefined,
+        timeout:
+          params.runTimeoutSeconds && params.runTimeoutSeconds > 0
+            ? params.runTimeoutSeconds
+            : undefined,
         label: params.label,
         spawnedBy: requesterInternalKey,
         groupId: params.requesterGroupId ?? undefined,
