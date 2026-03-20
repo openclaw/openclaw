@@ -193,9 +193,49 @@
       "types": "./dist/plugin-sdk/discord-core.d.ts",
       "default": "./dist/plugin-sdk/discord-core.js"
     },
+    "./plugin-sdk/feishu": {
+      "types": "./dist/plugin-sdk/feishu.d.ts",
+      "default": "./dist/plugin-sdk/feishu.js"
+    },
+    "./plugin-sdk/googlechat": {
+      "types": "./dist/plugin-sdk/googlechat.d.ts",
+      "default": "./dist/plugin-sdk/googlechat.js"
+    },
+    "./plugin-sdk/irc": {
+      "types": "./dist/plugin-sdk/irc.d.ts",
+      "default": "./dist/plugin-sdk/irc.js"
+    },
+    "./plugin-sdk/line": {
+      "types": "./dist/plugin-sdk/line.d.ts",
+      "default": "./dist/plugin-sdk/line.js"
+    },
+    "./plugin-sdk/line-core": {
+      "types": "./dist/plugin-sdk/line-core.d.ts",
+      "default": "./dist/plugin-sdk/line-core.js"
+    },
     "./plugin-sdk/matrix": {
       "types": "./dist/plugin-sdk/matrix.d.ts",
       "default": "./dist/plugin-sdk/matrix.js"
+    },
+    "./plugin-sdk/mattermost": {
+      "types": "./dist/plugin-sdk/mattermost.d.ts",
+      "default": "./dist/plugin-sdk/mattermost.js"
+    },
+    "./plugin-sdk/msteams": {
+      "types": "./dist/plugin-sdk/msteams.d.ts",
+      "default": "./dist/plugin-sdk/msteams.js"
+    },
+    "./plugin-sdk/nextcloud-talk": {
+      "types": "./dist/plugin-sdk/nextcloud-talk.d.ts",
+      "default": "./dist/plugin-sdk/nextcloud-talk.js"
+    },
+    "./plugin-sdk/nostr": {
+      "types": "./dist/plugin-sdk/nostr.d.ts",
+      "default": "./dist/plugin-sdk/nostr.js"
+    },
+    "./plugin-sdk/signal": {
+      "types": "./dist/plugin-sdk/signal.d.ts",
+      "default": "./dist/plugin-sdk/signal.js"
     },
     "./plugin-sdk/slack": {
       "types": "./dist/plugin-sdk/slack.d.ts",
@@ -204,6 +244,26 @@
     "./plugin-sdk/slack-core": {
       "types": "./dist/plugin-sdk/slack-core.d.ts",
       "default": "./dist/plugin-sdk/slack-core.js"
+    },
+    "./plugin-sdk/tlon": {
+      "types": "./dist/plugin-sdk/tlon.d.ts",
+      "default": "./dist/plugin-sdk/tlon.js"
+    },
+    "./plugin-sdk/twitch": {
+      "types": "./dist/plugin-sdk/twitch.d.ts",
+      "default": "./dist/plugin-sdk/twitch.js"
+    },
+    "./plugin-sdk/voice-call": {
+      "types": "./dist/plugin-sdk/voice-call.d.ts",
+      "default": "./dist/plugin-sdk/voice-call.js"
+    },
+    "./plugin-sdk/zalo": {
+      "types": "./dist/plugin-sdk/zalo.d.ts",
+      "default": "./dist/plugin-sdk/zalo.js"
+    },
+    "./plugin-sdk/zalouser": {
+      "types": "./dist/plugin-sdk/zalouser.d.ts",
+      "default": "./dist/plugin-sdk/zalouser.js"
     },
     "./plugin-sdk/imessage": {
       "types": "./dist/plugin-sdk/imessage.d.ts",
