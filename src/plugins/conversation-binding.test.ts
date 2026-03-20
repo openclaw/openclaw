@@ -345,6 +345,64 @@ describe("plugin conversation binding approvals", () => {
     second.__testing.reset();
   });
 
+  it("shares persistent approvals across duplicate module instances", async () => {
+    const first = await importConversationBindingModule(`first-${Date.now()}`);
+    const second = await importConversationBindingModule(`second-${Date.now()}`);
+
+    first.__testing.reset();
+
+    const request = await first.requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:77",
+        parentConversationId: "-10099",
+        threadId: "77",
+      },
+      binding: { summary: "Bind this conversation to Codex thread abc." },
+    });
+
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    await expect(
+      second.resolvePluginConversationBindingApproval({
+        approvalId: request.approvalId,
+        decision: "allow-always",
+        senderId: "user-1",
+      }),
+    ).resolves.toMatchObject({
+      status: "approved",
+      decision: "allow-always",
+    });
+
+    const rebound = await first.requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:78",
+        parentConversationId: "-10099",
+        threadId: "78",
+      },
+      binding: { summary: "Bind this conversation to Codex thread def." },
+    });
+
+    expect(rebound.status).toBe("bound");
+
+    first.__testing.reset();
+    fs.rmSync(approvalsPath, { force: true });
+  });
+
   it("does not share persistent approvals across plugin roots even with the same plugin id", async () => {
     const request = await requestPluginConversationBinding({
       pluginId: "codex",
