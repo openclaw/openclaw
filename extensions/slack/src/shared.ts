@@ -201,6 +201,7 @@ export function createSlackPluginBase(params: {
         ).concat([
           "- Slack uses mrkdwn (not Markdown). Use *bold* (not **bold**), _italic_ (not *italic*), and ~strikethrough~ (not ~~strikethrough~~).",
           "- Slack does not support headings (#). Use *bold* text instead.",
+          "- Slack links use `<url|display text>` syntax (not `[display text](url)`).",
         ]),
     },
     streaming: {
