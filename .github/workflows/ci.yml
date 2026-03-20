@@ -215,26 +215,37 @@ jobs:
           - runtime: bun
             task: test
             command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
+          - runtime: node
+            task: compat-node22
+            node_version: "22.x"
+            cache_key_suffix: "node22"
+            command: |
+              pnpm build
+              pnpm test
+              node scripts/stage-bundled-plugin-runtime-deps.mjs
+              node --import tsx scripts/release-check.ts
     steps:
-      - name: Skip bun lane on pull requests
-        if: github.event_name == 'pull_request' && matrix.runtime == 'bun'
-        run: echo "Skipping Bun compatibility lane on pull requests."
+      - name: Skip compatibility lanes on pull requests
+        if: github.event_name == 'pull_request' && (matrix.runtime == 'bun' || matrix.task == 'compat-node22')
+        run: echo "Skipping push-only lane on pull requests."
 
       - name: Checkout
-        if: github.event_name != 'pull_request' || matrix.runtime != 'bun'
+        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
         uses: actions/checkout@v6
         with:
           submodules: false
 
       - name: Setup Node environment
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
         uses: ./.github/actions/setup-node-env
         with:
+          node-version: "${{ matrix.node_version || '24.x' }}"
+          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
           install-bun: "${{ matrix.runtime == 'bun' }}"
           use-sticky-disk: "false"
 
       - name: Configure Node test resources
-        if: (github.event_name != 'pull_request' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
+        if: (github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')) && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'compat-node22')
         env:
           SHARD_COUNT: ${{ matrix.shard_count || '' }}
           SHARD_INDEX: ${{ matrix.shard_index || '' }}
@@ -249,11 +260,11 @@ jobs:
           fi
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
         run: ${{ matrix.command }}
 
   extension-fast:
-    name: "extension-fast (${{ matrix.extension }})"
+    name: "extension-fast"
     needs: [docs-scope, changed-scope, changed-extensions]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true' && needs.changed-extensions.outputs.has_changed_extensions == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -464,45 +475,9 @@ jobs:
       - name: Check docs
         run: pnpm check:docs
 
-  compat-node22:
-    name: "compat-node22"
-    needs: [docs-scope, changed-scope]
-    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Setup Node 22 compatibility environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: "22.x"
-          cache-key-suffix: "node22"
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Configure Node 22 test resources
-        run: |
-          # Keep the compatibility lane aligned with the default Node test lane.
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
-
-      - name: Build under Node 22
-        run: pnpm build
-
-      - name: Run tests under Node 22
-        run: pnpm test
-
-      - name: Verify npm pack under Node 22
-        run: |
-          node scripts/stage-bundled-plugin-runtime-deps.mjs
-          node --import tsx scripts/release-check.ts
-
   skills-python:
     needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_skills_python == 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_skills_python == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -972,10 +947,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - task: test
-            command: ./gradlew --no-daemon :app:testDebugUnitTest
-          - task: build
-            command: ./gradlew --no-daemon :app:assembleDebug
+          - task: test-play
+            command: ./gradlew --no-daemon :app:testPlayDebugUnitTest
+          - task: test-third-party
+            command: ./gradlew --no-daemon :app:testThirdPartyDebugUnitTest
+          - task: build-play
+            command: ./gradlew --no-daemon :app:assemblePlayDebug
+          - task: build-third-party
+            command: ./gradlew --no-daemon :app:assembleThirdPartyDebug
     steps:
       - name: Checkout
         uses: actions/checkout@v6

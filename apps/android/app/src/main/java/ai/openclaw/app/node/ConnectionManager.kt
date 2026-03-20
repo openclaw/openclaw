@@ -19,6 +19,7 @@ class ConnectionManager(
   private val motionPedometerAvailable: () -> Boolean,
   private val sendSmsAvailable: () -> Boolean,
   private val readSmsAvailable: () -> Boolean,
+  private val callLogAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
   private val manualTls: () -> Boolean,
 ) {
@@ -81,6 +82,7 @@ class ConnectionManager(
       locationEnabled = locationMode() != LocationMode.Off,
       sendSmsAvailable = sendSmsAvailable(),
       readSmsAvailable = readSmsAvailable(),
+      callLogAvailable = callLogAvailable(),
       voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
       motionActivityAvailable = motionActivityAvailable(),
       motionPedometerAvailable = motionPedometerAvailable(),
