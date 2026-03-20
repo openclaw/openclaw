@@ -187,6 +187,9 @@ export const soundchainChannelPlugin: ChannelPlugin<ResolvedSoundChainAccount> =
       // startAccount Promise resolves — so we must block until aborted.
       return new Promise<void>((resolve, reject) => {
         void (async () => {
+          // Handle already-aborted signal before starting any work
+          if (ctx.abortSignal.aborted) { resolve(); return; }
+
           ctx.log?.info(`[${account.accountId}] Starting SoundChain channel (${account.name})`);
 
           // Create and store the messaging client

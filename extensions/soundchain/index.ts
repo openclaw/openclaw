@@ -11,7 +11,6 @@ import {
   quickDiagnose,
   deepDiagnose,
   PIPELINE_STAGES,
-  classifyError,
 } from "./src/phil-jackson.js";
 import { setSoundChainRuntime } from "./src/runtime.js";
 import {

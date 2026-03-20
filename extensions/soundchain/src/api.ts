@@ -19,6 +19,7 @@ async function request(baseUrl: string, path: string, options?: RequestInit): Pr
       "Content-Type": "application/json",
       ...options?.headers,
     },
+    signal: options?.signal ?? AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     throw new Error(`SoundChain API error ${res.status}: ${res.statusText}`);
