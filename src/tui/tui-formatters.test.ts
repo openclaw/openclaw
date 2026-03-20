@@ -78,6 +78,27 @@ describe("extractTextFromMessage", () => {
     expect(text).toBe("[thinking]\nponder\n\nhello");
   });
 
+  it("hides tagged reasoning in string content when thinking is disabled", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: "<think>hidden chain of thought</think>Visible answer",
+    });
+
+    expect(text).toBe("Visible answer");
+  });
+
+  it("surfaces tagged reasoning separately from string content when thinking is enabled", () => {
+    const text = extractTextFromMessage(
+      {
+        role: "assistant",
+        content: "<think>hidden chain of thought</think>Visible answer",
+      },
+      { includeThinking: true },
+    );
+
+    expect(text).toBe("[thinking]\nhidden chain of thought\n\nVisible answer");
+  });
+
   it("sanitizes ANSI and control chars from string content", () => {
     const text = extractTextFromMessage({
       role: "assistant",
@@ -178,6 +199,15 @@ describe("extractThinkingFromMessage", () => {
 
     expect(text).toBe("alpha\nbeta");
   });
+
+  it("collects tagged reasoning from string content", () => {
+    const text = extractThinkingFromMessage({
+      role: "assistant",
+      content: "<think>alpha</think>Visible answer",
+    });
+
+    expect(text).toBe("alpha");
+  });
 });
 
 describe("extractContentFromMessage", () => {
@@ -191,6 +221,15 @@ describe("extractContentFromMessage", () => {
     });
 
     expect(text).toBe("hello");
+  });
+
+  it("strips tagged reasoning from string content", () => {
+    const text = extractContentFromMessage({
+      role: "assistant",
+      content: "<think>alpha</think>Visible answer",
+    });
+
+    expect(text).toBe("Visible answer");
   });
 
   it("renders error text when stopReason is error and content is not an array", () => {
