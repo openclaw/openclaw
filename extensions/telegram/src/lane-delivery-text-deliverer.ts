@@ -257,20 +257,36 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     run: () => Promise<void>;
   }) => {
     let attempt = 0;
+    let previousRetryKind: "preconnect" | "ambiguous" | undefined;
     while (true) {
       try {
         await args.run();
         return;
       } catch (err) {
         attempt += 1;
+        const recoverable = isRecoverableTelegramNetworkError(err, { allowMessageMatch: true });
+        const currentRetryKind = !recoverable
+          ? undefined
+          : isSafeToRetrySendError(err)
+            ? "preconnect"
+            : "ambiguous";
+        if (isAnyAbortError(err) && previousRetryKind) {
+          markPreviewEditAbortKind(
+            err,
+            previousRetryKind === "preconnect"
+              ? PREVIEW_EDIT_ABORTED_AFTER_PRECONNECT_FAILURE
+              : PREVIEW_EDIT_ABORTED_AFTER_AMBIGUOUS_RETRY,
+          );
+        }
         if (
           params.abortSignal?.aborted ||
           isTelegramClientRejection(err) ||
-          !isRecoverableTelegramNetworkError(err, { allowMessageMatch: true }) ||
+          !recoverable ||
           attempt >= TELEGRAM_PREVIEW_EDIT_MAX_ATTEMPTS
         ) {
           throw err;
         }
+        previousRetryKind = currentRetryKind;
         const delayMs = computeBackoff(TELEGRAM_PREVIEW_EDIT_RETRY_POLICY, attempt);
         params.log(
           `telegram: ${args.laneName} preview ${args.context} edit hit recoverable network error; retrying in ${delayMs}ms (${String(err)})`,
@@ -281,7 +297,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           if (params.abortSignal?.aborted && isAnyAbortError(sleepErr)) {
             markPreviewEditAbortKind(
               sleepErr,
-              isSafeToRetrySendError(err)
+              currentRetryKind === "preconnect"
                 ? PREVIEW_EDIT_ABORTED_AFTER_PRECONNECT_FAILURE
                 : PREVIEW_EDIT_ABORTED_AFTER_AMBIGUOUS_RETRY,
             );

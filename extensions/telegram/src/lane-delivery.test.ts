@@ -239,6 +239,34 @@ describe("createLaneTextDeliverer", () => {
     expect(sleepWithAbort).toHaveBeenCalledTimes(1);
   });
 
+  it("retains preview when a retried ambiguous final edit aborts mid-request", async () => {
+    computeBackoff.mockClear();
+    sleepWithAbort.mockClear();
+    const abortController = new AbortController();
+    const abortErr = Object.assign(new Error("The operation was aborted"), {
+      name: "AbortError",
+    });
+    const harness = createHarness({
+      answerMessageId: 999,
+      abortSignal: abortController.signal,
+    });
+    harness.editPreview
+      .mockRejectedValueOnce(new Error("timeout after Telegram accepted send"))
+      .mockImplementationOnce(async () => {
+        abortController.abort(new Error("poller restart"));
+        throw abortErr;
+      });
+
+    await expectFinalPreviewRetained({
+      harness,
+      expectedLogSnippet: "aborted after ambiguous network failure; keeping existing preview",
+    });
+
+    expect(harness.editPreview).toHaveBeenCalledTimes(2);
+    expect(computeBackoff).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbort).toHaveBeenCalledTimes(1);
+  });
+
   it("finalizes text-only replies by editing an existing preview message", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 

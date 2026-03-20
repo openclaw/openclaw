@@ -244,18 +244,24 @@ export function createTelegramDraftStream(params: {
     fn: () => Promise<T>,
   ): Promise<T> => {
     let attempt = 0;
+    let previousFailureWasSafePreconnect = false;
     while (true) {
       try {
         return await fn();
       } catch (err) {
         attempt += 1;
+        const safePreconnectFailure = isSafeToRetrySendError(err);
+        if (isAnyAbortError(err) && previousFailureWasSafePreconnect) {
+          markPreviewRetryAbortedAfterPreconnectFailure(err);
+        }
         if (
           params.abortSignal?.aborted ||
-          !isSafeToRetrySendError(err) ||
+          !safePreconnectFailure ||
           attempt >= TELEGRAM_PREVIEW_MAX_ATTEMPTS
         ) {
           throw err;
         }
+        previousFailureWasSafePreconnect = true;
         const delayMs = computeBackoff(TELEGRAM_PREVIEW_RETRY_POLICY, attempt);
         params.warn?.(
           `telegram stream preview ${operation} failed before reaching Telegram; retrying in ${delayMs}ms (${String(err)})`,
