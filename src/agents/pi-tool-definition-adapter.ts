@@ -185,7 +185,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           return jsonResult({
             status: "error",
             tool: normalizedName,
-            error: described.message,
+            error: "Tool execution failed.",
           });
         }
       },

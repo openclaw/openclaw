@@ -42,8 +42,7 @@ describe("pi tool definition adapter", () => {
       status: "error",
       tool: "boom",
     });
-    expect(result.details).toMatchObject({ error: "nope" });
-    expect(JSON.stringify(result.details)).not.toContain("\n    at ");
+    expect(result.details).toMatchObject({ error: "Tool execution failed." });
   });
 
   it("normalizes exec tool aliases in error results", async () => {
@@ -52,7 +51,7 @@ describe("pi tool definition adapter", () => {
     expect(result.details).toMatchObject({
       status: "error",
       tool: "exec",
-      error: "nope",
+      error: "Tool execution failed.",
     });
   });
 
