@@ -1,16 +1,16 @@
 ---
-summary: "Complete reference for CLI onboarding flow, auth/model setup, outputs, and internals"
+summary: "Complete reference for CLI setup flow, auth/model setup, outputs, and internals"
 read_when:
   - You need detailed behavior for openclaw onboard
   - You are debugging onboarding results or integrating onboarding clients
-title: "CLI Onboarding Reference"
+title: "CLI Setup Reference"
 sidebarTitle: "CLI reference"
 ---
 
-# CLI Onboarding Reference
+# CLI Setup Reference
 
 This page is the full reference for `openclaw onboard`.
-For the short guide, see [Onboarding Wizard (CLI)](/start/wizard).
+For the short guide, see [Onboarding (CLI)](/start/wizard).
 
 ## What the wizard does
 
@@ -51,10 +51,10 @@ It does not install or modify anything on the remote host.
   <Step title="Gateway">
     - Prompts for port, bind, auth mode, and tailscale exposure.
     - Recommended: keep token auth enabled even for loopback so local WS clients must authenticate.
-    - In token mode, interactive onboarding offers:
+    - In token mode, interactive setup offers:
       - **Generate/store plaintext token** (default)
       - **Use SecretRef** (opt-in)
-    - In password mode, interactive onboarding also supports plaintext or SecretRef storage.
+    - In password mode, interactive setup also supports plaintext or SecretRef storage.
     - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
       - Requires a non-empty env var in the onboarding process environment.
       - Cannot be combined with `--gateway-token`.
@@ -170,8 +170,8 @@ What you set:
     Prompts for account ID, gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
   </Accordion>
-  <Accordion title="MiniMax M2.5">
-    Config is auto-written.
+  <Accordion title="MiniMax">
+    Config is auto-written. Hosted default is `MiniMax-M2.7`; `MiniMax-M2.5` stays available.
     More detail: [MiniMax](/providers/minimax).
   </Accordion>
   <Accordion title="Synthetic (Anthropic-compatible)">
@@ -222,7 +222,7 @@ Credential storage mode:
 
 - Default onboarding behavior persists API keys as plaintext values in auth profiles.
 - `--secret-input-mode ref` enables reference mode instead of plaintext key storage.
-  In interactive onboarding, you can choose either:
+  In interactive setup, you can choose either:
   - environment variable ref (for example `keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" }`)
   - configured provider ref (`file` or `exec`) with provider alias + id
 - Interactive reference mode runs a fast preflight validation before saving.
@@ -234,7 +234,7 @@ Credential storage mode:
   - Inline key flags (for example `--openai-api-key`) require that env var to be set; otherwise onboarding fails fast.
   - For custom providers, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
   - In that custom-provider case, `--custom-api-key` requires `CUSTOM_API_KEY` to be set; otherwise onboarding fails fast.
-- Gateway auth credentials support plaintext and SecretRef choices in interactive onboarding:
+- Gateway auth credentials support plaintext and SecretRef choices in interactive setup:
   - Token mode: **Generate/store plaintext token** (default) or **Use SecretRef**.
   - Password mode: plaintext or SecretRef.
 - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
@@ -270,7 +270,7 @@ WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
 Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
 
 <Note>
-Some channels are delivered as plugins. When selected during onboarding, the wizard
+Some channels are delivered as plugins. When selected during setup, the wizard
 prompts to install the plugin (npm or local path) before channel configuration.
 </Note>
 
@@ -294,6 +294,6 @@ Signal setup behavior:
 
 ## Related docs
 
-- Onboarding hub: [Onboarding Wizard (CLI)](/start/wizard)
+- Onboarding hub: [Onboarding (CLI)](/start/wizard)
 - Automation and scripts: [CLI Automation](/start/wizard-cli-automation)
 - Command reference: [`openclaw onboard`](/cli/onboard)

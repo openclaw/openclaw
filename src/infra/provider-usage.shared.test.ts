@@ -1,5 +1,13 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";
+import {
+  clampPercent,
+  resolveLegacyPiAgentAccessToken,
+  resolveUsageProviderId,
+  withTimeout,
+} from "./provider-usage.shared.js";
 
 describe("provider-usage.shared", () => {
   afterEach(() => {
@@ -51,5 +59,35 @@ describe("provider-usage.shared", () => {
     await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
 
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads legacy pi auth tokens for known provider aliases", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-usage-"));
+    await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
+    await fs.writeFile(
+      path.join(home, ".pi", "agent", "auth.json"),
+      `${JSON.stringify({ "z-ai": { access: "legacy-zai-key" } }, null, 2)}\n`,
+      "utf8",
+    );
+
+    try {
+      expect(resolveLegacyPiAgentAccessToken({ HOME: home }, ["z-ai", "zai"])).toBe(
+        "legacy-zai-key",
+      );
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("returns undefined for invalid legacy pi auth files", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-usage-"));
+    await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
+    await fs.writeFile(path.join(home, ".pi", "agent", "auth.json"), "{not-json", "utf8");
+
+    try {
+      expect(resolveLegacyPiAgentAccessToken({ HOME: home }, ["z-ai", "zai"])).toBeUndefined();
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 });

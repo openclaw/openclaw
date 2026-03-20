@@ -1,21 +1,8 @@
-import { parseSlackBlocksInput } from "../../slack/blocks-input.js";
-import { truncateSlackText } from "../../slack/truncate.js";
 import type { ReplyPayload } from "../types.js";
 
-const SLACK_REPLY_BUTTON_ACTION_ID = "openclaw:reply_button";
-const SLACK_REPLY_SELECT_ACTION_ID = "openclaw:reply_select";
-const SLACK_MAX_BLOCKS = 50;
 const SLACK_BUTTON_MAX_ITEMS = 5;
 const SLACK_SELECT_MAX_ITEMS = 100;
-const SLACK_SECTION_TEXT_MAX = 3000;
-const SLACK_PLAIN_TEXT_MAX = 75;
-const SLACK_OPTION_VALUE_MAX = 75;
 const SLACK_DIRECTIVE_RE = /\[\[(slack_buttons|slack_select):\s*([^\]]+)\]\]/gi;
-
-type SlackBlock = Record<string, unknown>;
-type SlackChannelData = {
-  blocks?: unknown;
-};
 
 type SlackChoice = {
   label: string;
@@ -50,51 +37,35 @@ function parseChoices(raw: string, maxItems: number): SlackChoice[] {
     .slice(0, maxItems);
 }
 
-function buildSlackReplyChoiceToken(value: string, index: number): string {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return truncateSlackText(`reply_${index}_${slug || "choice"}`, SLACK_OPTION_VALUE_MAX);
-}
-
-function buildSectionBlock(text: string): SlackBlock | null {
+function buildTextBlock(
+  text: string,
+): NonNullable<ReplyPayload["interactive"]>["blocks"][number] | null {
   const trimmed = text.trim();
   if (!trimmed) {
     return null;
   }
-  return {
-    type: "section",
-    text: {
-      type: "mrkdwn",
-      text: truncateSlackText(trimmed, SLACK_SECTION_TEXT_MAX),
-    },
-  };
+  return { type: "text", text: trimmed };
 }
 
-function buildButtonsBlock(raw: string, index: number): SlackBlock | null {
+function buildButtonsBlock(
+  raw: string,
+): NonNullable<ReplyPayload["interactive"]>["blocks"][number] | null {
   const choices = parseChoices(raw, SLACK_BUTTON_MAX_ITEMS);
   if (choices.length === 0) {
     return null;
   }
   return {
-    type: "actions",
-    block_id: `openclaw_reply_buttons_${index}`,
-    elements: choices.map((choice, choiceIndex) => ({
-      type: "button",
-      action_id: SLACK_REPLY_BUTTON_ACTION_ID,
-      text: {
-        type: "plain_text",
-        text: truncateSlackText(choice.label, SLACK_PLAIN_TEXT_MAX),
-        emoji: true,
-      },
-      value: buildSlackReplyChoiceToken(choice.value, choiceIndex + 1),
+    type: "buttons",
+    buttons: choices.map((choice) => ({
+      label: choice.label,
+      value: choice.value,
     })),
   };
 }
 
-function buildSelectBlock(raw: string, index: number): SlackBlock | null {
+function buildSelectBlock(
+  raw: string,
+): NonNullable<ReplyPayload["interactive"]>["blocks"][number] | null {
   const parts = raw
     .split("|")
     .map((entry) => entry.trim())
@@ -109,38 +80,10 @@ function buildSelectBlock(raw: string, index: number): SlackBlock | null {
     return null;
   }
   return {
-    type: "actions",
-    block_id: `openclaw_reply_select_${index}`,
-    elements: [
-      {
-        type: "static_select",
-        action_id: SLACK_REPLY_SELECT_ACTION_ID,
-        placeholder: {
-          type: "plain_text",
-          text: truncateSlackText(placeholder, SLACK_PLAIN_TEXT_MAX),
-          emoji: true,
-        },
-        options: choices.map((choice, choiceIndex) => ({
-          text: {
-            type: "plain_text",
-            text: truncateSlackText(choice.label, SLACK_PLAIN_TEXT_MAX),
-            emoji: true,
-          },
-          value: buildSlackReplyChoiceToken(choice.value, choiceIndex + 1),
-        })),
-      },
-    ],
+    type: "select",
+    placeholder,
+    options: choices,
   };
-}
-
-function readExistingSlackBlocks(payload: ReplyPayload): SlackBlock[] {
-  const slackData = payload.channelData?.slack as SlackChannelData | undefined;
-  try {
-    const blocks = parseSlackBlocksInput(slackData?.blocks) as SlackBlock[] | undefined;
-    return blocks ?? [];
-  } catch {
-    return [];
-  }
 }
 
 export function hasSlackDirectives(text: string): boolean {
@@ -154,10 +97,8 @@ export function parseSlackDirectives(payload: ReplyPayload): ReplyPayload {
     return payload;
   }
 
-  const generatedBlocks: SlackBlock[] = [];
+  const generatedBlocks: NonNullable<ReplyPayload["interactive"]>["blocks"] = [];
   const visibleTextParts: string[] = [];
-  let buttonIndex = 0;
-  let selectIndex = 0;
   let cursor = 0;
   let matchedDirective = false;
   let generatedInteractiveBlock = false;
@@ -171,14 +112,14 @@ export function parseSlackDirectives(payload: ReplyPayload): ReplyPayload {
     const index = match.index ?? 0;
     const precedingText = text.slice(cursor, index);
     visibleTextParts.push(precedingText);
-    const section = buildSectionBlock(precedingText);
+    const section = buildTextBlock(precedingText);
     if (section) {
       generatedBlocks.push(section);
     }
     const block =
       directiveType.toLowerCase() === "slack_buttons"
-        ? buildButtonsBlock(body, ++buttonIndex)
-        : buildSelectBlock(body, ++selectIndex);
+        ? buildButtonsBlock(body)
+        : buildSelectBlock(body);
     if (block) {
       generatedInteractiveBlock = true;
       generatedBlocks.push(block);
@@ -188,7 +129,7 @@ export function parseSlackDirectives(payload: ReplyPayload): ReplyPayload {
 
   const trailingText = text.slice(cursor);
   visibleTextParts.push(trailingText);
-  const trailingSection = buildSectionBlock(trailingText);
+  const trailingSection = buildTextBlock(trailingText);
   if (trailingSection) {
     generatedBlocks.push(trailingSection);
   }
@@ -198,21 +139,11 @@ export function parseSlackDirectives(payload: ReplyPayload): ReplyPayload {
     return payload;
   }
 
-  const existingBlocks = readExistingSlackBlocks(payload);
-  if (existingBlocks.length + generatedBlocks.length > SLACK_MAX_BLOCKS) {
-    return payload;
-  }
-  const nextBlocks = [...existingBlocks, ...generatedBlocks];
-
   return {
     ...payload,
     text: cleanedText.trim() || undefined,
-    channelData: {
-      ...payload.channelData,
-      slack: {
-        ...(payload.channelData?.slack as Record<string, unknown> | undefined),
-        blocks: nextBlocks,
-      },
+    interactive: {
+      blocks: [...(payload.interactive?.blocks ?? []), ...generatedBlocks],
     },
   };
 }

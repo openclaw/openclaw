@@ -22,6 +22,11 @@ const CANVAS_WS_OPEN_TIMEOUT_MS = 2_000;
 const CANVAS_RELOAD_TIMEOUT_MS = 4_000;
 const CANVAS_RELOAD_TEST_TIMEOUT_MS = 12_000;
 
+function isLoopbackBindDenied(error: unknown) {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EPERM" || code === "EACCES";
+}
+
 // Tests: avoid chokidar polling/fsevents; trigger "all" events manually.
 vi.mock("chokidar", () => {
   const createWatcher = () => {
@@ -102,8 +107,15 @@ describe("canvas host", () => {
 
   it("creates a default index.html when missing", async () => {
     const dir = await createCaseDir();
-
-    const server = await startFixtureCanvasHost(dir);
+    let server: Awaited<ReturnType<typeof startFixtureCanvasHost>>;
+    try {
+      server = await startFixtureCanvasHost(dir);
+    } catch (error) {
+      if (isLoopbackBindDenied(error)) {
+        return;
+      }
+      throw error;
+    }
 
     try {
       const { res, html } = await fetchCanvasHtml(server.port);
@@ -119,8 +131,15 @@ describe("canvas host", () => {
   it("skips live reload injection when disabled", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>no-reload</body></html>", "utf8");
-
-    const server = await startFixtureCanvasHost(dir, { liveReload: false });
+    let server: Awaited<ReturnType<typeof startFixtureCanvasHost>>;
+    try {
+      server = await startFixtureCanvasHost(dir, { liveReload: false });
+    } catch (error) {
+      if (isLoopbackBindDenied(error)) {
+        return;
+      }
+      throw error;
+    }
 
     try {
       const { res, html } = await fetchCanvasHtml(server.port);
@@ -162,8 +181,27 @@ describe("canvas host", () => {
       }
       socket.destroy();
     });
-
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => {
+          server.off("listening", onListening);
+          reject(error);
+        };
+        const onListening = () => {
+          server.off("error", onError);
+          resolve();
+        };
+        server.once("error", onError);
+        server.once("listening", onListening);
+        server.listen(0, "127.0.0.1");
+      });
+    } catch (error) {
+      await handler.close();
+      if (isLoopbackBindDenied(error)) {
+        return;
+      }
+      throw error;
+    }
     const port = (server.address() as AddressInfo).port;
 
     try {
@@ -210,7 +248,15 @@ describe("canvas host", () => {
       await fs.writeFile(index, "<html><body>v1</body></html>", "utf8");
 
       const watcherStart = chokidarMockState.watchers.length;
-      const server = await startFixtureCanvasHost(dir);
+      let server: Awaited<ReturnType<typeof startFixtureCanvasHost>>;
+      try {
+        server = await startFixtureCanvasHost(dir);
+      } catch (error) {
+        if (isLoopbackBindDenied(error)) {
+          return;
+        }
+        throw error;
+      }
 
       try {
         const watcher = chokidarMockState.watchers[watcherStart];
@@ -267,6 +313,7 @@ describe("canvas host", () => {
     const linkPath = path.join(a2uiRoot, linkName);
     let createdBundle = false;
     let createdLink = false;
+    let server: Awaited<ReturnType<typeof startFixtureCanvasHost>> | undefined;
 
     try {
       await fs.stat(bundlePath);
@@ -278,9 +325,16 @@ describe("canvas host", () => {
     await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
     createdLink = true;
 
-    const server = await startFixtureCanvasHost(dir);
-
     try {
+      try {
+        server = await startFixtureCanvasHost(dir);
+      } catch (error) {
+        if (isLoopbackBindDenied(error)) {
+          return;
+        }
+        throw error;
+      }
+
       const res = await fetch(`http://127.0.0.1:${server.port}/__openclaw__/a2ui/`);
       const html = await res.text();
       expect(res.status).toBe(200);
@@ -302,7 +356,7 @@ describe("canvas host", () => {
       expect(symlinkRes.status).toBe(404);
       expect(await symlinkRes.text()).toBe("not found");
     } finally {
-      await server.close();
+      await server?.close();
       if (createdLink) {
         await fs.rm(linkPath, { force: true });
       }

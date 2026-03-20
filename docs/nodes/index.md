@@ -36,6 +36,10 @@ openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
+If a node retries with changed auth details (role/scopes/public key), the prior
+pending request is superseded and a new `requestId` is created. Re-run
+`openclaw devices list` before approving.
+
 Notes:
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
@@ -114,6 +118,9 @@ openclaw devices list
 openclaw devices approve <requestId>
 openclaw nodes status
 ```
+
+If the node retries with changed auth details, re-run `openclaw devices list`
+and approve the current `requestId`.
 
 Naming options:
 
@@ -285,6 +292,8 @@ Available families:
 - `photos.latest`
 - `contacts.search`, `contacts.add`
 - `calendar.events`, `calendar.add`
+- `callLog.search`
+- `sms.search`
 - `motion.activity`, `motion.pedometer`
 
 Example invokes:
