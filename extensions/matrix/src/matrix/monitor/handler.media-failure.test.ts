@@ -59,6 +59,9 @@ function createHandlerHarness() {
           markRunComplete: vi.fn(),
         }),
         resolveHumanDelayConfig: vi.fn().mockReturnValue(undefined),
+        withReplyDispatcher: vi
+          .fn()
+          .mockImplementation(async <T>(params: { run: () => Promise<T> }) => params.run()),
         dispatchReplyFromConfig: vi
           .fn()
           .mockResolvedValue({ queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } }),
