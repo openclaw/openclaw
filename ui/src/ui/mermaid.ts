@@ -9,6 +9,11 @@ let mermaidApiPromise: Promise<MermaidApi> | null = null;
 let renderScheduled = false;
 let renderCounter = 0;
 const interactionDocs = new WeakSet<Document>();
+const mermaidSanitizeOptions = {
+  ADD_TAGS: ["foreignObject", "foreignobject", "div", "span", "p", "br"],
+  ADD_ATTR: ["xmlns", "style", "class", "width", "height", "x", "y", "transform"],
+  HTML_INTEGRATION_POINTS: { foreignobject: true },
+};
 
 async function loadMermaidApi(): Promise<MermaidApi> {
   if (!mermaidApiPromise) {
@@ -18,10 +23,6 @@ async function loadMermaidApi(): Promise<MermaidApi> {
         api.initialize({
           startOnLoad: false,
           securityLevel: "strict",
-          // Keep labels as native SVG text instead of foreignObject-backed HTML.
-          // The rendered SVG is sanitized before insertion, and HTML labels can
-          // lose their contents during that pass, leaving empty shapes behind.
-          htmlLabels: false,
         });
         return api;
       })
@@ -117,6 +118,10 @@ function closeMermaidDialog(dialog: HTMLDialogElement | null): void {
   dialog.removeAttribute("open");
 }
 
+export function sanitizeMermaidSvg(svg: string): string {
+  return DOMPurify.sanitize(svg, mermaidSanitizeOptions);
+}
+
 export function scheduleMermaidRender(root: ParentNode = document): void {
   installMermaidInteractions(root);
   if (renderScheduled) {
@@ -168,9 +173,7 @@ async function renderMermaidBlocks(root: ParentNode): Promise<void> {
     try {
       const id = `openclaw-mermaid-${++renderCounter}`;
       const { svg } = await api.render(id, definition);
-      renderTarget.innerHTML = DOMPurify.sanitize(svg, {
-        USE_PROFILES: { svg: true, svgFilters: true },
-      });
+      renderTarget.innerHTML = sanitizeMermaidSvg(svg);
       block.dataset.mermaidStatus = "ready";
     } catch (err) {
       console.warn("[markdown] mermaid render failed", err);

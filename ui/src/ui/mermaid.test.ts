@@ -1,5 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installMermaidInteractions } from "./mermaid.ts";
+import { installMermaidInteractions, sanitizeMermaidSvg } from "./mermaid.ts";
+
+describe("sanitizeMermaidSvg", () => {
+  it("keeps safe HTML labels inside foreignObject", () => {
+    const sanitized = sanitizeMermaidSvg(
+      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject width="100" height="50"><div xmlns="http://www.w3.org/1999/xhtml">hello<br/>world</div></foreignObject></svg>',
+    );
+
+    expect(sanitized).toContain("foreignObject");
+    expect(sanitized).toContain("<div");
+    expect(sanitized).toContain("hello");
+    expect(sanitized).toContain("<br>");
+  });
+
+  it("strips unsafe HTML labels inside foreignObject", () => {
+    const sanitized = sanitizeMermaidSvg(
+      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject width="100" height="50"><div xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script>hello</div></foreignObject></svg>',
+    );
+
+    expect(sanitized).toContain("foreignObject");
+    expect(sanitized).toContain("hello");
+    expect(sanitized).not.toContain("<script");
+  });
+});
 
 describe("installMermaidInteractions", () => {
   beforeEach(() => {
