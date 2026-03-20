@@ -83,6 +83,7 @@ import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
+import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import {
   logToolSchemasForGoogle,
@@ -1226,6 +1227,16 @@ export async function compactEmbeddedPiSession(
           force: params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
         });
+        if (result.ok && result.compacted) {
+          await runContextEngineMaintenance({
+            contextEngine,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            sessionFile: params.sessionFile,
+            reason: "compaction",
+            runtimeContext: params as Record<string, unknown>,
+          });
+        }
         if (engineOwnsCompaction && result.ok && result.compacted) {
           await runPostCompactionSideEffects({
             config: params.config,

@@ -16,6 +16,7 @@ type RegisterContextEngineForOwnerOptions = {
 const LEGACY_SESSION_KEY_COMPAT = Symbol.for("openclaw.contextEngine.sessionKeyCompat");
 const SESSION_KEY_COMPAT_METHODS = [
   "bootstrap",
+  "maintain",
   "ingest",
   "ingestBatch",
   "afterTurn",
