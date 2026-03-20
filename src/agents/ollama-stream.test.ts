@@ -243,9 +243,7 @@ describe("convertToOllamaMessages — tool call argument normalisation", () => {
     const messages = [
       {
         role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_2", name: "bash", arguments: { command: "ls" } },
-        ],
+        content: [{ type: "toolCall", id: "call_2", name: "bash", arguments: { command: "ls" } }],
       },
     ];
     const result = convertToOllamaMessages(messages);
