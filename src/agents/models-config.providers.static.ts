@@ -11,6 +11,7 @@ export {
   buildDeepSeekProvider,
   buildDoubaoCodingProvider,
   buildDoubaoProvider,
+  buildFeatherlessProvider,
   buildKilocodeProvider,
   buildKimiCodingProvider,
   buildMinimaxPortalProvider,

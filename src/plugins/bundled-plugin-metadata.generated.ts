@@ -4182,6 +4182,48 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "featherless",
+    idHint: "featherless",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    publicSurfaceArtifacts: ["api.js", "models.js", "onboard.js", "provider-catalog.js"],
+    packageName: "@openclaw/featherless-provider",
+    packageVersion: "2026.3.20",
+    packageDescription: "OpenClaw Featherless provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "featherless",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["featherless"],
+      providerAuthEnvVars: {
+        featherless: ["FEATHERLESS_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "featherless",
+          method: "api-key",
+          choiceId: "featherless-api-key",
+          choiceLabel: "Featherless AI API key",
+          groupId: "featherless",
+          groupLabel: "Featherless AI",
+          groupHint: "API key",
+          optionKey: "featherlessApiKey",
+          cliFlag: "--featherless-api-key",
+          cliOption: "--featherless-api-key <key>",
+          cliDescription: "Featherless AI API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "feishu",
     idHint: "feishu",
     source: {

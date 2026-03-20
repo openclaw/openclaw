@@ -100,6 +100,11 @@ export {
   DEEPSEEK_MODEL_CATALOG,
 } from "./deepseek.js";
 export {
+  buildFeatherlessModelDefinition,
+  FEATHERLESS_BASE_URL,
+  FEATHERLESS_MODEL_CATALOG,
+} from "./featherless.js";
+export {
   buildTogetherModelDefinition,
   TOGETHER_BASE_URL,
   TOGETHER_MODEL_CATALOG,

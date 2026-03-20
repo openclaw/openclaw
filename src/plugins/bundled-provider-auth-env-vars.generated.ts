@@ -9,6 +9,7 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   deepseek: ["DEEPSEEK_API_KEY"],
   exa: ["EXA_API_KEY"],
   fal: ["FAL_KEY"],
+  featherless: ["FEATHERLESS_API_KEY"],
   firecrawl: ["FIRECRAWL_API_KEY"],
   "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
   google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],

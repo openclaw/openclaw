@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/featherless-provider",
+  "version": "2026.3.20",
+  "private": true,
+  "description": "OpenClaw Featherless provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

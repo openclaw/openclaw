@@ -1,0 +1,27 @@
+{
+  "id": "featherless",
+  "providers": ["featherless"],
+  "providerAuthEnvVars": {
+    "featherless": ["FEATHERLESS_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "featherless",
+      "method": "api-key",
+      "choiceId": "featherless-api-key",
+      "choiceLabel": "Featherless AI API key",
+      "groupId": "featherless",
+      "groupLabel": "Featherless AI",
+      "groupHint": "API key",
+      "optionKey": "featherlessApiKey",
+      "cliFlag": "--featherless-api-key",
+      "cliOption": "--featherless-api-key <key>",
+      "cliDescription": "Featherless AI API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

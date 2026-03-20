@@ -12,6 +12,7 @@ export {
 } from "./anthropic-vertex.js";
 export { buildBytePlusCodingProvider, buildBytePlusProvider } from "./byteplus.js";
 export { buildDeepSeekProvider } from "./deepseek.js";
+export { buildFeatherlessProvider } from "./featherless.js";
 export { buildHuggingfaceProvider } from "./huggingface.js";
 export { buildKimiCodingProvider } from "./kimi-coding.js";
 export { buildKilocodeProvider, buildKilocodeProviderWithDiscovery } from "./kilocode.js";
