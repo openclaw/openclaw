@@ -40,27 +40,42 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
         ? ((nextMsg as { role?: unknown }).role as string | undefined)
         : undefined;
 
-    // If next message is not user, keep the assistant message as-is
-    if (nextMsgRole !== "user") {
+    // Collect tool_use_ids from the next user message's tool_result blocks.
+    // If the next message is not a user message (or there is no next message — i.e. this
+    // assistant message is the last in the array), validToolUseIds stays empty, which causes
+    // all dangling tool_use blocks to be stripped below.  This fixes the edge case where the
+    // assistant message with orphaned tool_use blocks is the final message and was previously
+    // left untouched because the `nextMsgRole !== "user"` guard short-circuited early.
+    const validToolUseIds = new Set<string>();
+    if (nextMsgRole === "user") {
+      const nextUserMsg = nextMsg as {
+        content?: AnthropicContentBlock[];
+      };
+      if (Array.isArray(nextUserMsg.content)) {
+        for (const block of nextUserMsg.content) {
+          if (block && block.type === "toolResult" && block.toolUseId) {
+            validToolUseIds.add(block.toolUseId);
+          }
+        }
+      }
+    } else if (nextMsgRole !== undefined) {
+      // Next message exists but is not a user message (e.g. another assistant turn).
+      // We cannot repair this pairing, so keep the message as-is.
+      result.push(msg);
+      continue;
+    }
+    // nextMsgRole === undefined means this is the last message — fall through to strip.
+
+    // If content is not an array (e.g. legacy plain-string transcripts), there are no
+    // tool_use blocks to strip.  Keep the message unchanged to avoid silently dropping
+    // the assistant text on session resume.
+    if (!Array.isArray(assistantMsg.content)) {
       result.push(msg);
       continue;
     }
 
-    // Collect tool_use_ids from the next user message's tool_result blocks
-    const nextUserMsg = nextMsg as {
-      content?: AnthropicContentBlock[];
-    };
-    const validToolUseIds = new Set<string>();
-    if (Array.isArray(nextUserMsg.content)) {
-      for (const block of nextUserMsg.content) {
-        if (block && block.type === "toolResult" && block.toolUseId) {
-          validToolUseIds.add(block.toolUseId);
-        }
-      }
-    }
-
     // Filter out tool_use blocks that don't have matching tool_result
-    const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
+    const originalContent = assistantMsg.content;
     const filteredContent = originalContent.filter((block) => {
       if (!block) {
         return false;
