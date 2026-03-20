@@ -53,6 +53,18 @@
   },
   "redirects": [
     {
+      "source": "/platforms/oracle",
+      "destination": "/install/oracle"
+    },
+    {
+      "source": "/platforms/digitalocean",
+      "destination": "/install/digitalocean"
+    },
+    {
+      "source": "/platforms/raspberry-pi",
+      "destination": "/install/raspberry-pi"
+    },
+    {
       "source": "/brave-search",
       "destination": "/tools/brave-search"
     },
@@ -885,17 +897,20 @@
                 "group": "Hosting",
                 "pages": [
                   "install/azure",
+                  "install/digitalocean",
                   "install/docker-vm-runtime",
                   "install/exe-dev",
                   "install/fly",
                   "install/gcp",
                   "install/hetzner",
                   "install/kubernetes",
+                  "vps",
                   "install/macos-vm",
                   "install/northflank",
+                  "install/oracle",
                   "install/railway",
-                  "install/render",
-                  "vps"
+                  "install/raspberry-pi",
+                  "install/render"
                 ]
               },
               {
@@ -1164,10 +1179,7 @@
                   "platforms/linux",
                   "platforms/windows",
                   "platforms/android",
-                  "platforms/ios",
-                  "platforms/digitalocean",
-                  "platforms/oracle",
-                  "platforms/raspberry-pi"
+                  "platforms/ios"
                 ]
               },
               {
