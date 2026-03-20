@@ -1,0 +1,28 @@
+{
+  "contracts": [
+    {
+      "id": "sandbox-sync-must-carry-agentid",
+      "target": "syncSkillsToWorkspace",
+      "argumentIndex": 0,
+      "requiredKeys": ["agentId"],
+      "valueMustContain": {
+        "agentId": ["agentId", "runtime.agentId", "resolved.runtime.agentId"]
+      },
+      "includePathRegex": ["^agents/sandbox/"],
+      "excludePathRegex": ["\\.test\\."],
+      "strictSpread": false
+    },
+    {
+      "id": "context-snapshot-must-use-session-agentid",
+      "target": "buildWorkspaceSkillSnapshot",
+      "argumentIndex": 1,
+      "requiredKeys": ["agentId"],
+      "valueMustContain": {
+        "agentId": ["sessionAgentId", "resolvedSessionAgentId", "resolved.agentId"]
+      },
+      "includePathRegex": ["^auto-reply/reply/"],
+      "excludePathRegex": ["\\.test\\."],
+      "strictSpread": false
+    }
+  ]
+}

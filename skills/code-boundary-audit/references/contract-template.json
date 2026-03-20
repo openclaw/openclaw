@@ -1,0 +1,16 @@
+{
+  "contracts": [
+    {
+      "id": "sink-must-receive-critical-var",
+      "target": "syncToSandbox",
+      "argumentIndex": 0,
+      "requiredKeys": ["criticalVar"],
+      "valueMustContain": {
+        "criticalVar": ["criticalVar", "sessionCriticalVar", "runtime.criticalVar"]
+      },
+      "includePathRegex": ["^src/"],
+      "excludePathRegex": ["\\.test\\."],
+      "strictSpread": false
+    }
+  ]
+}
