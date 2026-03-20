@@ -126,6 +126,8 @@ describe("resolveProviderCapabilities", () => {
       }),
     ).toBe(true);
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("moonshot", "kimi-k2.5")).toBe("strict9");
+    expect(resolveTranscriptToolCallIdMode("moonshot", "moonshot-v1")).toBe("strict9");
   });
 
   it("treats kimi aliases as native anthropic tool payload providers", () => {

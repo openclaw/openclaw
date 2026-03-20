@@ -58,6 +58,10 @@ const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities
       "mistralai",
     ],
   },
+  moonshot: {
+    transcriptToolCallIdMode: "strict9",
+    transcriptToolCallIdModelHints: ["kimi", "moonshot", "moonshotai"],
+  },
   opencode: {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
