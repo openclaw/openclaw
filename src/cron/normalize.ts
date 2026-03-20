@@ -101,7 +101,8 @@ function coercePayload(payload: UnknownRecord) {
       typeof next.model === "string" ||
       typeof next.thinking === "string" ||
       typeof next.timeoutSeconds === "number" ||
-      typeof next.allowUnsafeExternalContent === "boolean";
+      typeof next.allowUnsafeExternalContent === "boolean" ||
+      Array.isArray(next.fallbacks);
     if (hasMessage) {
       next.kind = "agentTurn";
     } else if (hasText) {
