@@ -1246,7 +1246,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    // Persist webchat inbound images to disk (parity with WhatsApp/Telegram handlers).
+    // Persist inbound images to disk for all chat.send callers (parity with WhatsApp/Telegram
+    // handlers). This covers webchat, native app (iOS/Android/macOS), and control UI clients.
     // Runs after sendPolicy/stop/dedupe checks so only accepted requests write files.
     // Gated to non-ACP callers: ACP/IDE screenshots are transient and handled upstream.
     // Fire-and-forget: deferred to avoid blocking the "started" ack with synchronous
