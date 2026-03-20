@@ -78,6 +78,7 @@ export default defineConfig({
       "ui/src/ui/controllers/sessions.test.ts",
       "ui/src/ui/views/sessions.test.ts",
       "ui/src/ui/app-gateway.sessions.node.test.ts",
+      "ui/src/ui/chat/attachment-support.test.ts",
     ],
     setupFiles: ["test/setup.ts"],
     exclude: [
