@@ -627,7 +627,7 @@ describe("/compact command", () => {
     );
   });
 
-  it("labels benign no-op compaction results as skipped", async () => {
+  it("labels nothing-to-compact results as skipped without calling them below-threshold", async () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -655,13 +655,46 @@ describe("/compact command", () => {
     expect(result).toEqual({
       shouldContinue: false,
       reply: {
-        text: "⚙️ Compaction skipped: context is below the compaction threshold • Context 31k/?",
+        text: "⚙️ Compaction skipped: nothing compactable in this session yet • Context 31k/?",
       },
     });
     expect(vi.mocked(enqueueSystemEvent)).toHaveBeenCalledWith(
-      "Compaction skipped: context is below the compaction threshold • Context 31k/?",
+      "Compaction skipped: nothing compactable in this session yet • Context 31k/?",
       { sessionKey: params.sessionKey },
     );
+  });
+
+  it("formats below-threshold skip reasons with friendly copy", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/compact", cfg);
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Compaction skipped: below threshold for manual compaction",
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...params,
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          totalTokens: 31_000,
+          contextTokens: 200_000,
+        },
+      },
+      true,
+    );
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Compaction skipped: context is below the compaction threshold • Context 31k/?",
+      },
+    });
   });
 
   it("keeps true compaction errors labeled as failures", async () => {

@@ -62,6 +62,9 @@ function formatCompactionReason(reason?: string): string | undefined {
 
   const lower = text.toLowerCase();
   if (lower.includes("nothing to compact")) {
+    return "nothing compactable in this session yet";
+  }
+  if (lower.includes("below threshold")) {
     return "context is below the compaction threshold";
   }
   if (lower.includes("already compacted")) {

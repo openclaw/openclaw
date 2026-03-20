@@ -64,7 +64,10 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
-import { consumeCompactionSafeguardCancelReason } from "../pi-extensions/compaction-safeguard-runtime.js";
+import {
+  consumeCompactionSafeguardCancelReason,
+  setCompactionSafeguardCancelReason,
+} from "../pi-extensions/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -1122,7 +1125,7 @@ export async function compactEmbeddedPiSessionDirect(
         }
         const result = await compactWithSafetyTimeout(
           () => {
-            consumeCompactionSafeguardCancelReason(compactionSessionManager);
+            setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
             return session.compact(params.customInstructions);
           },
           compactionTimeoutMs,
