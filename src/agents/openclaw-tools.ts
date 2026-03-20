@@ -28,6 +28,38 @@ import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
+function coerceFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const parsed = Number(trimmed);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function toolParametersSupportsTopicId(tool: AnyAgentTool): boolean {
+  const schema =
+    tool.parameters && typeof tool.parameters === "object"
+      ? (tool.parameters as Record<string, unknown>)
+      : null;
+  if (!schema) {
+    return false;
+  }
+  const properties =
+    schema.properties && typeof schema.properties === "object"
+      ? (schema.properties as Record<string, unknown>)
+      : null;
+  return Boolean(properties && "topicId" in properties);
+}
+
 export function createOpenClawTools(
   options?: {
     sandboxBrowserBridgeUrl?: string;
@@ -250,5 +282,38 @@ export function createOpenClawTools(
     allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   });
 
-  return [...tools, ...pluginTools];
+  const normalizedTopicId = coerceFiniteNumber(options?.agentThreadId);
+  if (normalizedTopicId === undefined) {
+    return [...tools, ...pluginTools];
+  }
+
+  const wrappedPluginTools = pluginTools.map((tool) => {
+    if (!tool.execute || !toolParametersSupportsTopicId(tool)) {
+      return tool;
+    }
+    const originalExecute = tool.execute.bind(tool);
+    return {
+      ...tool,
+      execute: async (...args: unknown[]) => {
+        const params = args[1];
+        const paramsRecord =
+          params && typeof params === "object" && !Array.isArray(params)
+            ? (params as Record<string, unknown>)
+            : null;
+        if (!paramsRecord) {
+          return await originalExecute(...(args as Parameters<typeof originalExecute>));
+        }
+        // Avoid overriding an explicit user/model topicId.
+        if (paramsRecord.topicId !== undefined) {
+          return await originalExecute(...(args as Parameters<typeof originalExecute>));
+        }
+        const nextParams = { ...paramsRecord, topicId: normalizedTopicId };
+        const nextArgs = [...args];
+        nextArgs[1] = nextParams;
+        return await originalExecute(...(nextArgs as Parameters<typeof originalExecute>));
+      },
+    };
+  });
+
+  return [...tools, ...wrappedPluginTools];
 }

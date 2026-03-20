@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AnyAgentTool } from "./tools/common.js";
 
 const { resolvePluginToolsMock } = vi.hoisted(() => ({
-  resolvePluginToolsMock: vi.fn((params?: unknown) => {
+  resolvePluginToolsMock: vi.fn<(params?: unknown) => AnyAgentTool[]>((params?: unknown) => {
     void params;
     return [];
   }),
@@ -78,5 +79,101 @@ describe("createOpenClawTools plugin context", () => {
         allowGatewaySubagentBinding: true,
       }),
     );
+  });
+
+  it("injects DevClaw topicId from agentThreadId when tool schema supports topicId", async () => {
+    const topicIdTool: AnyAgentTool = {
+      name: "devclaw-topicId-test",
+      label: "devclaw-topicId-test",
+      description: "test",
+      ownerOnly: false,
+      parameters: {
+        type: "object",
+        properties: { topicId: { type: "number" } },
+      },
+      execute: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+        details: {},
+      })),
+    };
+
+    resolvePluginToolsMock.mockReturnValue([topicIdTool]);
+
+    const tools = createOpenClawTools({
+      config: {} as never,
+      agentThreadId: 77,
+    });
+    const tool = tools.find((candidate) => candidate.name === topicIdTool.name);
+    expect(tool).toBeDefined();
+    if (!tool) {
+      return;
+    }
+
+    await tool.execute("call1", {});
+    expect(topicIdTool.execute).toHaveBeenCalledWith("call1", { topicId: 77 });
+  });
+
+  it("does not override explicit params.topicId provided by the caller", async () => {
+    const topicIdTool: AnyAgentTool = {
+      name: "devclaw-topicId-test-override",
+      label: "devclaw-topicId-test-override",
+      description: "test",
+      ownerOnly: false,
+      parameters: {
+        type: "object",
+        properties: { topicId: { type: "number" } },
+      },
+      execute: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+        details: {},
+      })),
+    };
+
+    resolvePluginToolsMock.mockReturnValue([topicIdTool]);
+
+    const tools = createOpenClawTools({
+      config: {} as never,
+      agentThreadId: 77,
+    });
+    const tool = tools.find((candidate) => candidate.name === topicIdTool.name);
+    expect(tool).toBeDefined();
+    if (!tool) {
+      return;
+    }
+
+    await tool.execute("call1", { topicId: 5 });
+    expect(topicIdTool.execute).toHaveBeenCalledWith("call1", { topicId: 5 });
+  });
+
+  it("coerces numeric string agentThreadId into a number before injecting", async () => {
+    const topicIdTool: AnyAgentTool = {
+      name: "devclaw-topicId-test-string",
+      label: "devclaw-topicId-test-string",
+      description: "test",
+      ownerOnly: false,
+      parameters: {
+        type: "object",
+        properties: { topicId: { type: "number" } },
+      },
+      execute: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+        details: {},
+      })),
+    };
+
+    resolvePluginToolsMock.mockReturnValue([topicIdTool]);
+
+    const tools = createOpenClawTools({
+      config: {} as never,
+      agentThreadId: "77",
+    });
+    const tool = tools.find((candidate) => candidate.name === topicIdTool.name);
+    expect(tool).toBeDefined();
+    if (!tool) {
+      return;
+    }
+
+    await tool.execute("call1", {});
+    expect(topicIdTool.execute).toHaveBeenCalledWith("call1", { topicId: 77 });
   });
 });
