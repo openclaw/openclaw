@@ -801,10 +801,6 @@
       "destination": "/install/azure"
     },
     {
-      "source": "/install/azure/azure",
-      "destination": "/install/azure"
-    },
-    {
       "source": "/platforms/fly",
       "destination": "/install/fly"
     },
