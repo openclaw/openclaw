@@ -53,6 +53,8 @@ const runtimeStub: PluginRuntime = createPluginRuntimeMock({
 const createNoopAdapter = (): MSTeamsAdapter => ({
   continueConversation: async () => {},
   process: async () => {},
+  updateActivity: async () => {},
+  deleteActivity: async () => {},
 });
 
 const createRecordedSendActivity = (
@@ -81,6 +83,8 @@ const createFallbackAdapter = (proactiveSent: string[]): MSTeamsAdapter => ({
     });
   },
   process: async () => {},
+  updateActivity: async () => {},
+  deleteActivity: async () => {},
 });
 
 describe("msteams messenger", () => {
@@ -195,6 +199,8 @@ describe("msteams messenger", () => {
           });
         },
         process: async () => {},
+        updateActivity: async () => {},
+        deleteActivity: async () => {},
       };
 
       const ids = await sendMSTeamsMessages({
@@ -366,6 +372,8 @@ describe("msteams messenger", () => {
           await logic({ sendActivity: createRecordedSendActivity(attempts, 503) });
         },
         process: async () => {},
+        updateActivity: async () => {},
+        deleteActivity: async () => {},
       };
 
       const ids = await sendMSTeamsMessages({
