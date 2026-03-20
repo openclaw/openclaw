@@ -1845,16 +1845,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   const finalizeText = pendingPatchText;
 
                   // Reset immediately — new onPartialReply calls will create a fresh message.
+                  // Also reset patchSending so a slow in-flight patch from this turn
+                  // does not block the schedulePatch interval of the next turn.
                   streamMessageId = null;
                   pendingPatchText = "";
                   lastSentText = "";
+                  patchSending = false;
                   // Guard: pendingPatchText is set only by the interval which requires
                   // non-empty text, so finalizeText is always non-empty here in practice.
                   // Moving the guard before the increment avoids any ambiguity about
                   // whether streamedTurnCount could be left inflated without a matching
                   // finalization (the concern raised in review).
                   if (!finalizeText) return;
-                  streamedTurnCount++;
 
                   // Wait for any in-flight patch to complete before finalizing.
                   const deadline = Date.now() + 2000;
@@ -1866,11 +1868,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                       postId: finalizeId,
                       message: finalizeText,
                     });
+                    // Increment only after a successful patch so deliver() only
+                    // skips this turn if we know the complete text is visible.
+                    // If the patch fails, deliver() falls back to normal re-delivery.
+                    streamedTurnCount++;
                     runtime.log?.(`stream-patch finalized turn ${finalizeId}`);
                   } catch (err) {
-                    // Undo the increment so deliver() can re-deliver this turn's
-                    // content rather than silently skipping it.
-                    streamedTurnCount--;
                     logVerboseMessage(
                       `mattermost stream-patch turn finalize failed: ${String(err)}`,
                     );
