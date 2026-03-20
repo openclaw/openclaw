@@ -136,7 +136,13 @@ export async function updateAuthProfileStoreWithLock(params: {
 
   try {
     return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-      const store = params.agentLocalOnly
+      // Always load agent-local-only view before saving to prevent credential scope bleed
+      // from the merged main+agent store. When agentDir is set (subagent path), we must
+      // never load the merged view (ensureAuthProfileStore merges main+agent) because
+      // writing that merged view back to agent-local auth-profiles.json would leak main
+      // credentials into subagent scope. agentLocalOnly also forces this path explicitly.
+      const useLocalOnly = params.agentLocalOnly || params.agentDir !== undefined;
+      const store = useLocalOnly
         ? loadAgentLocalAuthProfileStore(params.agentDir)
         : ensureAuthProfileStore(params.agentDir);
       const shouldSave = params.updater(store);
