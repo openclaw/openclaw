@@ -11,6 +11,23 @@ function getServerArgs(value: unknown): unknown[] | undefined {
   return isRecord(value) && Array.isArray(value.args) ? value.args : undefined;
 }
 
+function normalizePathForAssertion(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  return path.normalize(value).replace(/\\/g, "/");
+}
+
+async function expectResolvedPathEqual(actual: unknown, expected: string): Promise<void> {
+  expect(typeof actual).toBe("string");
+  if (typeof actual !== "string") {
+    return;
+  }
+  expect(normalizePathForAssertion(await fs.realpath(actual))).toBe(
+    normalizePathForAssertion(await fs.realpath(expected)),
+  );
+}
+
 const tempHarness = createBundleMcpTempHarness();
 
 afterEach(async () => {
@@ -55,8 +72,10 @@ describe("loadEnabledBundleMcpConfig", () => {
       if (!loadedServerPath) {
         throw new Error("expected bundled MCP args to include the server path");
       }
-      expect(await fs.realpath(loadedServerPath)).toBe(resolvedServerPath);
-      expect(loadedServer.cwd).toBe(resolvedPluginRoot);
+      expect(normalizePathForAssertion(await fs.realpath(loadedServerPath))).toBe(
+        normalizePathForAssertion(resolvedServerPath),
+      );
+      await expectResolvedPathEqual(loadedServer.cwd, resolvedPluginRoot);
     } finally {
       env.restore();
     }
@@ -178,20 +197,35 @@ describe("loadEnabledBundleMcpConfig", () => {
           },
         },
       });
-      const resolvedPluginRoot = await fs.realpath(pluginRoot);
+      const loadedServer = loaded.config.mcpServers.inlineProbe;
+      const loadedArgs = getServerArgs(loadedServer);
+      const loadedCommand = isRecord(loadedServer) ? loadedServer.command : undefined;
+      const loadedCwd = isRecord(loadedServer) ? loadedServer.cwd : undefined;
+      const loadedEnv =
+        isRecord(loadedServer) && isRecord(loadedServer.env) ? loadedServer.env : {};
 
       expect(loaded.diagnostics).toEqual([]);
-      expect(loaded.config.mcpServers.inlineProbe).toEqual({
-        command: path.join(resolvedPluginRoot, "bin", "server.sh"),
-        args: [
-          path.join(resolvedPluginRoot, "servers", "probe.mjs"),
-          path.join(resolvedPluginRoot, "local-probe.mjs"),
-        ],
-        cwd: resolvedPluginRoot,
-        env: {
-          PLUGIN_ROOT: resolvedPluginRoot,
-        },
-      });
+      await expectResolvedPathEqual(loadedCwd, pluginRoot);
+      expect(typeof loadedCommand).toBe("string");
+      expect(loadedArgs).toHaveLength(2);
+      expect(typeof loadedEnv.PLUGIN_ROOT).toBe("string");
+      if (typeof loadedCommand !== "string" || typeof loadedCwd !== "string") {
+        throw new Error("expected inline bundled MCP server to expose command and cwd");
+      }
+      expect(normalizePathForAssertion(path.relative(loadedCwd, loadedCommand))).toBe(
+        normalizePathForAssertion(path.join("bin", "server.sh")),
+      );
+      expect(
+        loadedArgs?.map((entry) =>
+          typeof entry === "string"
+            ? normalizePathForAssertion(path.relative(loadedCwd, entry))
+            : entry,
+        ),
+      ).toEqual([
+        normalizePathForAssertion(path.join("servers", "probe.mjs")),
+        normalizePathForAssertion("local-probe.mjs"),
+      ]);
+      await expectResolvedPathEqual(loadedEnv.PLUGIN_ROOT, pluginRoot);
     } finally {
       env.restore();
     }
