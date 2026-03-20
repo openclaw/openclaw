@@ -4,6 +4,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
+import type { AcpRuntimeBackend } from "../acp/runtime/registry.js";
 import type {
   ApiKeyCredential,
   AuthProfileCredential,
@@ -1341,6 +1342,10 @@ export type OpenClawPluginApi = {
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
   ) => void;
+  /** Register an ACP runtime backend (e.g. cursor, acpx). */
+  registerAcpRuntimeBackend: (backend: AcpRuntimeBackend) => void;
+  /** Unregister a previously registered ACP runtime backend by id. */
+  unregisterAcpRuntimeBackend: (id: string) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

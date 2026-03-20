@@ -1,4 +1,5 @@
 import path from "node:path";
+import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
@@ -979,6 +980,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           });
         }
       },
+      registerAcpRuntimeBackend:
+        registrationMode === "full" ? (backend) => registerAcpRuntimeBackend(backend) : () => {},
+      unregisterAcpRuntimeBackend:
+        registrationMode === "full" ? (id) => unregisterAcpRuntimeBackend(id) : () => {},
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
         registrationMode === "full"
