@@ -144,7 +144,15 @@ const CONFUSABLE_LETTER_MAP: Record<number, string> = {
   0x03a4: "T", // Τ -> T
   0x03a7: "X", // Χ -> X
   // Greek lowercase confusables
+  0x03b1: "a", // α -> a
+  0x03b5: "e", // ε -> e
+  0x03b9: "i", // ι -> i
+  0x03ba: "k", // κ -> k
+  0x03bd: "v", // ν -> v
   0x03bf: "o", // ο -> o
+  0x03c1: "p", // ρ -> p
+  0x03c4: "t", // τ -> t
+  0x03c7: "x", // χ -> x
   // Latin-extended confusables (common in spoofing attacks)
   0x0190: "E", // Ɛ -> E (open E)
   0x01a4: "P", // Ƥ -> P
@@ -182,6 +190,18 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x02c3: ">", // modifier letter right arrowhead
 };
 
+// Auto-derive the confusable + angle-bracket character class from the map keys
+// so the regex and maps can never diverge (addresses PR review feedback).
+const CONFUSABLE_CHAR_RE = new RegExp(
+  `[\\uFF21-\\uFF3A\\uFF41-\\uFF5A${[
+    ...Object.keys(CONFUSABLE_LETTER_MAP),
+    ...Object.keys(ANGLE_BRACKET_MAP),
+  ]
+    .map((k) => `\\u${Number(k).toString(16).padStart(4, "0")}`)
+    .join("")}]`,
+  "g",
+);
+
 function foldMarkerChar(char: string): string {
   const code = char.charCodeAt(0);
   if (code >= 0xff21 && code <= 0xff3a) {
@@ -209,11 +229,7 @@ function foldMarkerText(input: string): string {
       // Strip invisible format characters that can split marker tokens without changing
       // how downstream models interpret the apparent boundary text.
       .replace(MARKER_IGNORABLE_CHAR_RE, "")
-      .replace(
-        // Fullwidth ASCII + angle bracket homoglyphs + Cyrillic confusables + Greek confusables + Latin-extended
-        /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u300A\u300B\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF\u276C\u276D\u276E\u276F\u02C2\u02C3\u0410\u0412\u0421\u0415\u041D\u041A\u041C\u041E\u0420\u0405\u0422\u0425\u0430\u0441\u0435\u043E\u0440\u0455\u0445\u0391\u0392\u0395\u0397\u039A\u039C\u039D\u039F\u03A1\u03A4\u03A7\u03BF\u0190\u01A4]/g,
-        (char) => foldMarkerChar(char),
-      )
+      .replace(CONFUSABLE_CHAR_RE, (char) => foldMarkerChar(char))
   );
 }
 
