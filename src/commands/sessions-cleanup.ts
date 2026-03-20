@@ -12,6 +12,12 @@ import {
   type SessionEntry,
   type SessionMaintenanceApplyReport,
 } from "../config/sessions.js";
+import { collectSessionHealth } from "../infra/session-health-collector.js";
+import {
+  buildRemediationPlan,
+  renderRemediationPlanText,
+} from "../infra/session-health-remediation-plan.js";
+import type { RemediationPlan } from "../infra/session-health-remediation-types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import {
@@ -290,6 +296,22 @@ function renderStoreDryRunPlan(params: {
   }
 }
 
+/**
+ * Attempt to collect a health snapshot and build a remediation plan.
+ * Best-effort: returns null if collection fails (e.g., no config, no disk).
+ * This is intentionally non-blocking for the existing dry-run flow.
+ */
+async function tryBuildRemediationPlanForDryRun(
+  cfg: ReturnType<typeof loadConfig>,
+): Promise<RemediationPlan | null> {
+  try {
+    const snapshot = await collectSessionHealth(cfg);
+    return buildRemediationPlan({ snapshot });
+  } catch {
+    return null;
+  }
+}
+
 export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runtime: RuntimeEnv) {
   const cfg = loadConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
@@ -323,23 +345,30 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
   }
 
   if (opts.dryRun) {
+    // Build the remediation plan from a live health snapshot (best-effort).
+    const remediationPlan = await tryBuildRemediationPlanForDryRun(cfg);
+
     if (opts.json) {
       if (previewResults.length === 1) {
-        runtime.log(JSON.stringify(previewResults[0]?.summary ?? {}, null, 2));
+        const payload: Record<string, unknown> = {
+          ...previewResults[0]?.summary,
+        };
+        if (remediationPlan) {
+          payload.remediationPlan = remediationPlan;
+        }
+        runtime.log(JSON.stringify(payload, null, 2));
         return;
       }
-      runtime.log(
-        JSON.stringify(
-          {
-            allAgents: true,
-            mode,
-            dryRun: true,
-            stores: previewResults.map((result) => result.summary),
-          },
-          null,
-          2,
-        ),
-      );
+      const payload: Record<string, unknown> = {
+        allAgents: true,
+        mode,
+        dryRun: true,
+        stores: previewResults.map((result) => result.summary),
+      };
+      if (remediationPlan) {
+        payload.remediationPlan = remediationPlan;
+      }
+      runtime.log(JSON.stringify(payload, null, 2));
       return;
     }
 
@@ -356,6 +385,12 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
         runtime,
         showAgentHeader: previewResults.length > 1,
       });
+    }
+
+    // Append remediation plan report after the existing dry-run output.
+    if (remediationPlan && remediationPlan.summary.totalActions > 0) {
+      runtime.log("");
+      runtime.log(renderRemediationPlanText(remediationPlan));
     }
     return;
   }
