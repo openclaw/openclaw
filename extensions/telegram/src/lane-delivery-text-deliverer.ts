@@ -83,6 +83,11 @@ type CreateLaneTextDelivererParams = {
   deletePreviewMessage: (messageId: number) => Promise<void>;
   log: (message: string) => void;
   markDelivered: () => void;
+  onFinalPreviewDelivered?: (params: {
+    laneName: LaneName;
+    text: string;
+    messageId?: number;
+  }) => Promise<void> | void;
 };
 
 type DeliverLaneTextParams = {
@@ -167,6 +172,17 @@ function resolvePreviewTarget(params: ResolvePreviewTargetParams): PreviewTarget
 }
 
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
+  const notifyFinalPreviewDelivered = async (
+    laneName: LaneName,
+    text: string,
+    messageId?: number,
+  ) => {
+    await params.onFinalPreviewDelivered?.({
+      laneName,
+      text,
+      messageId,
+    });
+  };
   const getLanePreviewText = (lane: DraftLaneState) => lane.lastPartialText;
   const markActivePreviewComplete = (laneName: LaneName) => {
     params.activePreviewLifecycleByLane[laneName] = "complete";
@@ -206,6 +222,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
     args.lane.lastPartialText = args.text;
     params.markDelivered();
+    await notifyFinalPreviewDelivered(args.laneName, args.text, materializedMessageId);
     return true;
   };
 
@@ -232,6 +249,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         args.lane.lastPartialText = args.text;
       }
       params.markDelivered();
+      if (args.context === "final") {
+        await notifyFinalPreviewDelivered(args.laneName, args.text, args.messageId);
+      }
       return "edited";
     } catch (err) {
       if (isMessageNotModifiedError(err)) {
@@ -239,6 +259,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           `telegram: ${args.laneName} preview ${args.context} edit returned "message is not modified"; treating as delivered`,
         );
         params.markDelivered();
+        if (args.context === "final") {
+          await notifyFinalPreviewDelivered(args.laneName, args.text, args.messageId);
+        }
         return "edited";
       }
       if (args.context === "final") {
@@ -247,6 +270,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
             `telegram: ${args.laneName} preview final edit failed after stop flush; keeping existing preview (${String(err)})`,
           );
           params.markDelivered();
+          await notifyFinalPreviewDelivered(args.laneName, args.text, args.messageId);
           return "retained";
         }
         if (isSafeToRetrySendError(err)) {
@@ -261,6 +285,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
               `telegram: ${args.laneName} preview final edit target missing; keeping alternate preview without fallback (${String(err)})`,
             );
             params.markDelivered();
+            await notifyFinalPreviewDelivered(args.laneName, args.text, args.messageId);
             return "retained";
           }
           params.log(
@@ -273,6 +298,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
             `telegram: ${args.laneName} preview final edit may have landed despite network error; keeping existing preview (${String(err)})`,
           );
           params.markDelivered();
+          await notifyFinalPreviewDelivered(args.laneName, args.text, args.messageId);
           return "retained";
         }
         if (isTelegramClientRejection(err)) {
@@ -286,6 +312,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           `telegram: ${args.laneName} preview final edit failed with ambiguous error; keeping existing preview to avoid duplicate (${String(err)})`,
         );
         params.markDelivered();
+        await notifyFinalPreviewDelivered(args.laneName, args.text, args.messageId);
         return "retained";
       }
       params.log(
@@ -323,12 +350,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         finalTextAlreadyLanded,
         retainAlternatePreviewOnMissingTarget,
       });
-    const finalizePreview = (
+    const finalizePreview = async (
       previewMessageId: number,
       finalTextAlreadyLanded: boolean,
       hadPreviewMessage: boolean,
       retainAlternatePreviewOnMissingTarget = false,
-    ): PreviewEditResult | Promise<PreviewEditResult> => {
+    ): Promise<PreviewEditResult> => {
       const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
       const shouldSkipRegressive = shouldSkipRegressivePreviewUpdate({
         currentPreviewText,
@@ -338,6 +365,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       });
       if (shouldSkipRegressive) {
         params.markDelivered();
+        if (context === "final") {
+          await notifyFinalPreviewDelivered(laneName, text, previewMessageId);
+        }
         return "edited";
       }
       return editPreview(
@@ -389,6 +419,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           `telegram: ${laneName} preview send may have landed despite missing message id; keeping to avoid duplicate`,
         );
         params.markDelivered();
+        await notifyFinalPreviewDelivered(laneName, text);
         return "retained";
       }
       return "fallback";

@@ -30,7 +30,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
-import { deliverReplies } from "./bot/delivery.js";
+import { deliverReplies, emitDeliveredReplyHooks } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -507,6 +507,18 @@ export const dispatchTelegramMessage = async ({
     log: logVerbose,
     markDelivered: () => {
       deliveryState.markDelivered();
+    },
+    onFinalPreviewDelivered: async ({ text, messageId }) => {
+      emitDeliveredReplyHooks({
+        sessionKeyForInternalHooks: ctxPayload.SessionKey,
+        chatId: String(chatId),
+        accountId: route.accountId,
+        content: text,
+        success: true,
+        messageId,
+        isGroup,
+        groupId: isGroup ? String(chatId) : undefined,
+      });
     },
   });
 

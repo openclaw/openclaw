@@ -546,6 +546,25 @@ function emitMessageSentHooks(params: {
   );
 }
 
+export function emitDeliveredReplyHooks(params: {
+  sessionKeyForInternalHooks?: string;
+  chatId: string;
+  accountId?: string;
+  content: string;
+  success: boolean;
+  error?: string;
+  messageId?: number;
+  isGroup?: boolean;
+  groupId?: string;
+}): void {
+  const hookRunner = getGlobalHookRunner();
+  emitMessageSentHooks({
+    hookRunner,
+    enabled: hookRunner?.hasHooks("message_sent") ?? false,
+    ...params,
+  });
+}
+
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
   chatId: string;
@@ -581,7 +600,6 @@ export async function deliverReplies(params: {
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
-  const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
   const chunkText = buildChunkTextResolver({
     textLimit: params.textLimit,
     chunkMode: params.chunkMode ?? "length",
@@ -686,9 +704,7 @@ export async function deliverReplies(params: {
         firstDeliveredMessageId,
       });
 
-      emitMessageSentHooks({
-        hookRunner,
-        enabled: hasMessageSentHooks,
+      emitDeliveredReplyHooks({
         sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
         chatId: params.chatId,
         accountId: params.accountId,
@@ -699,9 +715,7 @@ export async function deliverReplies(params: {
         groupId: params.mirrorGroupId,
       });
     } catch (error) {
-      emitMessageSentHooks({
-        hookRunner,
-        enabled: hasMessageSentHooks,
+      emitDeliveredReplyHooks({
         sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
         chatId: params.chatId,
         accountId: params.accountId,

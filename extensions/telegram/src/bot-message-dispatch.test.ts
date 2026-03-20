@@ -11,6 +11,7 @@ import {
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const deliverReplies = vi.hoisted(() => vi.fn());
+const emitDeliveredReplyHooks = vi.hoisted(() => vi.fn());
 const createForumTopicTelegram = vi.hoisted(() => vi.fn());
 const deleteMessageTelegram = vi.hoisted(() => vi.fn());
 const editForumTopicTelegram = vi.hoisted(() => vi.fn());
@@ -46,6 +47,7 @@ vi.mock("./draft-stream.js", () => ({
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
+  emitDeliveredReplyHooks,
 }));
 
 vi.mock("./send.js", () => ({
@@ -103,6 +105,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     createTelegramDraftStream.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     deliverReplies.mockClear();
+    emitDeliveredReplyHooks.mockClear();
     createForumTopicTelegram.mockClear();
     deleteMessageTelegram.mockClear();
     editForumTopicTelegram.mockClear();
@@ -2261,6 +2264,63 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(finalTextSentViaDeliverReplies).toBe(false);
   });
+
+  it.each([
+    {
+      label: "preview-finalized",
+      configureEdit: () => {
+        editMessageTelegram.mockResolvedValue(undefined);
+      },
+    },
+    {
+      label: "preview-retained",
+      configureEdit: () => {
+        editMessageTelegram.mockRejectedValue(
+          new Error("timeout: request timed out after 30000ms"),
+        );
+      },
+    },
+  ])(
+    "emits message:sent hooks when the final answer stays visible via %s",
+    async ({ configureEdit }) => {
+      const draftStream = createDraftStream(999);
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onPartialReply?.({ text: "Streaming..." });
+          await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+      deliverReplies.mockResolvedValue({ delivered: true });
+      configureEdit();
+
+      await dispatchWithContext({
+        context: createContext({
+          ctxPayload: { SessionKey: "agent:main:main" } as never,
+        }),
+      });
+
+      expect(emitDeliveredReplyHooks).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKeyForInternalHooks: "agent:main:main",
+          chatId: "123",
+          accountId: "default",
+          content: "Final answer",
+          success: true,
+          messageId: 999,
+          isGroup: false,
+          groupId: undefined,
+        }),
+      );
+      const finalTextSentViaDeliverReplies = deliverReplies.mock.calls.some((call: unknown[]) =>
+        (call[0] as { replies?: Array<{ text?: string }> })?.replies?.some(
+          (r: { text?: string }) => r.text === "Final answer",
+        ),
+      );
+      expect(finalTextSentViaDeliverReplies).toBe(false);
+    },
+  );
 
   it("falls back to sendPayload on pre-connect error during final edit", async () => {
     const draftStream = createDraftStream(999);
