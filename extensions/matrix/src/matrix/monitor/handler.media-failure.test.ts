@@ -100,10 +100,10 @@ function createHandlerHarness() {
     mediaMaxBytes: 5 * 1024 * 1024,
     startupMs: Date.now() - 120_000,
     startupGraceMs: 60_000,
-    dropPreStartupMessages: false,
     directTracker: {
       isDirectMessage: vi.fn().mockResolvedValue(true),
     },
+    dropPreStartupMessages: true,
     getRoomInfo: vi.fn().mockResolvedValue({
       name: "Media Room",
       canonicalAlias: "#media:example.org",

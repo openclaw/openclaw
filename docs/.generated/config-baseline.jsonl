@@ -1,4 +1,4 @@
-{"generatedBy":"scripts/generate-config-doc-baseline.ts","recordType":"meta","totalPaths":5518}
+{"generatedBy":"scripts/generate-config-doc-baseline.ts","recordType":"meta","totalPaths":5549}
 {"recordType":"path","path":"acp","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"ACP","help":"ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and tuning streamed turn projection behavior.","hasChildren":true}
 {"recordType":"path","path":"acp.allowedAgents","kind":"core","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":["access"],"label":"ACP Allowed Agents","help":"Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.","hasChildren":true}
 {"recordType":"path","path":"acp.allowedAgents.*","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -730,7 +730,7 @@
 {"recordType":"path","path":"canvasHost.port","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Canvas Host Port","help":"TCP port used by the canvas host HTTP server when canvas hosting is enabled. Choose a non-conflicting port and align firewall/proxy policy accordingly.","hasChildren":false}
 {"recordType":"path","path":"canvasHost.root","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Canvas Host Root Directory","help":"Filesystem root directory served by canvas host for canvas content and static assets. Use a dedicated directory and avoid broad repo roots for least-privilege file exposure.","hasChildren":false}
 {"recordType":"path","path":"channels","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Channels","help":"Channel provider configurations plus shared defaults that control access policies, heartbeat visibility, and per-surface behavior. Keep defaults centralized and override per provider only where required.","hasChildren":true}
-{"recordType":"path","path":"channels.bluebubbles","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"BlueBubbles","help":"iMessage via the BlueBubbles mac app + REST API.","hasChildren":true}
+{"recordType":"path","path":"channels.bluebubbles","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/bluebubbles","help":"BlueBubbles channel provider configuration used for Apple messaging bridge integrations. Keep DM policy aligned with your trusted sender model in shared deployments.","hasChildren":true}
 {"recordType":"path","path":"channels.bluebubbles.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.bluebubbles.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.bluebubbles.accounts.*.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -818,7 +818,7 @@
 {"recordType":"path","path":"channels.bluebubbles.serverUrl","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.bluebubbles.textChunkLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.bluebubbles.webhookPath","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.discord","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Discord","help":"very well supported right now.","hasChildren":true}
+{"recordType":"path","path":"channels.discord","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/discord","help":"Discord channel provider configuration for bot auth, retry policy, streaming, thread bindings, and optional voice capabilities. Keep privileged intents and advanced features disabled unless needed.","hasChildren":true}
 {"recordType":"path","path":"channels.discord.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.discord.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.discord.accounts.*.ackReaction","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -1352,7 +1352,7 @@
 {"recordType":"path","path":"channels.discord.voice.tts.provider","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.discord.voice.tts.summaryModel","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.discord.voice.tts.timeoutMs","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.feishu","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Feishu","help":"飞书/Lark enterprise messaging with doc/wiki/drive tools.","hasChildren":true}
+{"recordType":"path","path":"channels.feishu","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/feishu","hasChildren":true}
 {"recordType":"path","path":"channels.feishu.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.feishu.accounts.*.actions","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -1532,7 +1532,7 @@
 {"recordType":"path","path":"channels.feishu.webhookHost","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.webhookPath","kind":"channel","type":"string","required":true,"defaultValue":"/feishu/events","deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.webhookPort","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.googlechat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Google Chat","help":"Google Workspace Chat app via HTTP webhooks.","hasChildren":true}
+{"recordType":"path","path":"channels.googlechat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/googlechat","hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.accounts.*.actions","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -1660,7 +1660,7 @@
 {"recordType":"path","path":"channels.googlechat.typingIndicator","kind":"channel","type":"string","required":false,"enumValues":["none","message","reaction"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.webhookPath","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.googlechat.webhookUrl","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.imessage","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"iMessage","help":"this is still a work in progress.","hasChildren":true}
+{"recordType":"path","path":"channels.imessage","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/imessage","help":"iMessage channel provider configuration for CLI integration and DM access policy handling. Use explicit CLI paths when runtime environments have non-standard binary locations.","hasChildren":true}
 {"recordType":"path","path":"channels.imessage.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.imessage.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.imessage.accounts.*.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -1788,7 +1788,7 @@
 {"recordType":"path","path":"channels.imessage.responsePrefix","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.imessage.service","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.imessage.textChunkLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.irc","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"IRC","help":"classic IRC networks with DM/channel routing and pairing controls.","hasChildren":true}
+{"recordType":"path","path":"channels.irc","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/irc","help":"IRC channel provider configuration and compatibility settings for classic IRC transport workflows. Use this section when bridging legacy chat infrastructure into OpenClaw.","hasChildren":true}
 {"recordType":"path","path":"channels.irc.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.irc.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.irc.accounts.*.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -1928,7 +1928,7 @@
 {"recordType":"path","path":"channels.irc.textChunkLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.irc.tls","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.irc.username","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.line","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"LINE","help":"LINE Messaging API bot for Japan/Taiwan/Thailand markets.","hasChildren":true}
+{"recordType":"path","path":"channels.line","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/line","hasChildren":true}
 {"recordType":"path","path":"channels.line.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.line.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.line.accounts.*.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -1980,22 +1980,30 @@
 {"recordType":"path","path":"channels.line.secretFile","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.line.tokenFile","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.line.webhookPath","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.matrix","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Matrix","help":"open protocol; install the plugin to enable.","hasChildren":true}
+{"recordType":"path","path":"channels.matrix","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/matrix","hasChildren":true}
 {"recordType":"path","path":"channels.matrix.accessToken","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.matrix.accounts.*","kind":"channel","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.ackReaction","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.ackReactionScope","kind":"channel","type":"string","required":false,"enumValues":["group-mentions","group-all","direct","all","none","off"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.actions","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.matrix.actions.channelInfo","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.actions.memberInfo","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.actions.messages","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.actions.pins","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.actions.profile","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.actions.reactions","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.actions.verification","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.allowBots","kind":"channel","type":["boolean","string"],"required":false,"deprecated":false,"sensitive":false,"tags":["access","channels","network"],"label":"Matrix Allow Bot Messages","help":"Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set \"mentions\" to only accept bot messages that visibly mention this bot.","hasChildren":false}
 {"recordType":"path","path":"channels.matrix.allowlistOnly","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.allowPrivateNetwork","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.autoJoin","kind":"channel","type":"string","required":false,"enumValues":["always","allowlist","off"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.autoJoinAllowlist","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.matrix.autoJoinAllowlist.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.avatarUrl","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.chunkMode","kind":"channel","type":"string","required":false,"enumValues":["length","newline"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.defaultAccount","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.deviceId","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.deviceName","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.dm","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.matrix.dm.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -2010,6 +2018,7 @@
 {"recordType":"path","path":"channels.matrix.groups","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.matrix.groups.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.matrix.groups.*.allow","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.groups.*.allowBots","kind":"channel","type":["boolean","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.groups.*.autoReply","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.groups.*.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.groups.*.requireMention","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2035,11 +2044,13 @@
 {"recordType":"path","path":"channels.matrix.password.id","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.password.provider","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.password.source","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.reactionNotifications","kind":"channel","type":"string","required":false,"enumValues":["off","own"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.replyToMode","kind":"channel","type":"string","required":false,"enumValues":["off","first","all"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.responsePrefix","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.rooms","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.matrix.rooms.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.matrix.rooms.*.allow","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.rooms.*.allowBots","kind":"channel","type":["boolean","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.rooms.*.autoReply","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.rooms.*.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.rooms.*.requireMention","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2055,10 +2066,18 @@
 {"recordType":"path","path":"channels.matrix.rooms.*.tools.deny.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.rooms.*.users","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.matrix.rooms.*.users.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.startupVerification","kind":"channel","type":"string","required":false,"enumValues":["off","if-unverified"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.startupVerificationCooldownHours","kind":"channel","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.textChunkLimit","kind":"channel","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.threadBindings","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"channels.matrix.threadBindings.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.threadBindings.idleHours","kind":"channel","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.threadBindings.maxAgeHours","kind":"channel","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.threadBindings.spawnAcpSessions","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.matrix.threadBindings.spawnSubagentSessions","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.threadReplies","kind":"channel","type":"string","required":false,"enumValues":["off","inbound","always"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.matrix.userId","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.mattermost","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Mattermost","help":"self-hosted Slack-style chat; install the plugin to enable.","hasChildren":true}
+{"recordType":"path","path":"channels.mattermost","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/mattermost","help":"Mattermost channel provider configuration for bot credentials, base URL, and message trigger modes. Keep mention/trigger rules strict in high-volume team channels.","hasChildren":true}
 {"recordType":"path","path":"channels.mattermost.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.mattermost.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.mattermost.accounts.*.actions","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -2158,7 +2177,7 @@
 {"recordType":"path","path":"channels.mattermost.requireMention","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Mattermost Require Mention","help":"Require @mention in channels before responding (default: true).","hasChildren":false}
 {"recordType":"path","path":"channels.mattermost.responsePrefix","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.mattermost.textChunkLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.msteams","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Microsoft Teams","help":"Bot Framework; enterprise support.","hasChildren":true}
+{"recordType":"path","path":"channels.msteams","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/msteams","help":"Microsoft Teams channel provider configuration and provider-specific policy toggles. Use this section to isolate Teams behavior from other enterprise chat providers.","hasChildren":true}
 {"recordType":"path","path":"channels.msteams.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.msteams.allowFrom.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.msteams.appId","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2246,7 +2265,7 @@
 {"recordType":"path","path":"channels.msteams.webhook","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.msteams.webhook.path","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.msteams.webhook.port","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.nextcloud-talk","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Nextcloud Talk","help":"Self-hosted chat via Nextcloud Talk webhook bots.","hasChildren":true}
+{"recordType":"path","path":"channels.nextcloud-talk","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/nextcloud-talk","hasChildren":true}
 {"recordType":"path","path":"channels.nextcloud-talk.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.nextcloud-talk.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.nextcloud-talk.accounts.*.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -2362,7 +2381,7 @@
 {"recordType":"path","path":"channels.nextcloud-talk.webhookPath","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.nextcloud-talk.webhookPort","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.nextcloud-talk.webhookPublicUrl","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.nostr","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Nostr","help":"Decentralized protocol; encrypted DMs via NIP-04.","hasChildren":true}
+{"recordType":"path","path":"channels.nostr","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/nostr","hasChildren":true}
 {"recordType":"path","path":"channels.nostr.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.nostr.allowFrom.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.nostr.defaultAccount","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2383,7 +2402,7 @@
 {"recordType":"path","path":"channels.nostr.profile.website","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.nostr.relays","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.nostr.relays.*","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.signal","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Signal","help":"signal-cli linked device; more setup (David Reagans: \"Hop on Discord.\").","hasChildren":true}
+{"recordType":"path","path":"channels.signal","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/signal","help":"Signal channel provider configuration including account identity and DM policy behavior. Keep account mapping explicit so routing remains stable across multi-device setups.","hasChildren":true}
 {"recordType":"path","path":"channels.signal.account","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Signal Account","help":"Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.","hasChildren":false}
 {"recordType":"path","path":"channels.signal.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.signal.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -2527,7 +2546,7 @@
 {"recordType":"path","path":"channels.signal.sendReadReceipts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.signal.startupTimeoutMs","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.signal.textChunkLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.slack","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Slack","help":"supported (Socket Mode).","hasChildren":true}
+{"recordType":"path","path":"channels.slack","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/slack","help":"Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.","hasChildren":true}
 {"recordType":"path","path":"channels.slack.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.slack.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.slack.accounts.*.ackReaction","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -2779,9 +2798,9 @@
 {"recordType":"path","path":"channels.slack.userToken.source","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.slack.userTokenReadOnly","kind":"channel","type":"boolean","required":true,"defaultValue":true,"deprecated":false,"sensitive":false,"tags":["auth","channels","network","security"],"label":"Slack User Token Read Only","help":"When true, treat configured Slack user token usage as read-only helper behavior where possible. Keep enabled if you only need supplemental reads without user-context writes.","hasChildren":false}
 {"recordType":"path","path":"channels.slack.webhookPath","kind":"channel","type":"string","required":true,"defaultValue":"/slack/events","deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.synology-chat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Synology Chat","help":"Connect your Synology NAS Chat to OpenClaw with full agent capabilities.","hasChildren":true}
+{"recordType":"path","path":"channels.synology-chat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/synology-chat","hasChildren":true}
 {"recordType":"path","path":"channels.synology-chat.*","kind":"channel","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.telegram","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Telegram","help":"simplest way to get started — register a bot with @BotFather and get going.","hasChildren":true}
+{"recordType":"path","path":"channels.telegram","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/telegram","help":"Telegram channel provider configuration including auth tokens, retry behavior, and message rendering controls. Use this section to tune bot behavior for Telegram-specific API semantics.","hasChildren":true}
 {"recordType":"path","path":"channels.telegram.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.telegram.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.telegram.accounts.*.ackReaction","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -3139,7 +3158,7 @@
 {"recordType":"path","path":"channels.telegram.webhookSecret.provider","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.telegram.webhookSecret.source","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.telegram.webhookUrl","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.tlon","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Tlon","help":"decentralized messaging on Urbit; install the plugin to enable.","hasChildren":true}
+{"recordType":"path","path":"channels.tlon","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/tlon","hasChildren":true}
 {"recordType":"path","path":"channels.tlon.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.tlon.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.tlon.accounts.*.allowPrivateNetwork","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -3182,7 +3201,7 @@
 {"recordType":"path","path":"channels.tlon.ship","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.tlon.showModelSignature","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.tlon.url","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.twitch","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Twitch","help":"Twitch chat integration","hasChildren":true}
+{"recordType":"path","path":"channels.twitch","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/twitch","hasChildren":true}
 {"recordType":"path","path":"channels.twitch.accessToken","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.twitch.accounts","kind":"channel","type":"object","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.twitch.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -3218,7 +3237,7 @@
 {"recordType":"path","path":"channels.twitch.requireMention","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.twitch.responsePrefix","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.twitch.username","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.whatsapp","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"WhatsApp","help":"works with your own number; recommend a separate phone + eSIM.","hasChildren":true}
+{"recordType":"path","path":"channels.whatsapp","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/whatsapp","help":"WhatsApp channel provider configuration for access policy and message batching behavior. Use this section to tune responsiveness and direct-message routing safety for WhatsApp chats.","hasChildren":true}
 {"recordType":"path","path":"channels.whatsapp.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.whatsapp.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.whatsapp.accounts.*.ackReaction","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -3346,7 +3365,7 @@
 {"recordType":"path","path":"channels.whatsapp.selfChatMode","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"WhatsApp Self-Phone Mode","help":"Same-phone setup (bot uses your personal WhatsApp number).","hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.sendReadReceipts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.whatsapp.textChunkLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.zalo","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Zalo","help":"Vietnam-focused messaging platform with Bot API.","hasChildren":true}
+{"recordType":"path","path":"channels.zalo","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/zalo","hasChildren":true}
 {"recordType":"path","path":"channels.zalo.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.zalo.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.zalo.accounts.*.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -3398,7 +3417,7 @@
 {"recordType":"path","path":"channels.zalo.webhookSecret.provider","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.zalo.webhookSecret.source","kind":"channel","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.zalo.webhookUrl","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.zalouser","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Zalo Personal","help":"Zalo personal account via QR code login.","hasChildren":true}
+{"recordType":"path","path":"channels.zalouser","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"@openclaw/zalouser","hasChildren":true}
 {"recordType":"path","path":"channels.zalouser.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.zalouser.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.zalouser.accounts.*.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -4642,6 +4661,18 @@
 {"recordType":"path","path":"plugins.entries.talk-voice.subagent.allowedModels","kind":"plugin","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":["access"],"label":"Plugin Subagent Allowed Models","help":"Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.","hasChildren":true}
 {"recordType":"path","path":"plugins.entries.talk-voice.subagent.allowedModels.*","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"plugins.entries.talk-voice.subagent.allowModelOverride","kind":"plugin","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["access"],"label":"Allow Plugin Subagent Model Override","help":"Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.","hasChildren":false}
+{"recordType":"path","path":"plugins.entries.tavily","kind":"plugin","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"@openclaw/tavily-plugin","help":"OpenClaw Tavily plugin (plugin: tavily)","hasChildren":true}
+{"recordType":"path","path":"plugins.entries.tavily.config","kind":"plugin","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"@openclaw/tavily-plugin Config","help":"Plugin-defined config payload for tavily.","hasChildren":true}
+{"recordType":"path","path":"plugins.entries.tavily.config.webSearch","kind":"plugin","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"plugins.entries.tavily.config.webSearch.apiKey","kind":"plugin","type":["object","string"],"required":false,"deprecated":false,"sensitive":true,"tags":["auth","security"],"label":"Tavily API Key","help":"Tavily API key for web search and extraction (fallback: TAVILY_API_KEY env var).","hasChildren":false}
+{"recordType":"path","path":"plugins.entries.tavily.config.webSearch.baseUrl","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Tavily Base URL","help":"Tavily API base URL override.","hasChildren":false}
+{"recordType":"path","path":"plugins.entries.tavily.enabled","kind":"plugin","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Enable @openclaw/tavily-plugin","hasChildren":false}
+{"recordType":"path","path":"plugins.entries.tavily.hooks","kind":"plugin","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Plugin Hook Policy","help":"Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.","hasChildren":true}
+{"recordType":"path","path":"plugins.entries.tavily.hooks.allowPromptInjection","kind":"plugin","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["access"],"label":"Allow Prompt Injection Hooks","help":"Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.","hasChildren":false}
+{"recordType":"path","path":"plugins.entries.tavily.subagent","kind":"plugin","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Plugin Subagent Policy","help":"Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.","hasChildren":true}
+{"recordType":"path","path":"plugins.entries.tavily.subagent.allowedModels","kind":"plugin","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":["access"],"label":"Plugin Subagent Allowed Models","help":"Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.","hasChildren":true}
+{"recordType":"path","path":"plugins.entries.tavily.subagent.allowedModels.*","kind":"plugin","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"plugins.entries.tavily.subagent.allowModelOverride","kind":"plugin","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["access"],"label":"Allow Plugin Subagent Model Override","help":"Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.","hasChildren":false}
 {"recordType":"path","path":"plugins.entries.telegram","kind":"plugin","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"@openclaw/telegram","help":"OpenClaw Telegram channel plugin (plugin: telegram)","hasChildren":true}
 {"recordType":"path","path":"plugins.entries.telegram.config","kind":"plugin","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"@openclaw/telegram Config","help":"Plugin-defined config payload for telegram.","hasChildren":false}
 {"recordType":"path","path":"plugins.entries.telegram.enabled","kind":"plugin","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Enable @openclaw/telegram","hasChildren":false}

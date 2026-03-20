@@ -65,6 +65,7 @@ export function applyMatrixSetupAccountConfig(params: {
     return updateMatrixAccountConfig(next, normalizedAccountId, {
       enabled: true,
       homeserver: null,
+      allowPrivateNetwork: null,
       userId: null,
       accessToken: null,
       password: null,
@@ -79,6 +80,10 @@ export function applyMatrixSetupAccountConfig(params: {
   return updateMatrixAccountConfig(next, normalizedAccountId, {
     enabled: true,
     homeserver: params.input.homeserver?.trim(),
+    allowPrivateNetwork:
+      typeof params.input.allowPrivateNetwork === "boolean"
+        ? params.input.allowPrivateNetwork
+        : undefined,
     userId: password && !userId ? null : userId,
     accessToken: accessToken || (password ? null : undefined),
     password: password || (accessToken ? null : undefined),

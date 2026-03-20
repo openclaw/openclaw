@@ -1,13 +1,14 @@
 ---
-summary: "OpenClaw plugins/extensions: discovery, config, and safety"
+summary: "OpenClaw plugins: install, configure, and manage plugins that extend the gateway"
 read_when:
-  - Adding or modifying plugins/extensions
-  - Documenting plugin install or load rules
+  - Installing or configuring plugins
+  - Understanding plugin discovery and load rules
   - Working with Codex/Claude-compatible plugin bundles
 title: "Plugins"
+sidebarTitle: "Install and Configure"
 ---
 
-# Plugins (Extensions)
+# Plugins
 
 ## Quick start
 
@@ -65,14 +66,14 @@ marketplace source with `--marketplace`.
 
 These are published to npm and installed with `openclaw plugins install`:
 
-| Plugin          | Package                | Docs                               |
-| --------------- | ---------------------- | ---------------------------------- |
-| Matrix          | `@openclaw/matrix`     | [Matrix](/channels/matrix)         |
-| Microsoft Teams | `@openclaw/msteams`    | [MS Teams](/channels/msteams)      |
-| Nostr           | `@openclaw/nostr`      | [Nostr](/channels/nostr)           |
-| Voice Call      | `@openclaw/voice-call` | [Voice Call](/plugins/voice-call)  |
-| Zalo            | `@openclaw/zalo`       | [Zalo](/channels/zalo)             |
-| Zalo Personal   | `@openclaw/zalouser`   | [Zalo Personal](/plugins/zalouser) |
+| Plugin          | Package                | Docs                                 |
+| --------------- | ---------------------- | ------------------------------------ |
+| Matrix          | `@openclaw/matrix`     | [Matrix](/channels/matrix)           |
+| Microsoft Teams | `@openclaw/msteams`    | [Microsoft Teams](/channels/msteams) |
+| Nostr           | `@openclaw/nostr`      | [Nostr](/channels/nostr)             |
+| Voice Call      | `@openclaw/voice-call` | [Voice Call](/plugins/voice-call)    |
+| Zalo            | `@openclaw/zalo`       | [Zalo](/channels/zalo)               |
+| Zalo Personal   | `@openclaw/zalouser`   | [Zalo Personal](/plugins/zalouser)   |
 
 Microsoft Teams is plugin-only as of 2026.1.15.
 
@@ -286,7 +287,7 @@ openclaw plugins install ./plugin.zip           # install from a local zip
 openclaw plugins install -l ./extensions/voice-call # link (no copy) for dev
 openclaw plugins install @openclaw/voice-call   # install from npm
 openclaw plugins install @openclaw/voice-call --pin # store exact resolved name@version
-openclaw plugins update <id>
+openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins enable <id>
 openclaw plugins disable <id>
@@ -329,7 +330,7 @@ See [Plugin manifest](/plugins/manifest) for the manifest file format.
 - [Plugin architecture and internals](/plugins/architecture) -- capability model,
   ownership model, contracts, load pipeline, runtime helpers, and developer API
   reference
-- [Building extensions](/plugins/building-extensions)
+- [Building plugins](/plugins/building-plugins)
 - [Plugin bundles](/plugins/bundles)
 - [Plugin manifest](/plugins/manifest)
 - [Plugin agent tools](/plugins/agent-tools)
