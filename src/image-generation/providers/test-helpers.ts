@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import * as modelAuth from "../../agents/model-auth.js";
 
 /**
