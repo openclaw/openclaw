@@ -15,6 +15,7 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
 });
 
 import { retryTelegramFinalReplyDelivery } from "./final-reply-retry.js";
+import { isSafeToRetrySendError } from "./network-errors.js";
 
 describe("retryTelegramFinalReplyDelivery", () => {
   beforeEach(() => {
@@ -86,5 +87,24 @@ describe("retryTelegramFinalReplyDelivery", () => {
 
     expect(sleepWithAbort).toHaveBeenCalledTimes(1);
     expect(sleepWithAbort).toHaveBeenCalledWith(0, abortController.signal);
+  });
+
+  it("preserves safe pre-connect retry state when an aborted backoff wraps AbortError", async () => {
+    const preConnectErr = new Error("connect ECONNREFUSED 149.154.167.220:443");
+    (preConnectErr as NodeJS.ErrnoException).code = "ECONNREFUSED";
+    const deliver = vi.fn<() => Promise<string>>().mockRejectedValueOnce(preConnectErr);
+    const abortController = new AbortController();
+    const abortErr = Object.assign(new Error("The operation was aborted"), {
+      name: "AbortError",
+    });
+    abortController.abort(new Error("poller restart"));
+    sleepWithAbort.mockRejectedValueOnce(new Error("aborted", { cause: abortErr }));
+
+    const result = await retryTelegramFinalReplyDelivery({
+      deliver,
+      abortSignal: abortController.signal,
+    }).catch((err) => err);
+
+    expect(isSafeToRetrySendError(result)).toBe(true);
   });
 });

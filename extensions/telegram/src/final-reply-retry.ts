@@ -9,6 +9,39 @@ const TELEGRAM_FINAL_REPLY_RETRY_POLICY = {
 };
 
 const TELEGRAM_FINAL_REPLY_MAX_ATTEMPTS = 4;
+const PRECONNECT_RETRY_ABORTED_AFTER_SAFE_FAILURE = Symbol.for(
+  "openclaw.telegram.preconnect-retry-aborted-after-safe-failure",
+);
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+function isWrappedAbortError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.message.trim().toLowerCase() === "aborted" &&
+    isAbortError(err.cause)
+  );
+}
+
+function markPreconnectRetryAbortedAfterSafeFailure(err: unknown): void {
+  if (!err || typeof err !== "object") {
+    return;
+  }
+  Object.defineProperty(err, PRECONNECT_RETRY_ABORTED_AFTER_SAFE_FAILURE, {
+    value: true,
+    configurable: true,
+  });
+}
+
+export function isPreconnectRetryAbortedAfterSafeFailure(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    Boolean((err as Record<PropertyKey, unknown>)[PRECONNECT_RETRY_ABORTED_AFTER_SAFE_FAILURE])
+  );
+}
 
 export async function retryTelegramPreConnectSend<T>(params: {
   deliver: () => Promise<T>;
@@ -29,7 +62,17 @@ export async function retryTelegramPreConnectSend<T>(params: {
       params.log?.(
         `telegram: ${params.operationLabel ?? "send"} failed before reaching Telegram; retrying in ${delayMs}ms (${String(err)})`,
       );
-      await sleepWithAbort(delayMs, params.abortSignal);
+      try {
+        await sleepWithAbort(delayMs, params.abortSignal);
+      } catch (sleepErr) {
+        if (
+          params.abortSignal?.aborted &&
+          (isAbortError(sleepErr) || isWrappedAbortError(sleepErr))
+        ) {
+          markPreconnectRetryAbortedAfterSafeFailure(sleepErr);
+        }
+        throw sleepErr;
+      }
     }
   }
 }

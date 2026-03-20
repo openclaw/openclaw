@@ -6,6 +6,9 @@ import {
 } from "openclaw/plugin-sdk/infra-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
+const PRECONNECT_RETRY_ABORTED_AFTER_SAFE_FAILURE = Symbol.for(
+  "openclaw.telegram.preconnect-retry-aborted-after-safe-failure",
+);
 
 const RECOVERABLE_ERROR_CODES = new Set([
   "ECONNRESET",
@@ -161,6 +164,13 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
 export function isSafeToRetrySendError(err: unknown): boolean {
   if (!err) {
     return false;
+  }
+  if (
+    typeof err === "object" &&
+    err &&
+    Boolean((err as Record<PropertyKey, unknown>)[PRECONNECT_RETRY_ABORTED_AFTER_SAFE_FAILURE])
+  ) {
+    return true;
   }
   for (const candidate of collectTelegramErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));
