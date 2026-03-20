@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -968,7 +969,21 @@ export const OpenClawSchema = z
     const agentOverrides = cfg.skills?.policy?.agentOverrides;
     const isTestAgentOverrideKey = (agentId: string) => /^test-agent(?:[-_:].*)?$/i.test(agentId);
     if (agentOverrides && typeof agentOverrides === "object") {
+      const normalizedOverrideKeys = new Map<string, string>();
       for (const overrideAgentId of Object.keys(agentOverrides)) {
+        const normalizedOverrideKey = normalizeAgentId(overrideAgentId);
+        const existingOverrideKey = normalizedOverrideKeys.get(normalizedOverrideKey);
+        if (existingOverrideKey && existingOverrideKey !== overrideAgentId) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["skills", "policy", "agentOverrides", overrideAgentId],
+            message:
+              `Duplicate normalized agent override "${normalizedOverrideKey}" from ` +
+              `"${existingOverrideKey}" and "${overrideAgentId}". Keep only one key.`,
+          });
+        } else {
+          normalizedOverrideKeys.set(normalizedOverrideKey, overrideAgentId);
+        }
         if (!agentIds.has(overrideAgentId) && !isTestAgentOverrideKey(overrideAgentId)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

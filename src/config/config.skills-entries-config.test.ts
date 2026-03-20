@@ -117,6 +117,39 @@ describe("skills entries config schema", () => {
     ).toBe(true);
   });
 
+  it("rejects normalized collisions under skills policy overrides", () => {
+    const res = OpenClawSchema.safeParse({
+      agents: {
+        list: [{ id: "Ops Team" }, { id: "ops-team" }],
+      },
+      skills: {
+        policy: {
+          agentOverrides: {
+            "Ops Team": {
+              enabled: ["jira"],
+            },
+            "ops-team": {
+              disabled: ["weather"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+    if (res.success) {
+      return;
+    }
+
+    expect(
+      res.error.issues.some(
+        (issue) =>
+          issue.path.join(".") === "skills.policy.agentOverrides.ops-team" &&
+          issue.message.includes('Duplicate normalized agent override "ops-team"'),
+      ),
+    ).toBe(true);
+  });
+
   it("accepts test-agent override keys for isolated test harnesses", () => {
     const res = OpenClawSchema.safeParse({
       skills: {
