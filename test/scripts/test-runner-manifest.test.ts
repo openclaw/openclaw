@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   selectMemoryHeavyFiles,
   selectTimedHeavyFiles,
+  selectUnitHeavyFileGroups,
 } from "../../scripts/test-runner-manifest.mjs";
 
 describe("scripts/test-runner-manifest timed selection", () => {
@@ -59,5 +60,34 @@ describe("scripts/test-runner-manifest memory selection", () => {
         },
       }),
     ).toEqual(["b.test.ts", "c.test.ts"]);
+  });
+
+  it("gives memory-heavy isolation precedence over timed-heavy buckets", () => {
+    expect(
+      selectUnitHeavyFileGroups({
+        candidates: ["overlap.test.ts", "memory-only.test.ts", "timed-only.test.ts"],
+        behaviorOverrides: new Set(),
+        timedLimit: 3,
+        timedMinDurationMs: 1000,
+        memoryLimit: 3,
+        memoryMinDeltaKb: 256 * 1024,
+        timings: {
+          defaultDurationMs: 250,
+          files: {
+            "overlap.test.ts": { durationMs: 5000 },
+            "timed-only.test.ts": { durationMs: 4200 },
+          },
+        },
+        hotspots: {
+          files: {
+            "overlap.test.ts": { deltaKb: 900 * 1024 },
+            "memory-only.test.ts": { deltaKb: 700 * 1024 },
+          },
+        },
+      }),
+    ).toEqual({
+      memoryHeavyFiles: ["overlap.test.ts", "memory-only.test.ts"],
+      timedHeavyFiles: ["timed-only.test.ts"],
+    });
   });
 });

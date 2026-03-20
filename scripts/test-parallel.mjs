@@ -18,9 +18,8 @@ import {
   loadUnitMemoryHotspotManifest,
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
-  selectMemoryHeavyFiles,
+  selectUnitHeavyFileGroups,
   packFilesByDuration,
-  selectTimedHeavyFiles,
 } from "./test-runner-manifest.mjs";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
@@ -311,33 +310,25 @@ const memoryHeavyUnitMinDeltaKb = parseEnvNumber(
   "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_MIN_KB",
   unitMemoryHotspotManifest.defaultMinDeltaKb,
 );
-const timedHeavyUnitFiles =
-  shouldSplitUnitRuns && heavyUnitFileLimit > 0
-    ? selectTimedHeavyFiles({
+const { memoryHeavyFiles: memoryHeavyUnitFiles, timedHeavyFiles: timedHeavyUnitFiles } =
+  shouldSplitUnitRuns
+    ? selectUnitHeavyFileGroups({
         candidates: allKnownUnitFiles,
-        limit: heavyUnitFileLimit,
-        minDurationMs: heavyUnitMinDurationMs,
-        exclude: unitBehaviorOverrideSet,
+        behaviorOverrides: unitBehaviorOverrideSet,
+        timedLimit: heavyUnitFileLimit,
+        timedMinDurationMs: heavyUnitMinDurationMs,
+        memoryLimit: memoryHeavyUnitFileLimit,
+        memoryMinDeltaKb: memoryHeavyUnitMinDeltaKb,
         timings: unitTimingManifest,
-      })
-    : [];
-const memoryHeavyUnitFiles =
-  shouldSplitUnitRuns && memoryHeavyUnitFileLimit > 0
-    ? selectMemoryHeavyFiles({
-        candidates: allKnownUnitFiles,
-        limit: memoryHeavyUnitFileLimit,
-        minDeltaKb: memoryHeavyUnitMinDeltaKb,
-        exclude: unitBehaviorOverrideSet,
         hotspots: unitMemoryHotspotManifest,
       })
-    : [];
+    : {
+        memoryHeavyFiles: [],
+        timedHeavyFiles: [],
+      };
+const unitSchedulingOverrideSet = new Set([...unitBehaviorOverrideSet, ...memoryHeavyUnitFiles]);
 const unitFastExcludedFiles = [
-  ...new Set([
-    ...unitBehaviorOverrideSet,
-    ...timedHeavyUnitFiles,
-    ...memoryHeavyUnitFiles,
-    ...channelSingletonFiles,
-  ]),
+  ...new Set([...unitSchedulingOverrideSet, ...timedHeavyUnitFiles, ...channelSingletonFiles]),
 ];
 const unitAutoSingletonFiles = [
   ...new Set([...unitSingletonIsolatedFiles, ...memoryHeavyUnitFiles]),
