@@ -322,18 +322,18 @@ export async function remove(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove");
     await ensureLoaded(state);
-    const before = state.store?.jobs.length ?? 0;
     if (!state.store) {
-      return { ok: false, removed: false } as const;
+      return { ok: false, removed: false, reason: "store unavailable" } as const;
+    }
+    const job = state.store.jobs.find((j) => j.id === id);
+    if (!job) {
+      return { ok: false, removed: false, reason: "job not found" } as const;
     }
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
-    const removed = (state.store.jobs.length ?? 0) !== before;
     await persist(state);
     armTimer(state);
-    if (removed) {
-      emit(state, { jobId: id, action: "removed" });
-    }
-    return { ok: true, removed } as const;
+    emit(state, { jobId: id, action: "removed" });
+    return { ok: true, removed: true, jobName: job.name } as const;
   });
 }
 
