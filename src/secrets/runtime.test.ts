@@ -14,11 +14,14 @@ import {
 
 type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
 
-const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-}));
+const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvidersMock } =
+  vi.hoisted(() => ({
+    resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+    resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+  }));
 
 vi.mock("../plugins/web-search-providers.js", () => ({
+  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
@@ -113,6 +116,8 @@ function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): Auth
 
 describe("secrets runtime snapshot", () => {
   beforeEach(() => {
+    resolveBundledPluginWebSearchProvidersMock.mockReset();
+    resolveBundledPluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
     resolvePluginWebSearchProvidersMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
   });
@@ -120,6 +125,7 @@ describe("secrets runtime snapshot", () => {
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
     clearConfigCache();
+    resolveBundledPluginWebSearchProvidersMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
   });
 
