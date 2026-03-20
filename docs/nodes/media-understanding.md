@@ -97,10 +97,10 @@ model entries do **not** take an inline `apiKey`. Configure credentials through
 one of these supported sources instead:
 
 - an `auth-profiles.json` profile selected by `profile` / `preferredProfile`
-- the provider's standard environment variable (for example `OPENAI_API_KEY`,
-  `GOOGLE_API_KEY`, `GROQ_API_KEY`)
-- `models.providers.<provider>.apiKey` in config, including plaintext,
-  `${ENV_VAR}` substitution, or a SecretRef object
+- the provider's standard environment variable (for example `GOOGLE_API_KEY`,
+  `GROQ_API_KEY`, `OPENAI_API_KEY`)
+- `models.providers.<provider>.apiKey` in config when it resolves to a usable
+  string value, including plaintext or `${ENV_VAR}` substitution
 
 If none of those sources resolve for a provider entry, media understanding skips
 that entry and falls back to the next configured model.
