@@ -75,7 +75,7 @@ jobs:
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
         run: pnpm run deploy:check
 
-      - name: Publish packages to npm
+      - name: Publish denchclaw to npm
         if: steps.npm.outputs.published != 'true'
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

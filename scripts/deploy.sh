@@ -22,8 +22,6 @@
 set -euo pipefail
 
 PACKAGE_NAME="denchclaw"
-ALIAS_PACKAGE_NAME="dench"
-ALIAS_PACKAGE_DIR="packages/dench"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -346,42 +344,16 @@ fi
 
 # Always tag as "latest" — npm skips the latest tag for prerelease versions
 # by default, but we want `npm i -g denchclaw` to always resolve to
-# the most recently published version.
+# the most recently published version. The root package already exposes both
+# `denchclaw` and `dench` binaries, so there is no separate alias package.
 echo "publishing ${PACKAGE_NAME}@${VERSION}..."
 run_npm publish --access public --tag latest
 
-# ── publish alias package (dench → denchclaw) ────────────────────────────────
-
-ALIAS_PUBLISHED=false
-ALIAS_DIR="${ROOT_DIR}/${ALIAS_PACKAGE_DIR}"
-if [[ -d "$ALIAS_DIR" ]]; then
-  # Pin the alias package version and its denchclaw dependency to this release.
-  node -e "
-    const fs = require('fs');
-    const pkg = JSON.parse(fs.readFileSync('${ALIAS_DIR}/package.json', 'utf-8'));
-    pkg.version = '${VERSION}';
-    pkg.dependencies.denchclaw = '^${VERSION}';
-    fs.writeFileSync('${ALIAS_DIR}/package.json', JSON.stringify(pkg, null, 2) + '\n');
-  "
-  echo "publishing ${ALIAS_PACKAGE_NAME}@${VERSION}..."
-  if (cd "$ALIAS_DIR" && run_npm publish --access public --tag latest 2>/dev/null); then
-    ALIAS_PUBLISHED=true
-    echo "published ${ALIAS_PACKAGE_NAME}@${VERSION}"
-  else
-    echo "warning: failed to publish ${ALIAS_PACKAGE_NAME}@${VERSION} (non-fatal)"
-    echo "         npx ${PACKAGE_NAME} still works; ${ALIAS_PACKAGE_NAME} alias is optional"
-  fi
-fi
-
-# Verify published npx flows for both CLI aliases.
+# Verify published npx flows for the primary package.
 if [[ "$SKIP_NPX_SMOKE" != true ]]; then
   echo "verifying npx binaries..."
   verify_npx_command "$VERSION" "npx denchclaw" \
     npx --yes "${PACKAGE_NAME}@${VERSION}" --version
-  if [[ "$ALIAS_PUBLISHED" == true ]]; then
-    verify_npx_command "$VERSION" "npx dench (via dench package)" \
-      npx --yes "${ALIAS_PACKAGE_NAME}@${VERSION}" --version
-  fi
   verify_npx_invocation "npx denchclaw update --help" \
     npx --yes "${PACKAGE_NAME}@${VERSION}" update --help
   verify_npx_invocation "npx denchclaw start --help" \
@@ -398,10 +370,6 @@ if [[ ! -f "$STANDALONE_SERVER" ]]; then
 fi
 
 echo ""
-if [[ "$ALIAS_PUBLISHED" == true ]]; then
-  echo "published ${PACKAGE_NAME}@${VERSION} + ${ALIAS_PACKAGE_NAME}@${VERSION}"
-  echo "install:  npm i -g ${PACKAGE_NAME}  (or: npm i -g ${ALIAS_PACKAGE_NAME})"
-else
-  echo "published ${PACKAGE_NAME}@${VERSION}"
-  echo "install:  npm i -g ${PACKAGE_NAME}"
-fi
+echo "published ${PACKAGE_NAME}@${VERSION}"
+echo "install:  npm i -g ${PACKAGE_NAME}"
+echo "commands: ${PACKAGE_NAME}, dench"
