@@ -159,9 +159,9 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
   const trimmed = raw.trim();
   if (opts.strictJson) {
     try {
-      return JSON5.parse(trimmed);
+      return JSON.parse(trimmed);
     } catch (err) {
-      throw new Error(`Failed to parse JSON5 value: ${String(err)}`, { cause: err });
+      throw new Error(`Failed to parse JSON value: ${String(err)}`, { cause: err });
     }
   }
 
@@ -1280,8 +1280,8 @@ export function registerConfigCli(program: Command) {
     .command("set")
     .description(CONFIG_SET_DESCRIPTION)
     .argument("[path]", "Config path (dot or bracket notation)")
-    .argument("[value]", "Value (JSON5 or raw string)")
-    .option("--strict-json", "Strict JSON5 parsing (error instead of raw string fallback)", false)
+    .argument("[value]", "Value (JSON/JSON5 or raw string)")
+    .option("--strict-json", "Strict JSON parsing (error instead of raw string fallback)", false)
     .option("--json", "Legacy alias for --strict-json", false)
     .option(
       "--dry-run",

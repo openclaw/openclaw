@@ -442,6 +442,15 @@ describe("config cli", () => {
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
     });
 
+    it("rejects JSON5-only object syntax when strict parsing is enabled", async () => {
+      await expect(
+        runConfigCommand(["config", "set", "gateway.auth", "{mode:'token'}", "--strict-json"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+    });
+
     it("accepts --strict-json with batch mode and applies batch payload", async () => {
       const resolved: OpenClawConfig = { gateway: { port: 18789 } };
       setSnapshot(resolved, resolved);
@@ -470,6 +479,8 @@ describe("config cli", () => {
       expect(helpText).toContain("--strict-json");
       expect(helpText).toContain("--json");
       expect(helpText).toContain("Legacy alias for --strict-json");
+      expect(helpText).toContain("Value (JSON/JSON5 or raw string)");
+      expect(helpText).toContain("Strict JSON parsing (error instead of");
       expect(helpText).toContain("--ref-provider");
       expect(helpText).toContain("--provider-source");
       expect(helpText).toContain("--batch-json");
