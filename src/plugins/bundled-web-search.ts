@@ -1,4 +1,4 @@
-import { bundledWebSearchPluginRegistrations } from "./bundled-web-search-registry.js";
+import { bundledWebSearchPluginRegistrations } from "../bundled-web-search-registry.js";
 import { capturePluginRegistration } from "./captured-registration.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
@@ -48,6 +48,10 @@ export function resolveBundledWebSearchPluginIds(params: {
 
 export function listBundledWebSearchProviders(): PluginWebSearchProviderEntry[] {
   return loadBundledWebSearchProviders();
+}
+
+export function listBundledWebSearchPluginIds(): string[] {
+  return [...BUNDLED_WEB_SEARCH_PLUGIN_IDS];
 }
 
 export function resolveBundledWebSearchPluginId(
