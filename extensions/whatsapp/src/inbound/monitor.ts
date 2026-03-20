@@ -1,9 +1,8 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
-import { formatLocationText } from "openclaw/plugin-sdk/channel-runtime";
+import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
-import { createInboundDebouncer } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";

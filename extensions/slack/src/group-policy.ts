@@ -1,9 +1,9 @@
+import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveToolsBySender,
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
-import { type ChannelGroupContext } from "openclaw/plugin-sdk/channel-runtime";
 import { normalizeHyphenSlug } from "openclaw/plugin-sdk/core";
 import { inspectSlackAccount } from "./account-inspect.js";
 

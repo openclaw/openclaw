@@ -1,22 +1,24 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-actions";
 import { createTopLevelChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageToolDiscovery,
+} from "openclaw/plugin-sdk/channel-contract";
+import {
+  createPairingPrefixStripper,
+  createTextPairingAdapter,
+} from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
   projectWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
   createChannelDirectoryAdapter,
-  createMessageToolCardSchema,
-  createPairingPrefixStripper,
   createRuntimeDirectoryLiveAdapter,
-  createRuntimeOutboundDelegates,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-runtime";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageToolDiscovery,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { listDirectoryEntriesFromSources } from "openclaw/plugin-sdk/directory-runtime";
+  listDirectoryEntriesFromSources,
+} from "openclaw/plugin-sdk/directory-runtime";
+import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/infra-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
 import {

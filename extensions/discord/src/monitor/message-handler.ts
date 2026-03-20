@@ -2,7 +2,7 @@ import type { Client } from "@buape/carbon";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-inbound";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { buildDiscordInboundJob } from "./inbound-job.js";

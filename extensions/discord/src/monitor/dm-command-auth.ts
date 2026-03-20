@@ -1,4 +1,4 @@
-import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,

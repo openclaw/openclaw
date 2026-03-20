@@ -1,3 +1,4 @@
+import { createAllowFromSection, createTopLevelChannelDmPolicy } from "openclaw/plugin-sdk/setup";
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
@@ -6,8 +7,7 @@ import {
   splitSetupEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-} from "openclaw/plugin-sdk/line-core";
-import { createAllowFromSection, createTopLevelChannelDmPolicy } from "openclaw/plugin-sdk/setup";
+} from "../../../src/plugin-sdk/line-core.js";
 import {
   isLineConfigured,
   listLineAccountIds,

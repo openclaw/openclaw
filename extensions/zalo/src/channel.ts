@@ -9,11 +9,11 @@ import {
   createOpenProviderGroupPolicyWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
-  createChannelDirectoryAdapter,
   createEmptyChannelResult,
   createRawChannelSendResultAdapter,
-  createStaticReplyToModeResolver,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-send-result";
+import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
+import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
