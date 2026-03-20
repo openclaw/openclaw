@@ -64,6 +64,7 @@ import {
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { isLikelyMutatingToolName } from "../tool-mutation.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
@@ -1630,10 +1631,32 @@ export async function runEmbeddedPiAgent(
                 `incomplete turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                   `stopReason=${incompleteStopReason} payloads=0 — surfacing error to user`,
               );
+
+              // Mark the failing profile for cooldown so multi-profile setups
+              // rotate away from the exhausted credential on the next turn.
+              if (lastProfileId) {
+                const failoverReason = classifyFailoverReason(
+                  lastAssistant?.errorMessage ?? "",
+                );
+                await maybeMarkAuthProfileFailure({
+                  profileId: lastProfileId,
+                  reason: resolveAuthProfileFailureReason(failoverReason),
+                });
+              }
+
+              // Warn about potential side-effects when mutating tools executed
+              // before the turn was interrupted, so users don't blindly retry.
+              const hadMutatingTools = attempt.toolMetas.some((t) =>
+                isLikelyMutatingToolName(t.toolName),
+              );
+              const errorText = hadMutatingTools
+                ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
+                : "⚠️ Agent couldn't generate a response. Please try again.";
+
               return {
                 payloads: [
                   {
-                    text: "⚠️ Agent couldn't generate a response. Please try again.",
+                    text: errorText,
                     isError: true,
                   },
                 ],
