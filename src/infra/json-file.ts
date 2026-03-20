@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 
 const JSON_FILE_MODE = 0o600;
 const JSON_DIR_MODE = 0o700;
