@@ -1979,6 +1979,8 @@ export type PluginHookBeforeToolCallResult = {
     timeoutBehavior?: "allow" | "deny";
     /** Set automatically by the hook runner — plugins should not set this. */
     pluginId?: string;
+    /** Callback invoked after the user resolves the approval dialog. */
+    onResolution?: (decision: string) => Promise<void> | void;
   };
 };
 

@@ -228,6 +228,13 @@ export async function runBeforeToolCallHook(args: {
           { id },
         );
         const decision = waitResult?.decision;
+        if (typeof approval.onResolution === "function") {
+          try {
+            await approval.onResolution(decision ?? "timeout");
+          } catch (err) {
+            log.warn(`plugin onResolution callback failed: ${String(err)}`);
+          }
+        }
         if (decision === "allow-once" || decision === "allow-always") {
           return {
             blocked: false,
