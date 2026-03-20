@@ -66,7 +66,8 @@ interface OllamaTool {
 interface OllamaToolCall {
   function: {
     name: string;
-    arguments: Record<string, unknown>;
+    /** Wire format may be a JSON string; normalize before re-sending to Ollama. */
+    arguments: Record<string, unknown> | string;
   };
 }
 
@@ -221,8 +222,39 @@ interface OllamaChatResponse {
 type InputContentPart =
   | { type: "text"; text: string }
   | { type: "image"; data: string }
-  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> };
+  | {
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown> | string;
+    }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> | string };
+
+/**
+ * Normalize tool `arguments` / `input` for Ollama: OpenAI-style messages use a JSON string;
+ * Ollama expects an object. Uses the same unsafe-integer quoting as NDJSON parsing.
+ */
+function normalizeOllamaToolArguments(raw: unknown): Record<string, unknown> {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return {};
+    }
+    try {
+      const parsed = parseJsonPreservingUnsafeIntegers(trimmed);
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  }
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  return {};
+}
 
 function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
@@ -254,9 +286,13 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
-      result.push({ function: { name: part.name, arguments: part.arguments } });
+      result.push({
+        function: { name: part.name, arguments: normalizeOllamaToolArguments(part.arguments) },
+      });
     } else if (part.type === "tool_use") {
-      result.push({ function: { name: part.name, arguments: part.input } });
+      result.push({
+        function: { name: part.name, arguments: normalizeOllamaToolArguments(part.input) },
+      });
     }
   }
   return result;
@@ -355,7 +391,7 @@ export function buildAssistantMessage(
         type: "toolCall",
         id: `ollama_call_${randomUUID()}`,
         name: tc.function.name,
-        arguments: tc.function.arguments,
+        arguments: normalizeOllamaToolArguments(tc.function.arguments),
       });
     }
   }

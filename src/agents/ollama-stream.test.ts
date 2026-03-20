@@ -54,6 +54,77 @@ describe("convertToOllamaMessages", () => {
     ]);
   });
 
+  it("parses OpenAI-style toolCall arguments JSON strings for Ollama", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "get_weather",
+            arguments: '{"location": "Beijing"}',
+          },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "get_weather", arguments: { location: "Beijing" } } },
+    ]);
+  });
+
+  it("preserves unsafe integer literals in OpenAI-style toolCall argument JSON strings", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "send",
+            arguments: '{"target":12345678901234567890}',
+          },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls?.[0].function.arguments).toEqual({
+      target: "12345678901234567890",
+    });
+  });
+
+  it("parses tool_use input JSON strings for Ollama", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call_1",
+            name: "get_weather",
+            input: '{"location":"Paris"}',
+          },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "get_weather", arguments: { location: "Paris" } } },
+    ]);
+  });
+
+  it("treats invalid toolCall arguments JSON as empty object", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "broken", arguments: "{not json" }],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([{ function: { name: "broken", arguments: {} } }]);
+  });
+
   it("converts tool result messages with 'tool' role", () => {
     const messages = [{ role: "tool", content: "file1.txt\nfile2.txt" }];
     const result = convertToOllamaMessages(messages);
@@ -166,6 +237,29 @@ describe("buildAssistantMessage", () => {
     expect(toolCall.id).toMatch(/^ollama_call_[0-9a-f-]{36}$/);
   });
 
+  it("normalizes string tool call arguments from Ollama wire format", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        tool_calls: [{ function: { name: "get_weather", arguments: '{"location": "Beijing"}' } }],
+      },
+      done: true,
+      prompt_eval_count: 20,
+      eval_count: 10,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    const toolCall = result.content[0] as {
+      type: "toolCall";
+      name: string;
+      arguments: Record<string, unknown>;
+    };
+    expect(toolCall.name).toBe("get_weather");
+    expect(toolCall.arguments).toEqual({ location: "Beijing" });
+  });
+
   it("sets all costs to zero for local models", () => {
     const response = {
       model: "qwen3:32b",
@@ -261,7 +355,7 @@ describe("parseNdjsonStream", () => {
 
     // Simulate the accumulation logic from createOllamaStreamFn
     const accumulatedToolCalls: Array<{
-      function: { name: string; arguments: Record<string, unknown> };
+      function: { name: string; arguments: Record<string, unknown> | string };
     }> = [];
     const chunks = [];
     for await (const chunk of parseNdjsonStream(reader)) {
