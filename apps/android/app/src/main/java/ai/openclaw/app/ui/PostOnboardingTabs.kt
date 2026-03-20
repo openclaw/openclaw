@@ -159,7 +159,7 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
         HomeTab.Connect -> ConnectTabScreen(viewModel = viewModel)
         HomeTab.Chat -> if (!chatTabStarted) ChatSheet(viewModel = viewModel)
         HomeTab.Voice -> VoiceTabScreen(viewModel = viewModel)
-        HomeTab.Screen -> Unit
+        HomeTab.Screen -> if (!screenTabStarted) ScreenTabScreen(viewModel = viewModel, visible = true)
         HomeTab.Settings -> SettingsSheet(viewModel = viewModel)
       }
     }

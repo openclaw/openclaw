@@ -63,6 +63,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
 
   LaunchedEffect(mainSessionKey) {
     viewModel.loadChat(mainSessionKey)
+    viewModel.refreshChatSessions(limit = 200)
   }
 
   val context = LocalContext.current
