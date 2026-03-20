@@ -144,7 +144,7 @@ export type PluginRuntimeChannel = {
     resolveUserAllowlist: typeof import("../../../extensions/slack/runtime-api.js").resolveSlackUserAllowlist;
     sendMessageSlack: typeof import("../../../extensions/slack/runtime-api.js").sendMessageSlack;
     monitorSlackProvider: typeof import("../../../extensions/slack/runtime-api.js").monitorSlackProvider;
-    handleSlackAction: typeof import("../../agents/tools/slack-actions.js").handleSlackAction;
+    handleSlackAction: typeof import("../../../extensions/slack/runtime-api.js").handleSlackAction;
   };
   telegram: {
     auditGroupMembership: typeof import("../../../extensions/telegram/runtime-api.js").auditTelegramGroupMembership;
@@ -193,11 +193,17 @@ export type PluginRuntimeChannel = {
       unpinMessage: typeof import("../../../extensions/telegram/runtime-api.js").unpinMessageTelegram;
     };
   };
+  matrix: {
+    threadBindings: {
+      setIdleTimeoutBySessionKey: typeof import("../../plugin-sdk/matrix.js").setMatrixThreadBindingIdleTimeoutBySessionKey;
+      setMaxAgeBySessionKey: typeof import("../../plugin-sdk/matrix.js").setMatrixThreadBindingMaxAgeBySessionKey;
+    };
+  };
   signal: {
     probeSignal: typeof import("../../../extensions/signal/runtime-api.js").probeSignal;
     sendMessageSignal: typeof import("../../../extensions/signal/runtime-api.js").sendMessageSignal;
     monitorSignalProvider: typeof import("../../../extensions/signal/runtime-api.js").monitorSignalProvider;
-    messageActions: typeof import("../../channels/plugins/actions/signal.js").signalMessageActions;
+    messageActions: typeof import("../../../extensions/signal/runtime-api.js").signalMessageActions;
   };
   imessage: {
     monitorIMessageProvider: typeof import("../../../extensions/imessage/runtime-api.js").monitorIMessageProvider;
@@ -205,19 +211,19 @@ export type PluginRuntimeChannel = {
     sendMessageIMessage: typeof import("../../../extensions/imessage/runtime-api.js").sendMessageIMessage;
   };
   whatsapp: {
-    getActiveWebListener: typeof import("../../../extensions/whatsapp/runtime-api.js").getActiveWebListener;
-    getWebAuthAgeMs: typeof import("../../../extensions/whatsapp/runtime-api.js").getWebAuthAgeMs;
-    logoutWeb: typeof import("../../../extensions/whatsapp/runtime-api.js").logoutWeb;
-    logWebSelfId: typeof import("../../../extensions/whatsapp/runtime-api.js").logWebSelfId;
-    readWebSelfId: typeof import("../../../extensions/whatsapp/runtime-api.js").readWebSelfId;
-    webAuthExists: typeof import("../../../extensions/whatsapp/runtime-api.js").webAuthExists;
-    sendMessageWhatsApp: typeof import("../../../extensions/whatsapp/runtime-api.js").sendMessageWhatsApp;
-    sendPollWhatsApp: typeof import("../../../extensions/whatsapp/runtime-api.js").sendPollWhatsApp;
-    loginWeb: typeof import("../../../extensions/whatsapp/runtime-api.js").loginWeb;
-    startWebLoginWithQr: typeof import("../../../extensions/whatsapp/login-qr-api.js").startWebLoginWithQr;
-    waitForWebLogin: typeof import("../../../extensions/whatsapp/login-qr-api.js").waitForWebLogin;
-    monitorWebChannel: typeof import("../../channels/web/index.js").monitorWebChannel;
-    handleWhatsAppAction: typeof import("../../agents/tools/whatsapp-actions.js").handleWhatsAppAction;
+    getActiveWebListener: typeof import("./runtime-whatsapp-boundary.js").getActiveWebListener;
+    getWebAuthAgeMs: typeof import("./runtime-whatsapp-boundary.js").getWebAuthAgeMs;
+    logoutWeb: typeof import("./runtime-whatsapp-boundary.js").logoutWeb;
+    logWebSelfId: typeof import("./runtime-whatsapp-boundary.js").logWebSelfId;
+    readWebSelfId: typeof import("./runtime-whatsapp-boundary.js").readWebSelfId;
+    webAuthExists: typeof import("./runtime-whatsapp-boundary.js").webAuthExists;
+    sendMessageWhatsApp: typeof import("./runtime-whatsapp-boundary.js").sendMessageWhatsApp;
+    sendPollWhatsApp: typeof import("./runtime-whatsapp-boundary.js").sendPollWhatsApp;
+    loginWeb: typeof import("./runtime-whatsapp-boundary.js").loginWeb;
+    startWebLoginWithQr: typeof import("./runtime-whatsapp-boundary.js").startWebLoginWithQr;
+    waitForWebLogin: typeof import("./runtime-whatsapp-boundary.js").waitForWebLogin;
+    monitorWebChannel: typeof import("./runtime-whatsapp-boundary.js").monitorWebChannel;
+    handleWhatsAppAction: typeof import("./runtime-whatsapp-boundary.js").handleWhatsAppAction;
     createLoginTool: typeof import("./runtime-whatsapp-login-tool.js").createRuntimeWhatsAppLoginTool;
   };
   line: {

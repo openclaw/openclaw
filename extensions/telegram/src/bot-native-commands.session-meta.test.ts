@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ResolvedAgentRoute } from "../../../src/routing/resolve-route.js";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createDeferred,
   createNativeCommandTestParams,
@@ -61,6 +62,10 @@ const sessionBindingMocks = vi.hoisted(() => ({
   >(() => null),
   touch: vi.fn(),
 }));
+const conversationStoreMocks = vi.hoisted(() => ({
+  readChannelAllowFromStore: vi.fn(async () => []),
+  upsertChannelPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
+}));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
@@ -68,6 +73,8 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
     ...actual,
     resolveConfiguredBindingRoute: persistentBindingMocks.resolveConfiguredBindingRoute,
     ensureConfiguredBindingRouteReady: persistentBindingMocks.ensureConfiguredBindingRouteReady,
+    readChannelAllowFromStore: conversationStoreMocks.readChannelAllowFromStore,
+    upsertChannelPairingRequest: conversationStoreMocks.upsertChannelPairingRequest,
     getSessionBindingService: () => ({
       bind: vi.fn(),
       getCapabilities: vi.fn(),
@@ -189,6 +196,22 @@ function registerAndResolveCommandHandlerBase(params: {
   } = params;
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
+  const telegramDeps: TelegramBotDeps = {
+    loadConfig: vi.fn(() => cfg),
+    resolveStorePath: sessionMocks.resolveStorePath as TelegramBotDeps["resolveStorePath"],
+    readChannelAllowFromStore: vi.fn(async () => []),
+    upsertChannelPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
+    enqueueSystemEvent: vi.fn(),
+    dispatchReplyWithBufferedBlockDispatcher:
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    buildModelsProviderData: vi.fn(async () => ({
+      byProvider: new Map<string, Set<string>>(),
+      providers: [],
+      resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+    })),
+    listSkillCommandsForAgents: vi.fn(() => []),
+    wasSentByBot: vi.fn(() => false),
+  };
   registerTelegramNativeCommands({
     ...createNativeCommandTestParams({
       bot: {
@@ -206,6 +229,7 @@ function registerAndResolveCommandHandlerBase(params: {
       useAccessGroups,
       telegramCfg,
       resolveTelegramGroupConfig,
+      telegramDeps,
     }),
   });
 
@@ -500,7 +524,13 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
 
     const { handler } = registerAndResolveStatusHandler({
-      cfg: {},
+      cfg: {
+        channels: {
+          telegram: {
+            silentErrorReplies: true,
+          },
+        },
+      },
       telegramCfg: { silentErrorReplies: true },
     });
     await handler(createTelegramPrivateCommandContext());

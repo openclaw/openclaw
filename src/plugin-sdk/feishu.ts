@@ -38,7 +38,7 @@ export type {
 } from "../channels/plugins/types.adapters.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixContext } from "../channels/reply-prefix.js";
-export { createTypingCallbacks } from "../channels/typing.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig as ClawdbotConfig, OpenClawConfig } from "../config/config.js";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -47,13 +47,13 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 export type { DmPolicy, GroupToolPolicyConfig } from "../config/types.js";
-export type { SecretInput } from "../config/types.secrets.js";
+export type { SecretInput } from "./secret-input.js";
 export {
+  buildSecretInputSchema,
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-} from "../config/types.secrets.js";
-export { buildSecretInputSchema } from "./secret-input-schema.js";
+} from "./secret-input.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export { installRequestBodyLimitGuard, readJsonBodyWithLimit } from "../infra/http-body.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -67,12 +67,10 @@ export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { evaluateSenderGroupAccessForPolicy } from "./group-access.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export { feishuSetupWizard } from "../../extensions/feishu/api.js";
-export { feishuSetupAdapter } from "../../extensions/feishu/api.js";
+export { feishuSetupWizard, feishuSetupAdapter } from "../../extensions/feishu/setup-api.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { readJsonFileWithFallback } from "./json-store.js";
-export { createScopedPairingAccess } from "./pairing-access.js";
-export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
+export { createChannelPairingController } from "./channel-pairing.js";
 export { createPersistentDedupe } from "./persistent-dedupe.js";
 export {
   buildBaseChannelStatusSummary,
@@ -86,9 +84,9 @@ export {
   parseFeishuConversationId,
 } from "../../extensions/feishu/api.js";
 export {
-  createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
+  createFixedWindowRateLimiter,
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
-} from "./webhook-memory-guards.js";
-export { applyBasicWebhookRequestGuards } from "./webhook-request-guards.js";
+} from "./webhook-ingress.js";
+export { applyBasicWebhookRequestGuards } from "./webhook-ingress.js";

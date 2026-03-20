@@ -131,6 +131,10 @@ export async function createBundleMcpToolRuntime(params: {
   for (const diagnostic of loaded.diagnostics) {
     logWarn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
+  // Skip spawning when no MCP servers are configured.
+  if (Object.keys(loaded.mcpServers).length === 0) {
+    return { tools: [], dispose: async () => {} };
+  }
 
   const reservedNames = new Set(
     Array.from(params.reservedToolNames ?? [], (name) => name.trim().toLowerCase()).filter(Boolean),

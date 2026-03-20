@@ -1,10 +1,15 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/core";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
+import { applyXaiModelCompat } from "openclaw/plugin-sdk/provider-models";
 import { applyVeniceConfig, VENICE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildVeniceProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "venice";
+
+function isXaiBackedVeniceModel(modelId: string): boolean {
+  return modelId.trim().toLowerCase().includes("grok");
+}
 
 export default definePluginEntry({
   id: PROVIDER_ID,
@@ -53,6 +58,8 @@ export default definePluginEntry({
             buildProvider: buildVeniceProvider,
           }),
       },
+      normalizeResolvedModel: ({ modelId, model }) =>
+        isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
     });
   },
 });

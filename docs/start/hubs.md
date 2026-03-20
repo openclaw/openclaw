@@ -17,7 +17,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 
 - [Index](/)
 - [Getting Started](/start/getting-started)
-- [Quick start](/start/quickstart)
 - [Onboarding](/start/onboarding)
 - [Onboarding (CLI)](/start/wizard)
 - [Setup](/start/setup)
@@ -162,6 +161,18 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS skills](/platforms/mac/skills)
 - [macOS Peekaboo](/platforms/mac/peekaboo)
 
+## Extensions + plugins
+
+- [Plugins overview](/tools/plugin)
+- [Building extensions](/plugins/building-extensions)
+- [Plugin manifest](/plugins/manifest)
+- [Agent tools](/plugins/agent-tools)
+- [Plugin bundles](/plugins/bundles)
+- [Community plugins](/plugins/community)
+- [Capability cookbook](/tools/capability-cookbook)
+- [Voice call plugin](/plugins/voice-call)
+- [Zalo user plugin](/plugins/zalouser)
+
 ## Workspace + templates
 
 - [Skills](/tools/skills)
@@ -175,12 +186,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Templates: SOUL](/reference/templates/SOUL)
 - [Templates: TOOLS](/reference/templates/TOOLS)
 - [Templates: USER](/reference/templates/USER)
-
-## Experiments (exploratory)
-
-- [Onboarding config protocol](/experiments/onboarding-config-protocol)
-- [Research: memory](/experiments/research/memory)
-- [Model config exploration](/experiments/proposals/model-config)
 
 ## Project
 

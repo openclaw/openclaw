@@ -1,20 +1,11 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import {
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
-} from "openclaw/plugin-sdk/channel-config-helpers";
+import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   formatDocsLink,
   hasConfiguredSecretInput,
   patchChannelConfigForAccount,
 } from "openclaw/plugin-sdk/setup";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  SlackConfigSchema,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/slack-core";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
@@ -23,6 +14,13 @@ import {
   type ResolvedSlackAccount,
 } from "./accounts.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
+import {
+  buildChannelConfigSchema,
+  getChatChannelMeta,
+  SlackConfigSchema,
+  type ChannelPlugin,
+  type OpenClawConfig,
+} from "./runtime-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
@@ -144,20 +142,16 @@ export function isSlackSetupAccountConfigured(account: ResolvedSlackAccount): bo
   return hasConfiguredBotToken && hasConfiguredAppToken;
 }
 
-export const slackConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveSlackAccount({ cfg, accountId }),
-  resolveAllowFrom: (account: ResolvedSlackAccount) => account.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account: ResolvedSlackAccount) => account.config.defaultTo,
-});
-
-export const slackConfigBase = createScopedChannelConfigBase({
+export const slackConfigAdapter = createScopedChannelConfigAdapter<ResolvedSlackAccount>({
   sectionKey: SLACK_CHANNEL,
   listAccountIds: listSlackAccountIds,
   resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
   inspectAccount: (cfg, accountId) => inspectSlackAccount({ cfg, accountId }),
   defaultAccountId: resolveDefaultSlackAccountId,
   clearBaseFields: ["botToken", "appToken", "name"],
+  resolveAllowFrom: (account: ResolvedSlackAccount) => account.dm?.allowFrom,
+  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  resolveDefaultTo: (account: ResolvedSlackAccount) => account.config.defaultTo,
 });
 
 export function createSlackPluginBase(params: {
@@ -176,7 +170,7 @@ export function createSlackPluginBase(params: {
   | "config"
   | "setup"
 > {
-  return {
+  return createChannelPluginBase({
     id: SLACK_CHANNEL,
     meta: {
       ...getChatChannelMeta(SLACK_CHANNEL),
@@ -207,7 +201,7 @@ export function createSlackPluginBase(params: {
     reload: { configPrefixes: ["channels.slack"] },
     configSchema: buildChannelConfigSchema(SlackConfigSchema),
     config: {
-      ...slackConfigBase,
+      ...slackConfigAdapter,
       isConfigured: (account) => isSlackPluginAccountConfigured(account),
       describeAccount: (account) => ({
         accountId: account.accountId,
@@ -217,8 +211,19 @@ export function createSlackPluginBase(params: {
         botTokenSource: account.botTokenSource,
         appTokenSource: account.appTokenSource,
       }),
-      ...slackConfigAccessors,
     },
     setup: params.setup,
-  };
+  }) as Pick<
+    ChannelPlugin<ResolvedSlackAccount>,
+    | "id"
+    | "meta"
+    | "setupWizard"
+    | "capabilities"
+    | "agentPrompt"
+    | "streaming"
+    | "reload"
+    | "configSchema"
+    | "config"
+    | "setup"
+  >;
 }

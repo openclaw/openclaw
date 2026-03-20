@@ -1,7 +1,7 @@
 import {
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import {
   applyOpenAIConfig,
@@ -11,6 +11,10 @@ import {
   OPENAI_DEFAULT_MODEL,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-models";
+import {
+  createOpenAIAttributionHeadersWrapper,
+  createOpenAIDefaultTransportWrapper,
+} from "openclaw/plugin-sdk/provider-stream";
 import {
   cloneFirstTemplateModel,
   findCatalogTemplate,
@@ -169,6 +173,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
     capabilities: {
       providerFamily: "openai",
     },
+    wrapStreamFn: (ctx) =>
+      createOpenAIAttributionHeadersWrapper(createOpenAIDefaultTransportWrapper(ctx.streamFn)),
     supportsXHighThinking: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
     buildMissingAuthMessage: (ctx) => {

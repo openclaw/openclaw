@@ -1,3 +1,11 @@
+---
+title: "Auth Credential Semantics"
+summary: "Canonical credential eligibility and resolution semantics for auth profiles"
+read_when:
+  - Working on auth profile resolution or credential routing
+  - Debugging model auth failures or profile order
+---
+
 # Auth Credential Semantics
 
 This document defines the canonical credential eligibility and resolution semantics used across:

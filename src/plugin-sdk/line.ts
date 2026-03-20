@@ -32,8 +32,7 @@ export {
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../line/accounts.js";
-export { lineSetupAdapter } from "../../extensions/line/src/setup-core.js";
-export { lineSetupWizard } from "../../extensions/line/src/setup-surface.js";
+export { lineSetupAdapter, lineSetupWizard } from "../../extensions/line/setup-api.js";
 export { LineConfigSchema } from "../line/config-schema.js";
 export type { LineChannelData, LineConfig, ResolvedLineAccount } from "../line/types.js";
 export {

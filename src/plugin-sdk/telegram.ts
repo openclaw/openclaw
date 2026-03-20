@@ -26,6 +26,8 @@ export type { StickerMetadata } from "../../extensions/telegram/api.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { parseTelegramTopicConversation } from "../acp/conversation-id.js";
+export { clearAccountEntryFields } from "../channels/plugins/config-helpers.js";
+export { resolveTelegramPollVisibility } from "../poll-params.js";
 
 export {
   PAIRING_APPROVED_MESSAGE,
@@ -38,26 +40,22 @@ export {
   setAccountEnabledInConfigSection,
 } from "./channel-plugin-common.js";
 
-export { clearAccountEntryFields } from "../channels/plugins/config-helpers.js";
-export { resolveTelegramPollVisibility } from "../poll-params.js";
-
 export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
 } from "../channels/account-snapshot-fields.js";
 export {
-  listTelegramDirectoryGroupsFromConfig,
-  listTelegramDirectoryPeersFromConfig,
-} from "../channels/plugins/directory-config.js";
-
-export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
 export {
+  listTelegramDirectoryGroupsFromConfig,
+  listTelegramDirectoryPeersFromConfig,
+} from "../../extensions/telegram/api.js";
+export {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
-} from "../channels/plugins/group-mentions.js";
+} from "../../extensions/telegram/api.js";
 export { TelegramConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { buildTokenChannelStatusSummary } from "./status-helpers.js";
@@ -88,18 +86,31 @@ export {
 } from "../../extensions/telegram/api.js";
 export { resolveTelegramReactionLevel } from "../../extensions/telegram/api.js";
 export {
+  auditTelegramGroupMembership,
+  collectTelegramUnmentionedGroupIds,
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
+  monitorTelegramProvider,
+  pinMessageTelegram,
   reactMessageTelegram,
+  renameForumTopicTelegram,
+  probeTelegram,
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
+  sendTypingTelegram,
+  unpinMessageTelegram,
 } from "../../extensions/telegram/runtime-api.js";
 export { getCacheStats, searchStickers } from "../../extensions/telegram/api.js";
 export { resolveTelegramToken } from "../../extensions/telegram/runtime-api.js";
 export { telegramMessageActions } from "../../extensions/telegram/runtime-api.js";
+export {
+  setTelegramThreadBindingIdleTimeoutBySessionKey,
+  setTelegramThreadBindingMaxAgeBySessionKey,
+} from "../../extensions/telegram/runtime-api.js";
 export { collectTelegramStatusIssues } from "../../extensions/telegram/api.js";
 export { sendTelegramPayloadMessages } from "../../extensions/telegram/api.js";
 export {
