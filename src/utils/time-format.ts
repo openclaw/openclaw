@@ -10,7 +10,7 @@ export function getRelativeTimeDescription(date: Date): string {
 
   // Format the exact date suffix (e.g. "9 Feb" or "9 Feb 2023")
   const sameYear = date.getFullYear() === now.getFullYear();
-  const dateSuffix = date.toLocaleDateString("es-ES", {
+  const dateSuffix = date.toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
     year: sameYear ? undefined : "numeric",
@@ -19,49 +19,58 @@ export function getRelativeTimeDescription(date: Date): string {
   let sensation: string;
 
   if (seconds < 60) {
-    return "justo ahora";
+    return "just now";
   } else if (minutes < 30) {
-    sensation = "hace un momento";
+    sensation = "a moment ago";
   } else if (hours < 2) {
-    sensation = "hace un rato";
+    sensation = "a while ago";
   } else if (hours < 6) {
-    sensation = "hace unas horas";
+    sensation = "a few hours ago";
   } else if (hours < 18) {
-    sensation = "hoy más temprano";
+    sensation = "earlier today";
   } else if (hours < 30) {
-    sensation = "ayer";
+    sensation = "yesterday";
   } else if (days < 4) {
-    sensation = "hace unos días";
+    sensation = "a few days ago";
   } else if (days < 10) {
-    sensation = "la semana pasada";
+    sensation = "last week";
   } else if (days < 20) {
-    sensation = "hace unas semanas";
+    sensation = "a couple of weeks ago";
   } else if (months < 2) {
-    sensation = "hace un mes";
-  } else if (months < 3) {
-    sensation = "hace un par de meses";
+    sensation = "last month";
+  } else if (days < 75) {
+    sensation = "a couple of months ago";
+  } else if (days < 100) {
+    sensation = "about three months ago";
+  } else if (days < 130) {
+    sensation = "a few months back";
+  } else if (days < 160) {
+    sensation = "about four months ago";
   } else if (months < 6) {
-    sensation = "hace varios meses";
-  } else if (months < 11) {
-    sensation = "hace casi 1 año";
+    sensation = "five months ago or so";
+  } else if (months < 10) {
+    sensation = "several months ago";
+  } else if (months < 14) {
+    sensation = "last year";
   } else {
-    // Year-level granularity: N años, N años y algo, casi N+1 años
+    // Year-level granularity
     const wholeYears = Math.floor(years);
     const remainingMonths = months - wholeYears * 12;
 
-    if (wholeYears === 1 && remainingMonths < 3) {
-      sensation = "hace 1 año";
-    } else if (wholeYears === 1 && remainingMonths < 9) {
-      sensation = "hace 1 año y algo";
+    if (wholeYears === 1 && remainingMonths < 2) {
+      sensation = "about a year ago";
+    } else if (wholeYears === 1 && remainingMonths < 8) {
+      sensation = "over a year ago";
+    } else if (wholeYears === 1) {
+      sensation = "almost two years ago";
     } else {
-      // For 2+ years
       const n = wholeYears;
       if (remainingMonths < 2) {
-        sensation = `hace ${n} años`;
-      } else if (remainingMonths < 7) {
-        sensation = `hace ${n} años y algo`;
+        sensation = `${n} years ago`;
+      } else if (remainingMonths < 5) {
+        sensation = `over ${n} years ago`;
       } else {
-        sensation = `hace casi ${n + 1} años`;
+        sensation = `almost ${n + 1} years ago`;
       }
     }
   }
