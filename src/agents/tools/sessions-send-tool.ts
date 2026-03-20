@@ -9,6 +9,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
+import { optionalStringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -24,12 +25,16 @@ import {
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
+const SESSIONS_SEND_DELIVERY_MODES = ["private", "announce"] as const;
+
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  announce: Type.Optional(Type.Boolean()),
+  deliveryMode: optionalStringEnum(SESSIONS_SEND_DELIVERY_MODES),
 });
 
 async function startAgentRun(params: {
@@ -218,6 +223,15 @@ export function createSessionsSendTool(opts?: {
         typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
           ? Math.max(0, Math.floor(params.timeoutSeconds))
           : 30;
+      const deliveryMode = readStringParam(params, "deliveryMode")?.toLowerCase();
+      const announceEnabled =
+        deliveryMode === "private"
+          ? false
+          : deliveryMode === "announce"
+            ? true
+            : typeof params.announce === "boolean"
+              ? params.announce
+              : true;
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
@@ -242,6 +256,7 @@ export function createSessionsSendTool(opts?: {
         requesterSessionKey: opts?.agentSessionKey,
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
+        includePrivateReplyGuidance: !announceEnabled,
       });
       const sendParams = {
         message,
@@ -261,13 +276,17 @@ export function createSessionsSendTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
-      const delivery = { status: "pending", mode: "announce" as const };
+      const delivery = announceEnabled
+        ? { status: "pending", mode: "announce" as const }
+        : { status: "disabled", mode: "none" as const };
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
         void runSessionsSendA2AFlow({
           targetSessionKey: resolvedKey,
           displayKey,
           message,
           announceTimeoutMs,
+          announceEnabled,
+          privateDelivery: !announceEnabled,
           maxPingPongTurns,
           requesterSessionKey,
           requesterChannel,

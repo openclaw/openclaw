@@ -84,14 +84,29 @@ function buildAgentSessionLines(params: {
   ].filter((line): line is string => Boolean(line));
 }
 
+function buildPrivateReplyHint(sessionKey: string, params?: { lowercaseLead?: boolean }) {
+  const lead = params?.lowercaseLead
+    ? "for a private reply back to the sender"
+    : "For a private reply back to the sender";
+  return `${lead}, use sessions_send targeting ${sessionKey} with deliveryMode: "private" (or announce: false for legacy clients), if your sessions visibility allows that target.`;
+}
+
 export function buildAgentToAgentMessageContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
+  includePrivateReplyGuidance?: boolean;
 }) {
   const lines = ["Agent-to-agent message context:", ...buildAgentSessionLines(params)].filter(
     Boolean,
   );
+  lines.push("This message was delivered via sessions_send.");
+  if (params.includePrivateReplyGuidance && params.requesterSessionKey) {
+    lines.push(buildPrivateReplyHint(params.requesterSessionKey));
+    lines.push(
+      "Do not use channel messaging tools for private agent-to-agent replies unless you intentionally want to post to an external chat/channel.",
+    );
+  }
   return lines.join("\n");
 }
 
@@ -103,6 +118,7 @@ export function buildAgentToAgentReplyContext(params: {
   currentRole: "requester" | "target";
   turn: number;
   maxTurns: number;
+  includePrivateReplyGuidance?: boolean;
 }) {
   const currentLabel =
     params.currentRole === "requester" ? "Agent 1 (requester)" : "Agent 2 (target)";
@@ -111,6 +127,15 @@ export function buildAgentToAgentReplyContext(params: {
     `Current agent: ${currentLabel}.`,
     `Turn ${params.turn} of ${params.maxTurns}.`,
     ...buildAgentSessionLines(params),
+    "This conversation is happening through sessions_send.",
+    params.includePrivateReplyGuidance &&
+    params.currentRole === "target" &&
+    params.requesterSessionKey
+      ? `If you need to continue privately with the sender outside this ping-pong step, ${buildPrivateReplyHint(params.requesterSessionKey, { lowercaseLead: true })}`
+      : undefined,
+    params.includePrivateReplyGuidance
+      ? "Avoid channel messaging tools for private replies unless you explicitly intend to post externally."
+      : undefined,
     `If you want to stop the ping-pong, reply exactly "${REPLY_SKIP_TOKEN}".`,
   ].filter(Boolean);
   return lines.join("\n");

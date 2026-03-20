@@ -401,6 +401,16 @@ describe("sessions_send gating", () => {
     callGatewayMock.mockClear();
   });
 
+  it("exposes announce as an optional boolean parameter", () => {
+    const tool = createMainSessionsSendTool();
+    const schema = tool.parameters as {
+      properties?: Record<string, { type?: unknown; enum?: unknown }>;
+    };
+    expect(schema.properties?.announce?.type).toBe("boolean");
+    expect(schema.properties?.deliveryMode?.type).toBe("string");
+    expect(schema.properties?.deliveryMode?.enum).toEqual(["private", "announce"]);
+  });
+
   it("returns an error when neither sessionKey nor label is provided", async () => {
     const tool = createMainSessionsSendTool();
 
@@ -448,5 +458,296 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
     expect(result.details).toMatchObject({ status: "forbidden" });
+  });
+
+  it("announces to the target chat by default", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "agent") {
+        const extraSystemPrompt =
+          typeof request.params?.extraSystemPrompt === "string"
+            ? request.params.extraSystemPrompt
+            : "";
+        if (extraSystemPrompt.includes("Agent-to-agent reply step")) {
+          return { runId: "run-reply" };
+        }
+        if (extraSystemPrompt.includes("Agent-to-agent announce step")) {
+          return { runId: "run-announce" };
+        }
+        return { runId: "run-initial" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "initial" }] }],
+        };
+      }
+      if (request.method === "send") {
+        return { messageId: "m-announce" };
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsSendTool();
+    const result = await tool.execute("call-announce-default", {
+      sessionKey: "agent:main:discord:group:target",
+      message: "hi",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      reply: "initial",
+      delivery: { status: "pending", mode: "announce" },
+    });
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "send")).toHaveLength(1);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+    const sendCall = calls.find((call) => call.method === "send");
+    expect(sendCall?.params).toMatchObject({
+      channel: "discord",
+      to: "group:target",
+      message: "initial",
+    });
+  });
+
+  it("skips external announce delivery when announce=false", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "agent") {
+        const extraSystemPrompt =
+          typeof request.params?.extraSystemPrompt === "string"
+            ? request.params.extraSystemPrompt
+            : "";
+        if (extraSystemPrompt.includes("Agent-to-agent reply step")) {
+          return { runId: "run-reply" };
+        }
+        if (extraSystemPrompt.includes("Agent-to-agent announce step")) {
+          throw new Error("announce step should not run when announce=false");
+        }
+        return { runId: "run-initial" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "initial" }] }],
+        };
+      }
+      if (request.method === "send") {
+        throw new Error("send should not be called when announce=false");
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsSendTool();
+    const result = await tool.execute("call-announce-suppressed", {
+      sessionKey: "agent:main:discord:group:target",
+      message: "hi",
+      timeoutSeconds: 1,
+      announce: false,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      reply: "initial",
+      delivery: { status: "disabled", mode: "none" },
+    });
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(2);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+    expect(
+      calls.some(
+        (call) =>
+          typeof call.params?.extraSystemPrompt === "string" &&
+          call.params.extraSystemPrompt.includes("Agent-to-agent announce step"),
+      ),
+    ).toBe(false);
+    expect(calls.some((call) => call.method === "send")).toBe(false);
+  });
+
+  it("prefers deliveryMode=private over announce=true", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "agent") {
+        const extraSystemPrompt =
+          typeof request.params?.extraSystemPrompt === "string"
+            ? request.params.extraSystemPrompt
+            : "";
+        if (extraSystemPrompt.includes("Agent-to-agent announce step")) {
+          throw new Error("announce step should not run when deliveryMode=private");
+        }
+        return { runId: "run-initial" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "initial" }] }],
+        };
+      }
+      if (request.method === "send") {
+        throw new Error("send should not be called when deliveryMode=private");
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsSendTool();
+    const result = await tool.execute("call-deliverymode-private", {
+      sessionKey: "agent:main:discord:group:target",
+      message: "hi",
+      timeoutSeconds: 1,
+      deliveryMode: "private",
+      announce: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      delivery: { status: "disabled", mode: "none" },
+    });
+    await vi.waitFor(
+      () => {
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(2);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+    expect(
+      calls.some(
+        (call) =>
+          typeof call.params?.extraSystemPrompt === "string" &&
+          call.params.extraSystemPrompt.includes("Agent-to-agent announce step"),
+      ),
+    ).toBe(false);
+    expect(calls.some((call) => call.method === "send")).toBe(false);
+  });
+
+  it("injects sender session key and sessions_send private-reply guidance", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-initial" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "initial" }] }],
+        };
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsSendTool();
+    await tool.execute("call-prompt-guidance", {
+      sessionKey: "agent:main:discord:group:target",
+      message: "hi",
+      timeoutSeconds: 1,
+      deliveryMode: "private",
+    });
+
+    const initialAgentCall = calls.find((call) => call.method === "agent");
+    const extraSystemPrompt =
+      typeof initialAgentCall?.params?.extraSystemPrompt === "string"
+        ? initialAgentCall.params.extraSystemPrompt
+        : "";
+    expect(extraSystemPrompt).toContain("This message was delivered via sessions_send.");
+    expect(extraSystemPrompt).toContain(
+      "For a private reply back to the sender, use sessions_send targeting agent:main:main",
+    );
+    expect(extraSystemPrompt).toContain('deliveryMode: "private"');
+    expect(extraSystemPrompt).toContain(
+      "Do not use channel messaging tools for private agent-to-agent replies",
+    );
+  });
+
+  it("does not inject private-reply guidance when announce delivery is used", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-initial" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "initial" }] }],
+        };
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsSendTool();
+    await tool.execute("call-prompt-guidance-announce", {
+      sessionKey: "agent:main:discord:group:target",
+      message: "hi",
+      timeoutSeconds: 1,
+      deliveryMode: "announce",
+    });
+
+    const initialAgentCall = calls.find((call) => call.method === "agent");
+    const extraSystemPrompt =
+      typeof initialAgentCall?.params?.extraSystemPrompt === "string"
+        ? initialAgentCall.params.extraSystemPrompt
+        : "";
+    expect(extraSystemPrompt).toContain("This message was delivered via sessions_send.");
+    expect(extraSystemPrompt).not.toContain('deliveryMode: "private"');
+    expect(extraSystemPrompt).not.toContain("announce: false for legacy clients");
   });
 });

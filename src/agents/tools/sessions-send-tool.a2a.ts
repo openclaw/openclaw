@@ -20,6 +20,8 @@ export async function runSessionsSendA2AFlow(params: {
   displayKey: string;
   message: string;
   announceTimeoutMs: number;
+  announceEnabled?: boolean;
+  privateDelivery?: boolean;
   maxPingPongTurns: number;
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
@@ -76,6 +78,7 @@ export async function runSessionsSendA2AFlow(params: {
           currentRole,
           turn,
           maxTurns: params.maxPingPongTurns,
+          includePrivateReplyGuidance: params.privateDelivery === true,
         });
         const replyText = await runAgentStep({
           sessionKey: currentSessionKey,
@@ -97,6 +100,10 @@ export async function runSessionsSendA2AFlow(params: {
         currentSessionKey = nextSessionKey;
         nextSessionKey = swap;
       }
+    }
+
+    if (params.announceEnabled === false) {
+      return;
     }
 
     const announcePrompt = buildAgentToAgentAnnounceContext({

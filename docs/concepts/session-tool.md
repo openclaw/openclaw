@@ -103,6 +103,8 @@ Parameters:
 - `sessionKey` (required; accepts session key or `sessionId` from `sessions_list`)
 - `message` (required)
 - `timeoutSeconds?: number` (default >0; 0 = fire-and-forget)
+- `deliveryMode?: "private" | "announce"` (optional; choose private session-only delivery or external announce delivery)
+- `announce?: boolean` (legacy compatibility; `false` suppresses the final external announce delivery)
 
 Behavior:
 
@@ -111,6 +113,9 @@ Behavior:
 - If wait times out: `{ runId, status: "timeout", error }`. Run continues; call `sessions_history` later.
 - If the run fails: `{ runId, status: "error", error }`.
 - Announce delivery runs after the primary run completes and is best-effort; `status: "ok"` does not guarantee the announce was delivered.
+- `deliveryMode: "private"` keeps the exchange private to the requester/target sessions by skipping the final send to the target chat/channel.
+- `deliveryMode: "announce"` enables the final send to the target chat/channel.
+- Legacy compatibility: `announce: false` behaves like `deliveryMode: "private"`. If both are passed, `deliveryMode` wins.
 - Waits via gateway `agent.wait` (server-side) so reconnects don't drop the wait.
 - Agent-to-agent message context is injected for the primary run.
 - Inter-session messages are persisted with `message.provenance.kind = "inter_session"` so transcript readers can distinguish routed agent instructions from external user input.
