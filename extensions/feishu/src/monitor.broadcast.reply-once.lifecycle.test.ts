@@ -184,13 +184,6 @@ function createBroadcastEvent(messageId: string) {
   };
 }
 
-async function settleAsyncWork(): Promise<void> {
-  for (let i = 0; i < 6; i += 1) {
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-}
-
 async function setupLifecycleMonitor(accountId: "account-A" | "account-B") {
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlersByAccount.set(accountId, registered);
@@ -220,6 +213,7 @@ async function setupLifecycleMonitor(accountId: "account-A" | "account-B") {
 
 describe("Feishu broadcast reply-once lifecycle", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     handlersByAccount = new Map();
     runtimesByAccount = new Map();
@@ -327,6 +321,7 @@ describe("Feishu broadcast reply-once lifecycle", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
       return;
@@ -340,9 +335,14 @@ describe("Feishu broadcast reply-once lifecycle", () => {
     const event = createBroadcastEvent("om_broadcast_once");
 
     await onMessageA(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock.mock.calls.length).toBeGreaterThan(0);
+    });
     await onMessageB(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(2);
+      expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
+    });
 
     expect(runtimesByAccount.get("account-A")?.error).not.toHaveBeenCalled();
     expect(runtimesByAccount.get("account-B")?.error).not.toHaveBeenCalled();
@@ -383,9 +383,13 @@ describe("Feishu broadcast reply-once lifecycle", () => {
     });
 
     await onMessageA(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock.mock.calls.length).toBeGreaterThan(0);
+    });
     await onMessageB(event);
-    await settleAsyncWork();
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(2);
+    });
 
     expect(runtimesByAccount.get("account-A")?.error).not.toHaveBeenCalled();
     expect(runtimesByAccount.get("account-B")?.error).not.toHaveBeenCalled();
