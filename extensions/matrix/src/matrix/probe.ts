@@ -1,3 +1,4 @@
+import type { SsrFPolicy } from "../runtime-api.js";
 import type { BaseProbeResult } from "../runtime-api.js";
 import { createMatrixClient, isBunRuntime } from "./client.js";
 
@@ -13,6 +14,8 @@ export async function probeMatrix(params: {
   userId?: string;
   timeoutMs: number;
   accountId?: string | null;
+  allowPrivateNetwork?: boolean;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<MatrixProbe> {
   const started = Date.now();
   const result: MatrixProbe = {
@@ -50,6 +53,8 @@ export async function probeMatrix(params: {
       accessToken: params.accessToken,
       localTimeoutMs: params.timeoutMs,
       accountId: params.accountId,
+      allowPrivateNetwork: params.allowPrivateNetwork,
+      ssrfPolicy: params.ssrfPolicy,
     });
     // The client wrapper resolves user ID via whoami when needed.
     const userId = await client.getUserId();

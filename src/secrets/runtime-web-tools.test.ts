@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
-import * as webSearchProviders from "../plugins/web-search-providers.js";
+import * as bundledWebSearchProviders from "../plugins/web-search-providers.js";
+import * as runtimeWebSearchProviders from "../plugins/web-search-providers.runtime.js";
 import * as secretResolve from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
@@ -12,7 +13,15 @@ const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
 }));
 
+const { resolveBundledPluginWebSearchProvidersMock } = vi.hoisted(() => ({
+  resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+}));
+
 vi.mock("../plugins/web-search-providers.js", () => ({
+  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
+}));
+
+vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
@@ -176,7 +185,8 @@ function expectInactiveFirecrawlSecretRef(params: {
 
 describe("runtime web tools resolution", () => {
   beforeEach(() => {
-    vi.mocked(webSearchProviders.resolvePluginWebSearchProviders).mockClear();
+    vi.mocked(bundledWebSearchProviders.resolveBundledPluginWebSearchProviders).mockClear();
+    vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders).mockClear();
   });
 
   afterEach(() => {
@@ -184,7 +194,7 @@ describe("runtime web tools resolution", () => {
   });
 
   it("skips loading web search providers when search config is absent", async () => {
-    const providerSpy = vi.mocked(webSearchProviders.resolvePluginWebSearchProviders);
+    const providerSpy = vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders);
 
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
@@ -529,6 +539,48 @@ describe("runtime web tools resolution", () => {
         }),
       ]),
     );
+  });
+
+  it("uses bundled provider resolution for configured bundled providers", async () => {
+    const bundledSpy = vi.mocked(bundledWebSearchProviders.resolveBundledPluginWebSearchProviders);
+    const genericSpy = vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders);
+
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "gemini",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GEMINI_PROVIDER_REF" },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        GEMINI_PROVIDER_REF: "gemini-provider-key",
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("gemini");
+    expect(bundledSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundledAllowlistCompat: true,
+        onlyPluginIds: ["google"],
+      }),
+    );
+    expect(genericSpy).not.toHaveBeenCalled();
   });
 
   it("does not resolve Firecrawl SecretRef when Firecrawl is inactive", async () => {

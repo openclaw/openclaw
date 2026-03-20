@@ -309,8 +309,8 @@ importers:
   extensions/discord:
     dependencies:
       '@buape/carbon':
-        specifier: 0.0.0-beta-20260216184201
-        version: 0.0.0-beta-20260216184201(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)
+        specifier: 0.0.0-beta-20260317045421
+        version: 0.0.0-beta-20260317045421(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)
       '@discordjs/voice':
         specifier: ^0.19.2
         version: 0.19.2(@discordjs/opus@0.10.0)(opusscript@0.1.1)
@@ -518,6 +518,8 @@ importers:
         version: 4.3.6
 
   extensions/synthetic: {}
+
+  extensions/tavily: {}
 
   extensions/telegram:
     dependencies:
@@ -990,6 +992,9 @@ packages:
 
   '@buape/carbon@0.0.0-beta-20260216184201':
     resolution: {integrity: sha512-u5mgYcigfPVqT7D9gVTGd+3YSflTreQmrWog7ORbb0z5w9eT8ft4rJOdw9fGwr75zMu9kXpSBaAcY2eZoJFSdA==}
+
+  '@buape/carbon@0.0.0-beta-20260317045421':
+    resolution: {integrity: sha512-yM+r5iSxA/iG8CZ2VhK+EkcBQV+y45WLgF7kuczt2Ul1yixjXSCCcM80GppsklfUv7pqM4Dui+7w1WB3f5p7Kg==}
 
   '@cacheable/memory@2.0.7':
     resolution: {integrity: sha512-RbxnxAMf89Tp1dLhXMS7ceft/PGsDl1Ip7T20z5nZ+pwIAsQ1p2izPjVG69oCLv/jfQ7HDPHTWK0c9rcAWXN3A==}
@@ -7494,7 +7499,27 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@buape/carbon@0.0.0-beta-20260216184201(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)':
+  '@buape/carbon@0.0.0-beta-20260216184201(hono@4.12.8)(opusscript@0.1.1)':
+    dependencies:
+      '@types/node': 25.5.0
+      discord-api-types: 0.38.37
+    optionalDependencies:
+      '@cloudflare/workers-types': 4.20260120.0
+      '@discordjs/voice': 0.19.0(@discordjs/opus@0.10.0)(opusscript@0.1.1)
+      '@hono/node-server': 1.19.10(hono@4.12.8)
+      '@types/bun': 1.3.9
+      '@types/ws': 8.18.1
+      ws: 8.19.0
+    transitivePeerDependencies:
+      - '@discordjs/opus'
+      - bufferutil
+      - ffmpeg-static
+      - hono
+      - node-opus
+      - opusscript
+      - utf-8-validate
+
+  '@buape/carbon@0.0.0-beta-20260317045421(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)':
     dependencies:
       '@types/node': 25.5.0
       discord-api-types: 0.38.37
@@ -12415,7 +12440,7 @@ snapshots:
     dependencies:
       '@agentclientprotocol/sdk': 0.16.1(zod@4.3.6)
       '@aws-sdk/client-bedrock': 3.1009.0
-      '@buape/carbon': 0.0.0-beta-20260216184201(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)
+      '@buape/carbon': 0.0.0-beta-20260216184201(hono@4.12.8)(opusscript@0.1.1)
       '@clack/prompts': 1.1.0
       '@discordjs/voice': 0.19.2(@discordjs/opus@0.10.0)(opusscript@0.1.1)
       '@grammyjs/runner': 2.0.3(grammy@1.41.1)
