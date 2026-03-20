@@ -166,6 +166,11 @@ my-plugin/
     Always import from specific `openclaw/plugin-sdk/\<subpath\>` paths. The old
     monolithic import is deprecated (see [SDK Migration](/plugins/sdk-migration)).
 
+    If older plugin code still imports `openclaw/extension-api`, treat that as a
+    temporary compatibility bridge only. New code should use injected runtime
+    helpers such as `api.runtime.agent.*` instead of importing host-side agent
+    helpers directly.
+
     ```typescript
     // Correct: focused subpaths
     import { definePluginEntry } from "openclaw/plugin-sdk/core";
@@ -174,6 +179,9 @@ my-plugin/
 
     // Wrong: monolithic root (lint will reject this)
     import { ... } from "openclaw/plugin-sdk";
+
+    // Deprecated: legacy host bridge
+    import { runEmbeddedPiAgent } from "openclaw/extension-api";
     ```
 
     <Accordion title="Common subpaths reference">
@@ -302,7 +310,7 @@ patterns is strongly recommended.
 
 ## Related
 
-- [Plugin SDK Migration](/plugins/sdk-migration) — migrating from the deprecated compat import
+- [Plugin SDK Migration](/plugins/sdk-migration) — migrating from deprecated compat surfaces
 - [Plugin Architecture](/plugins/architecture) — internals and capability model
 - [Plugin Manifest](/plugins/manifest) — full manifest schema
 - [Plugin Agent Tools](/plugins/agent-tools) — adding agent tools in a plugin
