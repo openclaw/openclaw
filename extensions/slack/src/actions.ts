@@ -156,7 +156,7 @@ export async function removeOwnSlackReactions(
   }
   await Promise.all(
     Array.from(toRemove, (name) =>
-      removeSlackReaction(channelId, messageId, name, { client }),
+      removeSlackReaction(channelId, messageId, name, { ...opts, client }),
     ),
   );
   return Array.from(toRemove);
