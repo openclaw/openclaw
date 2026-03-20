@@ -1662,7 +1662,6 @@
   font-size: 15px;
   letter-spacing: -0.015em;
   overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
 .cron-job {
@@ -1715,7 +1714,6 @@
   font-size: 13px;
   line-height: 1.35;
   overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
 .cron-job-state {
@@ -1744,6 +1742,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .cron-job-status-pill {
