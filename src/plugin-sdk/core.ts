@@ -58,6 +58,8 @@ export type {
   PluginCommandContext,
   PluginLogger,
   PluginInteractiveTelegramHandlerContext,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
 } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isSecretRef } from "../config/types.secrets.js";
