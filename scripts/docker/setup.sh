@@ -12,6 +12,16 @@ SANDBOX_ENABLED=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
 
+# Temp file for the --no-deps + network_mode:bridge Compose override used by
+# config read/write calls that must not start (or join) the gateway service.
+BRIDGE_OVERRIDE_FILE="$(mktemp)"
+trap 'rm -f "$BRIDGE_OVERRIDE_FILE"' EXIT
+cat >"$BRIDGE_OVERRIDE_FILE" <<'YAML'
+services:
+  openclaw-cli:
+    network_mode: bridge
+YAML
+
 fail() {
   echo "ERROR: $*" >&2
   exit 1
@@ -108,7 +118,7 @@ ensure_control_ui_allowed_origins() {
   local current_allowed_origins
   allowed_origin_json="$(printf '["http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT")"
   current_allowed_origins="$(
-    docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    docker compose "${COMPOSE_ARGS[@]}" -f "$BRIDGE_OVERRIDE_FILE" run --rm --no-deps openclaw-cli \
       config get gateway.controlUi.allowedOrigins 2>/dev/null || true
   )"
   current_allowed_origins="${current_allowed_origins//$'\r'/}"
@@ -118,15 +128,16 @@ ensure_control_ui_allowed_origins() {
     return 0
   fi
 
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+  docker compose "${COMPOSE_ARGS[@]}" -f "$BRIDGE_OVERRIDE_FILE" run --rm --no-deps openclaw-cli \
     config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json >/dev/null
   echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
 }
 
 sync_gateway_mode_and_bind() {
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+  docker compose "${COMPOSE_ARGS[@]}" -f "$BRIDGE_OVERRIDE_FILE" run --rm --no-deps openclaw-cli \
     config set gateway.mode local >/dev/null
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+
+  docker compose "${COMPOSE_ARGS[@]}" -f "$BRIDGE_OVERRIDE_FILE" run --rm --no-deps openclaw-cli \
     config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
   echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
 }
