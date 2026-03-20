@@ -1136,6 +1136,7 @@
                   "providers/claude-max-api-proxy",
                   "providers/deepgram",
                   "providers/github-copilot",
+                  "providers/gigachat",
                   "providers/google",
                   "providers/groq",
                   "providers/huggingface",
