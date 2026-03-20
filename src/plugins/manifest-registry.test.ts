@@ -203,10 +203,19 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "openai",
+      enabledByDefault: true,
       providers: ["openai", "openai-codex"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
+      providerAuthChoices: [
+        {
+          provider: "openai",
+          method: "api-key",
+          choiceId: "openai-api-key",
+          choiceLabel: "OpenAI API key",
+        },
+      ],
       configSchema: { type: "object" },
     });
 
@@ -219,6 +228,15 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
       openai: ["OPENAI_API_KEY"],
     });
+    expect(registry.plugins[0]?.enabledByDefault).toBe(true);
+    expect(registry.plugins[0]?.providerAuthChoices).toEqual([
+      {
+        provider: "openai",
+        method: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
+      },
+    ]);
   });
 
   it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {
@@ -360,6 +378,23 @@ describe("loadPluginManifestRegistry", () => {
     const registry = loadRegistry([
       createPluginCandidate({
         idHint: "brave-plugin",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
+      false,
+    );
+  });
+
+  it("accepts sandbox-style id hints without warning", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "openshell", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "openshell-sandbox",
         rootDir: dir,
         origin: "bundled",
       }),

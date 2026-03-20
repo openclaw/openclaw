@@ -10,8 +10,9 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
 import {
-  CONFIG_PATH,
+  type ConfigFileSnapshot,
   type OpenClawConfig,
+  applyConfigOverrides,
   isNixMode,
   loadConfig,
   migrateLegacyConfig,
@@ -35,6 +36,10 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import {
+  detectPluginInstallPathIssue,
+  formatPluginInstallPathIssue,
+} from "../infra/plugin-install-path-warnings.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import {
   primeRemoteSkillsCache,
@@ -45,6 +50,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -63,7 +69,9 @@ import {
   prepareSecretsRuntimeSnapshot,
   resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import { runOnboardingWizard } from "../wizard/onboarding.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
@@ -73,10 +81,15 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
-import { createAgentEventHandler } from "./server-chat.js";
+import {
+  createAgentEventHandler,
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
+} from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
@@ -96,6 +109,7 @@ import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
+import { runStartupMatrixMigration } from "./server-startup-matrix-migration.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
@@ -110,6 +124,13 @@ import {
 import { resolveHookClientIpConfig } from "./server/hooks.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
+import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
+import {
+  attachOpenClawTranscriptMeta,
+  loadGatewaySessionRow,
+  loadSessionEntry,
+  readSessionMessages,
+} from "./session-utils.js";
 import {
   ensureGatewayStartupAuth,
   mergeGatewayAuthConfig,
@@ -138,6 +159,13 @@ const logDiscovery = log.child("discovery");
 const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
 const logBrowser = log.child("browser");
+
+let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | null = null;
+
+function getChannelRuntime() {
+  cachedChannelRuntime ??= createPluginRuntime().channel;
+  return cachedChannelRuntime;
+}
 const logHealth = log.child("health");
 const logCron = log.child("cron");
 const logReload = log.child("reload");
@@ -209,6 +237,73 @@ function applyGatewayAuthOverridesForStartupPreflight(
   };
 }
 
+function assertValidGatewayStartupConfigSnapshot(
+  snapshot: ConfigFileSnapshot,
+  options: { includeDoctorHint?: boolean } = {},
+): void {
+  if (snapshot.valid) {
+    return;
+  }
+  const issues =
+    snapshot.issues.length > 0
+      ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
+      : "Unknown validation issue.";
+  const doctorHint = options.includeDoctorHint
+    ? `\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`
+    : "";
+  throw new Error(`Invalid config at ${snapshot.path}.\n${issues}${doctorHint}`);
+}
+
+async function prepareGatewayStartupConfig(params: {
+  configSnapshot: ConfigFileSnapshot;
+  // Keep startup auth/runtime behavior aligned with loadConfig(), which applies
+  // runtime overrides beyond the raw on-disk snapshot.
+  runtimeConfig: OpenClawConfig;
+  authOverride?: GatewayServerOptions["auth"];
+  tailscaleOverride?: GatewayServerOptions["tailscale"];
+  activateRuntimeSecrets: (
+    config: OpenClawConfig,
+    options: { reason: "startup"; activate: boolean },
+  ) => Promise<{ config: OpenClawConfig }>;
+}): Promise<Awaited<ReturnType<typeof ensureGatewayStartupAuth>>> {
+  assertValidGatewayStartupConfigSnapshot(params.configSnapshot);
+
+  // Fail fast before startup auth persists anything if required refs are unresolved.
+  const startupPreflightConfig = applyGatewayAuthOverridesForStartupPreflight(
+    params.runtimeConfig,
+    {
+      auth: params.authOverride,
+      tailscale: params.tailscaleOverride,
+    },
+  );
+  await params.activateRuntimeSecrets(startupPreflightConfig, {
+    reason: "startup",
+    activate: false,
+  });
+
+  const authBootstrap = await ensureGatewayStartupAuth({
+    cfg: params.runtimeConfig,
+    env: process.env,
+    authOverride: params.authOverride,
+    tailscaleOverride: params.tailscaleOverride,
+    persist: true,
+  });
+  const runtimeStartupConfig = applyGatewayAuthOverridesForStartupPreflight(authBootstrap.cfg, {
+    auth: params.authOverride,
+    tailscale: params.tailscaleOverride,
+  });
+  const activatedConfig = (
+    await params.activateRuntimeSecrets(runtimeStartupConfig, {
+      reason: "startup",
+      activate: true,
+    })
+  ).config;
+  return {
+    ...authBootstrap,
+    cfg: activatedConfig,
+  };
+}
+
 export type GatewayServer = {
   close: (opts?: { reason?: string; restartExpectedMs?: number | null }) => Promise<void>;
 };
@@ -255,7 +350,7 @@ export type GatewayServerOptions = {
    */
   allowCanvasHostInTests?: boolean;
   /**
-   * Test-only: override the onboarding wizard runner.
+   * Test-only: override the setup wizard runner.
    */
   wizardRunner?: (
     opts: import("../commands/onboard-types.js").OnboardOptions,
@@ -307,20 +402,16 @@ export async function startGatewayServer(
   }
 
   configSnapshot = await readConfigFileSnapshot();
-  if (configSnapshot.exists && !configSnapshot.valid) {
-    const issues =
-      configSnapshot.issues.length > 0
-        ? formatConfigIssueLines(configSnapshot.issues, "", { normalizeRoot: true }).join("\n")
-        : "Unknown validation issue.";
-    throw new Error(
-      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
-    );
+  if (configSnapshot.exists) {
+    assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
   }
 
   const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
   if (autoEnable.changes.length > 0) {
     try {
       await writeConfigFile(autoEnable.config);
+      configSnapshot = await readConfigFileSnapshot();
+      assertValidGatewayStartupConfigSnapshot(configSnapshot);
       log.info(
         `gateway: auto-enabled plugins:\n${autoEnable.changes
           .map((entry) => `- ${entry}`)
@@ -397,37 +488,14 @@ export async function startGatewayServer(
       }
     });
 
-  // Fail fast before startup if required refs are unresolved.
   let cfgAtStart: OpenClawConfig;
-  {
-    const freshSnapshot = await readConfigFileSnapshot();
-    if (!freshSnapshot.valid) {
-      const issues =
-        freshSnapshot.issues.length > 0
-          ? formatConfigIssueLines(freshSnapshot.issues, "", { normalizeRoot: true }).join("\n")
-          : "Unknown validation issue.";
-      throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
-    }
-    const startupPreflightConfig = applyGatewayAuthOverridesForStartupPreflight(
-      freshSnapshot.config,
-      {
-        auth: opts.auth,
-        tailscale: opts.tailscale,
-      },
-    );
-    await activateRuntimeSecrets(startupPreflightConfig, {
-      reason: "startup",
-      activate: false,
-    });
-  }
-
-  cfgAtStart = loadConfig();
-  const authBootstrap = await ensureGatewayStartupAuth({
-    cfg: cfgAtStart,
-    env: process.env,
+  const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
+  const authBootstrap = await prepareGatewayStartupConfig({
+    configSnapshot,
+    runtimeConfig: startupRuntimeConfig,
     authOverride: opts.auth,
     tailscaleOverride: opts.tailscale,
-    persist: true,
+    activateRuntimeSecrets,
   });
   cfgAtStart = authBootstrap.cfg;
   if (authBootstrap.generatedToken) {
@@ -441,12 +509,6 @@ export async function startGatewayServer(
       );
     }
   }
-  cfgAtStart = (
-    await activateRuntimeSecrets(cfgAtStart, {
-      reason: "startup",
-      activate: true,
-    })
-  ).config;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();
@@ -462,21 +524,52 @@ export async function startGatewayServer(
     writeConfig: writeConfigFile,
     log,
   });
+  await runStartupMatrixMigration({
+    cfg: cfgAtStart,
+    env: process.env,
+    log,
+  });
+  const matrixInstallPathIssue = await detectPluginInstallPathIssue({
+    pluginId: "matrix",
+    install: cfgAtStart.plugins?.installs?.matrix,
+  });
+  if (matrixInstallPathIssue) {
+    const lines = formatPluginInstallPathIssue({
+      issue: matrixInstallPathIssue,
+      pluginLabel: "Matrix",
+      defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
+      repoInstallCommand: "openclaw plugins install ./extensions/matrix",
+      formatCommand: formatCliCommand,
+    });
+    log.warn(
+      `gateway: matrix install path warning:\n${lines.map((entry) => `- ${entry}`).join("\n")}`,
+    );
+  }
 
   initSubagentRegistry();
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
+  const deferredConfiguredChannelPluginIds = minimalTestGateway
+    ? []
+    : resolveConfiguredDeferredChannelPluginIds({
+        config: cfgAtStart,
+        workspaceDir: defaultWorkspaceDir,
+        env: process.env,
+      });
   const baseMethods = listGatewayMethods();
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  const { pluginRegistry, gatewayMethods: baseGatewayMethods } = minimalTestGateway
-    ? { pluginRegistry: emptyPluginRegistry, gatewayMethods: baseMethods }
-    : loadGatewayPlugins({
-        cfg: cfgAtStart,
-        workspaceDir: defaultWorkspaceDir,
-        log,
-        coreGatewayHandlers,
-        baseMethods,
-      });
+  let pluginRegistry = emptyPluginRegistry;
+  let baseGatewayMethods = baseMethods;
+  if (!minimalTestGateway) {
+    ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayPlugins({
+      cfg: cfgAtStart,
+      workspaceDir: defaultWorkspaceDir,
+      log,
+      coreGatewayHandlers,
+      baseMethods,
+      preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
+    }));
+  }
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -561,7 +654,7 @@ export async function startGatewayServer(
       : { kind: "missing" };
   }
 
-  const wizardRunner = opts.wizardRunner ?? runOnboardingWizard;
+  const wizardRunner = opts.wizardRunner ?? runSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
@@ -575,7 +668,7 @@ export async function startGatewayServer(
     loadConfig,
     channelLogs,
     channelRuntimeEnvs,
-    channelRuntime: createPluginRuntime().channel,
+    resolveChannelRuntime: getChannelRuntime,
   });
   const getReadiness = createReadinessChecker({
     channelManager,
@@ -583,6 +676,7 @@ export async function startGatewayServer(
   });
   const {
     canvasHost,
+    releasePluginRouteRegistry,
     httpServer,
     httpServers,
     httpBindHosts,
@@ -631,6 +725,8 @@ export async function startGatewayServer(
   const nodeRegistry = new NodeRegistry();
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const nodeSubscriptions = createNodeSubscriptionManager();
+  const sessionEventSubscribers = createSessionEventSubscriberRegistry();
+  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
   const nodeSendEvent = (opts: { nodeId: string; event: string; payloadJSON?: string | null }) => {
     const payload = safeParseJson(opts.payloadJSON ?? null);
     nodeRegistry.sendEvent(opts.nodeId, opts.event, payload);
@@ -739,6 +835,7 @@ export async function startGatewayServer(
           resolveSessionKeyForRun,
           clearAgentRunContext,
           toolEventRecipients,
+          sessionEventSubscribers,
         }),
       );
 
@@ -746,6 +843,146 @@ export async function startGatewayServer(
     ? null
     : onHeartbeatEvent((evt) => {
         broadcast("heartbeat", evt, { dropIfSlow: true });
+      });
+
+  const transcriptUnsub = minimalTestGateway
+    ? null
+    : onSessionTranscriptUpdate((update) => {
+        const sessionKey =
+          update.sessionKey ?? resolveSessionKeyForTranscriptFile(update.sessionFile);
+        if (!sessionKey || update.message === undefined) {
+          return;
+        }
+        const connIds = new Set<string>();
+        for (const connId of sessionEventSubscribers.getAll()) {
+          connIds.add(connId);
+        }
+        for (const connId of sessionMessageSubscribers.get(sessionKey)) {
+          connIds.add(connId);
+        }
+        if (connIds.size === 0) {
+          return;
+        }
+        const { entry, storePath } = loadSessionEntry(sessionKey);
+        const messageSeq = entry?.sessionId
+          ? readSessionMessages(entry.sessionId, storePath, entry.sessionFile).length
+          : undefined;
+        const sessionRow = loadGatewaySessionRow(sessionKey);
+        const sessionSnapshot = sessionRow
+          ? {
+              session: sessionRow,
+              updatedAt: sessionRow.updatedAt ?? undefined,
+              sessionId: sessionRow.sessionId,
+              kind: sessionRow.kind,
+              channel: sessionRow.channel,
+              label: sessionRow.label,
+              displayName: sessionRow.displayName,
+              deliveryContext: sessionRow.deliveryContext,
+              parentSessionKey: sessionRow.parentSessionKey,
+              childSessions: sessionRow.childSessions,
+              thinkingLevel: sessionRow.thinkingLevel,
+              systemSent: sessionRow.systemSent,
+              abortedLastRun: sessionRow.abortedLastRun,
+              lastChannel: sessionRow.lastChannel,
+              lastTo: sessionRow.lastTo,
+              lastAccountId: sessionRow.lastAccountId,
+              totalTokens: sessionRow.totalTokens,
+              totalTokensFresh: sessionRow.totalTokensFresh,
+              contextTokens: sessionRow.contextTokens,
+              estimatedCostUsd: sessionRow.estimatedCostUsd,
+              modelProvider: sessionRow.modelProvider,
+              model: sessionRow.model,
+              status: sessionRow.status,
+              startedAt: sessionRow.startedAt,
+              endedAt: sessionRow.endedAt,
+              runtimeMs: sessionRow.runtimeMs,
+            }
+          : {};
+        const message = attachOpenClawTranscriptMeta(update.message, {
+          ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
+          ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
+        });
+        broadcastToConnIds(
+          "session.message",
+          {
+            sessionKey,
+            message,
+            ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+            ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+            ...sessionSnapshot,
+          },
+          connIds,
+          { dropIfSlow: true },
+        );
+
+        const sessionEventConnIds = sessionEventSubscribers.getAll();
+        if (sessionEventConnIds.size > 0) {
+          broadcastToConnIds(
+            "sessions.changed",
+            {
+              sessionKey,
+              phase: "message",
+              ts: Date.now(),
+              ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+              ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+              ...sessionSnapshot,
+            },
+            sessionEventConnIds,
+            { dropIfSlow: true },
+          );
+        }
+      });
+
+  const lifecycleUnsub = minimalTestGateway
+    ? null
+    : onSessionLifecycleEvent((event) => {
+        const connIds = sessionEventSubscribers.getAll();
+        if (connIds.size === 0) {
+          return;
+        }
+        const sessionRow = loadGatewaySessionRow(event.sessionKey);
+        broadcastToConnIds(
+          "sessions.changed",
+          {
+            sessionKey: event.sessionKey,
+            reason: event.reason,
+            parentSessionKey: event.parentSessionKey,
+            label: event.label,
+            displayName: event.displayName,
+            ts: Date.now(),
+            ...(sessionRow
+              ? {
+                  updatedAt: sessionRow.updatedAt ?? undefined,
+                  sessionId: sessionRow.sessionId,
+                  kind: sessionRow.kind,
+                  channel: sessionRow.channel,
+                  label: event.label ?? sessionRow.label,
+                  displayName: event.displayName ?? sessionRow.displayName,
+                  deliveryContext: sessionRow.deliveryContext,
+                  parentSessionKey: event.parentSessionKey ?? sessionRow.parentSessionKey,
+                  childSessions: sessionRow.childSessions,
+                  thinkingLevel: sessionRow.thinkingLevel,
+                  systemSent: sessionRow.systemSent,
+                  abortedLastRun: sessionRow.abortedLastRun,
+                  lastChannel: sessionRow.lastChannel,
+                  lastTo: sessionRow.lastTo,
+                  lastAccountId: sessionRow.lastAccountId,
+                  totalTokens: sessionRow.totalTokens,
+                  totalTokensFresh: sessionRow.totalTokensFresh,
+                  contextTokens: sessionRow.contextTokens,
+                  estimatedCostUsd: sessionRow.estimatedCostUsd,
+                  modelProvider: sessionRow.modelProvider,
+                  model: sessionRow.model,
+                  status: sessionRow.status,
+                  startedAt: sessionRow.startedAt,
+                  endedAt: sessionRow.endedAt,
+                  runtimeMs: sessionRow.runtimeMs,
+                }
+              : {}),
+          },
+          connIds,
+          { dropIfSlow: true },
+        );
       });
 
   let heartbeatRunner: HeartbeatRunner = minimalTestGateway
@@ -773,6 +1010,11 @@ export async function startGatewayServer(
   if (!minimalTestGateway) {
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
+
+  const stopModelPricingRefresh =
+    !minimalTestGateway && process.env.VITEST !== "1"
+      ? startGatewayModelPricingRefresh({ config: cfgAtStart })
+      : () => {};
 
   // Recover pending outbound deliveries from previous crash/restart.
   if (!minimalTestGateway) {
@@ -859,6 +1101,15 @@ export async function startGatewayServer(
     chatDeltaSentAt: chatRunState.deltaSentAt,
     addChatRun,
     removeChatRun,
+    subscribeSessionEvents: sessionEventSubscribers.subscribe,
+    unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
+    subscribeSessionMessageEvents: sessionMessageSubscribers.subscribe,
+    unsubscribeSessionMessageEvents: sessionMessageSubscribers.unsubscribe,
+    unsubscribeAllSessionEvents: (connId: string) => {
+      sessionEventSubscribers.unsubscribe(connId);
+      sessionMessageSubscribers.unsubscribeAll(connId);
+    },
+    getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
     registerToolEventRecipient: toolEventRecipients.add,
     dedupe,
     wizardSessions,
@@ -932,6 +1183,16 @@ export async function startGatewayServer(
 
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   if (!minimalTestGateway) {
+    if (deferredConfiguredChannelPluginIds.length > 0) {
+      ({ pluginRegistry } = loadGatewayPlugins({
+        cfg: cfgAtStart,
+        workspaceDir: defaultWorkspaceDir,
+        log,
+        coreGatewayHandlers,
+        baseMethods,
+        logDiagnostics: false,
+      }));
+    }
     ({ browserControl, pluginServices } = await startGatewaySidecars({
       cfg: cfgAtStart,
       pluginRegistry,
@@ -1032,7 +1293,7 @@ export async function startGatewayServer(
             warn: (msg) => logReload.warn(msg),
             error: (msg) => logReload.error(msg),
           },
-          watchPath: CONFIG_PATH,
+          watchPath: configSnapshot.path,
         });
       })();
 
@@ -1041,6 +1302,7 @@ export async function startGatewayServer(
     tailscaleCleanup,
     canvasHost,
     canvasHostServer,
+    releasePluginRouteRegistry,
     stopChannel,
     pluginServices,
     cron,
@@ -1054,6 +1316,8 @@ export async function startGatewayServer(
     mediaCleanup,
     agentUnsub,
     heartbeatUnsub,
+    transcriptUnsub,
+    lifecycleUnsub,
     chatRunState,
     clients,
     configReloader,
@@ -1081,6 +1345,7 @@ export async function startGatewayServer(
       skillsChangeUnsub();
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
+      stopModelPricingRefresh();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
       await close(opts);

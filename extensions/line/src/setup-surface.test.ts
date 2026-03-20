@@ -1,36 +1,19 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/line";
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import {
   listLineAccountIds,
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../../../src/line/accounts.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
-import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import {
+  createTestWizardPrompter,
+  type WizardPrompter,
+} from "../../../test/helpers/extensions/setup-wizard.js";
+import type { OpenClawConfig } from "../api.js";
 import { lineSetupAdapter, lineSetupWizard } from "./setup-surface.js";
 
-function createPrompter(overrides: Partial<WizardPrompter> = {}): WizardPrompter {
-  return {
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
-    note: vi.fn(async () => {}),
-    select: vi.fn(async ({ options }: { options: Array<{ value: string }> }) => {
-      const first = options[0];
-      if (!first) {
-        throw new Error("no options");
-      }
-      return first.value;
-    }) as WizardPrompter["select"],
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => "") as WizardPrompter["text"],
-    confirm: vi.fn(async () => false),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    ...overrides,
-  };
-}
-
-const lineConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+const lineConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
   plugin: {
     id: "line",
     meta: { label: "LINE" },
@@ -41,13 +24,13 @@ const lineConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
         resolveLineAccount({ cfg, accountId: accountId ?? undefined }).config.allowFrom,
     },
     setup: lineSetupAdapter,
-  } as Parameters<typeof buildChannelOnboardingAdapterFromSetupWizard>[0]["plugin"],
+  } as Parameters<typeof buildChannelSetupWizardAdapterFromSetupWizard>[0]["plugin"],
   wizard: lineSetupWizard,
 });
 
 describe("line setup wizard", () => {
   it("configures token and secret for the default account", async () => {
-    const prompter = createPrompter({
+    const prompter = createTestWizardPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "Enter LINE channel access token") {
           return "line-token";

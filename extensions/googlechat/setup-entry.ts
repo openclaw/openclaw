@@ -1,6 +1,4 @@
-import { googlechatDock, googlechatPlugin } from "./src/channel.js";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { googlechatPlugin } from "./src/channel.js";
 
-export default {
-  plugin: googlechatPlugin,
-  dock: googlechatDock,
-};
+export default defineSetupPluginEntry(googlechatPlugin);

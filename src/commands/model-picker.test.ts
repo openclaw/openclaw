@@ -6,7 +6,7 @@ import {
   promptDefaultModel,
   promptModelAllowlist,
 } from "./model-picker.js";
-import { makePrompter } from "./onboarding/__tests__/test-utils.js";
+import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn());
 vi.mock("../agents/model-catalog.js", () => ({
@@ -40,11 +40,13 @@ const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 const runProviderPluginAuthMethod = vi.hoisted(() => vi.fn());
 vi.mock("./model-picker.runtime.js", () => ({
-  resolveProviderModelPickerEntries,
-  resolveProviderPluginChoice,
-  runProviderModelSelectedHook,
-  resolvePluginProviders,
-  runProviderPluginAuthMethod,
+  modelPickerRuntime: {
+    resolveProviderModelPickerEntries,
+    resolveProviderPluginChoice,
+    runProviderModelSelectedHook,
+    resolvePluginProviders,
+    runProviderPluginAuthMethod,
+  },
 }));
 
 const OPENROUTER_CATALOG = [
@@ -76,7 +78,7 @@ beforeEach(() => {
 });
 
 describe("promptDefaultModel", () => {
-  it("supports configuring vLLM during onboarding", async () => {
+  it("supports configuring vLLM during setup", async () => {
     loadModelCatalog.mockResolvedValue([
       {
         provider: "anthropic",

@@ -1,16 +1,31 @@
 import type {
+  ProviderAuthContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
-import { listProfilesForProvider } from "../../src/agents/auth-profiles/profiles.js";
-import { ensureAuthProfileStore } from "../../src/agents/auth-profiles/store.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../src/agents/defaults.js";
-import { normalizeModelCompat } from "../../src/agents/model-compat.js";
-import { normalizeProviderId } from "../../src/agents/model-selection.js";
-import { buildOpenAICodexProvider } from "../../src/agents/models-config.providers.static.js";
-import { fetchCodexUsage } from "../../src/infra/provider-usage.fetch.js";
-import type { ProviderPlugin } from "../../src/plugins/types.js";
-import { cloneFirstTemplateModel, findCatalogTemplate, isOpenAIApiBaseUrl } from "./shared.js";
+} from "openclaw/plugin-sdk/plugin-entry";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
+import {
+  CODEX_CLI_PROFILE_ID,
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+  type OAuthCredential,
+} from "openclaw/plugin-sdk/provider-auth";
+import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  normalizeModelCompat,
+  normalizeProviderId,
+  type ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-models";
+import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
+import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
+import {
+  cloneFirstTemplateModel,
+  findCatalogTemplate,
+  isOpenAIApiBaseUrl,
+  matchesExactOrPrefix,
+} from "./shared.js";
 
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
@@ -23,6 +38,24 @@ const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_53_SPARK_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
+const OPENAI_CODEX_DEFAULT_MODEL = `${PROVIDER_ID}/${OPENAI_CODEX_GPT_54_MODEL_ID}`;
+const OPENAI_CODEX_XHIGH_MODEL_IDS = [
+  OPENAI_CODEX_GPT_54_MODEL_ID,
+  OPENAI_CODEX_GPT_53_MODEL_ID,
+  OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+  "gpt-5.2-codex",
+  "gpt-5.1-codex",
+] as const;
+const OPENAI_CODEX_MODERN_MODEL_IDS = [
+  OPENAI_CODEX_GPT_54_MODEL_ID,
+  "gpt-5.2",
+  "gpt-5.2-codex",
+  OPENAI_CODEX_GPT_53_MODEL_ID,
+  OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+  "gpt-5.1-codex",
+  "gpt-5.1-codex-mini",
+  "gpt-5.1-codex-max",
+] as const;
 
 function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
   const trimmed = baseUrl?.trim();
@@ -106,12 +139,85 @@ function resolveCodexForwardCompatModel(
   );
 }
 
+async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
+  try {
+    const { getOAuthApiKey } = await import("./openai-codex-provider.runtime.js");
+    const refreshed = await getOAuthApiKey("openai-codex", {
+      "openai-codex": cred,
+    });
+    if (!refreshed) {
+      throw new Error("OpenAI Codex OAuth refresh returned no credentials.");
+    }
+    return {
+      ...cred,
+      ...refreshed.newCredentials,
+      type: "oauth" as const,
+      provider: PROVIDER_ID,
+      email: cred.email,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      /extract\s+accountid\s+from\s+token/i.test(message) &&
+      typeof cred.access === "string" &&
+      cred.access.trim().length > 0
+    ) {
+      return cred;
+    }
+    throw error;
+  }
+}
+
+async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
+  let creds;
+  try {
+    creds = await loginOpenAICodexOAuth({
+      prompter: ctx.prompter,
+      runtime: ctx.runtime,
+      isRemote: ctx.isRemote,
+      openUrl: ctx.openUrl,
+      localBrowserMessage: "Complete sign-in in browser…",
+    });
+  } catch {
+    return { profiles: [] };
+  }
+  if (!creds) {
+    return { profiles: [] };
+  }
+
+  return buildOauthProviderAuthResult({
+    providerId: PROVIDER_ID,
+    defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+    access: creds.access,
+    refresh: creds.refresh,
+    expires: creds.expires,
+    email: typeof creds.email === "string" ? creds.email : undefined,
+  });
+}
+
 export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
   return {
     id: PROVIDER_ID,
     label: "OpenAI Codex",
     docsPath: "/providers/models",
-    auth: [],
+    deprecatedProfileIds: [CODEX_CLI_PROFILE_ID],
+    auth: [
+      {
+        id: "oauth",
+        label: "ChatGPT OAuth",
+        hint: "Browser sign-in",
+        kind: "oauth",
+        run: async (ctx) => await runOpenAICodexOAuth(ctx),
+      },
+    ],
+    wizard: {
+      setup: {
+        choiceId: "openai-codex",
+        choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
+        choiceHint: "Browser sign-in",
+        methodId: "oauth",
+      },
+    },
     catalog: {
       order: "profile",
       run: async (ctx) => {
@@ -130,6 +236,9 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     capabilities: {
       providerFamily: "openai",
     },
+    supportsXHighThinking: ({ modelId }) =>
+      matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS),
+    isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
     prepareExtraParams: (ctx) => {
       const transport = ctx.extraParams?.transport;
       if (transport === "auto" || transport === "sse" || transport === "websocket") {
@@ -140,6 +249,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         transport: "auto",
       };
     },
+    wrapStreamFn: (ctx) => createOpenAIAttributionHeadersWrapper(ctx.streamFn),
     normalizeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
         return undefined;
@@ -149,6 +259,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
     fetchUsageSnapshot: async (ctx) =>
       await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn),
+    refreshOAuth: async (cred) => await refreshOpenAICodexOAuthCredential(cred),
     augmentModelCatalog: (ctx) => {
       const gpt54Template = findCatalogTemplate({
         entries: ctx.entries,

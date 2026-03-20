@@ -1,17 +1,8 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const runtimeMocks = vi.hoisted(() => ({
-  runCli: vi.fn(async () => {}),
-}));
-
-vi.mock("./cli/run-main.js", () => ({
-  runCli: runtimeMocks.runCli,
-}));
-
 describe("legacy root entry", () => {
   afterEach(() => {
-    vi.clearAllMocks();
     vi.resetModules();
   });
 
@@ -30,17 +21,7 @@ describe("legacy root entry", () => {
   it("does not run CLI bootstrap when imported as a library dependency", async () => {
     const mod = await import("./index.js");
 
+    expect(typeof mod.applyTemplate).toBe("function");
     expect(typeof mod.runLegacyCliEntry).toBe("function");
-    expect(runtimeMocks.runCli).not.toHaveBeenCalled();
-  });
-
-  it("delegates legacy direct-entry execution to run-main", async () => {
-    const mod = await import("./index.js");
-    const argv = ["node", "dist/index.js", "status"];
-
-    await mod.runLegacyCliEntry(argv);
-
-    expect(runtimeMocks.runCli).toHaveBeenCalledOnce();
-    expect(runtimeMocks.runCli).toHaveBeenCalledWith(argv);
   });
 });

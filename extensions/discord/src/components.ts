@@ -211,6 +211,7 @@ export type DiscordComponentBuildResult = {
   entries: DiscordComponentEntry[];
   modals: DiscordModalEntry[];
 };
+export { buildDiscordInteractiveComponents } from "./shared-interactive.js";
 
 const BLOCK_ALIASES = new Map<string, DiscordComponentBlock["type"]>([
   ["row", "actions"],

@@ -114,6 +114,34 @@ describe("Feishu webhook signed-request e2e", () => {
     );
   });
 
+  it("rejects malformed short signatures with 401", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "short-signature",
+        path: "/hook-e2e-short-signature",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = { type: "url_verification", challenge: "challenge-token" };
+        const headers = signFeishuPayload({ encryptKey: "encrypt_key", payload });
+        headers["x-lark-signature"] = headers["x-lark-signature"].slice(0, 12);
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(401);
+        expect(await response.text()).toBe("Invalid signature");
+      },
+    );
+  });
+
   it("returns 400 for invalid json before invoking the sdk", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 

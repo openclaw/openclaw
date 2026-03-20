@@ -28,7 +28,7 @@ openclaw models auth login --provider minimax-portal --set-default
 API key:
 
 ```bash
-openclaw onboard --auth-choice minimax-global-api
+openclaw setup --wizard --auth-choice minimax-global-api
 ```
 
 ## Notes

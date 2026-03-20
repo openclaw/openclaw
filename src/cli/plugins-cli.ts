@@ -5,16 +5,29 @@ import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveArchiveKind } from "../infra/archive.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import {
+  installPluginFromMarketplace,
+  listMarketplacePlugins,
+  resolveMarketplaceInstallShortcut,
+} from "../plugins/marketplace.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { resolvePluginSourceRoots, formatPluginSourceForTable } from "../plugins/source-display.js";
-import { buildPluginStatusReport } from "../plugins/status.js";
+import {
+  buildAllPluginInspectReports,
+  buildPluginCompatibilityNotices,
+  buildPluginInspectReport,
+  buildPluginStatusReport,
+  formatPluginCompatibilityNotice,
+} from "../plugins/status.js";
 import { resolveUninstallDirectoryTarget, uninstallPlugin } from "../plugins/uninstall.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
@@ -37,13 +50,18 @@ export type PluginsListOptions = {
   verbose?: boolean;
 };
 
-export type PluginInfoOptions = {
+export type PluginInspectOptions = {
   json?: boolean;
+  all?: boolean;
 };
 
 export type PluginUpdateOptions = {
   all?: boolean;
   dryRun?: boolean;
+};
+
+export type PluginMarketplaceListOptions = {
+  json?: boolean;
 };
 
 export type PluginUninstallOptions = {
@@ -124,6 +142,67 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   return parts.join("\n");
 }
 
+function formatInspectSection(title: string, lines: string[]): string[] {
+  if (lines.length === 0) {
+    return [];
+  }
+  return ["", theme.muted(`${title}:`), ...lines];
+}
+
+function formatCapabilityKinds(
+  capabilities: Array<{
+    kind: string;
+  }>,
+): string {
+  if (capabilities.length === 0) {
+    return "-";
+  }
+  return capabilities.map((entry) => entry.kind).join(", ");
+}
+
+function formatHookSummary(params: {
+  usesLegacyBeforeAgentStart: boolean;
+  typedHookCount: number;
+  customHookCount: number;
+}): string {
+  const parts: string[] = [];
+  if (params.usesLegacyBeforeAgentStart) {
+    parts.push("before_agent_start");
+  }
+  const nonLegacyTypedHookCount =
+    params.typedHookCount - (params.usesLegacyBeforeAgentStart ? 1 : 0);
+  if (nonLegacyTypedHookCount > 0) {
+    parts.push(`${nonLegacyTypedHookCount} typed`);
+  }
+  if (params.customHookCount > 0) {
+    parts.push(`${params.customHookCount} custom`);
+  }
+  return parts.length > 0 ? parts.join(", ") : "-";
+}
+
+function formatInstallLines(install: PluginInstallRecord | undefined): string[] {
+  if (!install) {
+    return [];
+  }
+  const lines = [`Source: ${install.source}`];
+  if (install.spec) {
+    lines.push(`Spec: ${install.spec}`);
+  }
+  if (install.sourcePath) {
+    lines.push(`Source path: ${shortenHomePath(install.sourcePath)}`);
+  }
+  if (install.installPath) {
+    lines.push(`Install path: ${shortenHomePath(install.installPath)}`);
+  }
+  if (install.version) {
+    lines.push(`Recorded version: ${install.version}`);
+  }
+  if (install.installedAt) {
+    lines.push(`Installed at: ${install.installedAt}`);
+  }
+  return lines;
+}
+
 function applySlotSelectionForPlugin(
   config: OpenClawConfig,
   pluginId: string,
@@ -146,6 +225,56 @@ function createPluginInstallLogger(): { info: (msg: string) => void; warn: (msg:
   return {
     info: (msg) => defaultRuntime.log(msg),
     warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+  };
+}
+
+function extractInstalledNpmPackageName(install: PluginInstallRecord): string | undefined {
+  if (install.source !== "npm") {
+    return undefined;
+  }
+  const resolvedName = install.resolvedName?.trim();
+  if (resolvedName) {
+    return resolvedName;
+  }
+  return (
+    (install.spec ? parseRegistryNpmSpec(install.spec)?.name : undefined) ??
+    (install.resolvedSpec ? parseRegistryNpmSpec(install.resolvedSpec)?.name : undefined)
+  );
+}
+
+function resolvePluginUpdateSelection(params: {
+  installs: Record<string, PluginInstallRecord>;
+  rawId?: string;
+  all?: boolean;
+}): { pluginIds: string[]; specOverrides?: Record<string, string> } {
+  if (params.all) {
+    return { pluginIds: Object.keys(params.installs) };
+  }
+  if (!params.rawId) {
+    return { pluginIds: [] };
+  }
+
+  const parsedSpec = parseRegistryNpmSpec(params.rawId);
+  if (!parsedSpec || parsedSpec.selectorKind === "none") {
+    return { pluginIds: [params.rawId] };
+  }
+
+  const matches = Object.entries(params.installs).filter(([, install]) => {
+    return extractInstalledNpmPackageName(install) === parsedSpec.name;
+  });
+  if (matches.length !== 1) {
+    return { pluginIds: [params.rawId] };
+  }
+
+  const [pluginId] = matches[0];
+  if (!pluginId) {
+    return { pluginIds: [params.rawId] };
+  }
+  return {
+    pluginIds: [pluginId],
+    specOverrides: {
+      [pluginId]: parsedSpec.raw,
+    },
   };
 }
 
@@ -203,13 +332,69 @@ async function installBundledPluginSource(params: {
 
 async function runPluginInstallCommand(params: {
   raw: string;
-  opts: { link?: boolean; pin?: boolean };
+  opts: { link?: boolean; pin?: boolean; marketplace?: string };
 }) {
-  const { raw, opts } = params;
+  const shorthand = !params.opts.marketplace
+    ? await resolveMarketplaceInstallShortcut(params.raw)
+    : null;
+  if (shorthand?.ok === false) {
+    defaultRuntime.error(shorthand.error);
+    return defaultRuntime.exit(1);
+  }
+
+  const raw = shorthand?.ok ? shorthand.plugin : params.raw;
+  const opts = {
+    ...params.opts,
+    marketplace:
+      params.opts.marketplace ?? (shorthand?.ok ? shorthand.marketplaceSource : undefined),
+  };
+
+  if (opts.marketplace) {
+    if (opts.link) {
+      defaultRuntime.error("`--link` is not supported with `--marketplace`.");
+      return defaultRuntime.exit(1);
+    }
+    if (opts.pin) {
+      defaultRuntime.error("`--pin` is not supported with `--marketplace`.");
+      return defaultRuntime.exit(1);
+    }
+
+    const cfg = loadConfig();
+    const result = await installPluginFromMarketplace({
+      marketplace: opts.marketplace,
+      plugin: raw,
+      logger: createPluginInstallLogger(),
+    });
+    if (!result.ok) {
+      defaultRuntime.error(result.error);
+      return defaultRuntime.exit(1);
+    }
+
+    clearPluginManifestRegistryCache();
+
+    let next = enablePluginInConfig(cfg, result.pluginId).config;
+    next = recordPluginInstall(next, {
+      pluginId: result.pluginId,
+      source: "marketplace",
+      installPath: result.targetDir,
+      version: result.version,
+      marketplaceName: result.marketplaceName,
+      marketplaceSource: result.marketplaceSource,
+      marketplacePlugin: result.marketplacePlugin,
+    });
+    const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
+    next = slotResult.config;
+    await writeConfigFile(next);
+    logSlotWarnings(slotResult.warnings);
+    defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
+    defaultRuntime.log(`Restart the gateway to load plugins.`);
+    return;
+  }
+
   const fileSpec = resolveFileNpmSpecToLocalPath(raw);
   if (fileSpec && !fileSpec.ok) {
     defaultRuntime.error(fileSpec.error);
-    process.exit(1);
+    return defaultRuntime.exit(1);
   }
   const normalized = fileSpec && fileSpec.ok ? fileSpec.path : raw;
   const resolved = resolveUserPath(normalized);
@@ -222,7 +407,7 @@ async function runPluginInstallCommand(params: {
       const probe = await installPluginFromPath({ path: resolved, dryRun: true });
       if (!probe.ok) {
         defaultRuntime.error(probe.error);
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
 
       let next: OpenClawConfig = enablePluginInConfig(
@@ -260,7 +445,7 @@ async function runPluginInstallCommand(params: {
     });
     if (!result.ok) {
       defaultRuntime.error(result.error);
-      process.exit(1);
+      return defaultRuntime.exit(1);
     }
     // Plugin CLI registrars may have warmed the manifest registry cache before install;
     // force a rescan so config validation sees the freshly installed plugin.
@@ -286,7 +471,7 @@ async function runPluginInstallCommand(params: {
 
   if (opts.link) {
     defaultRuntime.error("`--link` requires a local path.");
-    process.exit(1);
+    return defaultRuntime.exit(1);
   }
 
   if (
@@ -302,7 +487,7 @@ async function runPluginInstallCommand(params: {
     ])
   ) {
     defaultRuntime.error(`Path not found: ${resolved}`);
-    process.exit(1);
+    return defaultRuntime.exit(1);
   }
 
   const bundledPreNpmPlan = resolveBundledInstallPlanBeforeNpm({
@@ -331,7 +516,7 @@ async function runPluginInstallCommand(params: {
     });
     if (!bundledFallbackPlan) {
       defaultRuntime.error(result.error);
-      process.exit(1);
+      return defaultRuntime.exit(1);
     }
 
     await installBundledPluginSource({
@@ -477,88 +662,228 @@ export function registerPluginsCli(program: Command) {
     });
 
   plugins
-    .command("info")
-    .description("Show plugin details")
-    .argument("<id>", "Plugin id")
+    .command("inspect")
+    .alias("info")
+    .description("Inspect plugin details")
+    .argument("[id]", "Plugin id")
+    .option("--all", "Inspect all plugins")
     .option("--json", "Print JSON")
-    .action((id: string, opts: PluginInfoOptions) => {
-      const report = buildPluginStatusReport();
-      const plugin = report.plugins.find((p) => p.id === id || p.name === id);
-      if (!plugin) {
-        defaultRuntime.error(`Plugin not found: ${id}`);
-        process.exit(1);
-      }
+    .action((id: string | undefined, opts: PluginInspectOptions) => {
       const cfg = loadConfig();
-      const install = cfg.plugins?.installs?.[plugin.id];
+      const report = buildPluginStatusReport({ config: cfg });
+      if (opts.all) {
+        if (id) {
+          defaultRuntime.error("Pass either a plugin id or --all, not both.");
+          return defaultRuntime.exit(1);
+        }
+        const inspectAll = buildAllPluginInspectReports({
+          config: cfg,
+          report,
+        });
+        const inspectAllWithInstall = inspectAll.map((inspect) => ({
+          ...inspect,
+          install: cfg.plugins?.installs?.[inspect.plugin.id],
+        }));
+
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify(inspectAllWithInstall, null, 2));
+          return;
+        }
+
+        const tableWidth = getTerminalTableWidth();
+        const rows = inspectAll.map((inspect) => ({
+          Name: inspect.plugin.name || inspect.plugin.id,
+          ID:
+            inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id
+              ? inspect.plugin.id
+              : "",
+          Status:
+            inspect.plugin.status === "loaded"
+              ? theme.success("loaded")
+              : inspect.plugin.status === "disabled"
+                ? theme.warn("disabled")
+                : theme.error("error"),
+          Shape: inspect.shape,
+          Capabilities: formatCapabilityKinds(inspect.capabilities),
+          Compatibility:
+            inspect.compatibility.length > 0
+              ? inspect.compatibility
+                  .map((entry) => (entry.severity === "warn" ? `warn:${entry.code}` : entry.code))
+                  .join(", ")
+              : "none",
+          Bundle:
+            inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
+          Hooks: formatHookSummary({
+            usesLegacyBeforeAgentStart: inspect.usesLegacyBeforeAgentStart,
+            typedHookCount: inspect.typedHooks.length,
+            customHookCount: inspect.customHooks.length,
+          }),
+        }));
+        defaultRuntime.log(
+          renderTable({
+            width: tableWidth,
+            columns: [
+              { key: "Name", header: "Name", minWidth: 14, flex: true },
+              { key: "ID", header: "ID", minWidth: 10, flex: true },
+              { key: "Status", header: "Status", minWidth: 10 },
+              { key: "Shape", header: "Shape", minWidth: 18 },
+              { key: "Capabilities", header: "Capabilities", minWidth: 28, flex: true },
+              { key: "Compatibility", header: "Compatibility", minWidth: 24, flex: true },
+              { key: "Bundle", header: "Bundle", minWidth: 14, flex: true },
+              { key: "Hooks", header: "Hooks", minWidth: 20, flex: true },
+            ],
+            rows,
+          }).trimEnd(),
+        );
+        return;
+      }
+
+      if (!id) {
+        defaultRuntime.error("Provide a plugin id or use --all.");
+        return defaultRuntime.exit(1);
+      }
+
+      const inspect = buildPluginInspectReport({
+        id,
+        config: cfg,
+        report,
+      });
+      if (!inspect) {
+        defaultRuntime.error(`Plugin not found: ${id}`);
+        return defaultRuntime.exit(1);
+      }
+      const install = cfg.plugins?.installs?.[inspect.plugin.id];
 
       if (opts.json) {
-        defaultRuntime.log(JSON.stringify(plugin, null, 2));
+        defaultRuntime.log(
+          JSON.stringify(
+            {
+              ...inspect,
+              install,
+            },
+            null,
+            2,
+          ),
+        );
         return;
       }
 
       const lines: string[] = [];
-      lines.push(theme.heading(plugin.name || plugin.id));
-      if (plugin.name && plugin.name !== plugin.id) {
-        lines.push(theme.muted(`id: ${plugin.id}`));
+      lines.push(theme.heading(inspect.plugin.name || inspect.plugin.id));
+      if (inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id) {
+        lines.push(theme.muted(`id: ${inspect.plugin.id}`));
       }
-      if (plugin.description) {
-        lines.push(plugin.description);
+      if (inspect.plugin.description) {
+        lines.push(inspect.plugin.description);
       }
       lines.push("");
-      lines.push(`${theme.muted("Status:")} ${plugin.status}`);
-      lines.push(`${theme.muted("Format:")} ${plugin.format ?? "openclaw"}`);
-      if (plugin.bundleFormat) {
-        lines.push(`${theme.muted("Bundle format:")} ${plugin.bundleFormat}`);
+      lines.push(`${theme.muted("Status:")} ${inspect.plugin.status}`);
+      lines.push(`${theme.muted("Format:")} ${inspect.plugin.format ?? "openclaw"}`);
+      if (inspect.plugin.bundleFormat) {
+        lines.push(`${theme.muted("Bundle format:")} ${inspect.plugin.bundleFormat}`);
       }
-      lines.push(`${theme.muted("Source:")} ${shortenHomeInString(plugin.source)}`);
-      lines.push(`${theme.muted("Origin:")} ${plugin.origin}`);
-      if (plugin.version) {
-        lines.push(`${theme.muted("Version:")} ${plugin.version}`);
+      lines.push(`${theme.muted("Source:")} ${shortenHomeInString(inspect.plugin.source)}`);
+      lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
+      if (inspect.plugin.version) {
+        lines.push(`${theme.muted("Version:")} ${inspect.plugin.version}`);
       }
-      if (plugin.toolNames.length > 0) {
-        lines.push(`${theme.muted("Tools:")} ${plugin.toolNames.join(", ")}`);
-      }
-      if (plugin.hookNames.length > 0) {
-        lines.push(`${theme.muted("Hooks:")} ${plugin.hookNames.join(", ")}`);
-      }
-      if (plugin.gatewayMethods.length > 0) {
-        lines.push(`${theme.muted("Gateway methods:")} ${plugin.gatewayMethods.join(", ")}`);
-      }
-      if (plugin.providerIds.length > 0) {
-        lines.push(`${theme.muted("Providers:")} ${plugin.providerIds.join(", ")}`);
-      }
-      if ((plugin.bundleCapabilities?.length ?? 0) > 0) {
+      lines.push(`${theme.muted("Shape:")} ${inspect.shape}`);
+      lines.push(`${theme.muted("Capability mode:")} ${inspect.capabilityMode}`);
+      lines.push(
+        `${theme.muted("Legacy before_agent_start:")} ${inspect.usesLegacyBeforeAgentStart ? "yes" : "no"}`,
+      );
+      if (inspect.bundleCapabilities.length > 0) {
         lines.push(
-          `${theme.muted("Bundle capabilities:")} ${plugin.bundleCapabilities?.join(", ")}`,
+          `${theme.muted("Bundle capabilities:")} ${inspect.bundleCapabilities.join(", ")}`,
         );
       }
-      if (plugin.cliCommands.length > 0) {
-        lines.push(`${theme.muted("CLI commands:")} ${plugin.cliCommands.join(", ")}`);
+      lines.push(
+        ...formatInspectSection(
+          "Capabilities",
+          inspect.capabilities.map(
+            (entry) =>
+              `${entry.kind}: ${entry.ids.length > 0 ? entry.ids.join(", ") : "(registered)"}`,
+          ),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Typed hooks",
+          inspect.typedHooks.map((entry) =>
+            entry.priority == null ? entry.name : `${entry.name} (priority ${entry.priority})`,
+          ),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Compatibility warnings",
+          inspect.compatibility.map(formatPluginCompatibilityNotice),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Custom hooks",
+          inspect.customHooks.map((entry) => `${entry.name}: ${entry.events.join(", ")}`),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Tools",
+          inspect.tools.map((entry) => {
+            const names = entry.names.length > 0 ? entry.names.join(", ") : "(anonymous)";
+            return entry.optional ? `${names} [optional]` : names;
+          }),
+        ),
+      );
+      lines.push(...formatInspectSection("Commands", inspect.commands));
+      lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
+      lines.push(...formatInspectSection("Services", inspect.services));
+      lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods));
+      lines.push(
+        ...formatInspectSection(
+          "MCP servers",
+          inspect.mcpServers.map((entry) =>
+            entry.hasStdioTransport ? entry.name : `${entry.name} (unsupported transport)`,
+          ),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "LSP servers",
+          inspect.lspServers.map((entry) =>
+            entry.hasStdioTransport ? entry.name : `${entry.name} (unsupported transport)`,
+          ),
+        ),
+      );
+      if (inspect.httpRouteCount > 0) {
+        lines.push(...formatInspectSection("HTTP routes", [String(inspect.httpRouteCount)]));
       }
-      if (plugin.services.length > 0) {
-        lines.push(`${theme.muted("Services:")} ${plugin.services.join(", ")}`);
+      const policyLines: string[] = [];
+      if (typeof inspect.policy.allowPromptInjection === "boolean") {
+        policyLines.push(`allowPromptInjection: ${inspect.policy.allowPromptInjection}`);
       }
-      if (plugin.error) {
-        lines.push(`${theme.error("Error:")} ${plugin.error}`);
+      if (typeof inspect.policy.allowModelOverride === "boolean") {
+        policyLines.push(`allowModelOverride: ${inspect.policy.allowModelOverride}`);
       }
-      if (install) {
-        lines.push("");
-        lines.push(`${theme.muted("Install:")} ${install.source}`);
-        if (install.spec) {
-          lines.push(`${theme.muted("Spec:")} ${install.spec}`);
-        }
-        if (install.sourcePath) {
-          lines.push(`${theme.muted("Source path:")} ${shortenHomePath(install.sourcePath)}`);
-        }
-        if (install.installPath) {
-          lines.push(`${theme.muted("Install path:")} ${shortenHomePath(install.installPath)}`);
-        }
-        if (install.version) {
-          lines.push(`${theme.muted("Recorded version:")} ${install.version}`);
-        }
-        if (install.installedAt) {
-          lines.push(`${theme.muted("Installed at:")} ${install.installedAt}`);
-        }
+      if (inspect.policy.hasAllowedModelsConfig) {
+        policyLines.push(
+          `allowedModels: ${
+            inspect.policy.allowedModels.length > 0
+              ? inspect.policy.allowedModels.join(", ")
+              : "(configured but empty)"
+          }`,
+        );
+      }
+      lines.push(...formatInspectSection("Policy", policyLines));
+      lines.push(
+        ...formatInspectSection(
+          "Diagnostics",
+          inspect.diagnostics.map((entry) => `${entry.level.toUpperCase()}: ${entry.message}`),
+        ),
+      );
+      lines.push(...formatInspectSection("Install", formatInstallLines(install)));
+      if (inspect.plugin.error) {
+        lines.push("", `${theme.error("Error:")} ${inspect.plugin.error}`);
       }
       defaultRuntime.log(lines.join("\n"));
     });
@@ -631,7 +956,7 @@ export function registerPluginsCli(program: Command) {
         } else {
           defaultRuntime.error(`Plugin not found: ${id}`);
         }
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
 
       const install = cfg.plugins?.installs?.[pluginId];
@@ -698,7 +1023,7 @@ export function registerPluginsCli(program: Command) {
 
       if (!result.ok) {
         defaultRuntime.error(result.error);
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
       for (const warning of result.warnings) {
         defaultRuntime.log(theme.warn(warning));
@@ -734,37 +1059,50 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("install")
-    .description("Install a plugin (path, archive, or npm spec)")
-    .argument("<path-or-spec>", "Path (.ts/.js/.zip/.tgz/.tar.gz) or an npm package spec")
+    .description("Install a plugin (path, archive, npm spec, or marketplace entry)")
+    .argument(
+      "<path-or-spec-or-plugin>",
+      "Path (.ts/.js/.zip/.tgz/.tar.gz), npm package spec, or marketplace plugin name",
+    )
     .option("-l, --link", "Link a local path instead of copying", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
-    .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
+    .option(
+      "--marketplace <source>",
+      "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
+    )
+    .action(async (raw: string, opts: { link?: boolean; pin?: boolean; marketplace?: string }) => {
       await runPluginInstallCommand({ raw, opts });
     });
 
   plugins
     .command("update")
-    .description("Update installed plugins (npm installs only)")
+    .description("Update installed plugins (npm and marketplace installs)")
     .argument("[id]", "Plugin id (omit with --all)")
     .option("--all", "Update all tracked plugins", false)
     .option("--dry-run", "Show what would change without writing", false)
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       const cfg = loadConfig();
       const installs = cfg.plugins?.installs ?? {};
-      const targets = opts.all ? Object.keys(installs) : id ? [id] : [];
+      const selection = resolvePluginUpdateSelection({
+        installs,
+        rawId: id,
+        all: opts.all,
+      });
+      const targets = selection.pluginIds;
 
       if (targets.length === 0) {
         if (opts.all) {
-          defaultRuntime.log("No npm-installed plugins to update.");
+          defaultRuntime.log("No tracked plugins to update.");
           return;
         }
         defaultRuntime.error("Provide a plugin id or use --all.");
-        process.exit(1);
+        return defaultRuntime.exit(1);
       }
 
       const result = await updateNpmInstalledPlugins({
         config: cfg,
         pluginIds: targets,
+        specOverrides: selection.specOverrides,
         dryRun: opts.dryRun,
         logger: {
           info: (msg) => defaultRuntime.log(msg),
@@ -811,8 +1149,9 @@ export function registerPluginsCli(program: Command) {
       const report = buildPluginStatusReport();
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
+      const compatibility = buildPluginCompatibilityNotices({ report });
 
-      if (errors.length === 0 && diags.length === 0) {
+      if (errors.length === 0 && diags.length === 0 && compatibility.length === 0) {
         defaultRuntime.log("No plugin issues detected.");
         return;
       }
@@ -834,9 +1173,69 @@ export function registerPluginsCli(program: Command) {
           lines.push(`- ${target}${diag.message}`);
         }
       }
+      if (compatibility.length > 0) {
+        if (lines.length > 0) {
+          lines.push("");
+        }
+        lines.push(theme.warn("Compatibility:"));
+        for (const notice of compatibility) {
+          const marker = notice.severity === "warn" ? theme.warn("warn") : theme.muted("info");
+          lines.push(`- ${formatPluginCompatibilityNotice(notice)} [${marker}]`);
+        }
+      }
       const docs = formatDocsLink("/plugin", "docs.openclaw.ai/plugin");
       lines.push("");
       lines.push(`${theme.muted("Docs:")} ${docs}`);
       defaultRuntime.log(lines.join("\n"));
+    });
+
+  const marketplace = plugins
+    .command("marketplace")
+    .description("Inspect Claude-compatible plugin marketplaces");
+
+  marketplace
+    .command("list")
+    .description("List plugins published by a marketplace source")
+    .argument("<source>", "Local marketplace path/repo or git/GitHub source")
+    .option("--json", "Print JSON")
+    .action(async (source: string, opts: PluginMarketplaceListOptions) => {
+      const result = await listMarketplacePlugins({
+        marketplace: source,
+        logger: createPluginInstallLogger(),
+      });
+      if (!result.ok) {
+        defaultRuntime.error(result.error);
+        return defaultRuntime.exit(1);
+      }
+
+      if (opts.json) {
+        defaultRuntime.log(
+          JSON.stringify(
+            {
+              source: result.sourceLabel,
+              name: result.manifest.name,
+              version: result.manifest.version,
+              plugins: result.manifest.plugins,
+            },
+            null,
+            2,
+          ),
+        );
+        return;
+      }
+
+      if (result.manifest.plugins.length === 0) {
+        defaultRuntime.log(`No plugins found in marketplace ${result.sourceLabel}.`);
+        return;
+      }
+
+      defaultRuntime.log(
+        `${theme.heading("Marketplace")} ${theme.muted(result.manifest.name ?? result.sourceLabel)}`,
+      );
+      for (const plugin of result.manifest.plugins) {
+        const suffix = plugin.version ? theme.muted(` v${plugin.version}`) : "";
+        const desc = plugin.description ? ` - ${theme.muted(plugin.description)}` : "";
+        defaultRuntime.log(`${theme.command(plugin.name)}${suffix}${desc}`);
+      }
     });
 }

@@ -2,8 +2,6 @@ import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { probeGateway } from "../gateway/probe.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
-import { resolveSshConfig } from "../infra/ssh-config.js";
-import { parseSshTarget, startSshPortForward } from "../infra/ssh-tunnel.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
@@ -22,6 +20,19 @@ import {
   resolveTargets,
   sanitizeSshTarget,
 } from "./gateway-status/helpers.js";
+
+let sshConfigModulePromise: Promise<typeof import("../infra/ssh-config.js")> | undefined;
+let sshTunnelModulePromise: Promise<typeof import("../infra/ssh-tunnel.js")> | undefined;
+
+function loadSshConfigModule() {
+  sshConfigModulePromise ??= import("../infra/ssh-config.js");
+  return sshConfigModulePromise;
+}
+
+function loadSshTunnelModule() {
+  sshTunnelModulePromise ??= import("../infra/ssh-tunnel.js");
+  return sshTunnelModulePromise;
+}
 
 export async function gatewayStatusCommand(
   opts: {
@@ -87,6 +98,7 @@ export async function gatewayStatusCommand(
           return null;
         }
         try {
+          const { startSshPortForward } = await loadSshTunnelModule();
           const tunnel = await startSshPortForward({
             target: sshTarget,
             identity: sshIdentity ?? undefined,
@@ -119,11 +131,13 @@ export async function gatewayStatusCommand(
             const base = user ? `${user}@${host.trim()}` : host.trim();
             return sshPort !== 22 ? `${base}:${sshPort}` : base;
           })
-          .filter((candidate): candidate is string =>
-            Boolean(candidate && parseSshTarget(candidate)),
-          );
-        if (candidates.length > 0) {
-          sshTarget = candidates[0] ?? null;
+          .filter((candidate): candidate is string => Boolean(candidate));
+        const { parseSshTarget } = await loadSshTunnelModule();
+        const validCandidates = candidates.filter((candidate) =>
+          Boolean(parseSshTarget(candidate)),
+        );
+        if (validCandidates.length > 0) {
+          sshTarget = validCandidates[0] ?? null;
         }
       }
 
@@ -420,6 +434,10 @@ async function resolveSshTarget(
   identity: string | null,
   overallTimeoutMs: number,
 ): Promise<{ target: string; identity?: string } | null> {
+  const [{ resolveSshConfig }, { parseSshTarget }] = await Promise.all([
+    loadSshConfigModule(),
+    loadSshTunnelModule(),
+  ]);
   const parsed = parseSshTarget(rawTarget);
   if (!parsed) {
     return null;

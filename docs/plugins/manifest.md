@@ -1,7 +1,7 @@
 ---
 summary: "Plugin manifest + JSON schema requirements (strict config validation)"
 read_when:
-  - You are building a OpenClaw plugin
+  - You are building an OpenClaw plugin
   - You need to ship a plugin config schema or debug plugin validation errors
 title: "Plugin Manifest"
 ---
@@ -32,6 +32,8 @@ Every native OpenClaw plugin **must** ship a `openclaw.plugin.json` file in the
 plugin errors and block config validation.
 
 See the full plugin system guide: [Plugins](/tools/plugin).
+For the native capability model and current external-compatibility guidance:
+[Capability model](/plugins/architecture#public-capability-model).
 
 ## Required fields
 
@@ -54,16 +56,53 @@ Required keys:
 Optional keys:
 
 - `kind` (string): plugin kind (examples: `"memory"`, `"context-engine"`).
-- `channels` (array): channel ids registered by this plugin (example: `["matrix"]`).
-- `providers` (array): provider ids registered by this plugin.
+- `channels` (array): channel ids registered by this plugin (channel capability; example: `["matrix"]`).
+- `providers` (array): provider ids registered by this plugin (text inference capability).
 - `providerAuthEnvVars` (object): auth env vars keyed by provider id. Use this
   when OpenClaw should resolve provider credentials from env without loading
   plugin runtime first.
+- `providerAuthChoices` (array): cheap onboarding/auth-choice metadata keyed by
+  provider + auth method. Use this when OpenClaw should show a provider in
+  auth-choice pickers, preferred-provider resolution, and CLI help without
+  loading plugin runtime first.
 - `skills` (array): skill directories to load (relative to the plugin root).
 - `name` (string): display name for the plugin.
 - `description` (string): short plugin summary.
 - `uiHints` (object): config field labels/placeholders/sensitive flags for UI rendering.
 - `version` (string): plugin version (informational).
+
+### `providerAuthChoices` shape
+
+Each entry can declare:
+
+- `provider`: provider id
+- `method`: auth method id
+- `choiceId`: stable onboarding/auth-choice id
+- `choiceLabel` / `choiceHint`: picker label + short hint
+- `groupId` / `groupLabel` / `groupHint`: grouped onboarding bucket metadata
+- `optionKey` / `cliFlag` / `cliOption` / `cliDescription`: optional one-flag
+  CLI wiring for simple auth flows such as API keys
+
+Example:
+
+```json
+{
+  "providerAuthChoices": [
+    {
+      "provider": "openrouter",
+      "method": "api-key",
+      "choiceId": "openrouter-api-key",
+      "choiceLabel": "OpenRouter API key",
+      "groupId": "openrouter",
+      "groupLabel": "OpenRouter",
+      "optionKey": "openrouterApiKey",
+      "cliFlag": "--openrouter-api-key",
+      "cliOption": "--openrouter-api-key <key>",
+      "cliDescription": "OpenRouter API key"
+    }
+  ]
+}
+```
 
 ## JSON Schema requirements
 
@@ -82,6 +121,8 @@ Optional keys:
 - If plugin config exists but the plugin is **disabled**, the config is kept and
   a **warning** is surfaced in Doctor + logs.
 
+See [Configuration reference](/configuration) for the full `plugins.*` schema.
+
 ## Notes
 
 - The manifest is **required for native OpenClaw plugins**, including local filesystem loads.
@@ -90,6 +131,11 @@ Optional keys:
 - `providerAuthEnvVars` is the cheap metadata path for auth probes, env-marker
   validation, and similar provider-auth surfaces that should not boot plugin
   runtime just to inspect env names.
+- `providerAuthChoices` is the cheap metadata path for auth-choice pickers,
+  `--auth-choice` resolution, preferred-provider mapping, and simple onboarding
+  CLI flag registration before provider runtime loads. For runtime wizard
+  metadata that requires provider code, see
+  [Provider runtime hooks](/plugins/architecture#provider-runtime-hooks).
 - Exclusive plugin kinds are selected through `plugins.slots.*`.
   - `kind: "memory"` is selected by `plugins.slots.memory`.
   - `kind: "context-engine"` is selected by `plugins.slots.contextEngine`

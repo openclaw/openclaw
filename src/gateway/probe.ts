@@ -44,7 +44,10 @@ export async function probeGateway(opts: {
 
   const disableDeviceIdentity = (() => {
     try {
-      return isLoopbackHost(new URL(opts.url).hostname);
+      const hostname = new URL(opts.url).hostname;
+      // Local authenticated probes should stay device-bound so read/detail RPCs
+      // are not scope-limited by the shared-auth scope stripping hardening.
+      return isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password);
     } catch {
       return false;
     }

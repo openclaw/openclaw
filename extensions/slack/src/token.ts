@@ -1,4 +1,4 @@
-import { normalizeResolvedSecretInputString } from "../../../src/config/types.secrets.js";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/config-runtime";
 
 export function normalizeSlackToken(raw?: unknown): string | undefined {
   return normalizeResolvedSecretInputString({

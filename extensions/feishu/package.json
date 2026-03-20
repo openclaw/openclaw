@@ -31,6 +31,12 @@
       "npmSpec": "@openclaw/feishu",
       "localPath": "extensions/feishu",
       "defaultChoice": "npm"
+    },
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
+    "release": {
+      "publishToNpm": true
     }
   }
 }

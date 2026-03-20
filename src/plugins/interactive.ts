@@ -1,14 +1,20 @@
 import { createDedupeCache } from "../infra/dedupe.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
-  detachPluginConversationBinding,
-  getCurrentPluginConversationBinding,
-  requestPluginConversationBinding,
-} from "./conversation-binding.js";
+  dispatchDiscordInteractiveHandler,
+  dispatchSlackInteractiveHandler,
+  dispatchTelegramInteractiveHandler,
+  type DiscordInteractiveDispatchContext,
+  type SlackInteractiveDispatchContext,
+  type TelegramInteractiveDispatchContext,
+} from "./interactive-dispatch-adapters.js";
 import type {
   PluginInteractiveDiscordHandlerContext,
   PluginInteractiveButtons,
   PluginInteractiveDiscordHandlerRegistration,
   PluginInteractiveHandlerRegistration,
+  PluginInteractiveSlackHandlerContext,
+  PluginInteractiveSlackHandlerRegistration,
   PluginInteractiveTelegramHandlerRegistration,
   PluginInteractiveTelegramHandlerContext,
 } from "./types.js";
@@ -28,42 +34,23 @@ type InteractiveDispatchResult =
   | { matched: false; handled: false; duplicate: false }
   | { matched: true; handled: boolean; duplicate: boolean };
 
-type TelegramInteractiveDispatchContext = Omit<
-  PluginInteractiveTelegramHandlerContext,
-  | "callback"
-  | "respond"
-  | "channel"
-  | "requestConversationBinding"
-  | "detachConversationBinding"
-  | "getCurrentConversationBinding"
-> & {
-  callbackMessage: {
-    messageId: number;
-    chatId: string;
-    messageText?: string;
-  };
+type InteractiveState = {
+  interactiveHandlers: Map<string, RegisteredInteractiveHandler>;
+  callbackDedupe: ReturnType<typeof createDedupeCache>;
 };
 
-type DiscordInteractiveDispatchContext = Omit<
-  PluginInteractiveDiscordHandlerContext,
-  | "interaction"
-  | "respond"
-  | "channel"
-  | "requestConversationBinding"
-  | "detachConversationBinding"
-  | "getCurrentConversationBinding"
-> & {
-  interaction: Omit<
-    PluginInteractiveDiscordHandlerContext["interaction"],
-    "data" | "namespace" | "payload"
-  >;
-};
+const PLUGIN_INTERACTIVE_STATE_KEY = Symbol.for("openclaw.pluginInteractiveState");
 
-const interactiveHandlers = new Map<string, RegisteredInteractiveHandler>();
-const callbackDedupe = createDedupeCache({
-  ttlMs: 5 * 60_000,
-  maxSize: 4096,
-});
+const state = resolveGlobalSingleton<InteractiveState>(PLUGIN_INTERACTIVE_STATE_KEY, () => ({
+  interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
+  callbackDedupe: createDedupeCache({
+    ttlMs: 5 * 60_000,
+    maxSize: 4096,
+  }),
+}));
+
+const interactiveHandlers = state.interactiveHandlers;
+const callbackDedupe = state.callbackDedupe;
 
 function toRegistryKey(channel: string, namespace: string): string {
   return `${channel.trim().toLowerCase()}:${namespace.trim()}`;
@@ -134,6 +121,15 @@ export function registerPluginInteractiveHandler(
       pluginName: opts?.pluginName,
       pluginRoot: opts?.pluginRoot,
     });
+  } else if (registration.channel === "slack") {
+    interactiveHandlers.set(key, {
+      ...registration,
+      namespace,
+      channel: "slack",
+      pluginId,
+      pluginName: opts?.pluginName,
+      pluginRoot: opts?.pluginRoot,
+    });
   } else {
     interactiveHandlers.set(key, {
       ...registration,
@@ -181,11 +177,21 @@ export async function dispatchPluginInteractiveHandler(params: {
   respond: PluginInteractiveDiscordHandlerContext["respond"];
 }): Promise<InteractiveDispatchResult>;
 export async function dispatchPluginInteractiveHandler(params: {
-  channel: "telegram" | "discord";
+  channel: "slack";
+  data: string;
+  interactionId: string;
+  ctx: SlackInteractiveDispatchContext;
+  respond: PluginInteractiveSlackHandlerContext["respond"];
+}): Promise<InteractiveDispatchResult>;
+export async function dispatchPluginInteractiveHandler(params: {
+  channel: "telegram" | "discord" | "slack";
   data: string;
   callbackId?: string;
   interactionId?: string;
-  ctx: TelegramInteractiveDispatchContext | DiscordInteractiveDispatchContext;
+  ctx:
+    | TelegramInteractiveDispatchContext
+    | DiscordInteractiveDispatchContext
+    | SlackInteractiveDispatchContext;
   respond:
     | {
         reply: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
@@ -197,7 +203,8 @@ export async function dispatchPluginInteractiveHandler(params: {
         clearButtons: () => Promise<void>;
         deleteMessage: () => Promise<void>;
       }
-    | PluginInteractiveDiscordHandlerContext["respond"];
+    | PluginInteractiveDiscordHandlerContext["respond"]
+    | PluginInteractiveSlackHandlerContext["respond"];
 }): Promise<InteractiveDispatchResult> {
   const match = resolveNamespaceMatch(params.channel, params.data);
   if (!match) {
@@ -212,145 +219,37 @@ export async function dispatchPluginInteractiveHandler(params: {
 
   let result:
     | ReturnType<PluginInteractiveTelegramHandlerRegistration["handler"]>
-    | ReturnType<PluginInteractiveDiscordHandlerRegistration["handler"]>;
+    | ReturnType<PluginInteractiveDiscordHandlerRegistration["handler"]>
+    | ReturnType<PluginInteractiveSlackHandlerRegistration["handler"]>;
   if (params.channel === "telegram") {
-    const pluginRoot = match.registration.pluginRoot;
-    const { callbackMessage, ...handlerContext } = params.ctx as TelegramInteractiveDispatchContext;
-    result = (
-      match.registration as RegisteredInteractiveHandler &
-        PluginInteractiveTelegramHandlerRegistration
-    ).handler({
-      ...handlerContext,
-      channel: "telegram",
-      callback: {
-        data: params.data,
-        namespace: match.namespace,
-        payload: match.payload,
-        messageId: callbackMessage.messageId,
-        chatId: callbackMessage.chatId,
-        messageText: callbackMessage.messageText,
-      },
+    result = dispatchTelegramInteractiveHandler({
+      registration: match.registration as RegisteredInteractiveHandler &
+        PluginInteractiveTelegramHandlerRegistration,
+      data: params.data,
+      namespace: match.namespace,
+      payload: match.payload,
+      ctx: params.ctx as TelegramInteractiveDispatchContext,
       respond: params.respond as PluginInteractiveTelegramHandlerContext["respond"],
-      requestConversationBinding: async (bindingParams) => {
-        if (!pluginRoot) {
-          return {
-            status: "error",
-            message: "This interaction cannot bind the current conversation.",
-          };
-        }
-        return requestPluginConversationBinding({
-          pluginId: match.registration.pluginId,
-          pluginName: match.registration.pluginName,
-          pluginRoot,
-          requestedBySenderId: handlerContext.senderId,
-          conversation: {
-            channel: "telegram",
-            accountId: handlerContext.accountId,
-            conversationId: handlerContext.conversationId,
-            parentConversationId: handlerContext.parentConversationId,
-            threadId: handlerContext.threadId,
-          },
-          binding: bindingParams,
-        });
-      },
-      detachConversationBinding: async () => {
-        if (!pluginRoot) {
-          return { removed: false };
-        }
-        return detachPluginConversationBinding({
-          pluginRoot,
-          conversation: {
-            channel: "telegram",
-            accountId: handlerContext.accountId,
-            conversationId: handlerContext.conversationId,
-            parentConversationId: handlerContext.parentConversationId,
-            threadId: handlerContext.threadId,
-          },
-        });
-      },
-      getCurrentConversationBinding: async () => {
-        if (!pluginRoot) {
-          return null;
-        }
-        return getCurrentPluginConversationBinding({
-          pluginRoot,
-          conversation: {
-            channel: "telegram",
-            accountId: handlerContext.accountId,
-            conversationId: handlerContext.conversationId,
-            parentConversationId: handlerContext.parentConversationId,
-            threadId: handlerContext.threadId,
-          },
-        });
-      },
+    });
+  } else if (params.channel === "discord") {
+    result = dispatchDiscordInteractiveHandler({
+      registration: match.registration as RegisteredInteractiveHandler &
+        PluginInteractiveDiscordHandlerRegistration,
+      data: params.data,
+      namespace: match.namespace,
+      payload: match.payload,
+      ctx: params.ctx as DiscordInteractiveDispatchContext,
+      respond: params.respond as PluginInteractiveDiscordHandlerContext["respond"],
     });
   } else {
-    const pluginRoot = match.registration.pluginRoot;
-    result = (
-      match.registration as RegisteredInteractiveHandler &
-        PluginInteractiveDiscordHandlerRegistration
-    ).handler({
-      ...(params.ctx as DiscordInteractiveDispatchContext),
-      channel: "discord",
-      interaction: {
-        ...(params.ctx as DiscordInteractiveDispatchContext).interaction,
-        data: params.data,
-        namespace: match.namespace,
-        payload: match.payload,
-      },
-      respond: params.respond as PluginInteractiveDiscordHandlerContext["respond"],
-      requestConversationBinding: async (bindingParams) => {
-        if (!pluginRoot) {
-          return {
-            status: "error",
-            message: "This interaction cannot bind the current conversation.",
-          };
-        }
-        const handlerContext = params.ctx as DiscordInteractiveDispatchContext;
-        return requestPluginConversationBinding({
-          pluginId: match.registration.pluginId,
-          pluginName: match.registration.pluginName,
-          pluginRoot,
-          requestedBySenderId: handlerContext.senderId,
-          conversation: {
-            channel: "discord",
-            accountId: handlerContext.accountId,
-            conversationId: handlerContext.conversationId,
-            parentConversationId: handlerContext.parentConversationId,
-          },
-          binding: bindingParams,
-        });
-      },
-      detachConversationBinding: async () => {
-        if (!pluginRoot) {
-          return { removed: false };
-        }
-        const handlerContext = params.ctx as DiscordInteractiveDispatchContext;
-        return detachPluginConversationBinding({
-          pluginRoot,
-          conversation: {
-            channel: "discord",
-            accountId: handlerContext.accountId,
-            conversationId: handlerContext.conversationId,
-            parentConversationId: handlerContext.parentConversationId,
-          },
-        });
-      },
-      getCurrentConversationBinding: async () => {
-        if (!pluginRoot) {
-          return null;
-        }
-        const handlerContext = params.ctx as DiscordInteractiveDispatchContext;
-        return getCurrentPluginConversationBinding({
-          pluginRoot,
-          conversation: {
-            channel: "discord",
-            accountId: handlerContext.accountId,
-            conversationId: handlerContext.conversationId,
-            parentConversationId: handlerContext.parentConversationId,
-          },
-        });
-      },
+    result = dispatchSlackInteractiveHandler({
+      registration: match.registration as RegisteredInteractiveHandler &
+        PluginInteractiveSlackHandlerRegistration,
+      data: params.data,
+      namespace: match.namespace,
+      payload: match.payload,
+      ctx: params.ctx as SlackInteractiveDispatchContext,
+      respond: params.respond as PluginInteractiveSlackHandlerContext["respond"],
     });
   }
   const resolved = await result;

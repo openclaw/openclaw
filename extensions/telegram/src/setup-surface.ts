@@ -1,16 +1,21 @@
-import { type ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
+  createAllowFromSection,
+  DEFAULT_ACCOUNT_ID,
+  hasConfiguredSecretInput,
+  type OpenClawConfig,
   patchChannelConfigForAccount,
   setChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-  splitOnboardingEntries,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+  setSetupChannelEnabled,
+  splitSetupEntries,
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectTelegramAccount } from "./account-inspect.js";
-import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+import {
+  listTelegramAccountIds,
+  mergeTelegramAccountConfig,
+  resolveTelegramAccount,
+} from "./accounts.js";
 import {
   parseTelegramAllowFromId,
   promptTelegramAllowFromForAccount,
@@ -22,7 +27,30 @@ import {
 
 const channel = "telegram" as const;
 
-const dmPolicy: ChannelOnboardingDmPolicy = {
+function shouldShowTelegramDmAccessWarning(cfg: OpenClawConfig, accountId: string): boolean {
+  const merged = mergeTelegramAccountConfig(cfg, accountId);
+  const policy = merged.dmPolicy ?? "pairing";
+  const hasAllowFrom =
+    Array.isArray(merged.allowFrom) && merged.allowFrom.some((e) => String(e).trim());
+  return policy === "pairing" && !hasAllowFrom;
+}
+
+function buildTelegramDmAccessWarningLines(accountId: string): string[] {
+  const configBase =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? "channels.telegram"
+      : `channels.telegram.accounts.${accountId}`;
+  return [
+    "Your bot is using DM policy: pairing.",
+    "Any Telegram user who discovers the bot can send pairing requests.",
+    "For private use, configure an allowlist with your Telegram user id:",
+    "  " + formatCliCommand(`openclaw config set ${configBase}.dmPolicy "allowlist"`),
+    "  " + formatCliCommand(`openclaw config set ${configBase}.allowFrom '["YOUR_USER_ID"]'`),
+    `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
+  ];
+}
+
+const dmPolicy: ChannelSetupDmPolicy = {
   label: "Telegram",
   channel,
   policyKey: "channels.telegram.dmPolicy",
@@ -81,7 +109,7 @@ export const telegramSetupWizard: ChannelSetupWizard = {
       },
     },
   ],
-  allowFrom: {
+  allowFrom: createAllowFromSection({
     helpTitle: "Telegram user id",
     helpLines: TELEGRAM_USER_ID_HELP_LINES,
     credentialInputKey: "token",
@@ -89,7 +117,7 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     placeholder: "@username",
     invalidWithoutCredentialNote:
       "Telegram token missing; use numeric sender ids (usernames require a bot token).",
-    parseInputs: splitOnboardingEntries,
+    parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
     resolveEntries: async ({ credentialValues, entries }) =>
       resolveTelegramAllowFromEntries({
@@ -103,9 +131,18 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         accountId,
         patch: { dmPolicy: "allowlist", allowFrom },
       }),
+  }),
+  finalize: async ({ cfg, accountId, prompter }) => {
+    if (!shouldShowTelegramDmAccessWarning(cfg, accountId)) {
+      return;
+    }
+    await prompter.note(
+      buildTelegramDmAccessWarningLines(accountId).join("\n"),
+      "Telegram DM access warning",
+    );
   },
   dmPolicy,
-  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
 
 export { parseTelegramAllowFromId, telegramSetupAdapter };
