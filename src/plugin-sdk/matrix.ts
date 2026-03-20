@@ -1,4 +1,4 @@
-// Narrow plugin-sdk surface for the bundled matrix plugin.
+// Private helper surface for the bundled matrix plugin.
 // Keep this list additive and scoped to symbols used under extensions/matrix.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";

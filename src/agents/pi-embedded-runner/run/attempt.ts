@@ -10,7 +10,7 @@ import {
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramReactionLevel,
-} from "openclaw/plugin-sdk/telegram";
+} from "../../../../extensions/telegram/api.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -2167,6 +2167,7 @@ export async function runEmbeddedAttempt(
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
+              model: params.modelId,
             });
             if (assembled.messages !== activeSession.messages) {
               activeSession.agent.replaceMessages(assembled.messages);

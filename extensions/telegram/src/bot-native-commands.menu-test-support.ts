@@ -34,8 +34,8 @@ const deliveryMocks = vi.hoisted(() => ({
 export const listSkillCommandsForAgents = skillCommandMocks.listSkillCommandsForAgents;
 export const deliverReplies = deliveryMocks.deliverReplies;
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+vi.mock("openclaw/plugin-sdk/command-auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth")>();
   return {
     ...actual,
     listSkillCommandsForAgents,
