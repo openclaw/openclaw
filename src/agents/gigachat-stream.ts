@@ -309,6 +309,117 @@ function tryParseJsonObjectString(content: string): string | null {
   }
 }
 
+function resolveSchemaType(schema: unknown): string | undefined {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return undefined;
+  }
+  const type = (schema as Record<string, unknown>).type;
+  if (typeof type === "string") {
+    return type;
+  }
+  if (Array.isArray(type)) {
+    return type.find((value): value is string => typeof value === "string" && value !== "null");
+  }
+  return undefined;
+}
+
+function tryParseJsonValue(content: string): unknown {
+  try {
+    return JSON.parse(content);
+  } catch {
+    return undefined;
+  }
+}
+
+function rehydrateGigaChatArgumentValue(value: unknown, schema: unknown): unknown {
+  const schemaType = resolveSchemaType(schema);
+  const schemaObj =
+    schema && typeof schema === "object" && !Array.isArray(schema)
+      ? (schema as Record<string, unknown>)
+      : undefined;
+
+  if (schemaType === "object" || (!schemaType && schemaObj?.properties)) {
+    let objectValue = value;
+    if (typeof objectValue === "string") {
+      const parsed = tryParseJsonValue(objectValue);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return value;
+      }
+      objectValue = parsed;
+    }
+    if (!objectValue || typeof objectValue !== "object" || Array.isArray(objectValue)) {
+      return objectValue;
+    }
+
+    const properties =
+      schemaObj?.properties &&
+      typeof schemaObj.properties === "object" &&
+      !Array.isArray(schemaObj.properties)
+        ? (schemaObj.properties as Record<string, unknown>)
+        : undefined;
+    if (!properties) {
+      return objectValue;
+    }
+
+    const nextObject = { ...(objectValue as Record<string, unknown>) };
+    for (const [key, propertySchema] of Object.entries(properties)) {
+      if (key in nextObject) {
+        nextObject[key] = rehydrateGigaChatArgumentValue(nextObject[key], propertySchema);
+      }
+    }
+    return nextObject;
+  }
+
+  if (schemaType === "array") {
+    let arrayValue = value;
+    if (typeof arrayValue === "string") {
+      const parsed = tryParseJsonValue(arrayValue);
+      if (!Array.isArray(parsed)) {
+        return value;
+      }
+      arrayValue = parsed;
+    }
+    if (!Array.isArray(arrayValue)) {
+      return arrayValue;
+    }
+
+    const itemSchema = schemaObj?.items;
+    if (!itemSchema) {
+      return arrayValue;
+    }
+    return arrayValue.map((item) => rehydrateGigaChatArgumentValue(item, itemSchema));
+  }
+
+  return value;
+}
+
+function rehydrateGigaChatArguments(
+  args: Record<string, unknown>,
+  schema: unknown,
+): Record<string, unknown> {
+  const schemaObj =
+    schema && typeof schema === "object" && !Array.isArray(schema)
+      ? (schema as Record<string, unknown>)
+      : undefined;
+  const properties =
+    schemaObj?.properties &&
+    typeof schemaObj.properties === "object" &&
+    !Array.isArray(schemaObj.properties)
+      ? (schemaObj.properties as Record<string, unknown>)
+      : undefined;
+  if (!properties) {
+    return args;
+  }
+
+  const nextArgs = { ...args };
+  for (const [key, propertySchema] of Object.entries(properties)) {
+    if (key in nextArgs) {
+      nextArgs[key] = rehydrateGigaChatArgumentValue(nextArgs[key], propertySchema);
+    }
+  }
+  return nextArgs;
+}
+
 /**
  * Coerce tool result content to a JSON object string (gpt2giga compatibility).
  * GigaChat expects tool results to be JSON objects. If the content is already
@@ -608,6 +719,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
         const functionsEnabled = disableFunctions !== "1" && disableFunctions !== "true";
         const toolNameToGiga = new Map<string, string>();
         const gigaToToolName = new Map<string, string>();
+        const gigaToolSchemas = new Map<string, unknown>();
 
         // Build messages for GigaChat format
         const messages: Message[] = [];
@@ -717,6 +829,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
             if (sanitizedName !== tool.name) {
               log.debug(`GigaChat: sanitized function name "${tool.name}" → "${sanitizedName}"`);
             }
+            gigaToolSchemas.set(sanitizedName, tool.parameters);
 
             functions.push({
               name: sanitizedName,
@@ -902,6 +1015,10 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
             const clientName =
               gigaToToolName.get(resolvedFunctionCall.name) ??
               mapToolNameFromGigaChat(resolvedFunctionCall.name);
+            parsedArgs = rehydrateGigaChatArguments(
+              parsedArgs,
+              gigaToolSchemas.get(resolvedFunctionCall.name),
+            );
             accumulatedToolCalls.push({
               type: "toolCall",
               id: randomUUID(),

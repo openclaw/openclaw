@@ -228,6 +228,94 @@ describe("createGigachatStreamFn tool calling", () => {
     ]);
   });
 
+  it("rehydrates nested JSON-string tool arguments before dispatching them", async () => {
+    const interactivePayload = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Approve", value: "approve" }],
+        },
+      ],
+    };
+    const argumentPayload = JSON.stringify({
+      message: "Pick one",
+      interactive: JSON.stringify(interactivePayload),
+    });
+
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream([
+        `data: ${JSON.stringify({
+          choices: [{ delta: { function_call: { name: "message", arguments: argumentPayload } } }],
+        })}`,
+        "data: [DONE]",
+      ]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      {
+        messages: [],
+        tools: [
+          {
+            name: "message",
+            description: "Send a message",
+            parameters: {
+              type: "object",
+              properties: {
+                message: { type: "string" },
+                interactive: {
+                  type: "object",
+                  properties: {
+                    blocks: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          type: { type: "string" },
+                          buttons: {
+                            type: "array",
+                            items: {
+                              type: "object",
+                              properties: {
+                                label: { type: "string" },
+                                value: { type: "string" },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      } as never,
+      { apiKey: "token" } as never,
+    );
+
+    const event = await stream.result();
+
+    expect(event.stopReason).toBe("toolUse");
+    expect(event.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "message",
+        arguments: {
+          message: "Pick one",
+          interactive: interactivePayload,
+        },
+      }),
+    ]);
+  });
+
   it("parses a final SSE frame even when the stream closes without a trailing newline", async () => {
     request.mockResolvedValueOnce({
       status: 200,
