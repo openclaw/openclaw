@@ -14,10 +14,10 @@ import { Routes } from "discord-api-types/v10";
 import { getAcpSessionManager } from "openclaw/plugin-sdk/acp-runtime";
 import { isAcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
 import {
-  resolveThreadBindingIdleTimeoutMs,
-  resolveThreadBindingMaxAgeMs,
-  resolveThreadBindingsEnabled,
-} from "openclaw/plugin-sdk/channel-runtime";
+  listNativeCommandSpecsForConfig,
+  listSkillCommandsForAgents,
+  type NativeCommandSpec,
+} from "openclaw/plugin-sdk/command-auth";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -32,14 +32,16 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/config-runtime";
+import {
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingMaxAgeMs,
+  resolveThreadBindingsEnabled,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import type { NativeCommandSpec } from "openclaw/plugin-sdk/reply-runtime";
-import { listNativeCommandSpecsForConfig } from "openclaw/plugin-sdk/reply-runtime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-runtime";
-import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
   isVerbose,
@@ -306,6 +308,7 @@ async function deployDiscordCommands(params: {
       // errors like Discord 30034 fail fast and don't wedge the provider.
       restClient.options.queueRequests = false;
     }
+    params.runtime.log?.("discord: native commands using Carbon reconcile path");
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         await params.client.handleDeployRequest();
@@ -805,7 +808,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       phase: "deploy-commands:start",
       startAt: startupStartedAt,
       gateway: lifecycleGateway,
-      details: `native=${nativeEnabled ? "on" : "off"} commandCount=${commands.length}`,
+      details: `native=${nativeEnabled ? "on" : "off"} reconcile=on commandCount=${commands.length}`,
     });
     await deployDiscordCommands({
       client,

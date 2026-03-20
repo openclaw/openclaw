@@ -11,6 +11,7 @@ export type {
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
+  PluginCommandContext,
   OpenClawPluginConfigSchema,
   ProviderDiscoveryContext,
   ProviderCatalogContext,

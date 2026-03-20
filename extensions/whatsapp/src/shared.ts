@@ -6,6 +6,12 @@ import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import { createDelegatedSetupWizardProxy } from "openclaw/plugin-sdk/setup";
 import {
+  listWhatsAppAccountIds,
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAccount,
+  type ResolvedWhatsAppAccount,
+} from "./accounts.js";
+import {
   buildChannelConfigSchema,
   formatWhatsAppConfigAllowFromEntries,
   getChatChannelMeta,
@@ -15,13 +21,7 @@ import {
   resolveWhatsAppGroupToolPolicy,
   WhatsAppConfigSchema,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/whatsapp-core";
-import {
-  listWhatsAppAccountIds,
-  resolveDefaultWhatsAppAccountId,
-  resolveWhatsAppAccount,
-  type ResolvedWhatsAppAccount,
-} from "./accounts.js";
+} from "./runtime-api.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
 

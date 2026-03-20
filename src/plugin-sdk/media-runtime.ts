@@ -14,8 +14,15 @@ export * from "../media/outbound-attachment.js";
 export * from "../media/png-encode.ts";
 export * from "../media/store.js";
 export * from "../media/temp-files.js";
+export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export * from "./agent-media-payload.js";
 export * from "../media-understanding/audio-preflight.ts";
 export * from "../media-understanding/defaults.js";
 export * from "../media-understanding/providers/image-runtime.ts";
 export * from "../media-understanding/runner.js";
 export * from "../polls.js";
+export {
+  createDirectTextMediaOutbound,
+  createScopedChannelMediaMaxBytesResolver,
+  resolveScopedChannelMediaMaxBytes,
+} from "../channels/plugins/outbound/direct-text-media.js";

@@ -11,22 +11,20 @@ import {
   type StringSelectMenuInteraction,
 } from "@buape/carbon";
 import { ButtonStyle } from "discord-api-types/v10";
-import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
   listChatCommands,
   resolveCommandArgChoices,
+  resolveStoredModelOverride,
   serializeCommandArgs,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { resolveStoredModelOverride } from "openclaw/plugin-sdk/reply-runtime";
-import type {
-  ChatCommandDefinition,
-  CommandArgDefinition,
-  CommandArgValues,
-  CommandArgs,
-} from "openclaw/plugin-sdk/reply-runtime";
+  type ChatCommandDefinition,
+  type CommandArgDefinition,
+  type CommandArgValues,
+  type CommandArgs,
+} from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { chunkItems, withTimeout } from "openclaw/plugin-sdk/text-runtime";
@@ -38,6 +36,7 @@ import {
   type DiscordModelPickerPreferenceScope,
 } from "./model-picker-preferences.js";
 import {
+  DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   loadDiscordModelPickerData,
   parseDiscordModelPickerData,
   renderDiscordModelPickerModelsView,
@@ -949,7 +948,7 @@ class DiscordCommandArgFallbackButton extends Button {
 
 class DiscordModelPickerFallbackButton extends Button {
   label = "modelpick";
-  customId = "modelpick:seed=btn";
+  customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=btn`;
   private ctx: DiscordModelPickerContext;
   private safeInteractionCall: SafeDiscordInteractionCall;
   private dispatchCommandInteraction: DispatchDiscordCommandInteraction;
@@ -977,7 +976,7 @@ class DiscordModelPickerFallbackButton extends Button {
 }
 
 class DiscordModelPickerFallbackSelect extends StringSelectMenu {
-  customId = "modelpick:seed=sel";
+  customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=sel`;
   options = [];
   private ctx: DiscordModelPickerContext;
   private safeInteractionCall: SafeDiscordInteractionCall;

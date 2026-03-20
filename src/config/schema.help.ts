@@ -1,7 +1,7 @@
 import {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-} from "openclaw/plugin-sdk/discord";
+} from "../../extensions/discord/runtime-api.js";
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { IRC_FIELD_HELP } from "./schema.irc.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
@@ -729,6 +729,8 @@ export const FIELD_HELP: Record<string, string> = {
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
   "channels.slack.allowBots":
     "Allow bot-authored messages to trigger Slack replies (default: false).",
+  "channels.matrix.allowBots":
+    'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to only accept bot messages that visibly mention this bot.',
   "channels.slack.thread.historyScope":
     'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
   "channels.slack.thread.inheritParent":
@@ -1048,6 +1050,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 900). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
   "agents.defaults.compaction.model":
     "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
+  "agents.defaults.compaction.truncateAfterCompaction":
+    "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":

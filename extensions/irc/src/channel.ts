@@ -3,18 +3,18 @@ import {
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createTextPairingAdapter } from "openclaw/plugin-sdk/channel-pairing";
 import {
   composeWarningCollectors,
   createAllowlistProviderOpenWarningCollector,
   createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
-  createAttachedChannelResultAdapter,
   createChannelDirectoryAdapter,
-  createTextPairingAdapter,
   listResolvedDirectoryEntriesFromSources,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { runStoppablePassiveMonitor } from "../../shared/passive-monitor.js";
+} from "openclaw/plugin-sdk/directory-runtime";
+import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,

@@ -6,10 +6,12 @@ import {
   modelSupportsVision,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { removeAckReactionAfterReply } from "openclaw/plugin-sdk/channel-runtime";
-import { logAckFailure, logTypingFailure } from "openclaw/plugin-sdk/channel-runtime";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
-import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  logAckFailure,
+  logTypingFailure,
+  removeAckReactionAfterReply,
+} from "openclaw/plugin-sdk/channel-feedback";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
@@ -22,16 +24,16 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
-import { deliverReplies } from "./bot/delivery.js";
+import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -42,6 +44,7 @@ import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
   type DraftLaneState,
+  type LaneDeliveryResult,
   type LaneName,
   type LanePreviewLifecycle,
 } from "./lane-delivery.js";
@@ -381,12 +384,6 @@ export const dispatchTelegramMessage = async ({
           ? true
           : undefined;
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-    cfg,
-    agentId: route.agentId,
-    channel: "telegram",
-    accountId: route.accountId,
-  });
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 
   // Handle uncached stickers: get a dedicated vision description before dispatch
@@ -487,6 +484,21 @@ export const dispatchTelegramMessage = async ({
     }
     return result.delivered;
   };
+  const emitPreviewFinalizedHook = (result: LaneDeliveryResult) => {
+    if (result.kind !== "preview-finalized") {
+      return;
+    }
+    emitInternalMessageSentHook({
+      sessionKeyForInternalHooks: deliveryBaseOptions.sessionKeyForInternalHooks,
+      chatId: deliveryBaseOptions.chatId,
+      accountId: deliveryBaseOptions.accountId,
+      content: result.delivery.content,
+      success: true,
+      messageId: result.delivery.messageId,
+      isGroup: deliveryBaseOptions.mirrorIsGroup,
+      groupId: deliveryBaseOptions.mirrorGroupId,
+    });
+  };
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
     archivedAnswerPreviews,
@@ -524,15 +536,21 @@ export const dispatchTelegramMessage = async ({
     void statusReactionController.setThinking();
   }
 
-  const typingCallbacks = createTypingCallbacks({
-    start: sendTyping,
-    onStartError: (err) => {
-      logTypingFailure({
-        log: logVerbose,
-        channel: "telegram",
-        target: String(chatId),
-        error: err,
-      });
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+    cfg,
+    agentId: route.agentId,
+    channel: "telegram",
+    accountId: route.accountId,
+    typing: {
+      start: sendTyping,
+      onStartError: (err) => {
+        logTypingFailure({
+          log: logVerbose,
+          channel: "telegram",
+          target: String(chatId),
+          error: err,
+        });
+      },
     },
   });
 
@@ -542,8 +560,7 @@ export const dispatchTelegramMessage = async ({
       ctx: ctxPayload,
       cfg,
       dispatcherOptions: {
-        ...prefixOptions,
-        typingCallbacks,
+        ...replyPipeline,
         deliver: async (payload, info) => {
           if (payload.isError === true) {
             hadErrorReplyFailureOrSkip = true;
@@ -614,8 +631,11 @@ export const dispatchTelegramMessage = async ({
               previewButtons,
               allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
             });
+            if (info.kind === "final") {
+              emitPreviewFinalizedHook(result);
+            }
             if (segment.lane === "reasoning") {
-              if (result !== "skipped") {
+              if (result.kind !== "skipped") {
                 reasoningStepState.noteReasoningDelivered();
                 await flushBufferedFinalAnswer();
               }

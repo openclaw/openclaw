@@ -1,18 +1,20 @@
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
+import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
 import {
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+  ChannelMessageToolDiscovery,
+} from "openclaw/plugin-sdk/channel-contract";
+import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRestrictSendersWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import {
-  createAttachedChannelResultAdapter,
-  createChannelDirectoryAdapter,
-  createLoggedPairingApprovalNotifier,
-  createMessageToolButtonsSchema,
-  createScopedAccountReplyToModeResolver,
-  type ChannelMessageToolDiscovery,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
+import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
@@ -39,8 +41,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-  type ChannelMessageActionAdapter,
-  type ChannelMessageActionName,
   type ChannelPlugin,
 } from "./runtime-api.js";
 import { getMattermostRuntime } from "./runtime.js";
