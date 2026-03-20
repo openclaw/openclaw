@@ -25,7 +25,7 @@ type TelegramMessageProcessorDeps = Omit<
   streamMode: TelegramStreamMode;
   textLimit: number;
   telegramDeps: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token">;
+  opts: Pick<TelegramBotOptions, "token" | "fetchAbortSignal">;
 };
 
 export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
@@ -132,6 +132,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         await retryTelegramPreConnectSend({
           operationLabel: "error fallback send",
           log: runtime.log,
+          abortSignal: opts.fetchAbortSignal,
           deliver: () =>
             bot.api.sendMessage(
               context.chatId,

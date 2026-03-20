@@ -95,6 +95,7 @@ async function deliverTextReply(params: {
   bot: Bot;
   chatId: string;
   runtime: RuntimeEnv;
+  abortSignal?: AbortSignal;
   thread?: TelegramThreadSpec | null;
   chunkText: ChunkTextFn;
   replyText: string;
@@ -130,6 +131,7 @@ async function deliverTextReply(params: {
           linkPreview: params.linkPreview,
           silent: params.silent,
           replyMarkup,
+          abortSignal: params.abortSignal,
         },
       );
       if (firstDeliveredMessageId == null) {
@@ -144,6 +146,7 @@ async function sendPendingFollowUpText(params: {
   bot: Bot;
   chatId: string;
   runtime: RuntimeEnv;
+  abortSignal?: AbortSignal;
   thread?: TelegramThreadSpec | null;
   chunkText: ChunkTextFn;
   text: string;
@@ -170,6 +173,7 @@ async function sendPendingFollowUpText(params: {
         linkPreview: params.linkPreview,
         silent: params.silent,
         replyMarkup,
+        abortSignal: params.abortSignal,
       });
     },
   });
@@ -193,6 +197,7 @@ async function sendTelegramVoiceFallbackText(opts: {
   bot: Bot;
   chatId: string;
   runtime: RuntimeEnv;
+  abortSignal?: AbortSignal;
   text: string;
   chunkText: (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
   replyToId?: number;
@@ -218,6 +223,7 @@ async function sendTelegramVoiceFallbackText(opts: {
       linkPreview: opts.linkPreview,
       silent: opts.silent,
       replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
+      abortSignal: opts.abortSignal,
     });
     if (firstDeliveredMessageId == null) {
       firstDeliveredMessageId = messageId;
@@ -235,6 +241,7 @@ async function deliverMediaReply(params: {
   bot: Bot;
   chatId: string;
   runtime: RuntimeEnv;
+  abortSignal?: AbortSignal;
   thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
   mediaLocalRoots?: readonly string[];
@@ -295,6 +302,7 @@ async function deliverMediaReply(params: {
       const result = await retryTelegramPreConnectSend({
         operationLabel: "sendAnimation",
         log: params.runtime.log,
+        abortSignal: params.abortSignal,
         deliver: () =>
           sendTelegramWithThreadFallback({
             operation: "sendAnimation",
@@ -313,6 +321,7 @@ async function deliverMediaReply(params: {
       const result = await retryTelegramPreConnectSend({
         operationLabel: "sendPhoto",
         log: params.runtime.log,
+        abortSignal: params.abortSignal,
         deliver: () =>
           sendTelegramWithThreadFallback({
             operation: "sendPhoto",
@@ -331,6 +340,7 @@ async function deliverMediaReply(params: {
       const result = await retryTelegramPreConnectSend({
         operationLabel: "sendVideo",
         log: params.runtime.log,
+        abortSignal: params.abortSignal,
         deliver: () =>
           sendTelegramWithThreadFallback({
             operation: "sendVideo",
@@ -360,6 +370,7 @@ async function deliverMediaReply(params: {
           const result = await retryTelegramPreConnectSend({
             operationLabel: "sendVoice",
             log: params.runtime.log,
+            abortSignal: params.abortSignal,
             deliver: () =>
               sendTelegramWithThreadFallback({
                 operation: "sendVoice",
@@ -397,6 +408,7 @@ async function deliverMediaReply(params: {
               bot: params.bot,
               chatId: params.chatId,
               runtime: params.runtime,
+              abortSignal: params.abortSignal,
               text: fallbackText,
               chunkText: params.chunkText,
               replyToId: voiceFallbackReplyTo,
@@ -427,6 +439,7 @@ async function deliverMediaReply(params: {
                 bot: params.bot,
                 chatId: params.chatId,
                 runtime: params.runtime,
+                abortSignal: params.abortSignal,
                 text: fallbackText,
                 chunkText: params.chunkText,
                 replyToId: undefined,
@@ -445,6 +458,7 @@ async function deliverMediaReply(params: {
         const result = await retryTelegramPreConnectSend({
           operationLabel: "sendAudio",
           log: params.runtime.log,
+          abortSignal: params.abortSignal,
           deliver: () =>
             sendTelegramWithThreadFallback({
               operation: "sendAudio",
@@ -464,6 +478,7 @@ async function deliverMediaReply(params: {
       const result = await retryTelegramPreConnectSend({
         operationLabel: "sendDocument",
         log: params.runtime.log,
+        abortSignal: params.abortSignal,
         deliver: () =>
           sendTelegramWithThreadFallback({
             operation: "sendDocument",
@@ -485,6 +500,7 @@ async function deliverMediaReply(params: {
         bot: params.bot,
         chatId: params.chatId,
         runtime: params.runtime,
+        abortSignal: params.abortSignal,
         thread: params.thread,
         chunkText: params.chunkText,
         text: pendingFollowUpText,
@@ -615,6 +631,8 @@ export async function deliverReplies(params: {
   silent?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
+  /** Optional abort signal for pre-connect send backoff sleeps. */
+  abortSignal?: AbortSignal;
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
 }): Promise<{ delivered: boolean }> {
@@ -690,6 +708,7 @@ export async function deliverReplies(params: {
           bot: params.bot,
           chatId: params.chatId,
           runtime: params.runtime,
+          abortSignal: params.abortSignal,
           thread: params.thread,
           chunkText,
           replyText: reply.text || "",
@@ -708,6 +727,7 @@ export async function deliverReplies(params: {
           bot: params.bot,
           chatId: params.chatId,
           runtime: params.runtime,
+          abortSignal: params.abortSignal,
           thread: params.thread,
           tableMode: params.tableMode,
           mediaLocalRoots: params.mediaLocalRoots,

@@ -68,4 +68,23 @@ describe("retryTelegramFinalReplyDelivery", () => {
     expect(computeBackoff).toHaveBeenCalledTimes(1);
     expect(sleepWithAbort).toHaveBeenCalledTimes(1);
   });
+
+  it("passes the caller abort signal into retry backoff sleeps", async () => {
+    const preConnectErr = new Error("connect ECONNREFUSED 149.154.167.220:443");
+    (preConnectErr as NodeJS.ErrnoException).code = "ECONNREFUSED";
+    const deliver = vi.fn<() => Promise<string>>().mockRejectedValueOnce(preConnectErr);
+    const abortController = new AbortController();
+    const abortErr = new Error("aborted");
+    sleepWithAbort.mockRejectedValueOnce(abortErr);
+
+    await expect(
+      retryTelegramFinalReplyDelivery({
+        deliver,
+        abortSignal: abortController.signal,
+      }),
+    ).rejects.toThrow("aborted");
+
+    expect(sleepWithAbort).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbort).toHaveBeenCalledWith(0, abortController.signal);
+  });
 });

@@ -107,6 +107,7 @@ export async function sendTelegramText(
     linkPreview?: boolean;
     silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
+    abortSignal?: AbortSignal;
   },
 ): Promise<number> {
   const baseParams = buildTelegramSendParams({
@@ -125,6 +126,7 @@ export async function sendTelegramText(
     const res = await retryTelegramPreConnectSend({
       operationLabel: "sendMessage",
       log: runtime.log,
+      abortSignal: opts?.abortSignal,
       deliver: () =>
         sendTelegramWithThreadFallback({
           operation: "sendMessage",
@@ -154,6 +156,7 @@ export async function sendTelegramText(
     const res = await retryTelegramPreConnectSend({
       operationLabel: "sendMessage",
       log: runtime.log,
+      abortSignal: opts?.abortSignal,
       deliver: () =>
         sendTelegramWithThreadFallback({
           operation: "sendMessage",

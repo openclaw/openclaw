@@ -118,7 +118,7 @@ type DispatchTelegramMessageParams = {
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token">;
+  opts: Pick<TelegramBotOptions, "token" | "fetchAbortSignal">;
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
@@ -869,6 +869,7 @@ export const dispatchTelegramMessage = async ({
       replies: [{ text: fallbackText }],
       ...deliveryBaseOptions,
       silent: silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip),
+      abortSignal: opts.fetchAbortSignal,
     });
     sentFallback = result.delivered;
   }

@@ -14,6 +14,7 @@ export async function retryTelegramPreConnectSend<T>(params: {
   deliver: () => Promise<T>;
   log?: (message: string) => void;
   operationLabel?: string;
+  abortSignal?: AbortSignal;
 }): Promise<T> {
   let attempt = 0;
   while (true) {
@@ -28,7 +29,7 @@ export async function retryTelegramPreConnectSend<T>(params: {
       params.log?.(
         `telegram: ${params.operationLabel ?? "send"} failed before reaching Telegram; retrying in ${delayMs}ms (${String(err)})`,
       );
-      await sleepWithAbort(delayMs);
+      await sleepWithAbort(delayMs, params.abortSignal);
     }
   }
 }
@@ -36,6 +37,7 @@ export async function retryTelegramPreConnectSend<T>(params: {
 export async function retryTelegramFinalReplyDelivery<T>(params: {
   deliver: () => Promise<T>;
   log?: (message: string) => void;
+  abortSignal?: AbortSignal;
 }): Promise<T> {
   return retryTelegramPreConnectSend({
     ...params,
