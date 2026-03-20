@@ -59,12 +59,30 @@ vi.mock("../plugins/web-search-providers.js", () => {
         getCredentialValue: getScoped("perplexity"),
         getConfiguredCredentialValue: getConfigured("perplexity"),
       },
+      {
+        id: "tavily",
+        envVars: ["TAVILY_API_KEY"],
+        credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
+        getCredentialValue: getScoped("tavily"),
+        getConfiguredCredentialValue: getConfigured("tavily"),
+      },
     ],
   };
 });
 
 const { __testing } = await import("../agents/tools/web-search.js");
 const { resolveSearchProvider } = __testing;
+
+function pluginWebSearchApiKey(
+  config: Record<string, unknown> | undefined,
+  pluginId: string,
+): unknown {
+  return (
+    config?.plugins as
+      | { entries?: Record<string, { config?: { webSearch?: { apiKey?: unknown } } }> }
+      | undefined
+  )?.entries?.[pluginId]?.config?.webSearch?.apiKey;
+}
 
 describe("web search provider config", () => {
   it("accepts perplexity provider and config", () => {
@@ -111,6 +129,50 @@ describe("web search provider config", () => {
     );
 
     expect(res.ok).toBe(true);
+  });
+
+  it("accepts tavily provider config on the plugin-owned path", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "tavily",
+        providerConfig: {
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "TAVILY_API_KEY",
+          },
+          baseUrl: "https://api.tavily.com",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("does not migrate the nonexistent legacy Tavily scoped config", () => {
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            provider: "tavily",
+            tavily: {
+              apiKey: "tvly-test-key",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.config.tools?.web?.search?.provider).toBe("tavily");
+    expect((res.config.tools?.web?.search as Record<string, unknown> | undefined)?.tavily).toBe(
+      undefined,
+    );
+    expect(pluginWebSearchApiKey(res.config as Record<string, unknown>, "tavily")).toBe(undefined);
   });
 
   it("accepts gemini provider with no extra config", () => {
@@ -161,6 +223,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.MOONSHOT_API_KEY;
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.TAVILY_API_KEY;
     delete process.env.XAI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
@@ -183,6 +246,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects gemini when only GEMINI_API_KEY is set", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("gemini");
+  });
+
+  it("auto-detects tavily when only TAVILY_API_KEY is set", () => {
+    process.env.TAVILY_API_KEY = "tvly-test-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("tavily");
   });
 
   it("auto-detects firecrawl when only FIRECRAWL_API_KEY is set", () => {
