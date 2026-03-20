@@ -65,14 +65,14 @@ marketplace source with `--marketplace`.
 
 These are published to npm and installed with `openclaw plugins install`:
 
-| Plugin          | Package                | Docs                               |
-| --------------- | ---------------------- | ---------------------------------- |
-| Matrix          | `@openclaw/matrix`     | [Matrix](/channels/matrix)         |
+| Plugin          | Package                | Docs                                 |
+| --------------- | ---------------------- | ------------------------------------ |
+| Matrix          | `@openclaw/matrix`     | [Matrix](/channels/matrix)           |
 | Microsoft Teams | `@openclaw/msteams`    | [Microsoft Teams](/channels/msteams) |
-| Nostr           | `@openclaw/nostr`      | [Nostr](/channels/nostr)           |
-| Voice Call      | `@openclaw/voice-call` | [Voice Call](/plugins/voice-call)  |
-| Zalo            | `@openclaw/zalo`       | [Zalo](/channels/zalo)             |
-| Zalo Personal   | `@openclaw/zalouser`   | [Zalo Personal](/plugins/zalouser) |
+| Nostr           | `@openclaw/nostr`      | [Nostr](/channels/nostr)             |
+| Voice Call      | `@openclaw/voice-call` | [Voice Call](/plugins/voice-call)    |
+| Zalo            | `@openclaw/zalo`       | [Zalo](/channels/zalo)               |
+| Zalo Personal   | `@openclaw/zalouser`   | [Zalo Personal](/plugins/zalouser)   |
 
 Microsoft Teams is plugin-only as of 2026.1.15.
 
