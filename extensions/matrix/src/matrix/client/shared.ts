@@ -24,6 +24,7 @@ function buildSharedClientKey(auth: MatrixAuth): string {
     auth.userId,
     auth.accessToken,
     auth.encryption ? "e2ee" : "plain",
+    auth.allowPrivateNetwork ? "private-net" : "strict-net",
     auth.accountId,
   ].join("|");
 }
@@ -42,6 +43,8 @@ async function createSharedMatrixClient(params: {
     localTimeoutMs: params.timeoutMs,
     initialSyncLimit: params.auth.initialSyncLimit,
     accountId: params.auth.accountId,
+    allowPrivateNetwork: params.auth.allowPrivateNetwork,
+    ssrfPolicy: params.auth.ssrfPolicy,
   });
   return {
     client,
