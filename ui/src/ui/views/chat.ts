@@ -843,7 +843,15 @@ export function renderChat(props: ChatProps) {
     navigator.clipboard.writeText(code).then(
       () => {
         btn.classList.add("copied");
-        setTimeout(() => btn.classList.remove("copied"), 1500);
+        const idle = btn.querySelector(".code-block-copy__idle") as HTMLElement | null;
+        const done = btn.querySelector(".code-block-copy__done") as HTMLElement | null;
+        if (idle) idle.hidden = true;
+        if (done) done.hidden = false;
+        setTimeout(() => {
+          btn.classList.remove("copied");
+          if (idle) idle.hidden = false;
+          if (done) done.hidden = true;
+        }, 1500);
       },
       () => {},
     );
