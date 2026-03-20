@@ -2,7 +2,7 @@ import {
   resolveChannelMediaMaxBytes,
   type OpenClawConfig,
   type PluginRuntime,
-} from "openclaw/plugin-sdk/msteams";
+} from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import type {

@@ -1,13 +1,16 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
+  BILLING_ERROR_USER_MESSAGE,
   isCompactionFailureError,
   isContextOverflowError,
+  isBillingErrorMessage,
   isLikelyContextOverflowError,
   isTransientHttpError,
   sanitizeUserFacingText,
@@ -38,8 +41,7 @@ import {
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
-  buildEmbeddedRunBaseParams,
-  buildEmbeddedRunContexts,
+  buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -66,7 +68,7 @@ export type AgentRunLoopResult =
       fallbackModel?: string;
       fallbackAttempts: RuntimeFallbackAttempt[];
       didLogHeartbeatStrip: boolean;
-      autoCompactionCompleted: boolean;
+      autoCompactionCount: number;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
       directlySentBlockKeys?: Set<string>;
     }
@@ -102,7 +104,7 @@ export async function runAgentTurnWithFallback(params: {
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
-  let autoCompactionCompleted = false;
+  let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
 
@@ -147,6 +149,7 @@ export async function runAgentTurnWithFallback(params: {
     try {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
+        const reply = resolveSendableOutboundReplyParts(payload);
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
             mode: "message",
@@ -155,7 +158,7 @@ export async function runAgentTurnWithFallback(params: {
             didLogHeartbeatStrip = true;
             logVerbose("Stripped stray HEARTBEAT_OK token from reply");
           }
-          if (stripped.shouldSkip && (payload.mediaUrls?.length ?? 0) === 0) {
+          if (stripped.shouldSkip && !reply.hasMedia) {
             return { skip: true };
           }
           text = stripped.text;
@@ -171,7 +174,7 @@ export async function runAgentTurnWithFallback(params: {
         }
         if (!text) {
           // Allow media-only payloads (e.g. tool result screenshots) through.
-          if ((payload.mediaUrls?.length ?? 0) > 0) {
+          if (reply.hasMedia) {
             return { text: undefined, skip: false };
           }
           return { skip: true };
@@ -306,165 +309,178 @@ export async function runAgentTurnWithFallback(params: {
               }
             })();
           }
-          const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
-            run: params.followupRun.run,
-            sessionCtx: params.sessionCtx,
-            hasRepliedRef: params.opts?.hasRepliedRef,
-            provider,
-          });
-          const runBaseParams = buildEmbeddedRunBaseParams({
-            run: params.followupRun.run,
-            provider,
-            model,
-            runId,
-            authProfile,
-            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-          });
+          const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
+            {
+              run: params.followupRun.run,
+              sessionCtx: params.sessionCtx,
+              hasRepliedRef: params.opts?.hasRepliedRef,
+              provider,
+              runId,
+              allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+              model,
+            },
+          );
           return (async () => {
-            const result = await runEmbeddedPiAgent({
-              ...embeddedContext,
-              trigger: params.isHeartbeat ? "heartbeat" : "user",
-              groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
-              groupChannel:
-                params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
-              groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
-              ...senderContext,
-              ...runBaseParams,
-              prompt: params.commandBody,
-              extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-              toolResultFormat: (() => {
-                const channel = resolveMessageChannel(
-                  params.sessionCtx.Surface,
-                  params.sessionCtx.Provider,
-                );
-                if (!channel) {
-                  return "markdown";
-                }
-                return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
-              })(),
-              suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
-              bootstrapContextMode: params.opts?.bootstrapContextMode,
-              bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
-              images: params.opts?.images,
-              abortSignal: params.opts?.abortSignal,
-              blockReplyBreak: params.resolvedBlockStreamingBreak,
-              blockReplyChunking: params.blockReplyChunking,
-              onPartialReply: async (payload) => {
-                const textForTyping = await handlePartialForTyping(payload);
-                if (!params.opts?.onPartialReply || textForTyping === undefined) {
-                  return;
-                }
-                await params.opts.onPartialReply({
-                  text: textForTyping,
-                  mediaUrls: payload.mediaUrls,
-                });
-              },
-              onAssistantMessageStart: async () => {
-                await params.typingSignals.signalMessageStart();
-                await params.opts?.onAssistantMessageStart?.();
-              },
-              onReasoningStream:
-                params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
-                  ? async (payload) => {
-                      await params.typingSignals.signalReasoningDelta();
-                      await params.opts?.onReasoningStream?.({
-                        text: payload.text,
-                        mediaUrls: payload.mediaUrls,
-                      });
-                    }
-                  : undefined,
-              onReasoningEnd: params.opts?.onReasoningEnd,
-              onAgentEvent: async (evt) => {
-                // Signal run start only after the embedded agent emits real activity.
-                const hasLifecyclePhase =
-                  evt.stream === "lifecycle" && typeof evt.data.phase === "string";
-                if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
-                  notifyAgentRunStart();
-                }
-                // Trigger typing when tools start executing.
-                // Must await to ensure typing indicator starts before tool summaries are emitted.
-                if (evt.stream === "tool") {
-                  const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                  const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
-                  if (phase === "start" || phase === "update") {
-                    await params.typingSignals.signalToolStart();
-                    await params.opts?.onToolStart?.({ name, phase });
+            let attemptCompactionCount = 0;
+            try {
+              const result = await runEmbeddedPiAgent({
+                ...embeddedContext,
+                allowGatewaySubagentBinding: true,
+                trigger: params.isHeartbeat ? "heartbeat" : "user",
+                groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
+                groupChannel:
+                  params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
+                groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
+                ...senderContext,
+                ...runBaseParams,
+                prompt: params.commandBody,
+                extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                toolResultFormat: (() => {
+                  const channel = resolveMessageChannel(
+                    params.sessionCtx.Surface,
+                    params.sessionCtx.Provider,
+                  );
+                  if (!channel) {
+                    return "markdown";
                   }
-                }
-                // Track auto-compaction completion
-                if (evt.stream === "compaction") {
-                  const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                  if (phase === "end") {
-                    autoCompactionCompleted = true;
+                  return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
+                })(),
+                suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
+                bootstrapContextMode: params.opts?.bootstrapContextMode,
+                bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
+                images: params.opts?.images,
+                abortSignal: params.opts?.abortSignal,
+                blockReplyBreak: params.resolvedBlockStreamingBreak,
+                blockReplyChunking: params.blockReplyChunking,
+                onPartialReply: async (payload) => {
+                  const textForTyping = await handlePartialForTyping(payload);
+                  if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                    return;
                   }
-                }
-              },
-              // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
-              // even when regular block streaming is disabled. The handler sends directly
-              // via opts.onBlockReply when the pipeline isn't available.
-              onBlockReply: params.opts?.onBlockReply
-                ? createBlockReplyDeliveryHandler({
-                    onBlockReply: params.opts.onBlockReply,
-                    currentMessageId:
-                      params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
-                    normalizeStreamingText,
-                    applyReplyToMode: params.applyReplyToMode,
-                    normalizeMediaPaths: normalizeReplyMediaPaths,
-                    typingSignals: params.typingSignals,
-                    blockStreamingEnabled: params.blockStreamingEnabled,
-                    blockReplyPipeline,
-                    directlySentBlockKeys,
-                  })
-                : undefined,
-              onBlockReplyFlush:
-                params.blockStreamingEnabled && blockReplyPipeline
-                  ? async () => {
-                      await blockReplyPipeline.flush({ force: true });
-                    }
-                  : undefined,
-              shouldEmitToolResult: params.shouldEmitToolResult,
-              shouldEmitToolOutput: params.shouldEmitToolOutput,
-              bootstrapPromptWarningSignaturesSeen,
-              bootstrapPromptWarningSignature:
-                bootstrapPromptWarningSignaturesSeen[
-                  bootstrapPromptWarningSignaturesSeen.length - 1
-                ],
-              onToolResult: onToolResult
-                ? (() => {
-                    // Serialize tool result delivery to preserve message ordering.
-                    // Without this, concurrent tool callbacks race through typing signals
-                    // and message sends, causing out-of-order delivery to the user.
-                    // See: https://github.com/openclaw/openclaw/issues/11044
-                    let toolResultChain: Promise<void> = Promise.resolve();
-                    return (payload: ReplyPayload) => {
-                      toolResultChain = toolResultChain
-                        .then(async () => {
-                          const { text, skip } = normalizeStreamingText(payload);
-                          if (skip) {
-                            return;
-                          }
-                          await params.typingSignals.signalTextDelta(text);
-                          await onToolResult({
-                            ...payload,
-                            text,
-                          });
-                        })
-                        .catch((err) => {
-                          // Keep chain healthy after an error so later tool results still deliver.
-                          logVerbose(`tool result delivery failed: ${String(err)}`);
+                  await params.opts.onPartialReply({
+                    text: textForTyping,
+                    mediaUrls: payload.mediaUrls,
+                  });
+                },
+                onAssistantMessageStart: async () => {
+                  await params.typingSignals.signalMessageStart();
+                  await params.opts?.onAssistantMessageStart?.();
+                },
+                onReasoningStream:
+                  params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
+                    ? async (payload) => {
+                        await params.typingSignals.signalReasoningDelta();
+                        await params.opts?.onReasoningStream?.({
+                          text: payload.text,
+                          mediaUrls: payload.mediaUrls,
                         });
-                      const task = toolResultChain.finally(() => {
-                        params.pendingToolTasks.delete(task);
-                      });
-                      params.pendingToolTasks.add(task);
-                    };
-                  })()
-                : undefined,
-            });
-            bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-              result.meta?.systemPromptReport,
-            );
-            return result;
+                      }
+                    : undefined,
+                onReasoningEnd: params.opts?.onReasoningEnd,
+                onAgentEvent: async (evt) => {
+                  // Signal run start only after the embedded agent emits real activity.
+                  const hasLifecyclePhase =
+                    evt.stream === "lifecycle" && typeof evt.data.phase === "string";
+                  if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
+                    notifyAgentRunStart();
+                  }
+                  // Trigger typing when tools start executing.
+                  // Must await to ensure typing indicator starts before tool summaries are emitted.
+                  if (evt.stream === "tool") {
+                    const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                    const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
+                    if (phase === "start" || phase === "update") {
+                      await params.typingSignals.signalToolStart();
+                      await params.opts?.onToolStart?.({ name, phase });
+                    }
+                  }
+                  // Track auto-compaction completion and notify UI layer.
+                  if (evt.stream === "compaction") {
+                    const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                    if (phase === "start") {
+                      await params.opts?.onCompactionStart?.();
+                    }
+                    const completed = evt.data?.completed === true;
+                    if (phase === "end" && completed) {
+                      attemptCompactionCount += 1;
+                      await params.opts?.onCompactionEnd?.();
+                    }
+                  }
+                },
+                // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
+                // even when regular block streaming is disabled. The handler sends directly
+                // via opts.onBlockReply when the pipeline isn't available.
+                onBlockReply: params.opts?.onBlockReply
+                  ? createBlockReplyDeliveryHandler({
+                      onBlockReply: params.opts.onBlockReply,
+                      currentMessageId:
+                        params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+                      normalizeStreamingText,
+                      applyReplyToMode: params.applyReplyToMode,
+                      normalizeMediaPaths: normalizeReplyMediaPaths,
+                      typingSignals: params.typingSignals,
+                      blockStreamingEnabled: params.blockStreamingEnabled,
+                      blockReplyPipeline,
+                      directlySentBlockKeys,
+                    })
+                  : undefined,
+                onBlockReplyFlush:
+                  params.blockStreamingEnabled && blockReplyPipeline
+                    ? async () => {
+                        await blockReplyPipeline.flush({ force: true });
+                      }
+                    : undefined,
+                shouldEmitToolResult: params.shouldEmitToolResult,
+                shouldEmitToolOutput: params.shouldEmitToolOutput,
+                bootstrapPromptWarningSignaturesSeen,
+                bootstrapPromptWarningSignature:
+                  bootstrapPromptWarningSignaturesSeen[
+                    bootstrapPromptWarningSignaturesSeen.length - 1
+                  ],
+                onToolResult: onToolResult
+                  ? (() => {
+                      // Serialize tool result delivery to preserve message ordering.
+                      // Without this, concurrent tool callbacks race through typing signals
+                      // and message sends, causing out-of-order delivery to the user.
+                      // See: https://github.com/openclaw/openclaw/issues/11044
+                      let toolResultChain: Promise<void> = Promise.resolve();
+                      return (payload: ReplyPayload) => {
+                        toolResultChain = toolResultChain
+                          .then(async () => {
+                            const { text, skip } = normalizeStreamingText(payload);
+                            if (skip) {
+                              return;
+                            }
+                            await params.typingSignals.signalTextDelta(text);
+                            await onToolResult({
+                              ...payload,
+                              text,
+                            });
+                          })
+                          .catch((err) => {
+                            // Keep chain healthy after an error so later tool results still deliver.
+                            logVerbose(`tool result delivery failed: ${String(err)}`);
+                          });
+                        const task = toolResultChain.finally(() => {
+                          params.pendingToolTasks.delete(task);
+                        });
+                        params.pendingToolTasks.add(task);
+                      };
+                    })()
+                  : undefined,
+              });
+              bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                result.meta?.systemPromptReport,
+              );
+              const resultCompactionCount = Math.max(
+                0,
+                result.meta?.agentMeta?.compactionCount ?? 0,
+              );
+              attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
+              return result;
+            } finally {
+              autoCompactionCount += attemptCompactionCount;
+            }
           })();
         },
       });
@@ -514,8 +530,9 @@ export async function runAgentTurnWithFallback(params: {
       break;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const isContextOverflow = isLikelyContextOverflowError(message);
-      const isCompactionFailure = isCompactionFailureError(message);
+      const isBilling = isBillingErrorMessage(message);
+      const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
+      const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
@@ -610,11 +627,13 @@ export async function runAgentTurnWithFallback(params: {
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
-      const fallbackText = isContextOverflow
-        ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-        : isRoleOrderingError
-          ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+      const fallbackText = isBilling
+        ? BILLING_ERROR_USER_MESSAGE
+        : isContextOverflow
+          ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+          : isRoleOrderingError
+            ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
+            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",
@@ -649,7 +668,7 @@ export async function runAgentTurnWithFallback(params: {
     fallbackModel,
     fallbackAttempts,
     didLogHeartbeatStrip,
-    autoCompactionCompleted,
+    autoCompactionCount,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
   };
 }

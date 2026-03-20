@@ -67,12 +67,12 @@ If you use the `device-pair` plugin, you can do first-time device pairing entire
 2. The bot replies with two messages: an instruction message and a separate **setup code** message (easy to copy/paste in Telegram).
 3. On your phone, open the OpenClaw iOS app → Settings → Gateway.
 4. Paste the setup code and connect.
-5. Back in Telegram: `/pair approve`
+5. Back in Telegram: `/pair pending` (review request IDs, role, and scopes), then approve.
 
 The setup code is a base64-encoded JSON payload that contains:
 
 - `url`: the Gateway WebSocket URL (`ws://...` or `wss://...`)
-- `token`: a short-lived pairing token
+- `bootstrapToken`: a short-lived single-device bootstrap token used for the initial pairing handshake
 
 Treat the setup code like a password while it is valid.
 
@@ -83,6 +83,10 @@ openclaw devices list
 openclaw devices approve <requestId>
 openclaw devices reject <requestId>
 ```
+
+If the same device retries with different auth details (for example different
+role/scopes/public key), the previous pending request is superseded and a new
+`requestId` is created.
 
 ### Node pairing state storage
 

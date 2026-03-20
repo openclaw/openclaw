@@ -11,6 +11,7 @@ RUN --mount=type=cache,id=openclaw-install-sh-nonroot-apt-cache,target=/var/cach
     if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
     sleep 3; \
   done; \
+  DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 upgrade -y --no-install-recommends; \
   apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
     bash \
     ca-certificates \
@@ -19,6 +20,15 @@ RUN --mount=type=cache,id=openclaw-install-sh-nonroot-apt-cache,target=/var/cach
     make \
     python3 \
     sudo
+
+# Preinstall the supported Node runtime in a cacheable build layer so the
+# non-root smoke covers user-local npm prefixing and missing git without paying
+# the full NodeSource bootstrap cost on every container run.
+RUN --mount=type=cache,id=openclaw-install-sh-nonroot-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=openclaw-install-sh-nonroot-apt-lists,target=/var/lib/apt,sharing=locked \
+  set -eux; \
+  curl -fsSL https://deb.nodesource.com/setup_24.x | bash -; \
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs
 
 RUN useradd -m -s /bin/bash app \
   && echo "app ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/app

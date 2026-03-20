@@ -12,6 +12,7 @@ import {
   resolvePluginInstallDir,
 } from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
+import { installPluginFromMarketplace } from "./marketplace.js";
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -70,6 +71,19 @@ function formatNpmInstallFailure(params: {
   return `Failed to ${params.phase} ${params.pluginId}: ${params.result.error}`;
 }
 
+function formatMarketplaceInstallFailure(params: {
+  pluginId: string;
+  marketplaceSource: string;
+  marketplacePlugin: string;
+  phase: "check" | "update";
+  error: string;
+}): string {
+  return (
+    `Failed to ${params.phase} ${params.pluginId}: ` +
+    `${params.error} (marketplace plugin ${params.marketplacePlugin} from ${params.marketplaceSource}).`
+  );
+}
+
 type InstallIntegrityDrift = {
   spec: string;
   expectedIntegrity: string;
@@ -123,21 +137,25 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
   }
 }
 
-function pathsEqual(left?: string, right?: string): boolean {
+function pathsEqual(
+  left: string | undefined,
+  right: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   if (!left || !right) {
     return false;
   }
-  return resolveUserPath(left) === resolveUserPath(right);
+  return resolveUserPath(left, env) === resolveUserPath(right, env);
 }
 
-function buildLoadPathHelpers(existing: string[]) {
+function buildLoadPathHelpers(existing: string[], env: NodeJS.ProcessEnv = process.env) {
   let paths = [...existing];
-  const resolveSet = () => new Set(paths.map((entry) => resolveUserPath(entry)));
+  const resolveSet = () => new Set(paths.map((entry) => resolveUserPath(entry, env)));
   let resolved = resolveSet();
   let changed = false;
 
   const addPath = (value: string) => {
-    const normalized = resolveUserPath(value);
+    const normalized = resolveUserPath(value, env);
     if (resolved.has(normalized)) {
       return;
     }
@@ -147,11 +165,11 @@ function buildLoadPathHelpers(existing: string[]) {
   };
 
   const removePath = (value: string) => {
-    const normalized = resolveUserPath(value);
+    const normalized = resolveUserPath(value, env);
     if (!resolved.has(normalized)) {
       return;
     }
-    paths = paths.filter((entry) => resolveUserPath(entry) !== normalized);
+    paths = paths.filter((entry) => resolveUserPath(entry, env) !== normalized);
     resolved = resolveSet();
     changed = true;
   };
@@ -164,6 +182,79 @@ function buildLoadPathHelpers(existing: string[]) {
     },
     get paths() {
       return paths;
+    },
+  };
+}
+
+function replacePluginIdInList(
+  entries: string[] | undefined,
+  fromId: string,
+  toId: string,
+): string[] | undefined {
+  if (!entries || entries.length === 0 || fromId === toId) {
+    return entries;
+  }
+  const next: string[] = [];
+  for (const entry of entries) {
+    const value = entry === fromId ? toId : entry;
+    if (!next.includes(value)) {
+      next.push(value);
+    }
+  }
+  return next;
+}
+
+function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string): OpenClawConfig {
+  if (fromId === toId) {
+    return cfg;
+  }
+
+  const installs = cfg.plugins?.installs;
+  const entries = cfg.plugins?.entries;
+  const slots = cfg.plugins?.slots;
+  const allow = replacePluginIdInList(cfg.plugins?.allow, fromId, toId);
+  const deny = replacePluginIdInList(cfg.plugins?.deny, fromId, toId);
+
+  const nextInstalls = installs ? { ...installs } : undefined;
+  if (nextInstalls && fromId in nextInstalls) {
+    const record = nextInstalls[fromId];
+    if (record && !(toId in nextInstalls)) {
+      nextInstalls[toId] = record;
+    }
+    delete nextInstalls[fromId];
+  }
+
+  const nextEntries = entries ? { ...entries } : undefined;
+  if (nextEntries && fromId in nextEntries) {
+    const entry = nextEntries[fromId];
+    if (entry) {
+      nextEntries[toId] = nextEntries[toId]
+        ? {
+            ...entry,
+            ...nextEntries[toId],
+          }
+        : entry;
+    }
+    delete nextEntries[fromId];
+  }
+
+  const nextSlots =
+    slots?.memory === fromId
+      ? {
+          ...slots,
+          memory: toId,
+        }
+      : slots;
+
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      allow,
+      deny,
+      entries: nextEntries,
+      installs: nextInstalls,
+      slots: nextSlots,
     },
   };
 }
@@ -200,6 +291,7 @@ export async function updateNpmInstalledPlugins(params: {
   pluginIds?: string[];
   skipIds?: Set<string>;
   dryRun?: boolean;
+  specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
@@ -229,7 +321,7 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    if (record.source !== "npm") {
+    if (record.source !== "npm" && record.source !== "marketplace") {
       outcomes.push({
         pluginId,
         status: "skipped",
@@ -238,11 +330,30 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    if (!record.spec) {
+    const effectiveSpec =
+      record.source === "npm" ? (params.specOverrides?.[pluginId] ?? record.spec) : undefined;
+    const expectedIntegrity =
+      record.source === "npm" && effectiveSpec === record.spec
+        ? expectedIntegrityForUpdate(record.spec, record.integrity)
+        : undefined;
+
+    if (record.source === "npm" && !effectiveSpec) {
       outcomes.push({
         pluginId,
         status: "skipped",
         message: `Skipping "${pluginId}" (missing npm spec).`,
+      });
+      continue;
+    }
+
+    if (
+      record.source === "marketplace" &&
+      (!record.marketplaceSource || !record.marketplacePlugin)
+    ) {
+      outcomes.push({
+        pluginId,
+        status: "skipped",
+        message: `Skipping "${pluginId}" (missing marketplace source metadata).`,
       });
       continue;
     }
@@ -261,22 +372,34 @@ export async function updateNpmInstalledPlugins(params: {
     const currentVersion = await readInstalledPackageVersion(installPath);
 
     if (params.dryRun) {
-      let probe: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
+      let probe:
+        | Awaited<ReturnType<typeof installPluginFromNpmSpec>>
+        | Awaited<ReturnType<typeof installPluginFromMarketplace>>;
       try {
-        probe = await installPluginFromNpmSpec({
-          spec: record.spec,
-          mode: "update",
-          dryRun: true,
-          expectedPluginId: pluginId,
-          expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
-          onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
-            pluginId,
-            dryRun: true,
-            logger,
-            onIntegrityDrift: params.onIntegrityDrift,
-          }),
-          logger,
-        });
+        probe =
+          record.source === "npm"
+            ? await installPluginFromNpmSpec({
+                spec: effectiveSpec!,
+                mode: "update",
+                dryRun: true,
+                expectedPluginId: pluginId,
+                expectedIntegrity,
+                onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
+                  pluginId,
+                  dryRun: true,
+                  logger,
+                  onIntegrityDrift: params.onIntegrityDrift,
+                }),
+                logger,
+              })
+            : await installPluginFromMarketplace({
+                marketplace: record.marketplaceSource!,
+                plugin: record.marketplacePlugin!,
+                mode: "update",
+                dryRun: true,
+                expectedPluginId: pluginId,
+                logger,
+              });
       } catch (err) {
         outcomes.push({
           pluginId,
@@ -289,12 +412,21 @@ export async function updateNpmInstalledPlugins(params: {
         outcomes.push({
           pluginId,
           status: "error",
-          message: formatNpmInstallFailure({
-            pluginId,
-            spec: record.spec,
-            phase: "check",
-            result: probe,
-          }),
+          message:
+            record.source === "npm"
+              ? formatNpmInstallFailure({
+                  pluginId,
+                  spec: effectiveSpec!,
+                  phase: "check",
+                  result: probe,
+                })
+              : formatMarketplaceInstallFailure({
+                  pluginId,
+                  marketplaceSource: record.marketplaceSource!,
+                  marketplacePlugin: record.marketplacePlugin!,
+                  phase: "check",
+                  error: probe.error,
+                }),
         });
         continue;
       }
@@ -321,21 +453,32 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    let result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
+    let result:
+      | Awaited<ReturnType<typeof installPluginFromNpmSpec>>
+      | Awaited<ReturnType<typeof installPluginFromMarketplace>>;
     try {
-      result = await installPluginFromNpmSpec({
-        spec: record.spec,
-        mode: "update",
-        expectedPluginId: pluginId,
-        expectedIntegrity: expectedIntegrityForUpdate(record.spec, record.integrity),
-        onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
-          pluginId,
-          dryRun: false,
-          logger,
-          onIntegrityDrift: params.onIntegrityDrift,
-        }),
-        logger,
-      });
+      result =
+        record.source === "npm"
+          ? await installPluginFromNpmSpec({
+              spec: effectiveSpec!,
+              mode: "update",
+              expectedPluginId: pluginId,
+              expectedIntegrity,
+              onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
+                pluginId,
+                dryRun: false,
+                logger,
+                onIntegrityDrift: params.onIntegrityDrift,
+              }),
+              logger,
+            })
+          : await installPluginFromMarketplace({
+              marketplace: record.marketplaceSource!,
+              plugin: record.marketplacePlugin!,
+              mode: "update",
+              expectedPluginId: pluginId,
+              logger,
+            });
     } catch (err) {
       outcomes.push({
         pluginId,
@@ -348,25 +491,55 @@ export async function updateNpmInstalledPlugins(params: {
       outcomes.push({
         pluginId,
         status: "error",
-        message: formatNpmInstallFailure({
-          pluginId,
-          spec: record.spec,
-          phase: "update",
-          result: result,
-        }),
+        message:
+          record.source === "npm"
+            ? formatNpmInstallFailure({
+                pluginId,
+                spec: effectiveSpec!,
+                phase: "update",
+                result: result,
+              })
+            : formatMarketplaceInstallFailure({
+                pluginId,
+                marketplaceSource: record.marketplaceSource!,
+                marketplacePlugin: record.marketplacePlugin!,
+                phase: "update",
+                error: result.error,
+              }),
       });
       continue;
     }
 
+    const resolvedPluginId = result.pluginId;
+    if (resolvedPluginId !== pluginId) {
+      next = migratePluginConfigId(next, pluginId, resolvedPluginId);
+    }
+
     const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
-    next = recordPluginInstall(next, {
-      pluginId,
-      source: "npm",
-      spec: record.spec,
-      installPath: result.targetDir,
-      version: nextVersion,
-      ...buildNpmResolutionInstallFields(result.npmResolution),
-    });
+    if (record.source === "npm") {
+      next = recordPluginInstall(next, {
+        pluginId: resolvedPluginId,
+        source: "npm",
+        spec: effectiveSpec,
+        installPath: result.targetDir,
+        version: nextVersion,
+        ...buildNpmResolutionInstallFields(result.npmResolution),
+      });
+    } else {
+      const marketplaceResult = result as Extract<
+        Awaited<ReturnType<typeof installPluginFromMarketplace>>,
+        { ok: true }
+      >;
+      next = recordPluginInstall(next, {
+        pluginId: resolvedPluginId,
+        source: "marketplace",
+        installPath: result.targetDir,
+        version: nextVersion,
+        marketplaceName: marketplaceResult.marketplaceName ?? record.marketplaceName,
+        marketplaceSource: record.marketplaceSource,
+        marketplacePlugin: record.marketplacePlugin,
+      });
+    }
     changed = true;
 
     const currentLabel = currentVersion ?? "unknown";
@@ -397,21 +570,26 @@ export async function syncPluginsForUpdateChannel(params: {
   config: OpenClawConfig;
   channel: UpdateChannel;
   workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
 }): Promise<PluginChannelSyncResult> {
+  const env = params.env ?? process.env;
   const summary: PluginChannelSyncSummary = {
     switchedToBundled: [],
     switchedToNpm: [],
     warnings: [],
     errors: [],
   };
-  const bundled = resolveBundledPluginSources({ workspaceDir: params.workspaceDir });
+  const bundled = resolveBundledPluginSources({
+    workspaceDir: params.workspaceDir,
+    env,
+  });
   if (bundled.size === 0) {
     return { config: params.config, changed: false, summary };
   }
 
   let next = params.config;
-  const loadHelpers = buildLoadPathHelpers(next.plugins?.load?.paths ?? []);
+  const loadHelpers = buildLoadPathHelpers(next.plugins?.load?.paths ?? [], env);
   const installs = next.plugins?.installs ?? {};
   let changed = false;
 
@@ -425,7 +603,7 @@ export async function syncPluginsForUpdateChannel(params: {
       loadHelpers.addPath(bundledInfo.localPath);
 
       const alreadyBundled =
-        record.source === "path" && pathsEqual(record.sourcePath, bundledInfo.localPath);
+        record.source === "path" && pathsEqual(record.sourcePath, bundledInfo.localPath, env);
       if (alreadyBundled) {
         continue;
       }
@@ -456,7 +634,7 @@ export async function syncPluginsForUpdateChannel(params: {
       if (record.source !== "path") {
         continue;
       }
-      if (!pathsEqual(record.sourcePath, bundledInfo.localPath)) {
+      if (!pathsEqual(record.sourcePath, bundledInfo.localPath, env)) {
         continue;
       }
       // Keep explicit bundled installs on release channels. Replacing them with
@@ -464,8 +642,8 @@ export async function syncPluginsForUpdateChannel(params: {
       loadHelpers.addPath(bundledInfo.localPath);
       const alreadyBundled =
         record.source === "path" &&
-        pathsEqual(record.sourcePath, bundledInfo.localPath) &&
-        pathsEqual(record.installPath, bundledInfo.localPath);
+        pathsEqual(record.sourcePath, bundledInfo.localPath, env) &&
+        pathsEqual(record.installPath, bundledInfo.localPath, env);
       if (alreadyBundled) {
         continue;
       }

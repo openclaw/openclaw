@@ -12,8 +12,8 @@ const dotenvState = vi.hoisted(() => {
   };
 });
 
-vi.mock("../infra/dotenv.js", () => ({
-  loadDotEnv: dotenvState.loadDotEnv,
+vi.mock("./dotenv.js", () => ({
+  loadCliDotEnv: dotenvState.loadDotEnv,
 }));
 
 vi.mock("../infra/env.js", () => ({

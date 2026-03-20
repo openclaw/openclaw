@@ -97,6 +97,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("context length exceeded") ||
     lower.includes("maximum context length") ||
     lower.includes("prompt is too long") ||
+    lower.includes("prompt too long") ||
     lower.includes("exceeds model context window") ||
     lower.includes("model token limit") ||
     (hasRequestSizeExceeds && hasContextWindow) ||
@@ -135,6 +136,13 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   }
 
   if (isReasoningConstraintErrorMessage(errorMessage)) {
+    return false;
+  }
+
+  // Billing/quota errors can contain patterns like "request size exceeds" or
+  // "maximum token limit exceeded" that match the context overflow heuristic.
+  // Billing is a more specific error class — exclude it early.
+  if (isBillingErrorMessage(errorMessage)) {
     return false;
   }
 
@@ -178,11 +186,38 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
   return lower.includes("context overflow");
 }
 
+const OBSERVED_OVERFLOW_TOKEN_PATTERNS = [
+  /prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i,
+  /requested\s+([\d,]+)\s+tokens/i,
+  /resulted in\s+([\d,]+)\s+tokens/i,
+];
+
+export function extractObservedOverflowTokenCount(errorMessage?: string): number | undefined {
+  if (!errorMessage) {
+    return undefined;
+  }
+
+  for (const pattern of OBSERVED_OVERFLOW_TOKEN_PATTERNS) {
+    const match = errorMessage.match(pattern);
+    const rawCount = match?.[1]?.replaceAll(",", "");
+    if (!rawCount) {
+      continue;
+    }
+    const parsed = Number(rawCount);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+  }
+
+  return undefined;
+}
+
+// Allow provider-wrapped API payloads such as "Ollama API error 400: {...}".
 const ERROR_PAYLOAD_PREFIX_RE =
-  /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
+  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)(?:\s+\d{3})?[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 const ERROR_PREFIX_RE =
-  /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
+  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
@@ -255,6 +290,13 @@ function hasExplicit402BillingSignal(text: string): boolean {
   );
 }
 
+function hasQuotaRefreshWindowSignal(text: string): boolean {
+  return (
+    text.includes("subscription quota limit") &&
+    (text.includes("automatic quota refresh") || text.includes("rolling time window"))
+  );
+}
+
 function hasRetryable402TransientSignal(text: string): boolean {
   const hasPeriodicHint = includesAnyHint(text, PERIODIC_402_HINTS);
   const hasSpendLimit = text.includes("spend limit") || text.includes("spending limit");
@@ -278,6 +320,10 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
   const normalized = normalize402Message(message);
   if (!normalized) {
     return "billing";
+  }
+
+  if (hasQuotaRefreshWindowSignal(normalized)) {
+    return "rate_limit";
   }
 
   if (hasExplicit402BillingSignal(normalized)) {
@@ -387,7 +433,7 @@ export function classifyFailoverReasonFromHttpStatus(
   if (status === 529) {
     return "overloaded";
   }
-  if (status === 400) {
+  if (status === 400 || status === 422) {
     // Some providers return quota/balance errors under HTTP 400, so do not
     // let the generic format fallback mask an explicit billing signal.
     if (message && isBillingErrorMessage(message)) {
