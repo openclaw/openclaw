@@ -708,9 +708,12 @@ export async function runAgentTurnWithFallback(params: {
   // error payload into runResult so it flows through the normal
   // kind:"success" path — preserving streaming dedup, message_send
   // suppression, and usage/model metadata updates.
-  if (runResult && !runResult.didSendViaMessagingTool) {
+  if (runResult) {
     const hasNonErrorContent = runResult.payloads?.some(
-      (p) => !p.isError && (p.text?.trim() || (p.mediaUrls?.length ?? 0) > 0),
+      (p) =>
+        !p.isError &&
+        !p.isReasoning &&
+        (p.text?.trim() || (p.mediaUrls?.length ?? 0) > 0),
     );
     if (!hasNonErrorContent) {
       const metaErrorMsg = finalEmbeddedError?.message ?? "";

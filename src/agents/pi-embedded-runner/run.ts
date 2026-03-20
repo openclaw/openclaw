@@ -1615,7 +1615,6 @@ export async function runEmbeddedPiAgent(
             payloads.length === 0 &&
             !aborted &&
             !timedOut &&
-            !attempt.didSendViaMessagingTool &&
             !attempt.clientToolCall &&
             !attempt.yieldDetected &&
             !attempt.didSendDeterministicApprovalPrompt &&
