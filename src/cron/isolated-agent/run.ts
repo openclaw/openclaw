@@ -1,4 +1,8 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { CliDeps } from "../../cli/outbound-send-deps.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { AgentDefaultsConfig } from "../../config/types.js";
+import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -39,14 +43,11 @@ import {
   normalizeVerboseLevel,
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
-import type { CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionTranscriptPath,
   setSessionRuntimeModel,
   updateSessionStore,
 } from "../../config/sessions.js";
-import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -56,9 +57,9 @@ import {
   getHookType,
   isExternalHookSession,
 } from "../../security/external-content.js";
+import { saveThreadContext } from "../../sessions/thread-context-store.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
-import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   dispatchCronDelivery,
   matchesMessagingToolDeliveryTarget,
@@ -927,6 +928,30 @@ export async function runCronIsolatedAgentTurn(params: {
   const deliveryAttempted = deliveryResult.deliveryAttempted;
   summary = deliveryResult.summary;
   outputText = deliveryResult.outputText;
+
+  // Persist thread context so follow-up replies in the same IM thread can
+  // reference what this cron run accomplished (issue #50556).
+  if (
+    delivered &&
+    resolvedDelivery.ok &&
+    resolvedDelivery.threadId != null &&
+    resolvedDelivery.threadId !== ""
+  ) {
+    const ctxSummary = deliveryResult.summary?.trim() || deliveryResult.outputText?.trim() || "";
+    if (ctxSummary) {
+      void saveThreadContext({
+        channel: resolvedDelivery.channel,
+        accountId: resolvedDelivery.accountId,
+        threadId: resolvedDelivery.threadId,
+        sessionKey: agentSessionKey,
+        summary: ctxSummary,
+        task:
+          params.job.payload.kind === "agentTurn"
+            ? String(params.job.payload.message ?? "").slice(0, 500)
+            : (params.job.id ?? ""),
+      });
+    }
+  }
 
   return resolveRunOutcome({ delivered, deliveryAttempted });
 }
