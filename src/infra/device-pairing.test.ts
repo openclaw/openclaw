@@ -162,6 +162,36 @@ describe("device pairing tokens", () => {
     expect(paired?.scopes).toEqual(["operator.read", "operator.write"]);
   });
 
+  test("keeps superseded requests interactive when an existing pending request is interactive", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const first = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+        scopes: [],
+        silent: false,
+      },
+      baseDir,
+    );
+    expect(first.request.silent).toBe(false);
+
+    const second = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+        silent: true,
+      },
+      baseDir,
+    );
+
+    expect(second.created).toBe(true);
+    expect(second.request.requestId).not.toBe(first.request.requestId);
+    expect(second.request.silent).toBe(false);
+  });
+
   test("rejects bootstrap token replay before pending scope escalation can be approved", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     const issued = await issueDeviceBootstrapToken({ baseDir });
