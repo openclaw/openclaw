@@ -195,8 +195,8 @@ export type PluginRuntimeChannel = {
   };
   matrix: {
     threadBindings: {
-      setIdleTimeoutBySessionKey: typeof import("../../../extensions/matrix/runtime-api.js").setMatrixThreadBindingIdleTimeoutBySessionKey;
-      setMaxAgeBySessionKey: typeof import("../../../extensions/matrix/runtime-api.js").setMatrixThreadBindingMaxAgeBySessionKey;
+      setIdleTimeoutBySessionKey: typeof import("../../../extensions/matrix/thread-binding-api.js").setMatrixThreadBindingIdleTimeoutBySessionKey;
+      setMaxAgeBySessionKey: typeof import("../../../extensions/matrix/thread-binding-api.js").setMatrixThreadBindingMaxAgeBySessionKey;
     };
   };
   signal: {

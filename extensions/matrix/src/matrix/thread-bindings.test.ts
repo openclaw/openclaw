@@ -21,10 +21,9 @@ const pluginSdkActual = vi.hoisted(() => ({
 }));
 
 const sendMessageMatrixMock = vi.hoisted(() =>
-  vi.fn(async (_to: string, _message: string, opts?: { threadId?: string }) => ({
-    messageId: opts?.threadId ? "$reply" : "$root",
-    roomId: "!room:example",
-  })),
+  vi.fn(async (params: { accountId: string; roomId: string; text: string; threadId?: string }) =>
+    params.threadId ? "$reply" : "$root",
+  ),
 );
 const writeJsonFileAtomicallyMock = vi.hoisted(() =>
   vi.fn<(filePath: string, value: unknown) => Promise<void>>(),
@@ -39,14 +38,6 @@ vi.mock("openclaw/plugin-sdk/matrix", async () => {
     ...actual,
     writeJsonFileAtomically: (filePath: string, value: unknown) =>
       writeJsonFileAtomicallyMock(filePath, value),
-  };
-});
-
-vi.mock("./send.js", async () => {
-  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
-  return {
-    ...actual,
-    sendMessageMatrix: sendMessageMatrixMock,
   };
 });
 
@@ -97,10 +88,10 @@ describe("matrix thread bindings", () => {
     await createMatrixThreadBindingManager({
       accountId: "ops",
       auth,
-      client: {} as never,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
       enableSweeper: false,
+      sendMessage: sendMessageMatrixMock,
     });
 
     const binding = await getSessionBindingService().bind({
@@ -117,9 +108,10 @@ describe("matrix thread bindings", () => {
       },
     });
 
-    expect(sendMessageMatrixMock).toHaveBeenCalledWith("room:!room:example", "intro root", {
-      client: {},
+    expect(sendMessageMatrixMock).toHaveBeenCalledWith({
       accountId: "ops",
+      roomId: "!room:example",
+      text: "intro root",
     });
     expect(binding.conversation).toEqual({
       channel: "matrix",
@@ -133,10 +125,10 @@ describe("matrix thread bindings", () => {
     await createMatrixThreadBindingManager({
       accountId: "ops",
       auth,
-      client: {} as never,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
       enableSweeper: false,
+      sendMessage: sendMessageMatrixMock,
     });
 
     const binding = await getSessionBindingService().bind({
@@ -154,9 +146,10 @@ describe("matrix thread bindings", () => {
       },
     });
 
-    expect(sendMessageMatrixMock).toHaveBeenCalledWith("room:!room:example", "intro thread", {
-      client: {},
+    expect(sendMessageMatrixMock).toHaveBeenCalledWith({
       accountId: "ops",
+      roomId: "!room:example",
+      text: "intro thread",
       threadId: "$thread",
     });
     expect(
@@ -179,9 +172,9 @@ describe("matrix thread bindings", () => {
       await createMatrixThreadBindingManager({
         accountId: "ops",
         auth,
-        client: {} as never,
         idleTimeoutMs: 1_000,
         maxAgeMs: 0,
+        sendMessage: sendMessageMatrixMock,
       });
 
       await getSessionBindingService().bind({
@@ -223,7 +216,6 @@ describe("matrix thread bindings", () => {
       await createMatrixThreadBindingManager({
         accountId: "ops",
         auth,
-        client: {} as never,
         idleTimeoutMs: 1_000,
         maxAgeMs: 0,
       });
@@ -278,9 +270,9 @@ describe("matrix thread bindings", () => {
       await createMatrixThreadBindingManager({
         accountId: "ops",
         auth,
-        client: {} as never,
         idleTimeoutMs: 1_000,
         maxAgeMs: 0,
+        sendMessage: sendMessageMatrixMock,
         logVerboseMessage,
       });
 
@@ -323,10 +315,10 @@ describe("matrix thread bindings", () => {
     await createMatrixThreadBindingManager({
       accountId: "ops",
       auth,
-      client: {} as never,
       idleTimeoutMs: 1_000,
       maxAgeMs: 0,
       enableSweeper: false,
+      sendMessage: sendMessageMatrixMock,
     });
 
     const binding = await getSessionBindingService().bind({
@@ -351,10 +343,10 @@ describe("matrix thread bindings", () => {
     });
 
     expect(sendMessageMatrixMock).toHaveBeenCalledWith(
-      "room:!room:example",
-      expect.stringContaining("Session ended automatically"),
       expect.objectContaining({
         accountId: "ops",
+        roomId: "!room:example",
+        text: expect.stringContaining("Session ended automatically"),
         threadId: "$thread",
       }),
     );
@@ -373,7 +365,6 @@ describe("matrix thread bindings", () => {
     const initialManager = await createMatrixThreadBindingManager({
       accountId: "ops",
       auth: initialAuth,
-      client: {} as never,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
       enableSweeper: false,
@@ -398,7 +389,6 @@ describe("matrix thread bindings", () => {
     await createMatrixThreadBindingManager({
       accountId: "ops",
       auth: rotatedAuth,
-      client: {} as never,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
       maxAgeMs: 0,
       enableSweeper: false,
@@ -439,7 +429,6 @@ describe("matrix thread bindings", () => {
       const manager = await createMatrixThreadBindingManager({
         accountId: "ops",
         auth,
-        client: {} as never,
         idleTimeoutMs: 24 * 60 * 60 * 1000,
         maxAgeMs: 0,
         enableSweeper: false,
@@ -497,7 +486,6 @@ describe("matrix thread bindings", () => {
       await createMatrixThreadBindingManager({
         accountId: "ops",
         auth,
-        client: {} as never,
         idleTimeoutMs: 24 * 60 * 60 * 1000,
         maxAgeMs: 0,
         enableSweeper: false,
@@ -541,7 +529,6 @@ describe("matrix thread bindings", () => {
       const manager = await createMatrixThreadBindingManager({
         accountId: "ops",
         auth,
-        client: {} as never,
         idleTimeoutMs: 24 * 60 * 60 * 1000,
         maxAgeMs: 0,
         enableSweeper: false,

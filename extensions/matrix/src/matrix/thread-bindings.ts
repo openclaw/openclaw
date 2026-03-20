@@ -11,8 +11,6 @@ import {
 } from "../runtime-api.js";
 import { resolveMatrixStoragePaths } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
-import type { MatrixClient } from "./sdk.js";
-import { sendMessageMatrix } from "./send.js";
 
 const STORE_VERSION = 1;
 const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
@@ -60,6 +58,13 @@ export type MatrixThreadBindingManager = {
     maxAgeMs: number;
   }) => MatrixThreadBindingRecord[];
   stop: () => void;
+};
+
+type MatrixThreadBindingSendParams = {
+  accountId: string;
+  roomId: string;
+  threadId?: string;
+  text: string;
 };
 
 const MANAGERS_BY_ACCOUNT_ID = new Map<string, MatrixThreadBindingManager>();
@@ -286,67 +291,29 @@ function buildMatrixBindingIntroText(params: {
   return `⚙️ ${base} session active. Messages here go directly to this session.`;
 }
 
-async function sendBindingMessage(params: {
-  client: MatrixClient;
-  accountId: string;
-  roomId: string;
-  threadId?: string;
-  text: string;
-}): Promise<string | null> {
+async function sendBindingMessage(
+  sendMessage: ((params: MatrixThreadBindingSendParams) => Promise<string | null>) | undefined,
+  params: MatrixThreadBindingSendParams,
+): Promise<string | null> {
   const trimmed = params.text.trim();
-  if (!trimmed) {
+  if (!trimmed || !sendMessage) {
     return null;
   }
-  const result = await sendMessageMatrix(`room:${params.roomId}`, trimmed, {
-    client: params.client,
-    accountId: params.accountId,
-    ...(params.threadId ? { threadId: params.threadId } : {}),
+  return await sendMessage({
+    ...params,
+    text: trimmed,
   });
-  return result.messageId || null;
-}
-
-async function sendFarewellMessage(params: {
-  client: MatrixClient;
-  accountId: string;
-  record: MatrixThreadBindingRecord;
-  defaultIdleTimeoutMs: number;
-  defaultMaxAgeMs: number;
-  reason?: string;
-}): Promise<void> {
-  const roomId = params.record.parentConversationId ?? params.record.conversationId;
-  const idleTimeoutMs =
-    typeof params.record.idleTimeoutMs === "number"
-      ? params.record.idleTimeoutMs
-      : params.defaultIdleTimeoutMs;
-  const maxAgeMs =
-    typeof params.record.maxAgeMs === "number" ? params.record.maxAgeMs : params.defaultMaxAgeMs;
-  const farewellText = resolveThreadBindingFarewellText({
-    reason: params.reason,
-    idleTimeoutMs,
-    maxAgeMs,
-  });
-  await sendBindingMessage({
-    client: params.client,
-    accountId: params.accountId,
-    roomId,
-    threadId:
-      params.record.parentConversationId &&
-      params.record.parentConversationId !== params.record.conversationId
-        ? params.record.conversationId
-        : undefined,
-    text: farewellText,
-  }).catch(() => {});
 }
 
 export async function createMatrixThreadBindingManager(params: {
   accountId: string;
   auth: MatrixAuth;
-  client: MatrixClient;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   idleTimeoutMs: number;
   maxAgeMs: number;
   enableSweeper?: boolean;
+  sendMessage?: (params: MatrixThreadBindingSendParams) => Promise<string | null>;
   logVerboseMessage?: (message: string) => void;
 }): Promise<MatrixThreadBindingManager> {
   if (params.auth.accountId !== params.accountId) {
@@ -523,14 +490,24 @@ export async function createMatrixThreadBindingManager(params: {
   ) => {
     await Promise.all(
       removed.map(async (record) => {
-        await sendFarewellMessage({
-          client: params.client,
-          accountId: params.accountId,
-          record,
-          defaultIdleTimeoutMs: defaults.idleTimeoutMs,
-          defaultMaxAgeMs: defaults.maxAgeMs,
+        const roomId = record.parentConversationId ?? record.conversationId;
+        const idleTimeoutMs =
+          typeof record.idleTimeoutMs === "number" ? record.idleTimeoutMs : defaults.idleTimeoutMs;
+        const maxAgeMs = typeof record.maxAgeMs === "number" ? record.maxAgeMs : defaults.maxAgeMs;
+        const farewellText = resolveThreadBindingFarewellText({
           reason: typeof reason === "function" ? reason(record) : reason,
+          idleTimeoutMs,
+          maxAgeMs,
         });
+        await sendBindingMessage(params.sendMessage, {
+          accountId: params.accountId,
+          roomId,
+          threadId:
+            record.parentConversationId && record.parentConversationId !== record.conversationId
+              ? record.conversationId
+              : undefined,
+          text: farewellText,
+        }).catch(() => {});
       }),
     );
   };
@@ -565,8 +542,7 @@ export async function createMatrixThreadBindingManager(params: {
 
       if (input.placement === "child") {
         const roomId = parentConversationId || conversationId;
-        const rootEventId = await sendBindingMessage({
-          client: params.client,
+        const rootEventId = await sendBindingMessage(params.sendMessage, {
           accountId: params.accountId,
           roomId,
           text: introText,
@@ -603,8 +579,7 @@ export async function createMatrixThreadBindingManager(params: {
           boundParentConversationId && boundParentConversationId !== boundConversationId
             ? boundConversationId
             : undefined;
-        await sendBindingMessage({
-          client: params.client,
+        await sendBindingMessage(params.sendMessage, {
           accountId: params.accountId,
           roomId,
           threadId,

@@ -605,7 +605,6 @@ async function createContractMatrixThreadBindingManager() {
       userId: "@bot:example.org",
       accessToken: "token",
     },
-    client: {} as never,
     stateDir,
     idleTimeoutMs: 24 * 60 * 60 * 1000,
     maxAgeMs: 0,

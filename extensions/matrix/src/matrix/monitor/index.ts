@@ -19,6 +19,7 @@ import {
   resolveSharedMatrixClient,
 } from "../client.js";
 import { releaseSharedClientInstance } from "../client/shared.js";
+import { sendMessageMatrix } from "../send.js";
 import { createMatrixThreadBindingManager } from "../thread-bindings.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { resolveMatrixMonitorConfig } from "./config.js";
@@ -222,10 +223,17 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     threadBindingManager = await createMatrixThreadBindingManager({
       accountId: account.accountId,
       auth,
-      client,
       env: process.env,
       idleTimeoutMs: threadBindingIdleTimeoutMs,
       maxAgeMs: threadBindingMaxAgeMs,
+      sendMessage: async ({ accountId, roomId, threadId, text }) => {
+        const result = await sendMessageMatrix(`room:${roomId}`, text, {
+          client,
+          accountId,
+          ...(threadId ? { threadId } : {}),
+        });
+        return result.messageId || null;
+      },
       logVerboseMessage,
     });
     logVerboseMessage(
