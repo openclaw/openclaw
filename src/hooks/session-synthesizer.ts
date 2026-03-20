@@ -91,9 +91,11 @@ export async function synthesizeSessionContent(params: {
       cleanupBundleMcpOnRunEnd: true,
     });
 
-    // Extract text from payloads
+    // Extract text from payloads, skipping error payloads (e.g., timeout/auth failures)
+    // so we fall back to raw content instead of storing an error message as the summary.
     if (result.payloads && result.payloads.length > 0) {
-      const text = result.payloads[0]?.text?.trim();
+      const successPayload = result.payloads.find((p) => p.text?.trim() && !p.isError);
+      const text = successPayload?.text?.trim();
       if (text) {
         // If the LLM determined nothing worth remembering, return null
         if (text === "NO_SUMMARY" || text.startsWith("NO_SUMMARY")) {
