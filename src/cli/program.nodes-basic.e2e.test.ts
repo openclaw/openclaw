@@ -100,6 +100,40 @@ describe("cli program (nodes basics)", () => {
     expect(output).not.toContain("Two");
   });
 
+  it("runs nodes list and includes connected nodes missing from node.pair.list", async () => {
+    const now = Date.now();
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [],
+        };
+      }
+      if (opts.method === "node.list") {
+        return {
+          nodes: [
+            {
+              nodeId: "n-live",
+              displayName: "Live Node",
+              remoteIp: "10.0.0.9",
+              paired: false,
+              connected: true,
+              connectedAtMs: now - 1_000,
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "list"]);
+
+    const output = getRuntimeOutput();
+    expect(output).toContain("Pending: 0 · Paired: 0");
+    expect(output).toContain("Live Node");
+  });
+
   it("runs nodes status --last-connected and filters by age", async () => {
     const now = Date.now();
     callGateway.mockImplementation(async (...args: unknown[]) => {
