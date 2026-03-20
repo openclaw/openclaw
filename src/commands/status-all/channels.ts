@@ -211,7 +211,7 @@ const buildAccountNotes = (params: {
       cfg,
       accountId: snapshot.accountId,
       allowFrom,
-    }).slice(0, 3);
+    });
     if (formatted.length > 0) {
       notes.push(`allow:${formatted.join(",")}`);
     }
