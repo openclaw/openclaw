@@ -1,1 +1,10 @@
-export * from "openclaw/plugin-sdk/qwen-portal-auth";
+export { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-oauth";
+export { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+export type { ProviderAuthContext, ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+export { ensureAuthProfileStore, listProfilesForProvider } from "openclaw/plugin-sdk/provider-auth";
+export { QWEN_OAUTH_MARKER } from "openclaw/plugin-sdk/agent-runtime";
+export {
+  generatePkceVerifierChallenge,
+  toFormUrlEncoded,
+} from "openclaw/plugin-sdk/provider-oauth";
+export { refreshQwenPortalCredentials } from "./refresh.js";

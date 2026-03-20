@@ -100,6 +100,7 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { createOptionalChannelSetupSurface } from "openclaw/plugin-sdk/channel-setup";
 import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-oauth";
 
 // Wrong: monolithic root (lint will reject this)
 import { ... } from "openclaw/plugin-sdk";
@@ -120,6 +121,7 @@ Common subpaths:
 | `plugin-sdk/runtime-store`          | Persistent plugin storage            |
 | `plugin-sdk/allow-from`             | Allowlist resolution                 |
 | `plugin-sdk/reply-payload`          | Message reply types                  |
+| `plugin-sdk/provider-oauth`         | OAuth login + PKCE helpers           |
 | `plugin-sdk/provider-onboard`       | Provider onboarding config patches   |
 | `plugin-sdk/testing`                | Test utilities                       |
 
