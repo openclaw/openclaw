@@ -3,7 +3,7 @@ import type {
   ProviderAuthContext,
   ProviderFetchUsageSnapshotContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-oauth";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 
