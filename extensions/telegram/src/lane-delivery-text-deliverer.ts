@@ -431,11 +431,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       if (finalized === "edited") {
         params.onPreviewDelivered?.(text, archivedPreview.messageId);
         return "preview-finalized";
-      }
-      if (finalized === "regressive-skipped") {
-        // Kept the longer preview; emit hook with actual visible content.
-        params.onPreviewDelivered?.(archivedPreview.textSnapshot, archivedPreview.messageId);
-        return "preview-finalized";
+        const visibleText = archivedPreview.textSnapshot;
+        params.onPreviewDelivered?.(visibleText, archivedPreview.messageId);
       }
       if (finalized === "retained") {
         params.retainPreviewOnCleanupByLane.answer = true;
