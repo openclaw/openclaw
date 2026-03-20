@@ -17,6 +17,7 @@ import {
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
 } from "./accounts.js";
+import { feishuMessageActions } from "./actions.js";
 import {
   listFeishuDirectoryPeers,
   listFeishuDirectoryGroups,
@@ -299,6 +300,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       hint: "<chatId|user:openId|chat:chatId>",
     },
   },
+  actions: feishuMessageActions,
   directory: {
     self: async () => null,
     listPeers: async ({ cfg, query, limit, accountId }) =>

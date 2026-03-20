@@ -58,7 +58,7 @@ function resolveReplyToMessageId(params: {
   return trimmed || undefined;
 }
 
-async function sendOutboundText(params: {
+export async function sendOutboundText(params: {
   cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
   to: string;
   text: string;

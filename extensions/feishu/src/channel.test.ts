@@ -7,6 +7,7 @@ vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
 }));
 
+import { feishuMessageActions } from "./actions.js";
 import { feishuPlugin } from "./channel.js";
 
 describe("feishuPlugin.status.probeAccount", () => {
@@ -44,5 +45,11 @@ describe("feishuPlugin.status.probeAccount", () => {
       }),
     );
     expect(result).toMatchObject({ ok: true, appId: "cli_main" });
+  });
+});
+
+describe("feishuPlugin action wiring", () => {
+  it("registers the Feishu message action adapter", () => {
+    expect(feishuPlugin.actions).toBe(feishuMessageActions);
   });
 });

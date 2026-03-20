@@ -12,9 +12,14 @@ export type { ReplyPayload } from "../auto-reply/types.js";
 export { logTypingFailure } from "../channels/logging.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
 export type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "../channels/plugins/types.js";
+export type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
 } from "../channels/plugins/onboarding-types.js";
+export { jsonResult, readStringParam } from "../agents/tools/common.js";
 export {
   buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
@@ -50,6 +55,7 @@ export {
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
 export { buildSecretInputSchema } from "./secret-input-schema.js";
+export { extractToolSend } from "./tool-send.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export { installRequestBodyLimitGuard } from "../infra/http-body.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
