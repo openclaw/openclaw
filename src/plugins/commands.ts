@@ -8,6 +8,7 @@
 import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   detachPluginConversationBinding,
   getCurrentPluginConversationBinding,
@@ -25,28 +26,19 @@ type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginRoot?: string;
 };
 
-// Registry of plugin commands — shared via global symbol so all module instances
-// (including jiti-loaded extensions) access the same Map.
-const PLUGIN_COMMANDS_KEY = Symbol.for("openclaw.pluginCommands");
-const PLUGIN_COMMANDS_LOCK_KEY = Symbol.for("openclaw.pluginCommandsLocked");
-
-type GlobalWithPluginCommands = typeof globalThis & {
-  [key: symbol]: Map<string, RegisteredPluginCommand> | boolean | undefined;
+type PluginCommandState = {
+  pluginCommands: Map<string, RegisteredPluginCommand>;
+  registryLocked: boolean;
 };
 
-const g = globalThis as GlobalWithPluginCommands;
-if (!g[PLUGIN_COMMANDS_KEY]) {
-  g[PLUGIN_COMMANDS_KEY] = new Map<string, RegisteredPluginCommand>();
-}
-const pluginCommands = g[PLUGIN_COMMANDS_KEY] as Map<string, RegisteredPluginCommand>;
+const PLUGIN_COMMAND_STATE_KEY = Symbol.for("openclaw.pluginCommandsState");
 
-// Lock to prevent modifications during command execution
-function isRegistryLocked(): boolean {
-  return (g[PLUGIN_COMMANDS_LOCK_KEY] as boolean) ?? false;
-}
-function setRegistryLocked(locked: boolean): void {
-  g[PLUGIN_COMMANDS_LOCK_KEY] = locked;
-}
+const state = resolveGlobalSingleton<PluginCommandState>(PLUGIN_COMMAND_STATE_KEY, () => ({
+  pluginCommands: new Map<string, RegisteredPluginCommand>(),
+  registryLocked: false,
+}));
+
+const pluginCommands = state.pluginCommands;
 
 // Maximum allowed length for command arguments (defense in depth)
 const MAX_ARGS_LENGTH = 4096;
@@ -189,7 +181,7 @@ export function registerPluginCommand(
   opts?: { pluginName?: string; pluginRoot?: string },
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
-  if (isRegistryLocked()) {
+  if (state.registryLocked) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
 
@@ -468,7 +460,7 @@ export async function executePluginCommand(params: {
   };
 
   // Lock registry during execution to prevent concurrent modifications
-  setRegistryLocked(true);
+  state.registryLocked = true;
   try {
     const result = await command.handler(ctx);
     logVerbose(
@@ -481,7 +473,7 @@ export async function executePluginCommand(params: {
     // Don't leak internal error details - return a safe generic message
     return { text: "⚠️ Command failed. Please try again later." };
   } finally {
-    setRegistryLocked(false);
+    state.registryLocked = false;
   }
 }
 

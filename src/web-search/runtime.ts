@@ -5,10 +5,8 @@ import type {
   PluginWebSearchProviderEntry,
   WebSearchProviderToolDefinition,
 } from "../plugins/types.js";
-import {
-  resolvePluginWebSearchProviders,
-  resolveRuntimeWebSearchProviders,
-} from "../plugins/web-search-providers.js";
+import { resolveBundledPluginWebSearchProviders } from "../plugins/web-search-providers.js";
+import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
@@ -61,19 +59,14 @@ function readProviderEnvValue(envVars: string[]): string | undefined {
   return undefined;
 }
 
-function hasProviderCredential(
-  providerId: string,
+function hasEntryCredential(
+  provider: Pick<
+    PluginWebSearchProviderEntry,
+    "credentialPath" | "envVars" | "getConfiguredCredentialValue" | "getCredentialValue"
+  >,
   config: OpenClawConfig | undefined,
   search: WebSearchConfig | undefined,
 ): boolean {
-  const providers = resolvePluginWebSearchProviders({
-    config,
-    bundledAllowlistCompat: true,
-  });
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    return false;
-  }
   const rawValue =
     provider.getConfiguredCredentialValue?.(config) ??
     provider.getCredentialValue(search as Record<string, unknown> | undefined);
@@ -102,7 +95,7 @@ export function resolveWebSearchProviderId(params: {
 }): string {
   const providers =
     params.providers ??
-    resolvePluginWebSearchProviders({
+    resolveBundledPluginWebSearchProviders({
       config: params.config,
       bundledAllowlistCompat: true,
     });
@@ -120,7 +113,7 @@ export function resolveWebSearchProviderId(params: {
 
   if (!raw) {
     for (const provider of providers) {
-      if (!hasProviderCredential(provider.id, params.config, params.search)) {
+      if (!hasEntryCredential(provider, params.config, params.search)) {
         continue;
       }
       logVerbose(
@@ -147,7 +140,7 @@ export function resolveWebSearchDefinition(
           config: options?.config,
           bundledAllowlistCompat: true,
         })
-      : resolvePluginWebSearchProviders({
+      : resolveBundledPluginWebSearchProviders({
           config: options?.config,
           bundledAllowlistCompat: true,
         })
