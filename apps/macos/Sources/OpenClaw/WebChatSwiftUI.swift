@@ -471,7 +471,7 @@ final class WebChatSwiftUIWindowController {
 
 // MARK: - Chat window toolbar
 
-private var chatToolbarDelegateKey: UInt8 = 0
+nonisolated(unsafe) private var chatToolbarDelegateKey: UInt8 = 0
 
 private extension NSToolbarItem.Identifier {
     static let chatGearMenu = NSToolbarItem.Identifier("chatGearMenu")
