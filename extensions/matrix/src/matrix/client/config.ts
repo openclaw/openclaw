@@ -117,7 +117,7 @@ export async function resolveMatrixAuth(params?: {
     saveMatrixCredentials,
     credentialsMatchConfig,
     touchMatrixCredentials,
-  } = await import("../credentials.js");
+  } = await import("../credentials.runtime.js");
 
   const accountId = params?.accountId;
   const cached = loadMatrixCredentials(env, accountId);
