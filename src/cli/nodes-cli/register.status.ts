@@ -124,9 +124,7 @@ function shouldFallbackToPairList(error: unknown): boolean {
     message.includes("unknown method") ||
     message.includes("method not found") ||
     message.includes("not implemented") ||
-    message.includes("unsupported") ||
-    message.includes("unauthorized") ||
-    message.includes("forbidden")
+    message.includes("unsupported")
   );
 }
 
@@ -397,8 +395,9 @@ export function registerNodesStatusCommands(nodes: Command) {
           ).length;
           const filteredLabel =
             hasFilters && pairedCount !== totalPairedCount ? ` (of ${totalPairedCount})` : "";
+          const connectedCount = filteredNodes.filter((node) => Boolean(node.connected)).length;
           defaultRuntime.log(
-            `Pending: ${pendingRows.length} · Paired: ${pairedCount}${filteredLabel}`,
+            `Pending: ${pendingRows.length} · Paired: ${pairedCount}${filteredLabel} · Connected: ${connectedCount}`,
           );
 
           if (opts.json) {

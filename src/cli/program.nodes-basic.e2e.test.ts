@@ -130,7 +130,7 @@ describe("cli program (nodes basics)", () => {
     await runProgram(["nodes", "list"]);
 
     const output = getRuntimeOutput();
-    expect(output).toContain("Pending: 0 · Paired: 0");
+    expect(output).toContain("Pending: 0 · Paired: 0 · Connected: 1");
     expect(output).toContain("Live Node");
   });
 
