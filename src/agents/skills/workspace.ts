@@ -81,9 +81,6 @@ function filterSkillEntries(
   applyEligibility = true,
   targetPlatform?: string,
 ): { entries: SkillEntry[]; policy?: EffectiveSkillPolicy } {
-  if (config?.skills?.policy && typeof config.skills.policy === "object") {
-    assertNoCanonicalSkillAliasCollisions(entries);
-  }
   const policy =
     typeof agentId === "string" && agentId.trim().length > 0
       ? resolveEffectiveSkillPolicy(config, agentId)
@@ -112,6 +109,9 @@ function filterSkillEntries(
     skillsLogger.debug(
       `After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`,
     );
+  }
+  if (config?.skills?.policy && typeof config.skills.policy === "object") {
+    assertNoCanonicalSkillAliasCollisions(filtered);
   }
   return { entries: filtered, policy };
 }
@@ -838,6 +838,14 @@ export function loadWorkspaceSkillEntries(
   },
 ): SkillEntry[] {
   const entries = loadSkillEntries(workspaceDir, opts);
+  const shouldFilter =
+    Boolean(opts?.agentId) ||
+    opts?.applyPolicy === false ||
+    opts?.applyEligibility !== undefined ||
+    opts?.targetPlatform !== undefined;
+  if (!shouldFilter) {
+    return entries;
+  }
   // Policy filtering needs both config (policy definition) and agentId (scope key).
   // Eligibility/config gates should still run even when policy is skipped.
   const policyAgentId = opts?.applyPolicy === false ? undefined : opts?.agentId;

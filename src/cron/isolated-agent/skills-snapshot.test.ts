@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   matchesSkillPolicySnapshotMock: vi.fn(),
   resolveSkillPolicySnapshotMock: vi.fn(),
   getSkillsSnapshotVersionMock: vi.fn(),
+  shouldRefreshSnapshotForVersionMock: vi.fn(),
   getRemoteSkillEligibilityMock: vi.fn(),
 }));
 
@@ -30,6 +31,7 @@ vi.mock("../../agents/skills/policy.js", () => ({
 
 vi.mock("../../agents/skills/refresh.js", () => ({
   getSkillsSnapshotVersion: mocks.getSkillsSnapshotVersionMock,
+  shouldRefreshSnapshotForVersion: mocks.shouldRefreshSnapshotForVersionMock,
 }));
 
 vi.mock("../../infra/skills-remote.js", () => ({
@@ -46,6 +48,15 @@ describe("resolveCronSkillsSnapshot", () => {
     mocks.matchesSkillPolicySnapshotMock.mockReturnValue(true);
     mocks.resolveSkillPolicySnapshotMock.mockReturnValue(undefined);
     mocks.getRemoteSkillEligibilityMock.mockReturnValue({});
+    mocks.shouldRefreshSnapshotForVersionMock.mockImplementation(
+      (currentVersion: number | undefined, snapshotVersion: number) => {
+        const current = currentVersion ?? 0;
+        if (snapshotVersion > 0) {
+          return current < snapshotVersion;
+        }
+        return current > 0;
+      },
+    );
     mocks.buildWorkspaceSkillSnapshotMock.mockReturnValue({
       prompt: "rebuilt",
       skills: [],

@@ -129,6 +129,20 @@ export function getSkillsSnapshotVersion(workspaceDir?: string): number {
   return Math.max(globalVersion, local);
 }
 
+export function shouldRefreshSnapshotForVersion(
+  currentVersion: number | undefined,
+  snapshotVersion: number,
+): boolean {
+  const current = currentVersion ?? 0;
+  // Usual monotonic update while process is alive.
+  if (snapshotVersion > 0) {
+    return current < snapshotVersion;
+  }
+  // Counter resets to 0 on restart. Refresh once when cached snapshots still
+  // carry a positive version from the previous process.
+  return current > 0;
+}
+
 export function ensureSkillsWatcher(params: { workspaceDir: string; config?: OpenClawConfig }) {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {

@@ -8,7 +8,11 @@ import {
   matchesSkillPolicySnapshot,
   resolveSkillPolicySnapshot,
 } from "../../agents/skills/policy.js";
-import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import {
+  ensureSkillsWatcher,
+  getSkillsSnapshotVersion,
+  shouldRefreshSnapshotForVersion,
+} from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
@@ -198,7 +202,7 @@ export async function ensureSkillSnapshot(params: {
   const policySnapshot = resolveSkillPolicySnapshot(cfg, sessionAgentId);
   ensureSkillsWatcher({ workspaceDir, config: cfg });
   const shouldRefreshSnapshot =
-    (snapshotVersion > 0 && (existingSnapshot?.version ?? 0) < snapshotVersion) ||
+    shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
     !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter) ||
     !matchesSkillPolicySnapshot(existingSnapshot?.policy, policySnapshot);
   const buildSnapshot = () =>

@@ -5,7 +5,10 @@ import {
   matchesSkillPolicySnapshot,
   resolveSkillPolicySnapshot,
 } from "../../agents/skills/policy.js";
-import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import {
+  getSkillsSnapshotVersion,
+  shouldRefreshSnapshotForVersion,
+} from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 
@@ -27,7 +30,7 @@ export function resolveCronSkillsSnapshot(params: {
   const existingSnapshot = params.existingSnapshot;
   const shouldRefresh =
     !existingSnapshot ||
-    (snapshotVersion > 0 && (existingSnapshot.version ?? 0) < snapshotVersion) ||
+    shouldRefreshSnapshotForVersion(existingSnapshot.version, snapshotVersion) ||
     !matchesSkillFilter(existingSnapshot.skillFilter, skillFilter) ||
     !matchesSkillPolicySnapshot(existingSnapshot.policy, policySnapshot);
   if (!shouldRefresh) {
