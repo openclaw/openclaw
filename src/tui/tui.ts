@@ -230,6 +230,27 @@ export function resolveInitialTuiAgentId(params: {
   return normalizeAgentId(params.fallbackAgentId);
 }
 
+export function parseMouseWheelEvent(data: string): { direction: "up" | "down"; row: number; col: number } | null {
+  const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
+  if (!match) {
+    return null;
+  }
+  const code = Number.parseInt(match[1] ?? "", 10);
+  const col = Number.parseInt(match[2] ?? "", 10);
+  const row = Number.parseInt(match[3] ?? "", 10);
+  if (!Number.isFinite(code) || !Number.isFinite(col) || !Number.isFinite(row)) {
+    return null;
+  }
+  const baseCode = code & ~4 & ~8 & ~16;
+  if (baseCode === 64) {
+    return { direction: "up", row, col };
+  }
+  if (baseCode === 65) {
+    return { direction: "down", row, col };
+  }
+  return null;
+}
+
 export function resolveGatewayDisconnectState(reason?: string): {
   connectionStatus: string;
   activityStatus: string;
@@ -531,6 +552,23 @@ export async function runTui(opts: TuiOptions) {
   const tui = new TUI(new ProcessTerminal());
   const dedupeBackspace = createBackspaceDeduper();
   tui.addInputListener((data) => {
+    const mouse = parseMouseWheelEvent(data);
+    if (!mouse || tui.hasOverlay()) {
+      return undefined;
+    }
+    if (mouse.row < chatViewportTop || mouse.row > chatViewportBottom) {
+      return undefined;
+    }
+    if (mouse.direction === "up") {
+      chatLog.scrollPageUp();
+    } else {
+      chatLog.scrollPageDown();
+    }
+    tui.requestRender();
+    return { consume: true };
+  });
+
+  tui.addInputListener((data) => {
     const next = dedupeBackspace(data);
     if (next.length === 0) {
       return { consume: true };
@@ -542,6 +580,8 @@ export async function runTui(opts: TuiOptions) {
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
   const editor = new CustomEditor(tui, editorTheme);
+  let chatViewportTop = 1;
+  let chatViewportBottom = 1;
   const root = new (class extends Container {
     override render(width: number) {
       const headerLines = header.render(width);
@@ -553,6 +593,8 @@ export async function runTui(opts: TuiOptions) {
       const available = Math.max(1, tui.terminal.rows - reserved);
       chatLog.setViewportHeight(available);
       const chatLines = chatLog.render(width);
+      chatViewportTop = headerLines.length + 1;
+      chatViewportBottom = chatViewportTop + Math.max(chatLines.length, 1) - 1;
       return [...headerLines, ...chatLines, ...statusLines, ...footerLines, ...editorLines];
     }
   })();
@@ -1058,6 +1100,7 @@ export async function runTui(opts: TuiOptions) {
   process.on("SIGINT", sigintHandler);
   process.on("SIGTERM", sigtermHandler);
   tui.start();
+  tui.terminal.write("\x1b[?1000h\x1b[?1002h\x1b[?1006h");
   client.start();
   await new Promise<void>((resolve) => {
     const finish = () => {
