@@ -261,9 +261,19 @@ export async function ensureDockerImage(image: string) {
     return;
   }
   if (image === DEFAULT_SANDBOX_IMAGE) {
-    await execDocker(["pull", "debian:bookworm-slim"]);
-    await execDocker(["tag", "debian:bookworm-slim", DEFAULT_SANDBOX_IMAGE]);
-    return;
+    // Prefer the pre-built image from GitHub Container Registry (contains python3 + tools).
+    // Falls back to building locally from Dockerfile.sandbox if the registry pull fails.
+    const registryImage = "ghcr.io/openclaw/openclaw:main-slim-amd64";
+    try {
+      await execDocker(["pull", registryImage]);
+      await execDocker(["tag", registryImage, DEFAULT_SANDBOX_IMAGE]);
+      return;
+    } catch {
+      // Registry pull failed; build locally from the included Dockerfile.sandbox
+      const dockerfilePath = process.cwd() + "/Dockerfile.sandbox";
+      await execDocker(["build", "-t", DEFAULT_SANDBOX_IMAGE, "-f", dockerfilePath, "."]);
+      return;
+    }
   }
   throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
 }
