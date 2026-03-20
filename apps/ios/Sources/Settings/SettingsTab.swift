@@ -399,6 +399,8 @@ struct SettingsTab: View {
                         }
                     }
 
+                    PrivacyAccessSectionView()
+
                     DisclosureGroup("Device Info") {
                         TextField("Name", text: self.$displayName)
                         Text(self.instanceId)
