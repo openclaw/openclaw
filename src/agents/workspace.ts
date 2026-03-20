@@ -165,6 +165,17 @@ type WorkspaceSetupState = {
   setupCompletedAt?: string;
 };
 
+type WorkspaceTemplatedRootFileName =
+  | typeof DEFAULT_AGENTS_FILENAME
+  | typeof DEFAULT_SOUL_FILENAME
+  | typeof DEFAULT_TOOLS_FILENAME
+  | typeof DEFAULT_IDENTITY_FILENAME
+  | typeof DEFAULT_USER_FILENAME
+  | typeof DEFAULT_HEARTBEAT_FILENAME
+  | typeof DEFAULT_BOOTSTRAP_FILENAME;
+
+type WorkspaceTemplateContentByName = Record<WorkspaceTemplatedRootFileName, string>;
+
 /** Set of recognized bootstrap filenames for runtime validation */
 const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_AGENTS_FILENAME,
@@ -177,6 +188,20 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
 ]);
+
+const WORKSPACE_SEED_ROOT_FILENAMES = [
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_MEMORY_ALT_FILENAME,
+] as const;
+
+const WORKSPACE_SEED_DIRECTORY_NAMES = ["memory", "avatars"] as const;
 
 async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
   try {
@@ -200,6 +225,164 @@ async function fileExists(filePath: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function readTextFileIfExists(filePath: string): Promise<string | null> {
+  try {
+    return await fs.readFile(filePath, "utf-8");
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function resolveBundledWorkspaceSeedDir(workspaceDir: string): Promise<string | null> {
+  const rawConfigPath = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (!rawConfigPath) {
+    return null;
+  }
+  const configPath = path.resolve(resolveUserPath(rawConfigPath));
+  const sourceDir = path.dirname(configPath);
+  if (path.resolve(sourceDir) === path.resolve(workspaceDir)) {
+    return null;
+  }
+  const markerPaths = [
+    ...WORKSPACE_SEED_ROOT_FILENAMES.map((name) => path.join(sourceDir, name)),
+    ...WORKSPACE_SEED_DIRECTORY_NAMES.map((name) => path.join(sourceDir, name)),
+  ];
+  const existingMarkers = await Promise.all(markerPaths.map((filePath) => fileExists(filePath)));
+  return existingMarkers.some(Boolean) ? sourceDir : null;
+}
+
+function hasMeaningfulSeedContent(params: {
+  fileName: (typeof WORKSPACE_SEED_ROOT_FILENAMES)[number];
+  content: string;
+  templates: WorkspaceTemplateContentByName;
+}): boolean {
+  switch (params.fileName) {
+    case DEFAULT_AGENTS_FILENAME:
+    case DEFAULT_SOUL_FILENAME:
+    case DEFAULT_TOOLS_FILENAME:
+    case DEFAULT_IDENTITY_FILENAME:
+    case DEFAULT_USER_FILENAME:
+    case DEFAULT_HEARTBEAT_FILENAME:
+    case DEFAULT_BOOTSTRAP_FILENAME:
+      return params.content !== params.templates[params.fileName];
+    default:
+      return params.content.trim().length > 0;
+  }
+}
+
+async function copySeedDirectoryIfMissing(params: {
+  sourceDir: string;
+  targetDir: string;
+}): Promise<boolean> {
+  let entries: syncFs.Dirent[] = [];
+  try {
+    entries = await fs.readdir(params.sourceDir, { withFileTypes: true });
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code === "ENOENT") {
+      return false;
+    }
+    throw err;
+  }
+
+  let copied = false;
+  for (const entry of entries) {
+    const sourcePath = path.join(params.sourceDir, entry.name);
+    const targetPath = path.join(params.targetDir, entry.name);
+    if (entry.isDirectory()) {
+      await fs.mkdir(targetPath, { recursive: true });
+      copied =
+        (await copySeedDirectoryIfMissing({
+          sourceDir: sourcePath,
+          targetDir: targetPath,
+        })) || copied;
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (await fileExists(targetPath)) {
+      continue;
+    }
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.copyFile(sourcePath, targetPath);
+    copied = true;
+  }
+  return copied;
+}
+
+async function seedWorkspaceFromBundledDir(params: {
+  workspaceDir: string;
+  sourceDir: string;
+  templates: WorkspaceTemplateContentByName;
+}): Promise<void> {
+  let hasSeededWorkspaceContent = false;
+
+  for (const fileName of WORKSPACE_SEED_ROOT_FILENAMES) {
+    const sourcePath = path.join(params.sourceDir, fileName);
+    const sourceContent = await readTextFileIfExists(sourcePath);
+    if (sourceContent === null) {
+      continue;
+    }
+    const targetPath = path.join(params.workspaceDir, fileName);
+    const targetContent = await readTextFileIfExists(targetPath);
+    hasSeededWorkspaceContent =
+      hasMeaningfulSeedContent({
+        fileName,
+        content: sourceContent,
+        templates: params.templates,
+      }) || hasSeededWorkspaceContent;
+    if (targetContent === null) {
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.copyFile(sourcePath, targetPath);
+      continue;
+    }
+    if (targetContent === sourceContent) {
+      continue;
+    }
+    switch (fileName) {
+      case DEFAULT_AGENTS_FILENAME:
+      case DEFAULT_SOUL_FILENAME:
+      case DEFAULT_TOOLS_FILENAME:
+      case DEFAULT_IDENTITY_FILENAME:
+      case DEFAULT_USER_FILENAME:
+      case DEFAULT_HEARTBEAT_FILENAME:
+      case DEFAULT_BOOTSTRAP_FILENAME: {
+        const templateContent = params.templates[fileName];
+        if (targetContent === templateContent && sourceContent !== templateContent) {
+          await fs.writeFile(targetPath, sourceContent, "utf-8");
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  for (const dirName of WORKSPACE_SEED_DIRECTORY_NAMES) {
+    hasSeededWorkspaceContent =
+      (await copySeedDirectoryIfMissing({
+        sourceDir: path.join(params.sourceDir, dirName),
+        targetDir: path.join(params.workspaceDir, dirName),
+      })) || hasSeededWorkspaceContent;
+  }
+
+  const sourceBootstrapPath = path.join(params.sourceDir, DEFAULT_BOOTSTRAP_FILENAME);
+  const targetBootstrapPath = path.join(params.workspaceDir, DEFAULT_BOOTSTRAP_FILENAME);
+  if (
+    hasSeededWorkspaceContent &&
+    !(await fileExists(sourceBootstrapPath)) &&
+    (await readTextFileIfExists(targetBootstrapPath)) ===
+      params.templates[DEFAULT_BOOTSTRAP_FILENAME]
+  ) {
+    await fs.unlink(targetBootstrapPath);
   }
 }
 
@@ -381,6 +564,24 @@ export async function ensureAgentWorkspace(params?: {
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
+  const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
+  const workspaceTemplates: WorkspaceTemplateContentByName = {
+    [DEFAULT_AGENTS_FILENAME]: agentsTemplate,
+    [DEFAULT_SOUL_FILENAME]: soulTemplate,
+    [DEFAULT_TOOLS_FILENAME]: toolsTemplate,
+    [DEFAULT_IDENTITY_FILENAME]: identityTemplate,
+    [DEFAULT_USER_FILENAME]: userTemplate,
+    [DEFAULT_HEARTBEAT_FILENAME]: heartbeatTemplate,
+    [DEFAULT_BOOTSTRAP_FILENAME]: bootstrapTemplate,
+  };
+  const bundledSeedDir = await resolveBundledWorkspaceSeedDir(dir);
+  if (bundledSeedDir) {
+    await seedWorkspaceFromBundledDir({
+      workspaceDir: dir,
+      sourceDir: bundledSeedDir,
+      templates: workspaceTemplates,
+    });
+  }
   await writeFileIfMissing(agentsPath, agentsTemplate);
   await writeFileIfMissing(soulPath, soulTemplate);
   await writeFileIfMissing(toolsPath, toolsTemplate);
@@ -434,7 +635,6 @@ export async function ensureAgentWorkspace(params?: {
     if (legacySetupCompleted) {
       markState({ setupCompletedAt: nowIso() });
     } else {
-      const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
       const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
       if (!wroteBootstrap) {
         bootstrapExists = await fileExists(bootstrapPath);

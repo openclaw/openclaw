@@ -6,9 +6,11 @@ import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
@@ -171,6 +173,142 @@ describe("ensureAgentWorkspace", () => {
       "utf-8",
     );
     expect(persisted).toContain('"setupCompletedAt": "2026-03-15T02:30:00.000Z"');
+  });
+
+  it("seeds bundled workspace files from the config directory and skips BOOTSTRAP.md", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const sourceDir = await makeTempWorkspace("openclaw-bundled-workspace-");
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    try {
+      await writeWorkspaceFile({
+        dir: sourceDir,
+        name: DEFAULT_AGENTS_FILENAME,
+        content: "# AGENTS.md\ncustom agents",
+      });
+      await writeWorkspaceFile({
+        dir: sourceDir,
+        name: DEFAULT_SOUL_FILENAME,
+        content: "# SOUL.md\ncustom soul",
+      });
+      await writeWorkspaceFile({
+        dir: sourceDir,
+        name: DEFAULT_IDENTITY_FILENAME,
+        content: "- Name: Sophia\n- Emoji: 🌙\n",
+      });
+      await writeWorkspaceFile({
+        dir: sourceDir,
+        name: DEFAULT_USER_FILENAME,
+        content: "# USER.md\ncustom user",
+      });
+      await writeWorkspaceFile({
+        dir: sourceDir,
+        name: DEFAULT_HEARTBEAT_FILENAME,
+        content: "# HEARTBEAT.md\ncustom heartbeat",
+      });
+      await fs.mkdir(path.join(sourceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(sourceDir, "memory", "heartbeat-state.json"),
+        '{"lastChecks":{}}\n',
+        "utf-8",
+      );
+      await fs.writeFile(path.join(sourceDir, "openclaw.render.json"), "{}", "utf-8");
+      process.env.OPENCLAW_CONFIG_PATH = path.join(sourceDir, "openclaw.render.json");
+
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+      await expect(fs.readFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "utf-8")).resolves.toBe(
+        "# AGENTS.md\ncustom agents",
+      );
+      await expect(fs.readFile(path.join(tempDir, DEFAULT_SOUL_FILENAME), "utf-8")).resolves.toBe(
+        "# SOUL.md\ncustom soul",
+      );
+      await expect(
+        fs.readFile(path.join(tempDir, DEFAULT_IDENTITY_FILENAME), "utf-8"),
+      ).resolves.toBe("- Name: Sophia\n- Emoji: 🌙\n");
+      await expect(fs.readFile(path.join(tempDir, DEFAULT_USER_FILENAME), "utf-8")).resolves.toBe(
+        "# USER.md\ncustom user",
+      );
+      await expect(
+        fs.readFile(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME), "utf-8"),
+      ).resolves.toBe("# HEARTBEAT.md\ncustom heartbeat");
+      await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject(
+        {
+          code: "ENOENT",
+        },
+      );
+      await expect(
+        fs.readFile(path.join(tempDir, "memory", "heartbeat-state.json"), "utf-8"),
+      ).resolves.toBe('{"lastChecks":{}}\n');
+      const state = await readWorkspaceState(tempDir);
+      expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+    } finally {
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+    }
+  });
+
+  it("replaces default-seeded files with bundled workspace files without overwriting user content", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const sourceDir = await makeTempWorkspace("openclaw-bundled-workspace-");
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    try {
+      await fs.writeFile(path.join(sourceDir, "openclaw.render.json"), "{}", "utf-8");
+      await writeWorkspaceFile({
+        dir: sourceDir,
+        name: DEFAULT_AGENTS_FILENAME,
+        content: "# AGENTS.md\nsophia agents",
+      });
+      await writeWorkspaceFile({
+        dir: sourceDir,
+        name: DEFAULT_IDENTITY_FILENAME,
+        content: "- Name: Sophia\n- Emoji: 🌙\n",
+      });
+      await writeWorkspaceFile({
+        dir: sourceDir,
+        name: DEFAULT_USER_FILENAME,
+        content: "# USER.md\nseed user",
+      });
+      await fs.mkdir(path.join(sourceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(sourceDir, "memory", "heartbeat-state.json"),
+        '{"lastChecks":{}}\n',
+        "utf-8",
+      );
+      process.env.OPENCLAW_CONFIG_PATH = path.join(sourceDir, "openclaw.render.json");
+
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+      await fs.writeFile(
+        path.join(tempDir, DEFAULT_USER_FILENAME),
+        "# USER.md\nkeep me\n",
+        "utf-8",
+      );
+
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+      await expect(fs.readFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "utf-8")).resolves.toBe(
+        "# AGENTS.md\nsophia agents",
+      );
+      await expect(
+        fs.readFile(path.join(tempDir, DEFAULT_IDENTITY_FILENAME), "utf-8"),
+      ).resolves.toBe("- Name: Sophia\n- Emoji: 🌙\n");
+      await expect(fs.readFile(path.join(tempDir, DEFAULT_USER_FILENAME), "utf-8")).resolves.toBe(
+        "# USER.md\nkeep me\n",
+      );
+      await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject(
+        {
+          code: "ENOENT",
+        },
+      );
+    } finally {
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+    }
   });
 });
 
