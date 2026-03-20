@@ -628,18 +628,23 @@ export async function handleFeishuMessage(params: {
         bindingResolution: configuredBinding,
       });
       if (!ensured.ok) {
+        const explicitReplyTargetMessageId =
+          ctx.parentId && ctx.parentId !== ctx.rootId ? ctx.parentId : undefined;
         const replyTargetMessageId =
-          isGroup &&
+          explicitReplyTargetMessageId ??
+          (isGroup &&
           (groupSession?.groupSessionScope === "group_topic" ||
             groupSession?.groupSessionScope === "group_topic_sender")
             ? (ctx.rootId ?? ctx.messageId)
-            : ctx.messageId;
+            : ctx.messageId);
         await sendMessageFeishu({
           cfg: effectiveCfg,
           to: `chat:${ctx.chatId}`,
           text: `⚠️ Failed to initialize the configured ACP session for this Feishu conversation: ${ensured.error}`,
           replyToMessageId: replyTargetMessageId,
-          replyInThread: isGroup ? (groupSession?.replyInThread ?? false) : false,
+          replyInThread:
+            explicitReplyTargetMessageId == null &&
+            (isGroup ? (groupSession?.replyInThread ?? false) : false),
           accountId: account.accountId,
         }).catch((err) => {
           log(`feishu[${account.accountId}]: failed to send ACP init error reply: ${String(err)}`);
@@ -946,9 +951,13 @@ export async function handleFeishuMessage(params: {
     const configReplyInThread =
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
+    const explicitReplyTargetMessageId =
+      ctx.parentId && ctx.parentId !== ctx.rootId ? ctx.parentId : undefined;
     const replyTargetMessageId =
-      isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId;
+      explicitReplyTargetMessageId ??
+      (isTopicSession || configReplyInThread ? (ctx.rootId ?? ctx.messageId) : ctx.messageId);
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
+    const effectiveReplyInThread = explicitReplyTargetMessageId == null && replyInThread;
 
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
@@ -1002,7 +1011,7 @@ export async function handleFeishuMessage(params: {
             chatId: ctx.chatId,
             replyToMessageId: replyTargetMessageId,
             skipReplyToInMessages: !isGroup,
-            replyInThread,
+            replyInThread: effectiveReplyInThread,
             rootId: ctx.rootId,
             threadReply,
             mentionTargets: ctx.mentionTargets,
@@ -1103,7 +1112,7 @@ export async function handleFeishuMessage(params: {
         chatId: ctx.chatId,
         replyToMessageId: replyTargetMessageId,
         skipReplyToInMessages: !isGroup,
-        replyInThread,
+        replyInThread: effectiveReplyInThread,
         rootId: ctx.rootId,
         threadReply,
         mentionTargets: ctx.mentionTargets,
