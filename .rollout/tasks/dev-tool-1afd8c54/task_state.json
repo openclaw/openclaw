@@ -1,0 +1,163 @@
+{
+  "contract": {
+    "definition_of_done": [
+      "Branch is rebased cleanly on origin/main with no conflicts",
+      "The Codex review concern about cross-skill secret leakage is addressed: shouldIncludeSkill does not treat env vars injected by one skill as satisfying requires.env for unrelated skills",
+      "pnpm test src/agents/skills.test.ts passes (all tests)",
+      "Existing 'blocks dangerous host env overrides even when declared' test still passes",
+      "New test proves cross-skill env leakage is prevented"
+    ],
+    "goal": "Fix PR #50432: rebase branch on main, resolve merge conflicts, and scope skill-injected env vars to prevent cross-skill secret leakage."
+  },
+  "evidence": [
+    {
+      "head_sha": "19f86588407a463ea91ef64158cc8b9e0114ab34",
+      "id": "review-review-main-19f86588",
+      "kind": "review",
+      "recorded_at": "2026-03-20T07:22:03Z",
+      "ref": {
+        "type": "artifact",
+        "value": ".rollout/tasks/dev-tool-1afd8c54/review.md"
+      },
+      "summary": "Code review clean. Fix correctly moves ollama synthetic key check before resolveProviderConfig() null guard. No side effects on other providers. Test updated to assert synthetic key resolution. Pre-existing test infra issue (missing @mariozechner/pi-ai/oauth) confirmed on base branch \u2014 unrelated.",
+      "supports": ["review-main"]
+    },
+    {
+      "head_sha": "19f86588407a463ea91ef64158cc8b9e0114ab34",
+      "id": "verify-verify-main-19f86588",
+      "kind": "manual_check",
+      "recorded_at": "2026-03-20T07:22:51Z",
+      "ref": {
+        "type": "artifact",
+        "value": ".rollout/tasks/dev-tool-1afd8c54/verify.md"
+      },
+      "summary": "All spec requirements verified: ollama synthetic key resolves without provider config, non-ollama providers unaffected, env var still preferred, test updated. Test execution blocked by pre-existing missing @mariozechner/pi-ai/oauth (confirmed on main). Code diff matches spec exactly.",
+      "supports": ["verify-main"]
+    },
+    {
+      "head_sha": "d632d868d8e967efb6d67115e94b8815daf83540",
+      "id": "verify-verify-main-d632d868",
+      "kind": "manual_check",
+      "recorded_at": "2026-03-20T08:21:16Z",
+      "ref": {
+        "type": "agent_review",
+        "value": "d632d868d8e967efb6d67115e94b8815daf83540"
+      },
+      "summary": "Independent ACP verification at HEAD d632d868d8: (1) `pnpm test src/agents/skills.test.ts` \u2014 all 14 tests pass including new \"allows sensitive-pattern env vars configured in skills.entries.*.env\" test and existing \"blocks dangerous host env overrides even when declared\" test. (2) Code review confirms fix is minimal \u2014 only `pendingOverrides` keys added to `allowedSensitiveKeys`; `isAlwaysBlockedSkillEnvKey` (isDangerousHostEnvVarName) still enforced independently. (3) New test covers both `_PASSWORD` and `_TOKEN` patterns, verifies injection and restoration, dangerous vars (BASH_ENV, SHELL) remain blocked.",
+      "supports": ["verify-main"]
+    },
+    {
+      "head_sha": "d632d868d8e967efb6d67115e94b8815daf83540",
+      "id": "review-review-main-d632d868",
+      "kind": "review",
+      "recorded_at": "2026-03-20T08:23:21Z",
+      "ref": {
+        "type": "artifact",
+        "value": ".rollout/tasks/dev-tool-1afd8c54/review.md"
+      },
+      "summary": "Independent ACP code review at HEAD d632d868d8: Fix is correct and minimal \u2014 adds `pendingOverrides` keys to `allowedSensitiveKeys` after the env config loop, before calling `sanitizeSkillEnvOverrides`. Security model preserved: `isAlwaysBlockedSkillEnvKey` (isDangerousHostEnvVarName) runs independently and still blocks BASH_ENV, SHELL, LD_PRELOAD, NODE_OPTIONS, OPENSSL_CONF. New test covers both `_PASSWORD` and `_TOKEN` sensitive patterns, verifies injection and restoration. No issues found.",
+      "supports": ["review-main"]
+    },
+    {
+      "head_sha": "aad4cc9a91ff42e64aca1f6632ec87542d69c82a",
+      "id": "review-review-main-aad4cc9a",
+      "kind": "review",
+      "recorded_at": "2026-03-20T08:37:07Z",
+      "ref": {
+        "type": "artifact",
+        "value": ".rollout/tasks/dev-tool-1afd8c54/review.md"
+      },
+      "summary": "Independent ACP code review at HEAD aad4cc9a91: Fix correctly prevents cross-skill env var leakage by distinguishing host-provided vs skill-injected env vars in shouldIncludeSkill. Logic handles all edge cases (host env already set, skill's own config, other skill's injection). Circular import between config.ts and env-overrides.ts is safe in ESM (function-body-only usage). Merge conflict resolution correctly preserved both main's normalizeResolvedSecretInputString and branch's allowedSensitiveKeys loop. Test adequately covers the leakage scenario. All 15 tests pass. No blocking findings.",
+      "supports": ["review-main"]
+    },
+    {
+      "head_sha": "aad4cc9a91ff42e64aca1f6632ec87542d69c82a",
+      "id": "verify-verify-main-aad4cc9a",
+      "kind": "manual_check",
+      "recorded_at": "2026-03-20T08:41:08Z",
+      "ref": {
+        "type": "artifact",
+        "value": ".rollout/tasks/dev-tool-1afd8c54/verify.md"
+      },
+      "summary": "Independent ACP verification at HEAD aad4cc9a91: All 6 spec requirements pass. (1) Branch rebased cleanly on origin/main, no conflict markers. (2) shouldIncludeSkill hasEnv callback uses getActiveSkillEnvKeys() to distinguish skill-injected vs host env vars. (3) Sensitive-pattern env vars allowed through. (4) Dangerous host env vars still blocked. (5) Cross-skill leakage prevented \u2014 skill A's OPENAI_API_KEY does not make unrelated skill B eligible. (6) All 15 tests pass (845ms). Merge conflict resolution correct \u2014 both allowedSensitiveKeys loop and normalizeResolvedSecretInputString present.",
+      "supports": ["verify-main"]
+    }
+  ],
+  "execution": {
+    "attempt": 1,
+    "branch": "fix/exec-skill-env-sensitive-keys",
+    "head_sha": "aad4cc9a91ff42e64aca1f6632ec87542d69c82a",
+    "stage": "handoff",
+    "started_at": "2026-03-20T05:40:36Z",
+    "status": "handoff",
+    "updated_at": "2026-03-20T08:41:16Z"
+  },
+  "handoff": {
+    "kind": "complete",
+    "pr_url": "",
+    "requested": true,
+    "requested_at": "2026-03-20T08:41:16Z",
+    "required_human_action": "",
+    "result_type": "branch",
+    "summary": "Fixed PR #50432 with two changes: (1) Rebased branch on origin/main, resolving merge conflict in env-overrides.ts by preserving both main's normalizeResolvedSecretInputString and the branch's allowedSensitiveKeys loop. (2) Fixed cross-skill secret leakage by modifying shouldIncludeSkill's hasEnv callback in config.ts to use getActiveSkillEnvKeys() \u2014 env vars injected by one skill's overrides no longer make unrelated skills eligible. Added test proving skill A's OPENAI_API_KEY config doesn't make unrelated skill B eligible. All 15 tests pass.",
+    "target": "human_review"
+  },
+  "issues": [],
+  "linear_workpad_comment_id": "",
+  "obligations": [
+    {
+      "head_sha": "",
+      "id": "review-main",
+      "kind": "review",
+      "required": true,
+      "state": "satisfied",
+      "story_id": "",
+      "text": "Review the current code changes before handoff."
+    },
+    {
+      "head_sha": "",
+      "id": "verify-main",
+      "kind": "verification",
+      "required": true,
+      "state": "satisfied",
+      "story_id": "",
+      "text": "Independent verification that spec requirements are covered and mechanical checks pass."
+    }
+  ],
+  "plan": {
+    "active_story_id": "",
+    "document_path": ".rollout/tasks/dev-tool-1afd8c54/plan.md",
+    "generation": 1,
+    "spec_document_path": ".rollout/tasks/dev-tool-1afd8c54/spec.md",
+    "stories": [
+      {
+        "description": "Verify the exact current state of resolveSyntheticLocalProviderAuth and the test file before making any changes.",
+        "id": "s1",
+        "status": "done",
+        "title": "Read model-auth.ts and model-auth.profiles.test.ts to confirm exact current code"
+      },
+      {
+        "description": "In src/agents/model-auth.ts, reorder the normalizedProvider === 'ollama' check to run before the providerConfig existence check so Ollama always gets a synthetic local key.",
+        "id": "s2",
+        "status": "done",
+        "title": "Move ollama check before providerConfig guard in resolveSyntheticLocalProviderAuth"
+      },
+      {
+        "description": "In src/agents/model-auth.profiles.test.ts, update or add a test ensuring resolveApiKeyForProvider resolves synthetic local key for ollama without explicit provider config.",
+        "id": "s3",
+        "status": "done",
+        "title": "Add/update regression test for no-config ollama case"
+      }
+    ]
+  },
+  "task": {
+    "created_at": "2026-03-20T05:40:36Z",
+    "id": "dev-tool-1afd8c54",
+    "source": "manual",
+    "title": "Fix Ollama API key preflight regression #50759",
+    "url": ""
+  },
+  "tracker_status": "none",
+  "version": 5,
+  "workflow": ""
+}

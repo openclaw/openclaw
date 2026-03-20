@@ -85,6 +85,8 @@ export function shouldIncludeSkill(params: {
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
+  // Snapshot once so the hasEnv callback doesn't recreate the Set per env var.
+  const skillInjectedKeys = getActiveSkillEnvKeys();
   return evaluateRuntimeEligibility({
     os: entry.metadata?.os,
     remotePlatforms: eligibility?.remote?.platforms,
@@ -104,7 +106,6 @@ export function shouldIncludeSkill(params: {
       // Only count process.env if the value wasn't injected by another skill's overrides.
       // This prevents configuring OPENAI_API_KEY on skill A from making unrelated
       // skill B (which requires OPENAI_API_KEY) eligible.
-      const skillInjectedKeys = getActiveSkillEnvKeys();
       return Boolean(process.env[envName]) && !skillInjectedKeys.has(envName);
     },
     isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
