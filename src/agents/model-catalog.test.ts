@@ -125,6 +125,22 @@ describe("loadModelCatalog", () => {
         input: ["text", "image"],
       },
       {
+        id: "gpt-5-mini",
+        provider: "openai",
+        name: "GPT-5 Mini",
+        reasoning: true,
+        contextWindow: 391000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5-nano",
+        provider: "openai",
+        name: "GPT-5 Nano",
+        reasoning: true,
+        contextWindow: 391000,
+        input: ["text", "image"],
+      },
+      {
         id: "gpt-5.2-pro",
         provider: "openai",
         name: "GPT-5.2 Pro",
@@ -154,6 +170,26 @@ describe("loadModelCatalog", () => {
     expect(result).toContainEqual(
       expect.objectContaining({
         provider: "openai",
+        id: "gpt-5.4-mini",
+        name: "gpt-5.4-mini",
+        reasoning: true,
+        contextWindow: 391000,
+        input: ["text", "image"],
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-nano",
+        name: "gpt-5.4-nano",
+        reasoning: true,
+        contextWindow: 391000,
+        input: ["text", "image"],
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
         id: "gpt-5.4-pro",
         name: "gpt-5.4-pro",
       }),
@@ -163,6 +199,56 @@ describe("loadModelCatalog", () => {
         provider: "openai-codex",
         id: "gpt-5.4",
         name: "gpt-5.4",
+      }),
+    );
+  });
+
+  it("patches gpt-5.4 mini/nano catalog metadata when falling back to gpt-4.1 templates", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.2",
+        provider: "openai",
+        name: "GPT-5.2",
+        reasoning: true,
+        contextWindow: 1_050_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-4.1-mini",
+        provider: "openai",
+        name: "GPT-4.1 Mini",
+        reasoning: false,
+        contextWindow: 1_023_000,
+        input: ["text"],
+      },
+      {
+        id: "gpt-4.1-nano",
+        provider: "openai",
+        name: "GPT-4.1 Nano",
+        reasoning: false,
+        contextWindow: 1_023_000,
+        input: ["text"],
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        reasoning: true,
+        contextWindow: 391000,
+        input: ["text", "image"],
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-nano",
+        reasoning: true,
+        contextWindow: 391000,
+        input: ["text", "image"],
       }),
     );
   });

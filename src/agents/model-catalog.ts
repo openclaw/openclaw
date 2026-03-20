@@ -35,7 +35,11 @@ let importPiSdk = defaultImportPiSdk;
 const CODEX_PROVIDER = "openai-codex";
 const OPENAI_PROVIDER = "openai";
 const OPENAI_GPT54_MODEL_ID = "gpt-5.4";
+const OPENAI_GPT54_MINI_MODEL_ID = "gpt-5.4-mini";
+const OPENAI_GPT54_NANO_MODEL_ID = "gpt-5.4-nano";
 const OPENAI_GPT54_PRO_MODEL_ID = "gpt-5.4-pro";
+const OPENAI_GPT54_MINI_CONTEXT_TOKENS = 391_000;
+const OPENAI_GPT54_NANO_CONTEXT_TOKENS = 391_000;
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
@@ -45,6 +49,7 @@ type SyntheticCatalogFallback = {
   provider: string;
   id: string;
   templateIds: readonly string[];
+  patch?: Partial<Pick<ModelCatalogEntry, "contextWindow" | "reasoning" | "input">>;
 };
 
 const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
@@ -52,6 +57,26 @@ const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
     provider: OPENAI_PROVIDER,
     id: OPENAI_GPT54_MODEL_ID,
     templateIds: ["gpt-5.2"],
+  },
+  {
+    provider: OPENAI_PROVIDER,
+    id: OPENAI_GPT54_MINI_MODEL_ID,
+    templateIds: ["gpt-5-mini", "gpt-4.1-mini"],
+    patch: {
+      contextWindow: OPENAI_GPT54_MINI_CONTEXT_TOKENS,
+      reasoning: true,
+      input: ["text", "image"],
+    },
+  },
+  {
+    provider: OPENAI_PROVIDER,
+    id: OPENAI_GPT54_NANO_MODEL_ID,
+    templateIds: ["gpt-5-nano", "gpt-4.1-nano"],
+    patch: {
+      contextWindow: OPENAI_GPT54_NANO_CONTEXT_TOKENS,
+      reasoning: true,
+      input: ["text", "image"],
+    },
   },
   {
     provider: OPENAI_PROVIDER,
@@ -90,6 +115,7 @@ function applySyntheticCatalogFallbacks(models: ModelCatalogEntry[]): void {
     }
     models.push({
       ...template,
+      ...fallback.patch,
       id: fallback.id,
       name: fallback.id,
     });

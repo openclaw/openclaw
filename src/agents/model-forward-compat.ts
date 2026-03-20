@@ -5,10 +5,16 @@ import { normalizeModelCompat } from "./model-compat.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
+const OPENAI_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
+const OPENAI_GPT_54_NANO_MODEL_ID = "gpt-5.4-nano";
 const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
+const OPENAI_GPT_54_MINI_CONTEXT_TOKENS = 391_000;
+const OPENAI_GPT_54_NANO_CONTEXT_TOKENS = 391_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
+const OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS = ["gpt-5-mini", "gpt-4.1-mini"] as const;
+const OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS = ["gpt-5-nano", "gpt-4.1-nano"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
@@ -49,10 +55,19 @@ function resolveOpenAIGpt54ForwardCompatModel(
   const trimmedModelId = modelId.trim();
   const lower = trimmedModelId.toLowerCase();
   let templateIds: readonly string[];
+  let contextWindow: number;
   if (lower === OPENAI_GPT_54_MODEL_ID) {
     templateIds = OPENAI_GPT_54_TEMPLATE_MODEL_IDS;
+    contextWindow = OPENAI_GPT_54_CONTEXT_TOKENS;
+  } else if (lower === OPENAI_GPT_54_MINI_MODEL_ID) {
+    templateIds = OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS;
+    contextWindow = OPENAI_GPT_54_MINI_CONTEXT_TOKENS;
+  } else if (lower === OPENAI_GPT_54_NANO_MODEL_ID) {
+    templateIds = OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS;
+    contextWindow = OPENAI_GPT_54_NANO_CONTEXT_TOKENS;
   } else if (lower === OPENAI_GPT_54_PRO_MODEL_ID) {
     templateIds = OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS;
+    contextWindow = OPENAI_GPT_54_CONTEXT_TOKENS;
   } else {
     return undefined;
   }
@@ -69,7 +84,7 @@ function resolveOpenAIGpt54ForwardCompatModel(
         baseUrl: "https://api.openai.com/v1",
         reasoning: true,
         input: ["text", "image"],
-        contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
+        contextWindow,
         maxTokens: OPENAI_GPT_54_MAX_TOKENS,
       },
     }) ??
@@ -82,7 +97,7 @@ function resolveOpenAIGpt54ForwardCompatModel(
       reasoning: true,
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
+      contextWindow,
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
     } as Model<Api>)
   );
