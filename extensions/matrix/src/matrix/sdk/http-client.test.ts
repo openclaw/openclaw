@@ -25,7 +25,9 @@ describe("MatrixAuthedHttpClient", () => {
       buffer: Buffer.from('{"ok":true}', "utf8"),
     });
 
-    const client = new MatrixAuthedHttpClient("https://matrix.example.org", "token");
+    const client = new MatrixAuthedHttpClient("https://matrix.example.org", "token", {
+      allowPrivateNetwork: true,
+    });
     const result = await client.requestJson({
       method: "GET",
       endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
@@ -39,6 +41,7 @@ describe("MatrixAuthedHttpClient", () => {
         method: "GET",
         endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
         allowAbsoluteEndpoint: true,
+        ssrfPolicy: { allowPrivateNetwork: true },
       }),
     );
   });
