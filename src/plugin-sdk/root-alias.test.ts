@@ -9,6 +9,7 @@ const require = createRequire(import.meta.url);
 const rootSdk = require("./root-alias.cjs") as Record<string, unknown>;
 const rootAliasPath = fileURLToPath(new URL("./root-alias.cjs", import.meta.url));
 const rootAliasSource = fs.readFileSync(rootAliasPath, "utf-8");
+const packageJsonPath = fileURLToPath(new URL("../../package.json", import.meta.url));
 
 type EmptySchema = {
   safeParse: (value: unknown) =>
@@ -194,6 +195,15 @@ describe("plugin-sdk root alias", () => {
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
     expect(rootSdk.__esModule).toBe(true);
+  });
+
+  it("publishes Discord plugin-sdk subpaths", () => {
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      exports?: Record<string, unknown>;
+    };
+
+    expect(packageJson.exports?.["./plugin-sdk/discord"]).toBeDefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-core"]).toBeDefined();
   });
 
   it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {
