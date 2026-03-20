@@ -43,3 +43,7 @@ export {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
 } from "../utils/normalize-secret-input.js";
+export {
+  listKnownProviderAuthEnvVarNames,
+  omitEnvKeysCaseInsensitive,
+} from "../secrets/provider-env-vars.js";
