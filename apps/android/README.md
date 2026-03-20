@@ -27,11 +27,20 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 
 ```bash
 cd apps/android
-./gradlew :app:assembleDebug
-./gradlew :app:installDebug
-./gradlew :app:testDebugUnitTest
+./gradlew :app:assemblePlayDebug
+./gradlew :app:installPlayDebug
+./gradlew :app:testPlayDebugUnitTest
 cd ../..
 bun run android:bundle:release
+```
+
+Third-party debug flavor:
+
+```bash
+cd apps/android
+./gradlew :app:assembleThirdPartyDebug
+./gradlew :app:installThirdPartyDebug
+./gradlew :app:testThirdPartyDebugUnitTest
 ```
 
 `bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds two signed release bundles:
