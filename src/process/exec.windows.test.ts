@@ -89,6 +89,31 @@ describe("windows command wrapper behavior", () => {
       expect(result.code).toBe(0);
       const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
       expectCmdWrappedInvocation({ captured, expectedComSpec });
+      expect(captured?.[1][3]).toContain("chcp 65001>nul &&");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("does not build cmd.exe command line for non-wrapper runExec calls", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+
+    execFileMock.mockImplementation((...params: unknown[]) => {
+      const maybeCallback = params.at(-1);
+      if (typeof maybeCallback === "function") {
+        (maybeCallback as (err: Error | null, stdout: string, stderr: string) => void)(
+          null,
+          "ok",
+          "",
+        );
+      }
+    });
+
+    try {
+      await expect(runExec("grep", ["-P", "a|b"], 1000)).resolves.toBeDefined();
+      const captured = execFileMock.mock.calls[0] as ExecCall | undefined;
+      expect(captured?.[0]).toBe("grep");
+      expect(captured?.[1]).toEqual(["-P", "a|b"]);
     } finally {
       platformSpy.mockRestore();
     }
