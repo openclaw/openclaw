@@ -1,4 +1,4 @@
-import { normalizeE164 } from "../../../src/utils.js";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import {
   createAllowedChatSenderMatcher,
   type ChatSenderAllowParams,
@@ -105,6 +105,34 @@ export function parseIMessageTarget(raw: string): IMessageTarget {
   }
 
   return { kind: "handle", to: trimmed, service: "auto" };
+}
+
+export function looksLikeIMessageExplicitTargetId(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const lower = trimmed.toLowerCase();
+  if (/^(imessage:|sms:|auto:)/.test(lower)) {
+    return true;
+  }
+  return (
+    CHAT_ID_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
+    CHAT_GUID_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
+    CHAT_IDENTIFIER_PREFIXES.some((prefix) => lower.startsWith(prefix))
+  );
+}
+
+export function inferIMessageTargetChatType(raw: string): "direct" | "group" | undefined {
+  try {
+    const parsed = parseIMessageTarget(raw);
+    if (parsed.kind === "handle") {
+      return "direct";
+    }
+    return "group";
+  } catch {
+    return undefined;
+  }
 }
 
 export function parseIMessageAllowTarget(raw: string): IMessageAllowTarget {

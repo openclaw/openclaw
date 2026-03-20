@@ -8,6 +8,7 @@
 import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   detachPluginConversationBinding,
   getCurrentPluginConversationBinding,
@@ -25,60 +26,33 @@ type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginRoot?: string;
 };
 
-// Registry of plugin commands
-const pluginCommands: Map<string, RegisteredPluginCommand> = new Map();
+type PluginCommandState = {
+  pluginCommands: Map<string, RegisteredPluginCommand>;
+  registryLocked: boolean;
+};
 
-// Lock to prevent modifications during command execution
-let registryLocked = false;
+const PLUGIN_COMMAND_STATE_KEY = Symbol.for("openclaw.pluginCommandsState");
+
+const state = resolveGlobalSingleton<PluginCommandState>(PLUGIN_COMMAND_STATE_KEY, () => ({
+  pluginCommands: new Map<string, RegisteredPluginCommand>(),
+  registryLocked: false,
+}));
+
+const pluginCommands = state.pluginCommands;
 
 // Maximum allowed length for command arguments (defense in depth)
 const MAX_ARGS_LENGTH = 4096;
 
 /**
- * Reserved command names that plugins cannot override.
- * These are built-in commands from commands-registry.data.ts.
+ * Reserved command names that plugins cannot override (built-in commands).
+ *
+ * Constructed lazily inside validateCommandName to avoid TDZ errors: the
+ * bundler can place this module's body after call sites within the same
+ * output chunk, so any module-level const/let would be uninitialized when
+ * first accessed during plugin registration.
  */
-const RESERVED_COMMANDS = new Set([
-  // Core commands
-  "help",
-  "commands",
-  "status",
-  "whoami",
-  "context",
-  "btw",
-  // Session management
-  "stop",
-  "restart",
-  "reset",
-  "new",
-  "compact",
-  // Configuration
-  "config",
-  "debug",
-  "allowlist",
-  "activation",
-  // Agent control
-  "skill",
-  "subagents",
-  "kill",
-  "steer",
-  "tell",
-  "model",
-  "models",
-  "queue",
-  // Messaging
-  "send",
-  // Execution
-  "bash",
-  "exec",
-  // Mode toggles
-  "think",
-  "verbose",
-  "reasoning",
-  "elevated",
-  // Billing
-  "usage",
-]);
+// eslint-disable-next-line no-var -- var avoids TDZ when bundler reorders module bodies in a chunk
+var reservedCommands: Set<string> | undefined;
 
 /**
  * Validate a command name.
@@ -97,8 +71,41 @@ export function validateCommandName(name: string): string | null {
     return "Command name must start with a letter and contain only letters, numbers, hyphens, and underscores";
   }
 
-  // Check reserved commands
-  if (RESERVED_COMMANDS.has(trimmed)) {
+  reservedCommands ??= new Set([
+    "help",
+    "commands",
+    "status",
+    "whoami",
+    "context",
+    "btw",
+    "stop",
+    "restart",
+    "reset",
+    "new",
+    "compact",
+    "config",
+    "debug",
+    "allowlist",
+    "activation",
+    "skill",
+    "subagents",
+    "kill",
+    "steer",
+    "tell",
+    "model",
+    "models",
+    "queue",
+    "send",
+    "bash",
+    "exec",
+    "think",
+    "verbose",
+    "reasoning",
+    "elevated",
+    "usage",
+  ]);
+
+  if (reservedCommands.has(trimmed)) {
     return `Command name "${trimmed}" is reserved by a built-in command`;
   }
 
@@ -130,7 +137,38 @@ export function validatePluginCommandDefinition(
   if (!command.description.trim()) {
     return "Command description cannot be empty";
   }
-  return validateCommandName(command.name.trim());
+  const nameError = validateCommandName(command.name.trim());
+  if (nameError) {
+    return nameError;
+  }
+  for (const [label, alias] of Object.entries(command.nativeNames ?? {})) {
+    if (typeof alias !== "string") {
+      continue;
+    }
+    const aliasError = validateCommandName(alias.trim());
+    if (aliasError) {
+      return `Native command alias "${label}" invalid: ${aliasError}`;
+    }
+  }
+  return null;
+}
+
+function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
+  const keys = new Set<string>();
+  const push = (value: string | undefined) => {
+    const normalized = value?.trim().toLowerCase();
+    if (!normalized) {
+      return;
+    }
+    keys.add(`/${normalized}`);
+  };
+
+  push(command.name);
+  push(command.nativeNames?.default);
+  push(command.nativeNames?.telegram);
+  push(command.nativeNames?.discord);
+
+  return [...keys];
 }
 
 /**
@@ -143,7 +181,7 @@ export function registerPluginCommand(
   opts?: { pluginName?: string; pluginRoot?: string },
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
-  if (registryLocked) {
+  if (state.registryLocked) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
 
@@ -154,22 +192,31 @@ export function registerPluginCommand(
 
   const name = command.name.trim();
   const description = command.description.trim();
-
-  const key = `/${name.toLowerCase()}`;
-
-  // Check for duplicate registration
-  if (pluginCommands.has(key)) {
-    const existing = pluginCommands.get(key)!;
-    return {
-      ok: false,
-      error: `Command "${name}" already registered by plugin "${existing.pluginId}"`,
-    };
-  }
-
-  pluginCommands.set(key, {
+  const normalizedCommand = {
     ...command,
     name,
     description,
+  };
+  const invocationKeys = listPluginInvocationKeys(normalizedCommand);
+  const key = `/${name.toLowerCase()}`;
+
+  // Check for duplicate registration
+  for (const invocationKey of invocationKeys) {
+    const existing =
+      pluginCommands.get(invocationKey) ??
+      Array.from(pluginCommands.values()).find((candidate) =>
+        listPluginInvocationKeys(candidate).includes(invocationKey),
+      );
+    if (existing) {
+      return {
+        ok: false,
+        error: `Command "${invocationKey.slice(1)}" already registered by plugin "${existing.pluginId}"`,
+      };
+    }
+  }
+
+  pluginCommands.set(key, {
+    ...normalizedCommand,
     pluginId,
     pluginName: opts?.pluginName,
     pluginRoot: opts?.pluginRoot,
@@ -219,7 +266,11 @@ export function matchPluginCommand(
   const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
 
   const key = commandName.toLowerCase();
-  const command = pluginCommands.get(key);
+  const command =
+    pluginCommands.get(key) ??
+    Array.from(pluginCommands.values()).find((candidate) =>
+      listPluginInvocationNames(candidate).includes(key),
+    );
 
   if (!command) {
     return null;
@@ -409,7 +460,7 @@ export async function executePluginCommand(params: {
   };
 
   // Lock registry during execution to prevent concurrent modifications
-  registryLocked = true;
+  state.registryLocked = true;
   try {
     const result = await command.handler(ctx);
     logVerbose(
@@ -422,7 +473,7 @@ export async function executePluginCommand(params: {
     // Don't leak internal error details - return a safe generic message
     return { text: "⚠️ Command failed. Please try again later." };
   } finally {
-    registryLocked = false;
+    state.registryLocked = false;
   }
 }
 
@@ -456,6 +507,10 @@ function resolvePluginNativeName(
     return defaultOverride.trim();
   }
   return command.name;
+}
+
+function listPluginInvocationNames(command: OpenClawPluginCommandDefinition): string[] {
+  return listPluginInvocationKeys(command);
 }
 
 /**

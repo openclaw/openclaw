@@ -3,4 +3,4 @@ export {
   resolveSlackChannelId,
   type SlackTarget,
   type SlackTargetKind,
-} from "../../extensions/slack/src/targets.js";
+} from "../../extensions/slack/api.js";

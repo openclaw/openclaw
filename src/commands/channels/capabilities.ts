@@ -1,15 +1,20 @@
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
+import {
+  createMessageActionDiscoveryContext,
+  resolveMessageActionDiscoveryForPlugin,
+} from "../../channels/plugins/message-action-discovery.js";
 import type {
   ChannelCapabilities,
   ChannelCapabilitiesDiagnostics,
   ChannelCapabilitiesDisplayLine,
   ChannelPlugin,
 } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
+import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
 export type ChannelsCapabilitiesOptions = {
@@ -21,6 +26,7 @@ export type ChannelsCapabilitiesOptions = {
 };
 
 type ChannelCapabilitiesReport = {
+  plugin: ChannelPlugin;
   channel: string;
   accountId: string;
   accountName?: string;
@@ -133,10 +139,6 @@ async function resolveChannelReports(params: {
           : [resolveChannelDefaultAccountId({ plugin, cfg, accountIds: ids })];
       })();
   const reports: ChannelCapabilitiesReport[] = [];
-  const listedActions = plugin.actions?.listActions?.({ cfg }) ?? [];
-  const actions = Array.from(
-    new Set<string>(["send", "broadcast", ...listedActions.map((action) => String(action))]),
-  );
 
   for (const accountId of accountIds) {
     const resolvedAccount = plugin.config.resolveAccount(cfg, accountId);
@@ -169,8 +171,21 @@ async function resolveChannelReports(params: {
             target: params.target,
           })
         : undefined;
+    const discoveredActions = resolveMessageActionDiscoveryForPlugin({
+      pluginId: plugin.id,
+      actions: plugin.actions,
+      context: createMessageActionDiscoveryContext({
+        cfg,
+        accountId,
+      }),
+      includeActions: true,
+    }).actions;
+    const actions = Array.from(
+      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => String(action))]),
+    );
 
     reports.push({
+      plugin,
       channel: plugin.id,
       accountId,
       accountName:
@@ -192,10 +207,11 @@ export async function channelsCapabilitiesCommand(
   opts: ChannelsCapabilitiesOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime);
-  if (!cfg) {
+  const loadedCfg = await requireValidConfig(runtime);
+  if (!loadedCfg) {
     return;
   }
+  let cfg = loadedCfg;
   const timeoutMs = normalizeTimeout(opts.timeout, 10_000);
   const rawChannel = typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
   const rawTarget = typeof opts.target === "string" ? opts.target.trim() : "";
@@ -215,12 +231,18 @@ export async function channelsCapabilitiesCommand(
   const selected =
     !rawChannel || rawChannel === "all"
       ? plugins
-      : (() => {
-          const plugin = getChannelPlugin(rawChannel);
-          if (!plugin) {
-            return null;
+      : await (async () => {
+          const resolved = await resolveInstallableChannelPlugin({
+            cfg,
+            runtime,
+            rawChannel,
+            allowInstall: true,
+          });
+          if (resolved.configChanged) {
+            cfg = resolved.cfg;
+            await writeConfigFile(cfg);
           }
-          return [plugin];
+          return resolved.plugin ? [resolved.plugin] : null;
         })();
 
   if (!selected || selected.length === 0) {
@@ -268,7 +290,7 @@ export async function channelsCapabilitiesCommand(
       lines.push(`Status: ${configuredLabel}, ${enabledLabel}`);
     }
     const probeLines =
-      getChannelPlugin(report.channel)?.status?.formatCapabilitiesProbe?.({
+      report.plugin.status?.formatCapabilitiesProbe?.({
         probe: report.probe,
       }) ?? formatGenericProbeLines(report.probe);
     if (probeLines.length > 0) {

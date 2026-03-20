@@ -1,5 +1,4 @@
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, type ChannelSetupAdapter } from "openclaw/plugin-sdk/setup";
 
 export const msteamsSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: () => DEFAULT_ACCOUNT_ID,

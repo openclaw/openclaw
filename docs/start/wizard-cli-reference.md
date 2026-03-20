@@ -10,7 +10,7 @@ sidebarTitle: "CLI reference"
 # CLI Setup Reference
 
 This page is the full reference for `openclaw onboard`.
-For the short guide, see [Setup Wizard (CLI)](/start/wizard).
+For the short guide, see [Onboarding (CLI)](/start/wizard).
 
 ## What the wizard does
 
@@ -170,8 +170,8 @@ What you set:
     Prompts for account ID, gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
   </Accordion>
-  <Accordion title="MiniMax M2.5">
-    Config is auto-written.
+  <Accordion title="MiniMax">
+    Config is auto-written. Hosted default is `MiniMax-M2.7`; `MiniMax-M2.5` stays available.
     More detail: [MiniMax](/providers/minimax).
   </Accordion>
   <Accordion title="Synthetic (Anthropic-compatible)">
@@ -294,6 +294,6 @@ Signal setup behavior:
 
 ## Related docs
 
-- Onboarding hub: [Setup Wizard (CLI)](/start/wizard)
+- Onboarding hub: [Onboarding (CLI)](/start/wizard)
 - Automation and scripts: [CLI Automation](/start/wizard-cli-automation)
 - Command reference: [`openclaw onboard`](/cli/onboard)

@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
-import type { BaseTokenResolution } from "openclaw/plugin-sdk/zalo";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
+import type { BaseTokenResolution } from "./runtime-api.js";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type { ZaloConfig } from "./types.js";
 

@@ -7,7 +7,7 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 const tempDirs: string[] = [];
 const originalCwd = process.cwd();
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-const originalWatchMode = process.env.OPENCLAW_WATCH_MODE;
+const originalVitest = process.env.VITEST;
 
 function makeRepoRoot(prefix: string): string {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -22,10 +22,10 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledDir;
   }
-  if (originalWatchMode === undefined) {
-    delete process.env.OPENCLAW_WATCH_MODE;
+  if (originalVitest === undefined) {
+    delete process.env.VITEST;
   } else {
-    process.env.OPENCLAW_WATCH_MODE = originalWatchMode;
+    process.env.VITEST = originalVitest;
   }
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -33,9 +33,9 @@ afterEach(() => {
 });
 
 describe("resolveBundledPluginsDir", () => {
-  it("prefers source extensions from the package root in watch mode", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-dir-watch-");
-    fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
+  it("prefers the staged runtime bundled plugin tree from the package root", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-dir-runtime-");
+    fs.mkdirSync(path.join(repoRoot, "dist-runtime", "extensions"), { recursive: true });
     fs.mkdirSync(path.join(repoRoot, "dist", "extensions"), { recursive: true });
     fs.writeFileSync(
       path.join(repoRoot, "package.json"),
@@ -44,7 +44,62 @@ describe("resolveBundledPluginsDir", () => {
     );
 
     process.chdir(repoRoot);
-    process.env.OPENCLAW_WATCH_MODE = "1";
+
+    expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
+      fs.realpathSync(path.join(repoRoot, "dist-runtime", "extensions")),
+    );
+  });
+
+  it("falls back to built dist/extensions in installed package roots", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-dir-dist-");
+    fs.mkdirSync(path.join(repoRoot, "dist", "extensions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
+      "utf8",
+    );
+
+    process.chdir(repoRoot);
+
+    expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
+      fs.realpathSync(path.join(repoRoot, "dist", "extensions")),
+    );
+  });
+
+  it("prefers source extensions under vitest to avoid stale staged plugins", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-dir-vitest-");
+    fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "dist-runtime", "extensions"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "dist", "extensions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
+      "utf8",
+    );
+
+    process.chdir(repoRoot);
+    process.env.VITEST = "true";
+
+    expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
+      fs.realpathSync(path.join(repoRoot, "extensions")),
+    );
+  });
+
+  it("prefers source extensions in a git checkout even without vitest env", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-dir-git-");
+    fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "dist-runtime", "extensions"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "dist", "extensions"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, ".git"), "gitdir: /tmp/fake.git\n", "utf8");
+    fs.writeFileSync(
+      path.join(repoRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
+      "utf8",
+    );
+
+    process.chdir(repoRoot);
+    delete process.env.VITEST;
 
     expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
       fs.realpathSync(path.join(repoRoot, "extensions")),

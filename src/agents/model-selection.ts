@@ -1,4 +1,4 @@
-import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
+import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,

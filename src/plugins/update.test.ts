@@ -20,6 +20,8 @@ vi.mock("./bundled-sources.js", () => ({
   resolveBundledPluginSources: (...args: unknown[]) => resolveBundledPluginSourcesMock(...args),
 }));
 
+const { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } = await import("./update.js");
+
 describe("updateNpmInstalledPlugins", () => {
   beforeEach(() => {
     installPluginFromNpmSpecMock.mockReset();
@@ -36,7 +38,6 @@ describe("updateNpmInstalledPlugins", () => {
       extensions: ["index.ts"],
     });
 
-    const { updateNpmInstalledPlugins } = await import("./update.js");
     await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -71,7 +72,6 @@ describe("updateNpmInstalledPlugins", () => {
       extensions: ["index.ts"],
     });
 
-    const { updateNpmInstalledPlugins } = await import("./update.js");
     await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -104,7 +104,6 @@ describe("updateNpmInstalledPlugins", () => {
       error: "Package not found on npm: @openclaw/missing.",
     });
 
-    const { updateNpmInstalledPlugins } = await import("./update.js");
     const result = await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -137,7 +136,6 @@ describe("updateNpmInstalledPlugins", () => {
       error: "unsupported npm spec: github:evil/evil",
     });
 
-    const { updateNpmInstalledPlugins } = await import("./update.js");
     const result = await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -163,6 +161,129 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("reuses a recorded npm dist-tag spec for id-based updates", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "openclaw-codex-app-server",
+      targetDir: "/tmp/openclaw-codex-app-server",
+      version: "0.2.0-beta.4",
+      extensions: ["index.ts"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "openclaw-codex-app-server": {
+              source: "npm",
+              spec: "openclaw-codex-app-server@beta",
+              installPath: "/tmp/openclaw-codex-app-server",
+              resolvedName: "openclaw-codex-app-server",
+              resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.3",
+            },
+          },
+        },
+      },
+      pluginIds: ["openclaw-codex-app-server"],
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@beta",
+        expectedPluginId: "openclaw-codex-app-server",
+      }),
+    );
+    expect(result.config.plugins?.installs?.["openclaw-codex-app-server"]).toMatchObject({
+      source: "npm",
+      spec: "openclaw-codex-app-server@beta",
+      installPath: "/tmp/openclaw-codex-app-server",
+      version: "0.2.0-beta.4",
+    });
+  });
+
+  it("uses and persists an explicit npm spec override during updates", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "openclaw-codex-app-server",
+      targetDir: "/tmp/openclaw-codex-app-server",
+      version: "0.2.0-beta.4",
+      extensions: ["index.ts"],
+      npmResolution: {
+        name: "openclaw-codex-app-server",
+        version: "0.2.0-beta.4",
+        resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
+      },
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "openclaw-codex-app-server": {
+              source: "npm",
+              spec: "openclaw-codex-app-server",
+              installPath: "/tmp/openclaw-codex-app-server",
+            },
+          },
+        },
+      },
+      pluginIds: ["openclaw-codex-app-server"],
+      specOverrides: {
+        "openclaw-codex-app-server": "openclaw-codex-app-server@beta",
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@beta",
+        expectedPluginId: "openclaw-codex-app-server",
+      }),
+    );
+    expect(result.config.plugins?.installs?.["openclaw-codex-app-server"]).toMatchObject({
+      source: "npm",
+      spec: "openclaw-codex-app-server@beta",
+      installPath: "/tmp/openclaw-codex-app-server",
+      version: "0.2.0-beta.4",
+      resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
+    });
+  });
+
+  it("skips recorded integrity checks when an explicit npm version override changes the spec", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "openclaw-codex-app-server",
+      targetDir: "/tmp/openclaw-codex-app-server",
+      version: "0.2.0-beta.4",
+      extensions: ["index.ts"],
+    });
+
+    await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "openclaw-codex-app-server": {
+              source: "npm",
+              spec: "openclaw-codex-app-server@0.2.0-beta.3",
+              integrity: "sha512-old",
+              installPath: "/tmp/openclaw-codex-app-server",
+            },
+          },
+        },
+      },
+      pluginIds: ["openclaw-codex-app-server"],
+      specOverrides: {
+        "openclaw-codex-app-server": "openclaw-codex-app-server@0.2.0-beta.4",
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@0.2.0-beta.4",
+        expectedIntegrity: undefined,
+      }),
+    );
+  });
+
   it("migrates legacy unscoped install keys when a scoped npm package updates", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,
@@ -172,7 +293,6 @@ describe("updateNpmInstalledPlugins", () => {
       extensions: ["index.ts"],
     });
 
-    const { updateNpmInstalledPlugins } = await import("./update.js");
     const result = await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -231,7 +351,6 @@ describe("updateNpmInstalledPlugins", () => {
       marketplacePlugin: "claude-bundle",
     });
 
-    const { updateNpmInstalledPlugins } = await import("./update.js");
     const result = await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -280,7 +399,6 @@ describe("updateNpmInstalledPlugins", () => {
       marketplacePlugin: "claude-bundle",
     });
 
-    const { updateNpmInstalledPlugins } = await import("./update.js");
     const result = await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -330,7 +448,6 @@ describe("syncPluginsForUpdateChannel", () => {
       ]),
     );
 
-    const { syncPluginsForUpdateChannel } = await import("./update.js");
     const result = await syncPluginsForUpdateChannel({
       channel: "beta",
       config: {
@@ -369,7 +486,6 @@ describe("syncPluginsForUpdateChannel", () => {
       ]),
     );
 
-    const { syncPluginsForUpdateChannel } = await import("./update.js");
     const result = await syncPluginsForUpdateChannel({
       channel: "beta",
       config: {
@@ -402,7 +518,6 @@ describe("syncPluginsForUpdateChannel", () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
 
-    const { syncPluginsForUpdateChannel } = await import("./update.js");
     await syncPluginsForUpdateChannel({
       channel: "beta",
       config: {},
@@ -434,7 +549,6 @@ describe("syncPluginsForUpdateChannel", () => {
     const previousHome = process.env.HOME;
     process.env.HOME = "/tmp/process-home";
     try {
-      const { syncPluginsForUpdateChannel } = await import("./update.js");
       const result = await syncPluginsForUpdateChannel({
         channel: "beta",
         env: {

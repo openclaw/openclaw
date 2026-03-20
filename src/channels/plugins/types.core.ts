@@ -1,4 +1,3 @@
-import type { TopLevelComponents } from "@buape/carbon";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -20,6 +19,43 @@ export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
 };
 
 export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
+
+/**
+ * Discovery-time inputs passed to channel action adapters when the core is
+ * asking what an agent should be allowed to see. This is intentionally
+ * smaller than execution context: it carries routing/account scope, but no
+ * tool params or runtime handles.
+ */
+export type ChannelMessageActionDiscoveryContext = {
+  cfg: OpenClawConfig;
+  currentChannelId?: string | null;
+  currentChannelProvider?: string | null;
+  currentThreadTs?: string | null;
+  currentMessageId?: string | number | null;
+  accountId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
+  requesterSenderId?: string | null;
+};
+
+/**
+ * Plugin-owned schema fragments for the shared `message` tool.
+ * `current-channel` means expose the fields only when that provider is the
+ * active runtime channel. `all-configured` keeps the fields visible even while
+ * another configured channel is active, which is useful for cross-channel
+ * sends from cron or isolated agents.
+ */
+export type ChannelMessageToolSchemaContribution = {
+  properties: Record<string, TSchema>;
+  visibility?: "current-channel" | "all-configured";
+};
+
+export type ChannelMessageToolDiscovery = {
+  actions?: readonly ChannelMessageActionName[] | null;
+  capabilities?: readonly ChannelMessageCapability[] | null;
+  schema?: ChannelMessageToolSchemaContribution | ChannelMessageToolSchemaContribution[] | null;
+};
 
 export type ChannelSetupInput = {
   name?: string;
@@ -43,6 +79,7 @@ export type ChannelSetupInput = {
   audience?: string;
   useEnv?: boolean;
   homeserver?: string;
+  allowPrivateNetwork?: boolean;
   userId?: string;
   accessToken?: string;
   password?: string;
@@ -239,12 +276,16 @@ export type ChannelStreamingAdapter = {
   };
 };
 
+// Keep core transport-agnostic. Plugins can carry richer component types on
+// their side and cast at the boundary.
+export type ChannelStructuredComponents = unknown[];
+
 export type ChannelCrossContextComponentsFactory = (params: {
   originLabel: string;
   message: string;
   cfg: OpenClawConfig;
   accountId?: string | null;
-}) => TopLevelComponents[];
+}) => ChannelStructuredComponents;
 
 export type ChannelReplyTransport = {
   replyToId?: string | null;
@@ -345,11 +386,20 @@ export type ChannelThreadingToolContext = {
 
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  resolveSessionTarget?: (params: {
+    kind: "group" | "channel";
+    id: string;
+    threadId?: string | null;
+  }) => string | undefined;
   parseExplicitTarget?: (params: { raw: string }) => {
     to: string;
     threadId?: string | number;
     chatType?: ChatType;
   } | null;
+  /**
+   * Lightweight chat-type inference used before directory lookup so plugins can
+   * steer peer-vs-group resolution without reimplementing host search flow.
+   */
   inferTargetChatType?: (params: { to: string }) => ChatType | undefined;
   buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
   enableInteractiveReplies?: (params: {
@@ -360,6 +410,10 @@ export type ChannelMessagingAdapter = {
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
+    /**
+     * Plugin-owned fallback for explicit/native targets or post-directory-miss
+     * resolution. This should complement directory lookup, not duplicate it.
+     */
     resolveTarget?: (params: {
       cfg: OpenClawConfig;
       accountId?: string | null;
@@ -378,6 +432,10 @@ export type ChannelMessagingAdapter = {
     display?: string;
     kind?: ChannelDirectoryEntryKind;
   }) => string;
+  /**
+   * Provider-specific session-route builder used after target resolution.
+   * Keep session-key orchestration in core and channel-native routing rules here.
+   */
   resolveOutboundSessionRoute?: (params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -424,6 +482,9 @@ export type ChannelMessageActionContext = {
    * never be sourced from tool/model-controlled params.
    */
   requesterSenderId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
   gateway?: {
     url?: string;
     token?: string;
@@ -444,19 +505,23 @@ export type ChannelToolSend = {
 
 export type ChannelMessageActionAdapter = {
   /**
-   * Advertise agent-discoverable actions for this channel.
-   * Keep this aligned with any gated capability checks. Poll discovery is
-   * not inferred from `outbound.sendPoll`, so channels that want agents to
-   * create polls should include `"poll"` here when enabled.
+   * Unified discovery surface for the shared `message` tool.
+   * This returns the scoped actions,
+   * capabilities, and schema fragments together so they cannot drift.
    */
-  listActions?: (params: { cfg: OpenClawConfig }) => ChannelMessageActionName[];
+  describeMessageTool: (
+    params: ChannelMessageActionDiscoveryContext,
+  ) => ChannelMessageToolDiscovery | null | undefined;
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
-  getCapabilities?: (params: { cfg: OpenClawConfig }) => readonly ChannelMessageCapability[];
   requiresTrustedRequesterSender?: (params: {
     action: ChannelMessageActionName;
     toolContext?: ChannelThreadingToolContext;
   }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
+  /**
+   * Prefer this for channel-specific poll semantics or extra poll parameters.
+   * Core only parses the shared poll model when falling back to `outbound.sendPoll`.
+   */
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };
 
