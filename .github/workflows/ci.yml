@@ -244,8 +244,11 @@ jobs:
           # Pull request lanes still hit shared unit-fast OOMs when unit-fast and
           # isolated runs overlap. Keep pushes on the faster worker budget, but
           # serialize PR test runs onto the low-profile path to lower peak RSS.
+          # Force process forks there: CI low-profile vmForks can trip linked-module
+          # context errors in telegram/memory coverage while the fork pool stays stable.
           if [ "$EVENT_NAME" = "pull_request" ]; then
             echo "OPENCLAW_TEST_PROFILE=low" >> "$GITHUB_ENV"
+            echo "OPENCLAW_TEST_VM_FORKS=0" >> "$GITHUB_ENV"
             echo "OPENCLAW_TEST_WORKERS=1" >> "$GITHUB_ENV"
           else
             echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
