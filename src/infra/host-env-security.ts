@@ -2,6 +2,7 @@ import HOST_ENV_SECURITY_POLICY_JSON from "./host-env-security-policy.json" with
 import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
 
 const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const WINDOWS_COMPAT_OVERRIDE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_()]*$/;
 
 type HostEnvSecurityPolicy = {
   blockedKeys: string[];
@@ -65,6 +66,17 @@ export function normalizeEnvVarKey(
     return null;
   }
   return key;
+}
+
+function normalizeHostOverrideEnvVarKey(rawKey: string): string | null {
+  const key = normalizeEnvVarKey(rawKey);
+  if (!key) {
+    return null;
+  }
+  if (PORTABLE_ENV_VAR_KEY.test(key) || WINDOWS_COMPAT_OVERRIDE_ENV_VAR_KEY.test(key)) {
+    return key;
+  }
+  return null;
 }
 
 export function isDangerousHostEnvVarName(rawKey: string): boolean {
@@ -139,7 +151,7 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
     if (typeof value !== "string") {
       continue;
     }
-    const normalized = normalizeEnvVarKey(rawKey, { portable: true });
+    const normalized = normalizeHostOverrideEnvVarKey(rawKey);
     if (!normalized) {
       const candidate = rawKey.trim();
       rejectedInvalid.push(candidate || rawKey);

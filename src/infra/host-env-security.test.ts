@@ -257,6 +257,23 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.PATH).toBe("/usr/bin:/bin");
     expect(result.env.CLASSPATH).toBeUndefined();
   });
+
+  it("allows Windows-style override names while still rejecting invalid keys", () => {
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        "ProgramFiles(x86)": "C:\\Program Files (x86)",
+      },
+      overrides: {
+        "ProgramFiles(x86)": "D:\\SDKs",
+        "BAD-KEY": "bad",
+      },
+    });
+
+    expect(result.rejectedOverrideBlockedKeys).toEqual([]);
+    expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
+    expect(result.env["ProgramFiles(x86)"]).toBe("D:\\SDKs");
+  });
 });
 
 describe("normalizeEnvVarKey", () => {
