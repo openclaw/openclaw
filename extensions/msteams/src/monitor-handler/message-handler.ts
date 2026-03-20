@@ -177,10 +177,17 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       channelName,
       allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
-    const senderGroupPolicy = resolveSenderScopedGroupPolicy({
-      groupPolicy,
-      groupAllowFrom: effectiveGroupAllowFrom,
-    });
+    // When a route-level (team/channel) allowlist is configured but the sender allowlist is
+    // empty, resolveSenderScopedGroupPolicy would otherwise downgrade the policy to "open",
+    // allowing any sender. To close this bypass (GHSA-g7cr-9h7q-4qxq), treat an empty sender
+    // allowlist as deny-all whenever the route allowlist is active.
+    const senderGroupPolicy =
+      channelGate.allowlistConfigured && effectiveGroupAllowFrom.length === 0
+        ? groupPolicy
+        : resolveSenderScopedGroupPolicy({
+            groupPolicy,
+            groupAllowFrom: effectiveGroupAllowFrom,
+          });
     const access = resolveDmGroupAccessWithLists({
       isGroup: !isDirectMessage,
       dmPolicy,
