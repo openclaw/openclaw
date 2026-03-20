@@ -25,6 +25,8 @@ export async function startGatewayTailscaleExposure(params: {
     }
     const host = await getTailnetHostname().catch(() => null);
     if (host) {
+      // Custom control servers (tailscale.controlUrl) are only valid with mode=off,
+      // so serve/funnel exposure logs intentionally do not reference controlUrl.
       const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
       params.logTailscale.info(
         `${params.tailscaleMode} enabled: https://${host}${uiPath} (WS via wss://${host})`,

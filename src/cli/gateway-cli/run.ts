@@ -44,6 +44,7 @@ type GatewayRunOpts = {
   passwordFile?: unknown;
   tailscale?: unknown;
   tailscaleResetOnExit?: boolean;
+  tailscaleControlUrl?: unknown;
   allowUnconfigured?: boolean;
   force?: boolean;
   verbose?: boolean;
@@ -66,6 +67,7 @@ const GATEWAY_RUN_VALUE_KEYS = [
   "password",
   "passwordFile",
   "tailscale",
+  "tailscaleControlUrl",
   "wsLog",
   "rawStreamPath",
 ] as const;
@@ -410,11 +412,27 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
+  const tailscaleControlUrlRaw = toOptionString(opts.tailscaleControlUrl);
+  if (tailscaleControlUrlRaw) {
+    try {
+      const protocol = new URL(tailscaleControlUrlRaw).protocol;
+      if (protocol !== "http:" && protocol !== "https:") {
+        throw new Error("invalid protocol");
+      }
+    } catch {
+      defaultRuntime.error(
+        "Invalid --tailscale-control-url: must be a valid http:// or https:// URL",
+      );
+      defaultRuntime.exit(1);
+      return;
+    }
+  }
   const tailscaleOverride =
-    tailscaleMode || opts.tailscaleResetOnExit
+    tailscaleMode || opts.tailscaleResetOnExit || tailscaleControlUrlRaw
       ? {
           ...(tailscaleMode ? { mode: tailscaleMode } : {}),
           ...(opts.tailscaleResetOnExit ? { resetOnExit: true } : {}),
+          ...(tailscaleControlUrlRaw ? { controlUrl: tailscaleControlUrlRaw } : {}),
         }
       : undefined;
 
@@ -479,6 +497,10 @@ export function addGatewayRunCommand(cmd: Command): Command {
       "--tailscale-reset-on-exit",
       "Reset Tailscale serve/funnel configuration on shutdown",
       false,
+    )
+    .option(
+      "--tailscale-control-url <url>",
+      "Custom Tailscale control server URL (e.g., for Headscale). Serve and Funnel modes are not supported with a custom control server.",
     )
     .option(
       "--allow-unconfigured",

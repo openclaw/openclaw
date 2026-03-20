@@ -247,4 +247,23 @@ describe("gateway-cli coverage", () => {
       expect(startGatewayServer).toHaveBeenCalledWith(19001, expect.anything());
     });
   });
+
+  it("rejects tailscale control URL with non-http scheme", async () => {
+    resetRuntimeCapture();
+    startGatewayServer.mockClear();
+
+    await expectGatewayExit([
+      "gateway",
+      "--token",
+      "test-token",
+      "--allow-unconfigured",
+      "--tailscale-control-url",
+      "ftp://headscale.example.com",
+    ]);
+
+    expect(runtimeErrors.join("\n")).toContain(
+      "Invalid --tailscale-control-url: must be a valid http:// or https:// URL",
+    );
+    expect(startGatewayServer).not.toHaveBeenCalled();
+  });
 });

@@ -4,6 +4,7 @@ import type {
   GatewayTailscaleConfig,
   loadConfig,
 } from "../config/config.js";
+import { isOfficialTailscaleControlServer, readTailscaleStatusJson } from "../infra/tailscale.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
@@ -18,6 +19,35 @@ import {
   resolveGatewayBindHost,
 } from "./net.js";
 import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
+
+function readNestedString(
+  root: Record<string, unknown> | null,
+  path: readonly string[],
+): string | undefined {
+  let current: unknown = root;
+  for (const key of path) {
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  return typeof current === "string" && current.trim().length > 0 ? current.trim() : undefined;
+}
+
+async function readDaemonControlServerUrl(): Promise<string | undefined> {
+  try {
+    const status = await readTailscaleStatusJson();
+    const parsed = status;
+    return (
+      readNestedString(parsed, ["Self", "ControlURL"]) ??
+      readNestedString(parsed, ["CurrentTailnet", "ControlURL"]) ??
+      readNestedString(parsed, ["Prefs", "ControlURL"]) ??
+      readNestedString(parsed, ["ControlURL"])
+    );
+  } catch {
+    return undefined;
+  }
+}
 
 export type GatewayRuntimeConfig = {
   bindHost: string;
@@ -122,6 +152,22 @@ export async function resolveGatewayRuntimeConfig(params: {
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
   assertGatewayAuthConfigured(resolvedAuth, params.cfg.gateway?.auth);
+  if (tailscaleConfig.controlUrl && (tailscaleMode === "serve" || tailscaleMode === "funnel")) {
+    throw new Error(
+      `tailscale mode=${tailscaleMode} is not supported with a custom control server (tailscale.controlUrl). ` +
+        'Use tailscale.mode="off" and gateway.bind="tailnet" instead.',
+    );
+  }
+  const daemonControlUrl =
+    !tailscaleConfig.controlUrl && (tailscaleMode === "serve" || tailscaleMode === "funnel")
+      ? await readDaemonControlServerUrl()
+      : undefined;
+  if (daemonControlUrl && !isOfficialTailscaleControlServer(daemonControlUrl)) {
+    throw new Error(
+      `tailscale mode=${tailscaleMode} is not supported with a custom control server (tailscale daemon: ${daemonControlUrl}). ` +
+        'Use tailscale.mode="off" and gateway.bind="tailnet" instead.',
+    );
+  }
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",

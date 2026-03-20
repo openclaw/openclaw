@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
+import { isOfficialTailscaleControlServer } from "../infra/tailscale.js";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -199,6 +200,26 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
   return issues;
 }
 
+function validateGatewayTailscaleControlUrl(config: OpenClawConfig): ConfigValidationIssue[] {
+  const tailscaleMode = config.gateway?.tailscale?.mode ?? "off";
+  const controlUrl = config.gateway?.tailscale?.controlUrl;
+  if (!controlUrl || (tailscaleMode !== "serve" && tailscaleMode !== "funnel")) {
+    return [];
+  }
+  if (isOfficialTailscaleControlServer(controlUrl)) {
+    return [];
+  }
+  return [
+    {
+      path: "gateway.tailscale.mode",
+      message:
+        `gateway.tailscale.mode=${tailscaleMode} is not supported with a custom control server ` +
+        "(gateway.tailscale.controlUrl). Tailscale Serve and Funnel require official Tailscale " +
+        'infrastructure. Use gateway.tailscale.mode="off" and gateway.bind="tailnet" instead.',
+    },
+  ];
+}
+
 function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationIssue[] {
   const tailscaleMode = config.gateway?.tailscale?.mode ?? "off";
   if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") {
@@ -266,6 +287,12 @@ export function validateConfigObjectRaw(
   const avatarIssues = validateIdentityAvatar(validated.data as OpenClawConfig);
   if (avatarIssues.length > 0) {
     return { ok: false, issues: avatarIssues };
+  }
+  const gatewayTailscaleControlUrlIssues = validateGatewayTailscaleControlUrl(
+    validated.data as OpenClawConfig,
+  );
+  if (gatewayTailscaleControlUrlIssues.length > 0) {
+    return { ok: false, issues: gatewayTailscaleControlUrlIssues };
   }
   const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validated.data as OpenClawConfig);
   if (gatewayTailscaleBindIssues.length > 0) {

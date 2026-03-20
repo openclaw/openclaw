@@ -112,6 +112,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Tailscale publish mode: "off", "serve", or "funnel" for private or public exposure paths. Use "serve" for tailnet-only access and "funnel" only when public internet reachability is required.',
   "gateway.tailscale.resetOnExit":
     "Resets Tailscale Serve/Funnel state on gateway exit to avoid stale published routes after shutdown. Keep enabled unless another controller manages publish lifecycle outside the gateway.",
+  "gateway.tailscale.controlUrl":
+    'Custom Tailscale control server URL for Headscale or self-hosted coordination servers. Set to an http:// or https:// URL pointing at your control plane. Only used when tailscale.mode is "off" and gateway.bind is "tailnet"; Serve and Funnel modes require official Tailscale infrastructure and will reject a custom control URL. Leave unset to use the default Tailscale control plane.',
   "gateway.remote":
     "Remote gateway connection settings for direct or SSH transport when this instance proxies to another runtime host. Use remote mode only when split-host operation is intentionally configured.",
   "gateway.remote.transport":

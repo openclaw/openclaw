@@ -183,6 +183,12 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /**
+   * Custom Tailscale control server URL (e.g., for Headscale or other self-hosted servers).
+   * When set, Serve and Funnel modes are not available because they require official Tailscale
+   * infrastructure. Use gateway.bind="tailnet" with mode="off" for custom control servers.
+   */
+  controlUrl?: string;
 };
 
 export type GatewayRemoteConfig = {

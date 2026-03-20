@@ -124,8 +124,12 @@ const HttpUrlSchema = z
   .string()
   .url()
   .refine((value) => {
-    const protocol = new URL(value).protocol;
-    return protocol === "http:" || protocol === "https:";
+    try {
+      const protocol = new URL(value).protocol;
+      return protocol === "http:" || protocol === "https:";
+    } catch {
+      return false;
+    }
   }, "Expected http:// or https:// URL");
 
 const ResponsesEndpointUrlFetchShape = {
@@ -725,6 +729,7 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            controlUrl: HttpUrlSchema.optional(),
           })
           .strict()
           .optional(),

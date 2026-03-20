@@ -58,6 +58,9 @@ export function mergeGatewayTailscaleConfig(
   if (override.resetOnExit !== undefined) {
     merged.resetOnExit = override.resetOnExit;
   }
+  if (override.controlUrl !== undefined) {
+    merged.controlUrl = override.controlUrl;
+  }
   return merged;
 }
 
