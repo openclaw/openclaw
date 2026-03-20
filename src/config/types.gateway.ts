@@ -450,4 +450,11 @@ export type GatewayConfig = {
    * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
+  /**
+   * WebSocket handshake timeout in milliseconds.
+   * Unauthenticated connections that don't complete the handshake within this
+   * window are closed. Increase on loaded gateways where the default may be
+   * too aggressive. Default: 10000 (10 s).
+   */
+  handshakeTimeoutMs?: number;
 };

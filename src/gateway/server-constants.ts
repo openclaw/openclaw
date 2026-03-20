@@ -1,3 +1,5 @@
+import { loadConfig } from "../config/config.js";
+
 // Keep server maxPayload aligned with gateway client maxPayload so high-res canvas snapshots
 // don't get disconnected mid-invoke with "Max payload size exceeded".
 export const MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
@@ -23,6 +25,7 @@ export const __setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
 };
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 export const getHandshakeTimeoutMs = () => {
+  // Priority: env var > config file > default.
   // User-facing env var (works in all environments); test-only var gated behind VITEST
   const envKey =
     process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS ||
@@ -32,6 +35,16 @@ export const getHandshakeTimeoutMs = () => {
     if (Number.isFinite(parsed) && parsed > 0) {
       return parsed;
     }
+  }
+  // Config file: gateway.handshakeTimeoutMs
+  try {
+    const cfg = loadConfig();
+    const cfgVal = cfg?.gateway?.handshakeTimeoutMs;
+    if (typeof cfgVal === "number" && Number.isFinite(cfgVal) && cfgVal > 0) {
+      return cfgVal;
+    }
+  } catch {
+    // Config not available (e.g. during early init) — fall through to default.
   }
   return DEFAULT_HANDSHAKE_TIMEOUT_MS;
 };
