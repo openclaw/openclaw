@@ -85,7 +85,7 @@ When validation fails:
     - [iMessage](/channels/imessage) — `channels.imessage`
     - [Google Chat](/channels/googlechat) — `channels.googlechat`
     - [Mattermost](/channels/mattermost) — `channels.mattermost`
-    - [MS Teams](/channels/msteams) — `channels.msteams`
+    - [Microsoft Teams](/channels/msteams) — `channels.msteams`
 
     All channels share the same DM policy pattern:
 
