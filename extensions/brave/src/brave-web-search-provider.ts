@@ -4,6 +4,7 @@ import {
   DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
   formatCliCommand,
+  mergeScopedSearchConfig,
   normalizeFreshness,
   normalizeToIsoDate,
   readCachedSearchPayload,
@@ -607,21 +608,12 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
     },
     createTool: (ctx) =>
       createBraveToolDefinition(
-        (() => {
-          const searchConfig = ctx.searchConfig as SearchConfigRecord | undefined;
-          const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "brave");
-          if (!pluginConfig) {
-            return searchConfig;
-          }
-          return {
-            ...(searchConfig ?? {}),
-            ...(pluginConfig.apiKey === undefined ? {} : { apiKey: pluginConfig.apiKey }),
-            brave: {
-              ...resolveBraveConfig(searchConfig),
-              ...pluginConfig,
-            },
-          } as SearchConfigRecord;
-        })(),
+        mergeScopedSearchConfig(
+          ctx.searchConfig as SearchConfigRecord | undefined,
+          "brave",
+          resolveProviderWebSearchPluginConfig(ctx.config, "brave"),
+          { mirrorApiKeyToTopLevel: true },
+        ) as SearchConfigRecord | undefined,
       ),
   };
 }

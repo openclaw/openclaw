@@ -3,7 +3,9 @@ import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  getScopedCredentialValue,
   MAX_SEARCH_COUNT,
+  mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readNumberParam,
@@ -13,6 +15,7 @@ import {
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
+  setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
@@ -322,20 +325,9 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
     autoDetectOrder: 40,
     credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.moonshot.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => {
-      const kimi = searchConfig?.kimi;
-      return kimi && typeof kimi === "object" && !Array.isArray(kimi)
-        ? (kimi as Record<string, unknown>).apiKey
-        : undefined;
-    },
-    setCredentialValue: (searchConfigTarget, value) => {
-      const scoped = searchConfigTarget.kimi;
-      if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
-        searchConfigTarget.kimi = { apiKey: value };
-        return;
-      }
-      (scoped as Record<string, unknown>).apiKey = value;
-    },
+    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "kimi"),
+    setCredentialValue: (searchConfigTarget, value) =>
+      setScopedCredentialValue(searchConfigTarget, "kimi", value),
     getConfiguredCredentialValue: (config) =>
       resolveProviderWebSearchPluginConfig(config, "moonshot")?.apiKey,
     setConfiguredCredentialValue: (configTarget, value) => {
@@ -343,20 +335,11 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
     },
     createTool: (ctx) =>
       createKimiToolDefinition(
-        (() => {
-          const searchConfig = ctx.searchConfig as SearchConfigRecord | undefined;
-          const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "moonshot");
-          if (!pluginConfig) {
-            return searchConfig;
-          }
-          return {
-            ...(searchConfig ?? {}),
-            kimi: {
-              ...resolveKimiConfig(searchConfig),
-              ...pluginConfig,
-            },
-          } as SearchConfigRecord;
-        })(),
+        mergeScopedSearchConfig(
+          ctx.searchConfig as SearchConfigRecord | undefined,
+          "kimi",
+          resolveProviderWebSearchPluginConfig(ctx.config, "moonshot"),
+        ) as SearchConfigRecord | undefined,
       ),
   };
 }
