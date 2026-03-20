@@ -53,6 +53,8 @@ const runtimeStub: PluginRuntime = createPluginRuntimeMock({
 const createNoopAdapter = (): MSTeamsAdapter => ({
   continueConversation: async () => {},
   process: async () => {},
+  updateActivity: async () => {},
+  deleteActivity: async () => {},
 });
 
 const createRecordedSendActivity = (
@@ -75,12 +77,12 @@ const createRecordedSendActivity = (
 const REVOCATION_ERROR = "Cannot perform 'set' on a proxy that has been revoked";
 
 const createFallbackAdapter = (proactiveSent: string[]): MSTeamsAdapter => ({
+  ...createNoopAdapter(),
   continueConversation: async (_appId, _reference, logic) => {
     await logic({
       sendActivity: createRecordedSendActivity(proactiveSent),
     });
   },
-  process: async () => {},
 });
 
 describe("msteams messenger", () => {
@@ -195,6 +197,8 @@ describe("msteams messenger", () => {
           });
         },
         process: async () => {},
+        updateActivity: async () => {},
+        deleteActivity: async () => {},
       };
 
       const ids = await sendMSTeamsMessages({
@@ -366,6 +370,8 @@ describe("msteams messenger", () => {
           await logic({ sendActivity: createRecordedSendActivity(attempts, 503) });
         },
         process: async () => {},
+        updateActivity: async () => {},
+        deleteActivity: async () => {},
       };
 
       const ids = await sendMSTeamsMessages({
