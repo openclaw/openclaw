@@ -207,6 +207,7 @@ export type ChatRunState = {
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
   abortedRuns: Map<string, number>;
+  finalizedRuns: Map<string, number>;
   clear: () => void;
 };
 
@@ -216,6 +217,7 @@ export function createChatRunState(): ChatRunState {
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+  const finalizedRuns = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
@@ -223,6 +225,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
     abortedRuns.clear();
+    finalizedRuns.clear();
   };
 
   return {
@@ -231,6 +234,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt,
     deltaLastBroadcastLen,
     abortedRuns,
+    finalizedRuns,
     clear,
   };
 }
@@ -696,6 +700,10 @@ export function createAgentEventHandler({
     // Include sessionKey so Control UI can filter tool streams per session.
     const agentPayload = sessionKey ? { ...eventForClients, sessionKey } : eventForClients;
     const last = agentRunSeq.get(evt.runId) ?? 0;
+    const isStalePostLifecycleEvent = last === 0 && chatRunState.finalizedRuns.has(evt.runId);
+    if (isStalePostLifecycleEvent) {
+      return;
+    }
     const isToolEvent = evt.stream === "tool";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
     // Build tool payload: strip result/partialResult unless verbose=full
@@ -808,6 +816,7 @@ export function createAgentEventHandler({
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {
       toolEventRecipients.markFinal(evt.runId);
       clearAgentRunContext(evt.runId);
+      chatRunState.finalizedRuns.set(evt.runId, Date.now());
       agentRunSeq.delete(evt.runId);
       agentRunSeq.delete(clientRunId);
     }

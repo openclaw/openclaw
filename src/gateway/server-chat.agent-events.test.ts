@@ -527,6 +527,30 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("still emits a seq-gap error when the first observed event is not seq 1", () => {
+    const { broadcast, handler, nowSpy } = createHarness({ now: 3_000 });
+
+    handler({
+      runId: "run-missed-start",
+      seq: 3,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "late first chunk" },
+    });
+
+    const errorCalls = broadcast.mock.calls.filter(
+      ([event, payload]) =>
+        event === "agent" && (payload as { stream?: string }).stream === "error",
+    );
+    expect(errorCalls).toHaveLength(1);
+    expect(errorCalls[0]?.[1]).toMatchObject({
+      runId: "run-missed-start",
+      stream: "error",
+      data: { reason: "seq gap", expected: 1, received: 3 },
+    });
+    nowSpy?.mockRestore();
+  });
+
   it("flushes buffered chat delta before tool start events", () => {
     let now = 12_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
