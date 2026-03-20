@@ -76,6 +76,24 @@ class SmsManager(private val context: Context) {
         ) : ParseResult()
     }
 
+    data class ReadResult(
+        val ok: Boolean,
+        val messages: List<SmsMessage>,
+        val error: String? = null,
+        val payloadJson: String,
+    )
+
+    internal data class ReadParams(
+        val id: Long? = null,
+        val threadId: Long? = null,
+        val limit: Int = DEFAULT_READ_LIMIT,
+    )
+
+    internal sealed class ReadParseResult {
+        data class Ok(val params: ReadParams) : ReadParseResult()
+        data class Error(val error: String) : ReadParseResult()
+    }
+
     internal data class QueryParams(
         val startTime: Long? = null,
         val endTime: Long? = null,
@@ -100,7 +118,22 @@ class SmsManager(private val context: Context) {
 
     companion object {
         private const val DEFAULT_SMS_LIMIT = 25
+        private const val DEFAULT_READ_LIMIT = 50
+        private const val MAX_READ_LIMIT = 200
         internal val JsonConfig = Json { ignoreUnknownKeys = true }
+
+        private val SMS_PROJECTION = arrayOf(
+            Telephony.Sms._ID,
+            Telephony.Sms.THREAD_ID,
+            Telephony.Sms.ADDRESS,
+            Telephony.Sms.PERSON,
+            Telephony.Sms.DATE,
+            Telephony.Sms.DATE_SENT,
+            Telephony.Sms.READ,
+            Telephony.Sms.TYPE,
+            Telephony.Sms.BODY,
+            Telephony.Sms.STATUS,
+        )
 
         internal fun parseParams(paramsJson: String?, json: Json = JsonConfig): ParseResult {
             val params = paramsJson?.trim().orEmpty()
@@ -136,6 +169,30 @@ class SmsManager(private val context: Context) {
             }
 
             return ParseResult.Ok(ParsedParams(to = to, message = message))
+        }
+
+        internal fun parseReadParams(paramsJson: String?, json: Json = JsonConfig): ReadParseResult {
+            val params = paramsJson?.trim().orEmpty()
+            if (params.isEmpty()) {
+                return ReadParseResult.Error("INVALID_REQUEST: id or threadId required")
+            }
+
+            val obj = try {
+                json.parseToJsonElement(params).jsonObject
+            } catch (_: Throwable) {
+                return ReadParseResult.Error("INVALID_REQUEST: expected JSON object")
+            }
+
+            val id = (obj["id"] as? JsonPrimitive)?.content?.toLongOrNull()
+            val threadId = (obj["threadId"] as? JsonPrimitive)?.content?.toLongOrNull()
+            val limit = ((obj["limit"] as? JsonPrimitive)?.content?.toIntOrNull() ?: DEFAULT_READ_LIMIT)
+                .coerceIn(1, MAX_READ_LIMIT)
+
+            if (id == null && threadId == null) {
+                return ReadParseResult.Error("INVALID_REQUEST: id or threadId required")
+            }
+
+            return ReadParseResult.Ok(ReadParams(id = id, threadId = threadId, limit = limit))
         }
 
         internal fun parseQueryParams(paramsJson: String?, json: Json = JsonConfig): QueryParseResult {
@@ -181,7 +238,7 @@ class SmsManager(private val context: Context) {
         }
 
         private fun normalizePhoneNumber(phone: String): String {
-            return phone.replace(Regex("""[\s\-()]"""), "")
+            return phone.replace(Regex("""[\s\-.()]"""), "")
         }
 
         internal fun buildSendPlan(
@@ -285,6 +342,9 @@ class SmsManager(private val context: Context) {
             )
         }
 
+        // Also request RECEIVE_SMS so inbound SMS delivery works via SmsBroadcastReceiver.
+        ensureReceiveSmsPermission()
+
         val parseResult = parseParams(paramsJson, json)
         if (parseResult is ParseResult.Error) {
             return errorResult(
@@ -346,6 +406,16 @@ class SmsManager(private val context: Context) {
         val requester = permissionRequester ?: return false
         val results = requester.requestIfMissing(listOf(Manifest.permission.READ_SMS))
         return results[Manifest.permission.READ_SMS] == true
+    }
+
+    private fun hasReceiveSmsPermission(): Boolean =
+        context.checkSelfPermission(Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
+
+    private suspend fun ensureReceiveSmsPermission(): Boolean {
+        if (hasReceiveSmsPermission()) return true
+        val requester = permissionRequester ?: return false
+        val results = requester.requestIfMissing(listOf(Manifest.permission.RECEIVE_SMS))
+        return results[Manifest.permission.RECEIVE_SMS] == true
     }
 
     private suspend fun ensureReadContactsPermission(): Boolean {
@@ -458,6 +528,136 @@ class SmsManager(private val context: Context) {
                 payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = "SMS_QUERY_FAILED: ${e.message ?: "unknown error"}")
             )
         }
+    }
+
+    /**
+     * Read SMS messages by ID or thread ID.
+     *
+     * @param paramsJson JSON with fields:
+     *   - id (Long): Single message ID to fetch
+     *   - threadId (Long): Thread ID to fetch conversation
+     *   - limit (Int): Max messages for thread query (default: 50, max: 200)
+     * @return ReadResult containing the list of SMS messages or an error
+     */
+    suspend fun read(paramsJson: String?): ReadResult = withContext(Dispatchers.IO) {
+        if (!hasTelephonyFeature()) {
+            return@withContext ReadResult(
+                ok = false,
+                messages = emptyList(),
+                error = "SMS_UNAVAILABLE: telephony not available",
+                payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = "SMS_UNAVAILABLE: telephony not available")
+            )
+        }
+
+        if (!ensureReadSmsPermission()) {
+            return@withContext ReadResult(
+                ok = false,
+                messages = emptyList(),
+                error = "SMS_PERMISSION_REQUIRED: grant READ_SMS permission",
+                payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = "SMS_PERMISSION_REQUIRED: grant READ_SMS permission")
+            )
+        }
+
+        val parseResult = parseReadParams(paramsJson, json)
+        if (parseResult is ReadParseResult.Error) {
+            return@withContext ReadResult(
+                ok = false,
+                messages = emptyList(),
+                error = parseResult.error,
+                payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = parseResult.error)
+            )
+        }
+        val params = (parseResult as ReadParseResult.Ok).params
+
+        return@withContext try {
+            val messages = if (params.id != null) {
+                // Fetch single message by ID
+                querySmsById(params.id)
+            } else {
+                // Fetch thread by threadId
+                querySmsThread(params.threadId!!, params.limit)
+            }
+            ReadResult(
+                ok = true,
+                messages = messages,
+                error = null,
+                payloadJson = buildQueryPayloadJson(json, ok = true, messages = messages)
+            )
+        } catch (e: SecurityException) {
+            ReadResult(
+                ok = false,
+                messages = emptyList(),
+                error = "SMS_PERMISSION_REQUIRED: ${e.message}",
+                payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = "SMS_PERMISSION_REQUIRED: ${e.message}")
+            )
+        } catch (e: Throwable) {
+            ReadResult(
+                ok = false,
+                messages = emptyList(),
+                error = "SMS_READ_FAILED: ${e.message ?: "unknown error"}",
+                payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = "SMS_READ_FAILED: ${e.message ?: "unknown error"}")
+            )
+        }
+    }
+
+    private fun querySmsById(id: Long): List<SmsMessage> {
+        val messages = mutableListOf<SmsMessage>()
+        val cursor = context.contentResolver.query(
+            Telephony.Sms.CONTENT_URI,
+            SMS_PROJECTION,
+            "${Telephony.Sms._ID} = ?",
+            arrayOf(id.toString()),
+            null
+        )
+        cursor?.use {
+            if (it.moveToFirst()) {
+                messages.add(cursorToSmsMessage(it))
+            }
+        }
+        return messages
+    }
+
+    private fun querySmsThread(threadId: Long, limit: Int): List<SmsMessage> {
+        val messages = mutableListOf<SmsMessage>()
+        val sortOrder = "${Telephony.Sms.DATE} DESC LIMIT $limit"
+        val cursor = context.contentResolver.query(
+            Telephony.Sms.CONTENT_URI,
+            SMS_PROJECTION,
+            "${Telephony.Sms.THREAD_ID} = ?",
+            arrayOf(threadId.toString()),
+            sortOrder
+        )
+        cursor?.use {
+            while (it.moveToNext()) {
+                messages.add(cursorToSmsMessage(it))
+            }
+        }
+        return messages
+    }
+
+    private fun cursorToSmsMessage(cursor: Cursor): SmsMessage {
+        val idIndex = cursor.getColumnIndex(Telephony.Sms._ID)
+        val threadIdIndex = cursor.getColumnIndex(Telephony.Sms.THREAD_ID)
+        val addressIndex = cursor.getColumnIndex(Telephony.Sms.ADDRESS)
+        val personIndex = cursor.getColumnIndex(Telephony.Sms.PERSON)
+        val dateIndex = cursor.getColumnIndex(Telephony.Sms.DATE)
+        val dateSentIndex = cursor.getColumnIndex(Telephony.Sms.DATE_SENT)
+        val readIndex = cursor.getColumnIndex(Telephony.Sms.READ)
+        val typeIndex = cursor.getColumnIndex(Telephony.Sms.TYPE)
+        val bodyIndex = cursor.getColumnIndex(Telephony.Sms.BODY)
+        val statusIndex = cursor.getColumnIndex(Telephony.Sms.STATUS)
+        return SmsMessage(
+            id = cursor.getLong(idIndex),
+            threadId = cursor.getLong(threadIdIndex),
+            address = cursor.getString(addressIndex),
+            person = cursor.getString(personIndex),
+            date = cursor.getLong(dateIndex),
+            dateSent = cursor.getLong(dateSentIndex),
+            read = cursor.getInt(readIndex) == 1,
+            type = cursor.getInt(typeIndex),
+            body = cursor.getString(bodyIndex),
+            status = cursor.getInt(statusIndex)
+        )
     }
 
     /**

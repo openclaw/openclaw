@@ -11,6 +11,7 @@ export const CHAT_CHANNEL_ORDER = [
   "signal",
   "imessage",
   "line",
+  "sms",
 ] as const;
 
 export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];

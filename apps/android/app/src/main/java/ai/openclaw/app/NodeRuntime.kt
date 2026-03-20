@@ -312,6 +312,11 @@ class NodeRuntime(
         nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)
       }
     }
+    SmsChannelBridge.setEventSink { event, payloadJson ->
+      scope.launch {
+        nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)
+      }
+    }
   }
 
   private val chat: ChatController =

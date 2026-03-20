@@ -1638,6 +1638,24 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 
 </Accordion>
 
+### SMS (Android node)
+
+SMS messaging via a connected Android node. DM-only (no group support).
+
+```json5
+{
+  channels: {
+    sms: {
+      allowFrom: ["+15551234567"], // phone numbers allowed to send SMS to the agent
+    },
+  },
+}
+```
+
+- `allowFrom`: phone number allowlist. Normalized (spaces, dashes, parens stripped). Empty list rejects all inbound SMS.
+- Outbound delivery routes through the connected Android node's SMS manager.
+- Use `/allowlist add sms +15551234567` to manage the allowlist at runtime.
+
 ---
 
 ## Messages

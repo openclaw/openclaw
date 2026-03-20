@@ -202,6 +202,10 @@ object InvokeCommandRegistry {
         availability = InvokeCommandAvailability.ReadSmsAvailable,
       ),
       InvokeCommandSpec(
+        name = OpenClawSmsCommand.Read.rawValue,
+        availability = InvokeCommandAvailability.ReadSmsAvailable,
+      ),
+      InvokeCommandSpec(
         name = OpenClawCallLogCommand.Search.rawValue,
         availability = InvokeCommandAvailability.CallLogAvailable,
       ),

@@ -580,6 +580,24 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
       return;
     }
+    case "sms.received": {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
+        return;
+      }
+      const from = typeof obj.from === "string" ? obj.from.trim() : "";
+      const body = typeof obj.body === "string" ? obj.body.trim() : "";
+      if (!from || !body) {
+        return;
+      }
+      const timestampMs =
+        typeof obj.timestampMs === "number" && Number.isFinite(obj.timestampMs)
+          ? obj.timestampMs
+          : Date.now();
+      const { handleIncomingSms } = await import("../channels/sms/inbound.js");
+      await handleIncomingSms(ctx, nodeId, { from, body, timestampMs });
+      return;
+    }
     case "push.apns.register": {
       const obj = parsePayloadObject(evt.payloadJSON);
       if (!obj) {

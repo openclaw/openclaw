@@ -776,6 +776,11 @@ export async function startGatewayServer(
     setSkillsRemoteRegistry(nodeRegistry);
     void primeRemoteSkillsCache();
   }
+  // Wire SMS channel outbound to the node registry so sms.send can reach Android nodes.
+  {
+    const { setSmsNodeRegistry } = await import("../channels/sms/outbound.js");
+    setSmsNodeRegistry(nodeRegistry);
+  }
   // Debounce skills-triggered node probes to avoid feedback loops and rapid-fire invokes.
   // Skills changes can happen in bursts (e.g., file watcher events), and each probe
   // takes time to complete. A 30-second delay ensures we batch changes together.

@@ -133,6 +133,16 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     blurb: "LINE Messaging API webhook bot.",
     systemImage: "message",
   },
+  sms: {
+    id: "sms",
+    label: "SMS",
+    selectionLabel: "SMS (Android node)",
+    detailLabel: "SMS",
+    docsPath: "/channels/sms",
+    docsLabel: "sms",
+    blurb: "send and receive SMS via a connected Android device.",
+    systemImage: "message",
+  },
 };
 
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
