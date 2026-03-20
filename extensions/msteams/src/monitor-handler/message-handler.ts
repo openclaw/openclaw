@@ -499,19 +499,21 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         if (!graphTeamId) {
           throw new Error("Could not resolve team group ID");
         }
-        const parentMsg = await fetchChannelMessage({
-          token: graphToken,
-          teamId: graphTeamId,
-          channelId: conversationId,
-          messageId: conversationMessageId,
-        });
-        const replies = await fetchThreadReplies({
-          token: graphToken,
-          teamId: graphTeamId,
-          channelId: conversationId,
-          messageId: conversationMessageId,
-          top: 50,
-        });
+        const [parentMsg, replies] = await Promise.all([
+          fetchChannelMessage({
+            token: graphToken,
+            teamId: graphTeamId,
+            channelId: conversationId,
+            messageId: conversationMessageId,
+          }),
+          fetchThreadReplies({
+            token: graphToken,
+            teamId: graphTeamId,
+            channelId: conversationId,
+            messageId: conversationMessageId,
+            top: 50,
+          }),
+        ]);
         const threadMessages: string[] = [];
         if (parentMsg?.body?.content) {
           const sender = parentMsg.from?.user?.displayName ?? "Unknown";
@@ -520,10 +522,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             threadMessages.push(`${sender}: ${content}`);
           }
         }
-        // Exclude the current message (last reply) to avoid duplication.
+        // Exclude the current message to avoid duplication.
+        // Compare by both id and createdDateTime since Bot Framework activity.id
+        // and Graph API reply.id may use different formats.
         const currentActivityId = activity.id;
+        const currentTimestamp =
+          activity.timestamp instanceof Date ? activity.timestamp.toISOString() : undefined;
         for (const reply of replies) {
           if (reply.id === currentActivityId) continue;
+          if (currentTimestamp && reply.createdDateTime === currentTimestamp) continue;
           const sender = reply.from?.user?.displayName ?? "Unknown";
           const content = reply.body?.content ? stripHtmlTags(reply.body.content) : "";
           if (content) {

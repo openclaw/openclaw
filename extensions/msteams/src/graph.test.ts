@@ -34,6 +34,7 @@ import {
   listTeamsByName,
   normalizeQuery,
   resolveGraphToken,
+  stripHtmlTags,
 } from "./graph.js";
 
 const originalFetch = globalThis.fetch;
@@ -161,5 +162,59 @@ describe("msteams graph helpers", () => {
       "/groups?$filter=resourceProvisioningOptions%2FAny(x%3Ax%20eq%20'Team')%20and%20startsWith(displayName%2C'Bob''s%20Team')&$select=id,displayName",
     );
     expect(calls[1]).toContain("/teams/team%2Fops/channels?$select=id,displayName");
+  });
+});
+
+describe("stripHtmlTags", () => {
+  it("removes basic HTML tags", () => {
+    expect(stripHtmlTags("<p>Hello <b>world</b></p>")).toBe("Hello world");
+  });
+
+  it("preserves @mention display names from <at> tags", () => {
+    expect(stripHtmlTags('<at id="123">John Doe</at> check this')).toBe("John Doe check this");
+  });
+
+  it("handles multiple @mentions", () => {
+    expect(stripHtmlTags('<at id="1">Alice</at> and <at id="2">Bob</at> please review')).toBe(
+      "Alice and Bob please review",
+    );
+  });
+
+  it("decodes common HTML entities", () => {
+    expect(stripHtmlTags("a &amp; b &lt; c &gt; d &quot;e&quot; f&apos;s")).toBe(
+      'a & b < c > d "e" f\'s',
+    );
+  });
+
+  it("decodes &#39; numeric entity for apostrophe", () => {
+    expect(stripHtmlTags("it&#39;s fine")).toBe("it's fine");
+  });
+
+  it("replaces &nbsp; with space", () => {
+    expect(stripHtmlTags("hello&nbsp;&nbsp;world")).toBe("hello world");
+  });
+
+  it("collapses whitespace and trims", () => {
+    expect(stripHtmlTags("  hello   world  ")).toBe("hello world");
+  });
+
+  it("handles empty string", () => {
+    expect(stripHtmlTags("")).toBe("");
+  });
+
+  it("handles plain text without HTML", () => {
+    expect(stripHtmlTags("just plain text")).toBe("just plain text");
+  });
+
+  it("handles nested tags", () => {
+    expect(stripHtmlTags("<div><p><span>nested</span></p></div>")).toBe("nested");
+  });
+
+  it("handles typical Teams message with mention and formatting", () => {
+    expect(
+      stripHtmlTags(
+        '<div><div><at id="0">OpenClaw Bot</at>&nbsp;what&#39;s the &quot;status&quot;?</div></div>',
+      ),
+    ).toBe('OpenClaw Bot what\'s the "status"?');
   });
 });

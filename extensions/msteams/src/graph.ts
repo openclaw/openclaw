@@ -76,41 +76,67 @@ export async function listTeamsByName(token: string, query: string): Promise<Gra
   return res.value ?? [];
 }
 
-// Cache: conversation-style team ID → Azure AD group ID
-const teamIdToGroupIdCache = new Map<string, string>();
+// Cache: conversation-style team ID → Azure AD group ID (TTL-based to avoid stale entries).
+const TEAM_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const teamIdToGroupIdCache = new Map<string, { groupId: string; expiresAt: number }>();
 
 /**
  * Resolve the Azure AD group ID from a Teams conversation-style team ID (19:xxx@thread.tacv2).
  * Graph API endpoints need the group GUID, not the conversation ID.
+ * Paginates through all groups and caches results with a TTL.
  */
 export async function resolveTeamGroupId(
   token: string,
   conversationTeamId: string,
 ): Promise<string | null> {
   const cached = teamIdToGroupIdCache.get(conversationTeamId);
-  if (cached) return cached;
+  if (cached && cached.expiresAt > Date.now()) return cached.groupId;
 
-  // List all teams and match by internalId
+  // Paginate through all teams and match by internalId
   const filter = `resourceProvisioningOptions/Any(x:x eq 'Team')`;
-  const path = `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
-  const groups = await fetchGraphJson<GraphResponse<GraphGroup>>({ token, path });
-  for (const group of groups.value ?? []) {
-    if (!group.id) continue;
-    try {
-      const teamPath = `/teams/${encodeURIComponent(group.id)}?$select=id,internalId`;
-      const teamInfo = await fetchGraphJson<{ id?: string; internalId?: string }>({
-        token,
-        path: teamPath,
+  let nextPath: string | null =
+    `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName&$top=100`;
+
+  type GroupPage = GraphResponse<GraphGroup> & { "@odata.nextLink"?: string };
+
+  while (nextPath) {
+    const pagePath = nextPath;
+    const page: GroupPage = await fetchGraphJson<GroupPage>({ token, path: pagePath });
+    const groups: GraphGroup[] = page.value ?? [];
+
+    // Resolve internalId for each group in parallel (batched)
+    const results = await Promise.all(
+      groups
+        .filter((g: GraphGroup) => g.id)
+        .map(async (group: GraphGroup) => {
+          try {
+            const teamPath = `/teams/${encodeURIComponent(group.id!)}?$select=id,internalId`;
+            return await fetchGraphJson<{ id?: string; internalId?: string }>({
+              token,
+              path: teamPath,
+            });
+          } catch {
+            return null; // Skip teams we can't access
+          }
+        }),
+    );
+
+    for (const teamInfo of results) {
+      if (!teamInfo?.internalId || !teamInfo.id) continue;
+      const groupId = groups.find((g: GraphGroup) => g.id === teamInfo.id)?.id;
+      if (!groupId) continue;
+      teamIdToGroupIdCache.set(teamInfo.internalId, {
+        groupId,
+        expiresAt: Date.now() + TEAM_CACHE_TTL_MS,
       });
-      if (teamInfo.internalId) {
-        teamIdToGroupIdCache.set(teamInfo.internalId, group.id);
-        if (teamInfo.internalId === conversationTeamId) {
-          return group.id;
-        }
+      if (teamInfo.internalId === conversationTeamId) {
+        return groupId;
       }
-    } catch {
-      // Skip teams we can't access
     }
+
+    // Follow pagination link — strip the Graph root since fetchGraphJson prepends it
+    const rawNext = page["@odata.nextLink"];
+    nextPath = rawNext ? rawNext.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/, "") : null;
   }
   return null;
 }
@@ -169,7 +195,10 @@ export async function fetchThreadReplies(params: {
 }
 
 /**
- * Strip HTML tags from Teams message body content.
+ * Strip HTML tags from Teams message body content for thread context display.
+ * Unlike `stripMSTeamsMentionTags` (in inbound.ts) which removes @mention text entirely
+ * for bot command parsing, this preserves mention display names so thread context
+ * retains who was mentioned.
  */
 export function stripHtmlTags(html: string): string {
   return html
@@ -180,6 +209,8 @@ export function stripHtmlTags(html: string): string {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
 }
