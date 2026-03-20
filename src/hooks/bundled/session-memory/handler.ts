@@ -193,6 +193,22 @@ async function findPreviousSessionFile(params: {
   return undefined;
 }
 
+async function findLatestResetTranscriptFile(sessionsDir: string): Promise<string | undefined> {
+  try {
+    const files = await fs.readdir(sessionsDir);
+    // reset transcripts keep the base session file name but with an extra `.reset.<timestamp>` suffix
+    const resetFiles = files.filter((name) => name.includes(".jsonl.reset."));
+    if (resetFiles.length === 0) {
+      return undefined;
+    }
+    // ISO timestamps make lexicographic ordering align with recency.
+    const latest = resetFiles.toSorted().at(-1);
+    return latest ? path.join(sessionsDir, latest) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Save session context to memory when /new or /reset command is triggered
  */
@@ -207,6 +223,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     log.debug("Hook triggered for reset/new command", { action: event.action });
 
     const context = event.context || {};
+    const hasPreviousSessionEntry = Boolean(context.previousSessionEntry);
     const cfg = context.cfg as OpenClawConfig | undefined;
     const contextWorkspaceDir =
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
@@ -236,7 +253,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
       string,
       unknown
     >;
-    const currentSessionId = sessionEntry.sessionId as string;
+    let currentSessionId = sessionEntry.sessionId as string;
     let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
 
     // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
@@ -253,12 +270,31 @@ const saveSessionToMemory: HookHandler = async (event) => {
           currentSessionFile,
           sessionId: currentSessionId,
         });
-        if (!recoveredSessionFile) {
-          continue;
+        if (recoveredSessionFile) {
+          currentSessionFile = recoveredSessionFile;
+          log.debug("Found previous session file", { file: currentSessionFile });
+          break;
         }
-        currentSessionFile = recoveredSessionFile;
-        log.debug("Found previous session file", { file: currentSessionFile });
-        break;
+
+        // Special case: for `/new` triggered after a timed-out session, `previousSessionEntry` can be missing.
+        // In that case, the "current" session points to an ephemeral session without a matching transcript file,
+        // while the old transcript is already rotated into the latest `*.jsonl.reset.*` in `sessions/`.
+        if (event.action === "new" && !hasPreviousSessionEntry) {
+          const latestReset = await findLatestResetTranscriptFile(sessionsDir);
+          if (latestReset) {
+            currentSessionFile = latestReset;
+            const baseName = path.basename(latestReset);
+            const match = baseName.match(/^(.+)\.jsonl\.reset\./);
+            if (match?.[1]) {
+              currentSessionId = match[1];
+            }
+            log.debug("Recovered session content from latest reset transcript", {
+              file: currentSessionFile,
+              recoveredSessionId: currentSessionId,
+            });
+            break;
+          }
+        }
       }
     }
 
@@ -323,7 +359,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const timeStr = now.toISOString().split("T")[1].split(".")[0];
 
     // Extract context details
-    const sessionId = (sessionEntry.sessionId as string) || "unknown";
+    const sessionId = currentSessionId || "unknown";
     const source = (context.commandSource as string) || "unknown";
 
     // Build Markdown entry
