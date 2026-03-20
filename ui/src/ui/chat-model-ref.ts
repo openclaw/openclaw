@@ -19,6 +19,37 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
   return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
 }
 
+function hasCatalogMatch(
+  catalog: ModelCatalogEntry[] | undefined,
+  provider: string | null | undefined,
+  model: string,
+): boolean {
+  const trimmedProvider = provider?.trim();
+  const trimmedModel = model.trim();
+  if (!trimmedProvider || !trimmedModel) {
+    return false;
+  }
+  return (
+    catalog?.some(
+      (entry) =>
+        entry.provider.trim().toLowerCase() === trimmedProvider.toLowerCase() &&
+        entry.id.trim().toLowerCase() === trimmedModel.toLowerCase(),
+    ) ?? false
+  );
+}
+
+function hasQualifiedCatalogMatch(
+  catalog: ModelCatalogEntry[] | undefined,
+  value: string,
+): boolean {
+  const trimmed = value.trim();
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === trimmed.length - 1) {
+    return false;
+  }
+  return hasCatalogMatch(catalog, trimmed.slice(0, slashIndex), trimmed.slice(slashIndex + 1));
+}
+
 export function createChatModelOverride(value: string): ChatModelOverride | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -65,11 +96,22 @@ export function normalizeChatModelOverrideValue(
 export function resolveServerChatModelValue(
   model?: string | null,
   provider?: string | null,
+  catalog?: ModelCatalogEntry[],
 ): string {
   if (typeof model !== "string") {
     return "";
   }
-  return buildQualifiedChatModelValue(model, provider);
+  const trimmedModel = model.trim();
+  if (!trimmedModel) {
+    return "";
+  }
+  if (hasCatalogMatch(catalog, provider, trimmedModel)) {
+    return buildQualifiedChatModelValue(trimmedModel, provider);
+  }
+  if (hasQualifiedCatalogMatch(catalog, trimmedModel)) {
+    return trimmedModel;
+  }
+  return buildQualifiedChatModelValue(trimmedModel, provider);
 }
 
 export function formatChatModelDisplay(value: string): string {

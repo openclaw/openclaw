@@ -735,6 +735,73 @@ describe("chat view", () => {
     vi.unstubAllGlobals();
   });
 
+  it("prefers the embedded provider prefix when the server session row already includes one", () => {
+    const models: ModelCatalogEntry[] = [
+      { id: "qwen3.5-plus", name: "Qwen 3.5 Plus", provider: "moonshot" },
+      { id: "qwen3.5-plus", name: "Qwen 3.5 Plus", provider: "dashscope" },
+    ];
+    const { state } = createChatHeaderState({ models, model: "qwen3.5-plus" });
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "moonshot", model: "qwen3.5-plus", contextTokens: null },
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          modelProvider: "moonshot",
+          model: "dashscope/qwen3.5-plus",
+        },
+      ],
+    };
+    const container = document.createElement("div");
+
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("dashscope/qwen3.5-plus");
+  });
+
+  it("keeps the recorded provider when the model id itself contains a slash", () => {
+    const models: ModelCatalogEntry[] = [
+      { id: "moonshotai/Kimi-K2.5", name: "Kimi K2.5", provider: "openrouter" },
+    ];
+    const { state } = createChatHeaderState({ models });
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: {
+        modelProvider: "openrouter",
+        model: "moonshotai/Kimi-K2.5",
+        contextTokens: null,
+      },
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          modelProvider: "openrouter",
+          model: "moonshotai/Kimi-K2.5",
+        },
+      ],
+    };
+    const container = document.createElement("div");
+
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("openrouter/moonshotai/Kimi-K2.5");
+  });
+
   it("disables the chat header model picker while a run is active", () => {
     const { state } = createChatHeaderState();
     state.chatRunId = "run-123";
