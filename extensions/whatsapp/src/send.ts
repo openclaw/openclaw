@@ -24,6 +24,8 @@ export async function sendMessageWhatsApp(
     mediaLocalRoots?: readonly string[];
     gifPlayback?: boolean;
     accountId?: string;
+    /** Message ID to quote-reply (passed as Baileys quoted key). */
+    replyToId?: string;
   },
 ): Promise<{ messageId: string; toJid: string }> {
   let text = body.trimStart();
@@ -87,11 +89,13 @@ export async function sendMessageWhatsApp(
     await active.sendComposingTo(to);
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
+    const replyToId = options.replyToId?.trim() || undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || accountId || documentFileName
+      options.gifPlayback || accountId || documentFileName || replyToId
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
+            ...(replyToId ? { replyToId } : {}),
             accountId,
           }
         : undefined;

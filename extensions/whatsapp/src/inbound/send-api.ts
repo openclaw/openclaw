@@ -63,7 +63,18 @@ export function createWebSendApi(params: {
       } else {
         payload = { text };
       }
-      const result = await params.sock.sendMessage(jid, payload);
+      const replyToId = sendOptions?.replyToId?.trim();
+      const sendMessageOptions = replyToId
+        ? // Note: `message` content is not available at this call site; passing an empty
+          // object as a placeholder. Baileys uses it to render the quote preview — without
+          // it the recipient sees "Message unavailable". This is a known limitation.
+          { quoted: { key: { remoteJid: jid, id: replyToId }, message: {} } }
+        : undefined;
+      const result = await params.sock.sendMessage(
+        jid,
+        payload,
+        sendMessageOptions as Parameters<typeof params.sock.sendMessage>[2],
+      );
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       recordWhatsAppOutbound(accountId);
       const messageId = resolveOutboundMessageId(result);
