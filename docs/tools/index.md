@@ -184,6 +184,52 @@ Apply structured patches across one or more files. Use for multi-hunk edits.
 Experimental: enable via `tools.exec.applyPatch.enabled` (OpenAI models only).
 `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
 
+### `read`
+
+Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.
+
+Core parameters:
+
+- `path` or `file_path` (required) — Path to the file to read (relative or absolute)
+- `offset` — Line number to start reading from (1-indexed)
+- `limit` — Maximum number of lines to read
+
+Notes:
+
+- For text files, output is truncated to 2000 lines or 50KB (whichever is hit first).
+- Use `offset` and `limit` to read large files in chunks.
+- Images are returned as image blocks with `MEDIA:<path>`.
+
+### `write`
+
+Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.
+
+Core parameters:
+
+- `path` or `file_path` (required) — Path to the file to write (relative or absolute)
+- `content` (required) — Content to write to the file
+
+Notes:
+
+- Creates parent directories automatically if they don't exist.
+- Overwrites existing files without warning.
+
+### `edit`
+
+Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits.
+
+Core parameters:
+
+- `path` or `file_path` (required) — Path to the file to edit (relative or absolute)
+- `oldText` or `old_string` (required) — Exact text to find and replace (must match exactly)
+- `newText` or `new_string` (required) — New text to replace the old text with (can be empty to delete)
+
+Notes:
+
+- The `oldText` must match exactly, including all whitespace.
+- Use for precise, surgical edits rather than broad rewrites.
+- Set `newText` to empty string to delete the matched text.
+
 ### `exec`
 
 Run shell commands in the workspace.
