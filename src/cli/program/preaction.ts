@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import { routeLogsToStderr } from "../../logging/console.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -144,6 +145,9 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const suppressDoctorStdout = isJsonOutputMode(commandPath, argv);
+    if (suppressDoctorStdout) {
+      routeLogsToStderr();
+    }
     const { ensureConfigReady } = await loadConfigGuardModule();
     await ensureConfigReady({
       runtime: defaultRuntime,

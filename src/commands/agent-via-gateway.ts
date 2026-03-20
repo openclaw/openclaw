@@ -156,7 +156,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   );
 
   if (opts.json) {
-    runtime.log(JSON.stringify(response, null, 2));
+    process.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
     return response;
   }
 

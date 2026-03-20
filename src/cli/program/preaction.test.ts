@@ -5,6 +5,7 @@ const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
 const ensureConfigReadyMock = vi.fn(async () => {});
 const ensurePluginRegistryLoadedMock = vi.fn();
+const routeLogsToStderrMock = vi.fn();
 
 const runtimeMock = {
   log: vi.fn(),
@@ -18,6 +19,10 @@ vi.mock("../../globals.js", () => ({
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtimeMock,
+}));
+
+vi.mock("../../logging/console.js", () => ({
+  routeLogsToStderr: routeLogsToStderrMock,
 }));
 
 vi.mock("../banner.js", () => ({
@@ -88,6 +93,10 @@ describe("registerPreActionHooks", () => {
     program.command("doctor").action(() => {});
     program.command("completion").action(() => {});
     program.command("secrets").action(() => {});
+    program
+      .command("agent")
+      .option("--json")
+      .action(() => {});
     program.command("agents").action(() => {});
     program.command("configure").action(() => {});
     program.command("onboard").action(() => {});
@@ -270,6 +279,29 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("routes logs to stderr when --json is set", async () => {
+    await runPreAction({
+      parseArgv: ["agent"],
+      processArgv: ["node", "openclaw", "agent", "--json"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalled();
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["agent"],
+      suppressDoctorStdout: true,
+    });
+  });
+
+  it("does not route logs to stderr when --json is absent", async () => {
+    await runPreAction({
+      parseArgv: ["agent"],
+      processArgv: ["node", "openclaw", "agent"],
+    });
+
+    expect(routeLogsToStderrMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for backup create", async () => {
