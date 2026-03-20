@@ -1300,9 +1300,16 @@ if (serialPrefixRuns.length > 0) {
   if (failedSerialPrefix !== undefined) {
     process.exit(failedSerialPrefix);
   }
+  const deferredRunConcurrency = isMacMiniProfile ? 3 : testProfile === "low" ? 2 : undefined;
   const failedDeferredParallel = isMacMiniProfile
-    ? await runEntriesWithLimit(deferredParallelRuns, passthroughOptionArgs, 3)
-    : await runEntries(deferredParallelRuns, passthroughOptionArgs);
+    ? await runEntriesWithLimit(deferredParallelRuns, passthroughOptionArgs, deferredRunConcurrency)
+    : deferredRunConcurrency
+      ? await runEntriesWithLimit(
+          deferredParallelRuns,
+          passthroughOptionArgs,
+          deferredRunConcurrency,
+        )
+      : await runEntries(deferredParallelRuns, passthroughOptionArgs);
   if (failedDeferredParallel !== undefined) {
     process.exit(failedDeferredParallel);
   }
