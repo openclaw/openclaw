@@ -267,6 +267,34 @@ describe("createLaneTextDeliverer", () => {
     expect(sleepWithAbort).toHaveBeenCalledTimes(1);
   });
 
+  it("retains preview when an ambiguous retry chain later ends with pre-connect failure", async () => {
+    computeBackoff.mockClear();
+    sleepWithAbort.mockClear();
+    const abortController = new AbortController();
+    const harness = createHarness({
+      answerMessageId: 999,
+      abortSignal: abortController.signal,
+    });
+    const preConnectErr = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+    });
+    harness.editPreview
+      .mockRejectedValueOnce(new Error("timeout after Telegram accepted send"))
+      .mockImplementationOnce(async () => {
+        abortController.abort(new Error("poller restart"));
+        throw preConnectErr;
+      });
+
+    await expectFinalPreviewRetained({
+      harness,
+      expectedLogSnippet: "failed after ambiguous network retry chain; keeping existing preview",
+    });
+
+    expect(harness.editPreview).toHaveBeenCalledTimes(2);
+    expect(computeBackoff).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbort).toHaveBeenCalledTimes(1);
+  });
+
   it("finalizes text-only replies by editing an existing preview message", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 

@@ -26,6 +26,9 @@ const PREVIEW_EDIT_ABORTED_AFTER_PRECONNECT_FAILURE = Symbol(
 const PREVIEW_EDIT_ABORTED_AFTER_AMBIGUOUS_RETRY = Symbol(
   "openclaw.telegram.preview-edit-aborted-after-ambiguous-retry",
 );
+const PREVIEW_EDIT_FAILED_AFTER_AMBIGUOUS_RETRY = Symbol(
+  "openclaw.telegram.preview-edit-failed-after-ambiguous-retry",
+);
 
 function extractErrorText(err: unknown): string {
   return typeof err === "string"
@@ -86,6 +89,26 @@ function hasPreviewEditAbortKind(
   marker:
     | typeof PREVIEW_EDIT_ABORTED_AFTER_PRECONNECT_FAILURE
     | typeof PREVIEW_EDIT_ABORTED_AFTER_AMBIGUOUS_RETRY,
+): boolean {
+  return !!err && typeof err === "object" && Boolean((err as Record<PropertyKey, unknown>)[marker]);
+}
+
+function markPreviewEditFailureKind(
+  err: unknown,
+  marker: typeof PREVIEW_EDIT_FAILED_AFTER_AMBIGUOUS_RETRY,
+): void {
+  if (!err || typeof err !== "object") {
+    return;
+  }
+  Object.defineProperty(err, marker, {
+    value: true,
+    configurable: true,
+  });
+}
+
+function hasPreviewEditFailureKind(
+  err: unknown,
+  marker: typeof PREVIEW_EDIT_FAILED_AFTER_AMBIGUOUS_RETRY,
 ): boolean {
   return !!err && typeof err === "object" && Boolean((err as Record<PropertyKey, unknown>)[marker]);
 }
@@ -270,6 +293,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           : isSafeToRetrySendError(err)
             ? "preconnect"
             : "ambiguous";
+        const effectiveRetryKind =
+          currentRetryKind === "ambiguous" || previousRetryKind === "ambiguous"
+            ? "ambiguous"
+            : currentRetryKind;
+        if (effectiveRetryKind === "ambiguous" && currentRetryKind === "preconnect") {
+          markPreviewEditFailureKind(err, PREVIEW_EDIT_FAILED_AFTER_AMBIGUOUS_RETRY);
+        }
         if (isAnyAbortError(err) && previousRetryKind) {
           markPreviewEditAbortKind(
             err,
@@ -286,7 +316,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         ) {
           throw err;
         }
-        previousRetryKind = currentRetryKind;
+        previousRetryKind = effectiveRetryKind;
         const delayMs = computeBackoff(TELEGRAM_PREVIEW_EDIT_RETRY_POLICY, attempt);
         params.log(
           `telegram: ${args.laneName} preview ${args.context} edit hit recoverable network error; retrying in ${delayMs}ms (${String(err)})`,
@@ -373,6 +403,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         if (args.finalTextAlreadyLanded) {
           params.log(
             `telegram: ${args.laneName} preview final edit failed after stop flush; keeping existing preview (${String(err)})`,
+          );
+          params.markDelivered();
+          return "retained";
+        }
+        if (hasPreviewEditFailureKind(err, PREVIEW_EDIT_FAILED_AFTER_AMBIGUOUS_RETRY)) {
+          params.log(
+            `telegram: ${args.laneName} preview final edit failed after ambiguous network retry chain; keeping existing preview (${String(err)})`,
           );
           params.markDelivered();
           return "retained";
