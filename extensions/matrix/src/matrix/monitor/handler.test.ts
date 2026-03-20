@@ -720,12 +720,36 @@ describe("matrix monitor handler pairing account scope", () => {
               dispatcher: {},
               replyOptions: {},
               markDispatchIdle: () => {},
+              markRunComplete: () => {},
             }),
             resolveHumanDelayConfig: () => undefined,
             dispatchReplyFromConfig: async () => ({
               queuedFinal: true,
               counts: { final: 1, block: 0, tool: 0 },
             }),
+            withReplyDispatcher: async <T>({
+              dispatcher,
+              run,
+              onSettled,
+            }: {
+              dispatcher: {
+                markComplete?: () => void;
+                waitForIdle?: () => Promise<void>;
+              };
+              run: () => Promise<T>;
+              onSettled?: () => void | Promise<void>;
+            }) => {
+              try {
+                return await run();
+              } finally {
+                dispatcher.markComplete?.();
+                try {
+                  await dispatcher.waitForIdle?.();
+                } finally {
+                  await onSettled?.();
+                }
+              }
+            },
           },
           reactions: {
             shouldAckReaction: () => false,
@@ -987,5 +1011,284 @@ describe("matrix monitor handler pairing account scope", () => {
     );
 
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("matrix monitor handler durable inbound dedupe", () => {
+  it("skips replayed inbound events before session recording", async () => {
+    const inboundDeduper = {
+      claimEvent: vi.fn(() => false),
+      commitEvent: vi.fn(async () => undefined),
+      releaseEvent: vi.fn(),
+    };
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      dispatchReplyFromConfig: vi.fn(async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      })),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$dup",
+        body: "hello",
+      }),
+    );
+
+    expect(inboundDeduper.claimEvent).toHaveBeenCalledWith({
+      roomId: "!room:example.org",
+      eventId: "$dup",
+    });
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
+    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+  });
+
+  it("commits inbound events only after queued replies finish delivering", async () => {
+    const callOrder: string[] = [];
+    const inboundDeduper = {
+      claimEvent: vi.fn(() => {
+        callOrder.push("claim");
+        return true;
+      }),
+      commitEvent: vi.fn(async () => {
+        callOrder.push("commit");
+      }),
+      releaseEvent: vi.fn(() => {
+        callOrder.push("release");
+      }),
+    };
+    const recordInboundSession = vi.fn(async () => {
+      callOrder.push("record");
+    });
+    const dispatchReplyFromConfig = vi.fn(async () => {
+      callOrder.push("dispatch");
+      return {
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      };
+    });
+    const { handler } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      recordInboundSession,
+      dispatchReplyFromConfig,
+      createReplyDispatcherWithTyping: () => ({
+        dispatcher: {
+          markComplete: () => {
+            callOrder.push("mark-complete");
+          },
+          waitForIdle: async () => {
+            callOrder.push("wait-for-idle");
+          },
+        },
+        replyOptions: {},
+        markDispatchIdle: () => {
+          callOrder.push("dispatch-idle");
+        },
+        markRunComplete: () => {
+          callOrder.push("run-complete");
+        },
+      }),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$commit-order",
+        body: "hello",
+      }),
+    );
+
+    expect(callOrder).toEqual([
+      "claim",
+      "record",
+      "dispatch",
+      "run-complete",
+      "mark-complete",
+      "wait-for-idle",
+      "dispatch-idle",
+      "commit",
+    ]);
+    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+  });
+
+  it("releases a claimed event when reply dispatch fails before completion", async () => {
+    const inboundDeduper = {
+      claimEvent: vi.fn(() => true),
+      commitEvent: vi.fn(async () => undefined),
+      releaseEvent: vi.fn(),
+    };
+    const runtime = {
+      error: vi.fn(),
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      runtime: runtime as never,
+      recordInboundSession: vi.fn(async () => {
+        throw new Error("disk failed");
+      }),
+      dispatchReplyFromConfig: vi.fn(async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      })),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$release-on-error",
+        body: "hello",
+      }),
+    );
+
+    expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
+    expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
+      roomId: "!room:example.org",
+      eventId: "$release-on-error",
+    });
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("matrix handler failed"));
+  });
+
+  it("releases a claimed event when queued final delivery fails", async () => {
+    const inboundDeduper = {
+      claimEvent: vi.fn(() => true),
+      commitEvent: vi.fn(async () => undefined),
+      releaseEvent: vi.fn(),
+    };
+    const runtime = {
+      error: vi.fn(),
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      runtime: runtime as never,
+      dispatchReplyFromConfig: vi.fn(async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      })),
+      createReplyDispatcherWithTyping: (params) => ({
+        dispatcher: {
+          markComplete: () => {},
+          waitForIdle: async () => {
+            params?.onError?.(new Error("send failed"), { kind: "final" });
+          },
+        },
+        replyOptions: {},
+        markDispatchIdle: () => {},
+        markRunComplete: () => {},
+      }),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$release-on-final-delivery-error",
+        body: "hello",
+      }),
+    );
+
+    expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
+    expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
+      roomId: "!room:example.org",
+      eventId: "$release-on-final-delivery-error",
+    });
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("matrix final reply failed"),
+    );
+  });
+
+  it.each(["tool", "block"] as const)(
+    "releases a claimed event when queued %s delivery fails and no final reply exists",
+    async (kind) => {
+      const inboundDeduper = {
+        claimEvent: vi.fn(() => true),
+        commitEvent: vi.fn(async () => undefined),
+        releaseEvent: vi.fn(),
+      };
+      const runtime = {
+        error: vi.fn(),
+      };
+      const { handler } = createMatrixHandlerTestHarness({
+        inboundDeduper,
+        runtime: runtime as never,
+        dispatchReplyFromConfig: vi.fn(async () => ({
+          queuedFinal: false,
+          counts: {
+            final: 0,
+            block: kind === "block" ? 1 : 0,
+            tool: kind === "tool" ? 1 : 0,
+          },
+        })),
+        createReplyDispatcherWithTyping: (params) => ({
+          dispatcher: {
+            markComplete: () => {},
+            waitForIdle: async () => {
+              params?.onError?.(new Error("send failed"), { kind });
+            },
+          },
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        }),
+      });
+
+      await handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({
+          eventId: `$release-on-${kind}-delivery-error`,
+          body: "hello",
+        }),
+      );
+
+      expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
+      expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
+        roomId: "!room:example.org",
+        eventId: `$release-on-${kind}-delivery-error`,
+      });
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining(`matrix ${kind} reply failed`),
+      );
+    },
+  );
+
+  it("commits a claimed event when dispatch completes without a final reply", async () => {
+    const callOrder: string[] = [];
+    const inboundDeduper = {
+      claimEvent: vi.fn(() => {
+        callOrder.push("claim");
+        return true;
+      }),
+      commitEvent: vi.fn(async () => {
+        callOrder.push("commit");
+      }),
+      releaseEvent: vi.fn(() => {
+        callOrder.push("release");
+      }),
+    };
+    const { handler } = createMatrixHandlerTestHarness({
+      inboundDeduper,
+      recordInboundSession: vi.fn(async () => {
+        callOrder.push("record");
+      }),
+      dispatchReplyFromConfig: vi.fn(async () => {
+        callOrder.push("dispatch");
+        return {
+          queuedFinal: false,
+          counts: { final: 0, block: 0, tool: 0 },
+        };
+      }),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$no-final",
+        body: "hello",
+      }),
+    );
+
+    expect(callOrder).toEqual(["claim", "record", "dispatch", "commit"]);
+    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
   });
 });
