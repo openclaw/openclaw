@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -880,6 +881,23 @@ export const OpenClawSchema = z
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
+        policy: z
+          .object({
+            globalEnabled: z.array(z.string()).optional(),
+            agentOverrides: z
+              .record(
+                z.string(),
+                z
+                  .object({
+                    enabled: z.array(z.string()).optional(),
+                    disabled: z.array(z.string()).optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
+          })
+          .strict()
+          .optional(),
         load: z
           .object({
             extraDirs: z.array(z.string()).optional(),
