@@ -4,9 +4,21 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-vi.mock("./oag-diagnosis.js", () => ({
-  composeDiagnosisPrompt: vi.fn(() => "test prompt"),
-  completeDiagnosis: vi.fn(async () => ({
+vi.mock("./oag-memory.js", () => ({
+  loadOagMemory: vi.fn(async () => ({ version: 1, lifecycles: [], evolutions: [], diagnoses: [] })),
+}));
+
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => ({ gateway: { oag: { evolution: { autoApply: true } } } }),
+}));
+
+vi.mock("./oag-config-writer.js", () => ({
+  applyOagConfigChanges: vi.fn(async () => ({ applied: true })),
+}));
+
+// Use hoisted mock for completeDiagnosis to allow per-test configuration
+const mockCompleteDiagnosis = vi.hoisted(() =>
+  vi.fn(async () => ({
     rootCause: "test",
     analysis: "test",
     confidence: 0.9,
@@ -20,18 +32,11 @@ vi.mock("./oag-diagnosis.js", () => ({
       },
     ],
   })),
-}));
+);
 
-vi.mock("./oag-memory.js", () => ({
-  loadOagMemory: vi.fn(async () => ({ version: 1, lifecycles: [], evolutions: [], diagnoses: [] })),
-}));
-
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({ gateway: { oag: { evolution: { autoApply: true } } } }),
-}));
-
-vi.mock("./oag-config-writer.js", () => ({
-  applyOagConfigChanges: vi.fn(async () => ({ applied: true })),
+vi.mock("./oag-diagnosis.js", () => ({
+  composeDiagnosisPrompt: vi.fn(() => "test prompt"),
+  completeDiagnosis: mockCompleteDiagnosis,
 }));
 
 const { registerDiagnosisDispatch, isDiagnosisDispatchRegistered, dispatchDiagnosis } =
@@ -39,6 +44,7 @@ const { registerDiagnosisDispatch, isDiagnosisDispatchRegistered, dispatchDiagno
 
 describe("oag-diagnosis-dispatch", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     // Reset by re-registering null — but since there's no unregister, we test in order
   });
 
@@ -72,22 +78,21 @@ describe("oag-diagnosis-dispatch", () => {
   });
 
   it("registers and dispatches to agent", async () => {
-    const mockDispatch = vi.fn(async () =>
-      JSON.stringify({
-        rootCause: "test",
-        analysis: "x",
-        confidence: 0.9,
-        recommendations: [
-          {
-            type: "config_change",
-            description: "t",
-            configPath: "gateway.oag.delivery.maxRetries",
-            suggestedValue: 8,
-            risk: "low",
-          },
-        ],
-      }),
-    );
+    mockCompleteDiagnosis.mockResolvedValueOnce({
+      rootCause: "test",
+      analysis: "x",
+      confidence: 0.9,
+      recommendations: [
+        {
+          type: "config_change",
+          description: "t",
+          configPath: "gateway.oag.delivery.maxRetries",
+          suggestedValue: 8,
+          risk: "low",
+        },
+      ],
+    });
+    const mockDispatch = vi.fn(async () => "response");
     registerDiagnosisDispatch(mockDispatch);
     expect(isDiagnosisDispatchRegistered()).toBe(true);
 
@@ -103,5 +108,177 @@ describe("oag-diagnosis-dispatch", () => {
         agentId: "oag",
       }),
     );
+  });
+
+  describe("auto-apply security allowlist", () => {
+    it("allows allowlisted config paths", async () => {
+      mockCompleteDiagnosis.mockResolvedValueOnce({
+        rootCause: "test",
+        analysis: "x",
+        confidence: 0.9,
+        recommendations: [
+          {
+            type: "config_change",
+            description: "valid change",
+            configPath: "gateway.oag.health.stalePollFactor",
+            suggestedValue: 3,
+            risk: "low",
+          },
+        ],
+      });
+      const mockDispatch = vi.fn(async () => "response");
+      registerDiagnosisDispatch(mockDispatch);
+
+      const result = await dispatchDiagnosis(
+        { type: "recurring_pattern", description: "test" },
+        "diag-allowlist",
+      );
+      expect(result.dispatched).toBe(true);
+      expect(result.applied).toBe(1);
+    });
+
+    it("rejects non-allowlisted config paths", async () => {
+      mockCompleteDiagnosis.mockResolvedValueOnce({
+        rootCause: "test",
+        analysis: "x",
+        confidence: 0.9,
+        recommendations: [
+          {
+            type: "config_change",
+            description: "non-allowlisted path",
+            configPath: "gateway.oag.evolution.autoApply",
+            suggestedValue: true,
+            risk: "low",
+          },
+        ],
+      });
+      const mockDispatch = vi.fn(async () => "response");
+      registerDiagnosisDispatch(mockDispatch);
+
+      const result = await dispatchDiagnosis(
+        { type: "recurring_pattern", description: "test" },
+        "diag-nonallowlist",
+      );
+      expect(result.dispatched).toBe(true);
+      expect(result.applied).toBe(0); // Rejected because path not in allowlist
+    });
+
+    it("rejects malicious __proto__ path", async () => {
+      mockCompleteDiagnosis.mockResolvedValueOnce({
+        rootCause: "test",
+        analysis: "x",
+        confidence: 0.9,
+        recommendations: [
+          {
+            type: "config_change",
+            description: "prototype pollution attempt",
+            configPath: "gateway.oag.__proto__",
+            suggestedValue: { malicious: true },
+            risk: "low",
+          },
+        ],
+      });
+      const mockDispatch = vi.fn(async () => "response");
+      registerDiagnosisDispatch(mockDispatch);
+
+      const result = await dispatchDiagnosis(
+        { type: "recurring_pattern", description: "test" },
+        "diag-proto",
+      );
+      expect(result.dispatched).toBe(true);
+      expect(result.applied).toBe(0); // Rejected malicious path
+    });
+
+    it("rejects malicious constructor path", async () => {
+      mockCompleteDiagnosis.mockResolvedValueOnce({
+        rootCause: "test",
+        analysis: "x",
+        confidence: 0.9,
+        recommendations: [
+          {
+            type: "config_change",
+            description: "constructor pollution attempt",
+            configPath: "gateway.oag.constructor",
+            suggestedValue: { malicious: true },
+            risk: "low",
+          },
+        ],
+      });
+      const mockDispatch = vi.fn(async () => "response");
+      registerDiagnosisDispatch(mockDispatch);
+
+      const result = await dispatchDiagnosis(
+        { type: "recurring_pattern", description: "test" },
+        "diag-constructor",
+      );
+      expect(result.dispatched).toBe(true);
+      expect(result.applied).toBe(0); // Rejected malicious path
+    });
+
+    it("rejects arbitrary path outside oag namespace", async () => {
+      mockCompleteDiagnosis.mockResolvedValueOnce({
+        rootCause: "test",
+        analysis: "x",
+        confidence: 0.9,
+        recommendations: [
+          {
+            type: "config_change",
+            description: "arbitrary path attempt",
+            configPath: "gateway.someOtherService.enabled",
+            suggestedValue: true,
+            risk: "low",
+          },
+        ],
+      });
+      const mockDispatch = vi.fn(async () => "response");
+      registerDiagnosisDispatch(mockDispatch);
+
+      const result = await dispatchDiagnosis(
+        { type: "recurring_pattern", description: "test" },
+        "diag-arbitrary",
+      );
+      expect(result.dispatched).toBe(true);
+      expect(result.applied).toBe(0);
+    });
+
+    it("mixes allowed and rejected paths", async () => {
+      mockCompleteDiagnosis.mockResolvedValueOnce({
+        rootCause: "test",
+        analysis: "x",
+        confidence: 0.9,
+        recommendations: [
+          {
+            type: "config_change",
+            description: "allowed",
+            configPath: "gateway.oag.delivery.maxRetries",
+            suggestedValue: 5,
+            risk: "low",
+          },
+          {
+            type: "config_change",
+            description: "rejected",
+            configPath: "gateway.oag.__proto__",
+            suggestedValue: {},
+            risk: "low",
+          },
+          {
+            type: "config_change",
+            description: "also allowed",
+            configPath: "gateway.oag.lock.staleMs",
+            suggestedValue: 30000,
+            risk: "low",
+          },
+        ],
+      });
+      const mockDispatch = vi.fn(async () => "response");
+      registerDiagnosisDispatch(mockDispatch);
+
+      const result = await dispatchDiagnosis(
+        { type: "recurring_pattern", description: "test" },
+        "diag-mixed",
+      );
+      expect(result.dispatched).toBe(true);
+      expect(result.applied).toBe(2); // Only the 2 allowed paths
+    });
   });
 });

@@ -18,6 +18,7 @@ import {
   detectAnomaly,
   detectAnomalies,
   linearSlope,
+  linearSlopeTimeWeighted,
   predictBreach,
 } from "./oag-anomaly.js";
 import type { MetricSnapshot } from "./oag-memory.js";
@@ -128,6 +129,43 @@ describe("detectAnomalies", () => {
     // mean=0, so anomalies with zero mean are excluded
     expect(results).toEqual([]);
   });
+
+  it("skips intermittent metrics with insufficient valid samples", () => {
+    // Create series where metric is only present in half the samples
+    const series: MetricSnapshot[] = Array.from({ length: 30 }, (_, i) => ({
+      timestamp: new Date(Date.now() - (30 - i) * 3600_000).toISOString(),
+      uptimeMs: i * 3600_000,
+      // Only include metric in even-indexed samples (15 valid samples < 24 minSamples)
+      metrics: i % 2 === 0 ? { channelRestarts: 5 } : {},
+    }));
+    // Even with a high current value, should skip due to insufficient samples
+    const results = detectAnomalies({ channelRestarts: 100 }, series);
+    expect(results).toEqual([]);
+  });
+
+  it("detects anomalies for intermittent metrics with enough valid samples", () => {
+    mockEmitOagEvent.mockClear();
+    // Create series with 25 valid samples (>= 24 minSamples)
+    const series: MetricSnapshot[] = Array.from({ length: 50 }, (_, i) => ({
+      timestamp: new Date(Date.now() - (50 - i) * 3600_000).toISOString(),
+      uptimeMs: i * 3600_000,
+      // Include metric in 25 out of 50 samples (valid, others undefined)
+      metrics: i < 25 ? { channelRestarts: 5 } : {},
+    }));
+    // Should detect anomaly since we have 25 valid samples
+    const results = detectAnomalies({ channelRestarts: 100 }, series);
+    expect(results.length).toBe(1);
+    expect(results[0].metric).toBe("channelRestarts");
+    expect(results[0].anomalous).toBe(true);
+  });
+
+  it("skips new counter metrics not present in history", () => {
+    // Series has no 'newMetric' at all
+    const series = makeSeries(30, { existingMetric: 10 });
+    // Trying to detect anomaly on a new metric that doesn't exist in history
+    const results = detectAnomalies({ newMetric: 100 }, series);
+    expect(results).toEqual([]);
+  });
 });
 
 describe("linearSlope", () => {
@@ -149,6 +187,42 @@ describe("linearSlope", () => {
   it("returns 0 for single point", () => {
     const slope = linearSlope([42]);
     expect(slope).toBe(0);
+  });
+});
+
+describe("linearSlopeTimeWeighted", () => {
+  it("returns 0 for empty arrays", () => {
+    expect(linearSlopeTimeWeighted([], [])).toBe(0);
+  });
+
+  it("returns 0 for single point", () => {
+    expect(linearSlopeTimeWeighted([0], [42])).toBe(0);
+  });
+
+  it("returns 0 for mismatched array lengths", () => {
+    expect(linearSlopeTimeWeighted([0, 1], [42])).toBe(0);
+  });
+
+  it("returns correct slope for equally-spaced data", () => {
+    // x = [0, 1, 2, 3], y = [1, 2, 3, 4] -> slope = 1
+    const slope = linearSlopeTimeWeighted([0, 1, 2, 3], [1, 2, 3, 4]);
+    expect(slope).toBeCloseTo(1, 10);
+  });
+
+  it("returns correct slope for sparse time intervals", () => {
+    // x = [0, 6, 12], y = [1, 7, 13] -> slope = 1 (6 units per 6 hours)
+    const slope = linearSlopeTimeWeighted([0, 6, 12], [1, 7, 13]);
+    expect(slope).toBeCloseTo(1, 10);
+  });
+
+  it("handles negative slope correctly", () => {
+    const slope = linearSlopeTimeWeighted([0, 1, 2], [5, 4, 3]);
+    expect(slope).toBeCloseTo(-1, 10);
+  });
+
+  it("returns 0 for constant values", () => {
+    const slope = linearSlopeTimeWeighted([0, 1, 2, 3], [5, 5, 5, 5]);
+    expect(slope).toBeCloseTo(0, 10);
   });
 });
 
@@ -201,5 +275,104 @@ describe("predictBreach", () => {
     const series = makeSeries([1, 2]);
     const result = predictBreach(series, "channelRestarts", 10, 12);
     expect(result).toBeNull();
+  });
+
+  it("returns null for intermittent metric with insufficient valid samples", () => {
+    // Create series with only 2 valid samples (need >= 3)
+    const series: MetricSnapshot[] = Array.from({ length: 12 }, (_, i) => ({
+      timestamp: new Date(Date.now() - (12 - i) * 3600_000).toISOString(),
+      uptimeMs: i * 3600_000,
+      // Only 2 samples have the metric defined
+      metrics: i < 2 ? { channelRestarts: i + 1 } : {},
+    }));
+    const result = predictBreach(series, "channelRestarts", 10, 12);
+    expect(result).toBeNull();
+  });
+
+  it("predicts breach for intermittent metric with enough valid samples", () => {
+    // Create series with 4 valid samples (>= 3)
+    const series: MetricSnapshot[] = Array.from({ length: 12 }, (_, i) => ({
+      timestamp: new Date(Date.now() - (12 - i) * 3600_000).toISOString(),
+      uptimeMs: i * 3600_000,
+      // First 4 samples have increasing values, rest undefined
+      metrics: i < 4 ? { channelRestarts: i + 1 } : {},
+    }));
+    const result = predictBreach(series, "channelRestarts", 6, 12);
+    expect(result).not.toBeNull();
+    expect(result!.currentValue).toBe(4);
+  });
+
+  it("returns null for metric not present in any sample", () => {
+    const series: MetricSnapshot[] = Array.from({ length: 12 }, (_, i) => ({
+      timestamp: new Date(Date.now() - (12 - i) * 3600_000).toISOString(),
+      uptimeMs: i * 3600_000,
+      metrics: { otherMetric: i },
+    }));
+    const result = predictBreach(series, "channelRestarts", 10, 12);
+    expect(result).toBeNull();
+  });
+
+  it("uses time-weighted slope for sparse samples", () => {
+    // Samples at hours -11, -5, -1 (gaps of 6h each)
+    // Values: 1, 7, 11 -> slope should be ~1 (10 units over 10 hours)
+    const now = Date.now();
+    const series: MetricSnapshot[] = [
+      {
+        timestamp: new Date(now - 11 * 3600_000).toISOString(),
+        uptimeMs: 0,
+        metrics: { channelRestarts: 1 },
+      },
+      {
+        timestamp: new Date(now - 5 * 3600_000).toISOString(),
+        uptimeMs: 0,
+        metrics: { channelRestarts: 7 },
+      },
+      {
+        timestamp: new Date(now - 1 * 3600_000).toISOString(),
+        uptimeMs: 0,
+        metrics: { channelRestarts: 11 },
+      },
+    ];
+    const result = predictBreach(series, "channelRestarts", 15, 12);
+    expect(result).not.toBeNull();
+    // Slope should be approximately 1 unit/hour (10 units over 10 hours)
+    expect(result!.slope).toBeCloseTo(1, 1);
+    // hoursToBreak = (15 - 11) / 1 = 4
+    expect(result!.hoursToBreak).toBeCloseTo(4, 0);
+  });
+
+  it("returns high confidence when samples have no large gaps", () => {
+    // Samples every hour, no gaps > 6h
+    const series = makeSeries([1, 2, 3, 4]);
+    const result = predictBreach(series, "channelRestarts", 6, 12);
+    expect(result).not.toBeNull();
+    expect(result!.confidence).toBe("high");
+  });
+
+  it("returns low confidence when samples have large gaps", () => {
+    // Samples with 8h gap between them
+    const now = Date.now();
+    const series: MetricSnapshot[] = [
+      {
+        timestamp: new Date(now - 12 * 3600_000).toISOString(),
+        uptimeMs: 0,
+        metrics: { channelRestarts: 0 },
+      },
+      {
+        timestamp: new Date(now - 10 * 3600_000).toISOString(),
+        uptimeMs: 0,
+        metrics: { channelRestarts: 1 },
+      },
+      {
+        timestamp: new Date(now - 2 * 3600_000).toISOString(),
+        uptimeMs: 0,
+        metrics: { channelRestarts: 9 },
+      },
+    ];
+    // threshold=12, current=9, slope ~0.93 -> hoursToBreak ~3.2 (within 6h)
+    const result = predictBreach(series, "channelRestarts", 12, 12);
+    expect(result).not.toBeNull();
+    // Gap between second and third sample is 8h (> 6h threshold)
+    expect(result!.confidence).toBe("low");
   });
 });

@@ -18,17 +18,87 @@ const MAX_PROMPT_VALUE_LENGTH = 200;
 const MAX_HISTORICAL_RECOMMENDATIONS = 10;
 
 /**
+ * Patterns that could be used for prompt injection attacks.
+ * These are neutralized by replacing with safe alternatives.
+ */
+const PROMPT_INJECTION_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
+  // Role markers that could hijack conversation context (anchored to line start to avoid false positives)
+  { pattern: /^(System|User|Assistant|Human|AI|Model):\s*/gm, replacement: "[ROLE]: " },
+  // Instruction override attempts
+  {
+    pattern:
+      /\b(Ignore|Disregard|Forget|Skip)\s+(all\s+)?(previous|prior|above|earlier)\s+(instructions?|prompts?|context|directions?|rules)/gi,
+    replacement: "[IGNORE_BLOCKED]",
+  },
+  // Common injection phrases
+  {
+    pattern: /\b(new\s+instructions?|override\s+(previous|prior|default)|disregard\s+everything)/gi,
+    replacement: "[INJECTION_BLOCKED]",
+  },
+  // Code fence attempts that could break prompt structure (matches both opening and closing)
+  {
+    pattern: /```(?:\s*(?:json|javascript|js|typescript|ts|python|py|bash|shell|sh)?)?\s*/gi,
+    replacement: "[CODE_FENCE_BLOCKED]",
+  },
+  // XML-like tags that could be interpreted as prompt markers (allows attributes)
+  {
+    pattern:
+      /<\/?(?:system|user|assistant|instruction|prompt|context|input|output)(?:\s+[^>]*)?>/gi,
+    replacement: "[TAG_BLOCKED]",
+  },
+];
+
+/**
+ * Escape prompt injection patterns in a string.
+ * Replaces known injection patterns with safe placeholders to prevent
+ * malicious instructions from hijacking the diagnosis output.
+ *
+ * @param text - The text to escape
+ * @returns The text with injection patterns neutralized
+ */
+export function escapePromptInjection(text: string): string {
+  let escaped = text;
+  for (const { pattern, replacement } of PROMPT_INJECTION_PATTERNS) {
+    escaped = escaped.replace(pattern, replacement);
+  }
+  return escaped;
+}
+
+/**
+ * Recursively sanitize all string values in a nested structure.
+ * This ensures prompt injection patterns are escaped BEFORE JSON serialization,
+ * so anchored patterns like ^(System|...): match at actual string starts.
+ */
+function sanitizeDeep(v: unknown): unknown {
+  if (typeof v === "string") {
+    return escapePromptInjection(v);
+  }
+  if (Array.isArray(v)) {
+    return v.map(sanitizeDeep);
+  }
+  if (v && typeof v === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v)) {
+      result[k] = sanitizeDeep(val);
+    }
+    return result;
+  }
+  return v;
+}
+
+/**
  * Sanitize an arbitrary value for safe inclusion in a diagnosis prompt.
- * JSON-stringifies the value and truncates to MAX_PROMPT_VALUE_LENGTH chars
- * to prevent prompt injection and unbounded prompt size.
+ * JSON-stringifies the value, truncates to MAX_PROMPT_VALUE_LENGTH chars,
+ * and escapes prompt injection patterns to prevent hijacking.
  */
 export function sanitizeForPrompt(value: unknown): string {
   let serialized: string;
   try {
-    serialized = JSON.stringify(value);
+    serialized = JSON.stringify(sanitizeDeep(value));
   } catch {
-    serialized = String(value);
+    serialized = escapePromptInjection(String(value));
   }
+  // Escape injection patterns BEFORE truncation to prevent attacks hidden at boundaries
   if (serialized.length <= MAX_PROMPT_VALUE_LENGTH) {
     return serialized;
   }

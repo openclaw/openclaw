@@ -22,6 +22,8 @@ export type Prediction = {
   currentValue: number;
   threshold: number;
   slope: number;
+  /** Confidence level based on sample density. 'high' = no gaps > 6h, 'low' = gaps exist */
+  confidence?: "high" | "low";
 };
 
 export function computeBaseline(values: number[]): Baseline {
@@ -94,7 +96,12 @@ export function detectAnomalies(
 
   const results: AnomalyResult[] = [];
   for (const [metric, current] of Object.entries(currentMetrics)) {
-    const values = series.map((s) => s.metrics[metric] ?? 0);
+    // Filter out undefined values instead of coercing to 0
+    const values = series.map((s) => s.metrics[metric]).filter((v): v is number => v !== undefined);
+    // Skip metrics without enough valid samples
+    if (values.length < minSamples) {
+      continue;
+    }
     const baseline = computeBaseline(values);
     const result = detectAnomaly(current, baseline, options?.threshold);
     // Only report anomalies for metrics that have non-trivial activity
@@ -134,8 +141,36 @@ export function linearSlope(values: number[]): number {
 }
 
 /**
+ * Time-weighted linear regression slope.
+ * Uses actual x-coordinates (hours from first sample) instead of assuming equal spacing.
+ * Returns slope in units per hour.
+ */
+export function linearSlopeTimeWeighted(x: number[], y: number[]): number {
+  if (x.length < 2 || x.length !== y.length) {
+    return 0;
+  }
+  const n = x.length;
+  let sumX = 0;
+  let sumY = 0;
+  let sumXY = 0;
+  let sumXX = 0;
+  for (let i = 0; i < n; i++) {
+    sumX += x[i];
+    sumY += y[i];
+    sumXY += x[i] * y[i];
+    sumXX += x[i] * x[i];
+  }
+  const denom = n * sumXX - sumX * sumX;
+  if (denom === 0) {
+    return 0;
+  }
+  return (n * sumXY - sumX * sumY) / denom;
+}
+
+/**
  * Predict when a metric will breach a threshold based on recent linear trend.
  * Returns null when the metric is not trending toward the threshold within 6 hours.
+ * Uses time-weighted regression to handle sparse samples correctly.
  */
 export function predictBreach(
   series: MetricSnapshot[],
@@ -143,18 +178,56 @@ export function predictBreach(
   threshold: number,
   windowHours = 12,
 ): Prediction | null {
-  const recent = series.slice(-windowHours);
+  // Filter by timestamp, not sample count, to handle sparse data correctly
+  const now = Date.now();
+  const windowCutoff = now - windowHours * 60 * 60_000;
+  const recent = series.filter((s) => new Date(s.timestamp).getTime() >= windowCutoff);
   if (recent.length < 3) {
     return null;
   }
 
-  const values = recent.map((s) => s.metrics[metric] ?? 0);
-  const slope = linearSlope(values);
+  // Collect values with their actual time positions (hours from first sample)
+  const dataPoints: { hoursFromNow: number; value: number }[] = [];
+
+  for (const snapshot of recent) {
+    const value = snapshot.metrics[metric];
+    if (value !== undefined) {
+      const hoursFromNow = (new Date(snapshot.timestamp).getTime() - now) / 3600_000;
+      dataPoints.push({ hoursFromNow, value });
+    }
+  }
+
+  // Require at least 3 valid samples for meaningful slope calculation
+  if (dataPoints.length < 3) {
+    return null;
+  }
+
+  // Sort by time (oldest first) to compute hours from first sample
+  dataPoints.sort((a, b) => a.hoursFromNow - b.hoursFromNow);
+
+  // Compute x-coordinates as hours from the first sample
+  const firstHours = dataPoints[0].hoursFromNow;
+  const x: number[] = [];
+  const y: number[] = [];
+  let maxGap = 0;
+
+  for (let i = 0; i < dataPoints.length; i++) {
+    const hoursFromFirst = dataPoints[i].hoursFromNow - firstHours;
+    x.push(hoursFromFirst);
+    y.push(dataPoints[i].value);
+    // Track max gap between consecutive samples
+    if (i > 0) {
+      const gap = hoursFromFirst - (dataPoints[i - 1].hoursFromNow - firstHours);
+      maxGap = Math.max(maxGap, gap);
+    }
+  }
+
+  const slope = linearSlopeTimeWeighted(x, y);
   if (slope <= 0) {
     return null;
   } // not increasing
 
-  const current = values[values.length - 1];
+  const current = y[y.length - 1];
   if (current >= threshold) {
     return null;
   } // already breached
@@ -164,6 +237,9 @@ export function predictBreach(
     return null;
   } // too far out
 
-  emitOagEvent("prediction_alert", { metric, hoursToBreak, slope });
-  return { metric, hoursToBreak, currentValue: current, threshold, slope };
+  // Low confidence if max gap exceeds 6 hours between consecutive samples
+  const confidence: "high" | "low" = maxGap > 6 ? "low" : "high";
+
+  emitOagEvent("prediction_alert", { metric, hoursToBreak, slope, confidence });
+  return { metric, hoursToBreak, currentValue: current, threshold, slope, confidence };
 }

@@ -100,8 +100,13 @@ vi.mock("./oag-scheduler.js", () => ({
   createGatewayIdleCheck: () => () => true,
 }));
 
-const { runPostRecoveryAnalysis, schedulePeriodicAnalysis, analyzeMetricTrends, maybeExplore } =
-  await import("./oag-postmortem.js");
+const {
+  runPostRecoveryAnalysis,
+  schedulePeriodicAnalysis,
+  analyzeMetricTrends,
+  maybeExplore,
+  isPostmortemRunning,
+} = await import("./oag-postmortem.js");
 
 describe("oag-postmortem", () => {
   beforeEach(() => {
@@ -904,5 +909,234 @@ describe("anomaly integration in postmortem", () => {
     expect(result).toHaveProperty("predictions");
     expect(Array.isArray(result.anomalies)).toBe(true);
     expect(Array.isArray(result.predictions)).toBe(true);
+  });
+});
+
+describe("stale data filtering in root cause classification", () => {
+  beforeEach(() => {
+    mockMemory.current = {
+      version: 1,
+      lifecycles: [],
+      evolutions: [],
+      diagnoses: [],
+      metricSeries: [],
+    };
+    mockEmitOagEvent.mockClear();
+  });
+
+  it("ignores incidents older than 48h when classifying root cause", async () => {
+    const now = new Date();
+    const oldDate = new Date(now.getTime() - 72 * 60 * 60_000); // 72h ago (outside 48h window)
+    const recentDate = new Date(now.getTime() - 12 * 60 * 60_000); // 12h ago (inside 48h window)
+
+    // Old lifecycle with incident (should be ignored)
+    const oldLifecycle = {
+      id: "old-lc",
+      startedAt: oldDate.toISOString(),
+      stoppedAt: oldDate.toISOString(),
+      stopReason: "restart" as const,
+      uptimeMs: 1000,
+      metricsSnapshot: {},
+      incidents: [
+        {
+          type: "channel_crash_loop" as const,
+          channel: "old_channel",
+          detail: "old error details",
+          count: 1,
+          firstAt: oldDate.toISOString(),
+          lastAt: oldDate.toISOString(),
+          lastError: "OLD_ERROR: this should be ignored",
+        },
+      ],
+    };
+
+    // Recent lifecycle with incident (should be used)
+    const recentLifecycles = Array.from({ length: 4 }, (_, i) => ({
+      id: `recent-lc-${i}`,
+      startedAt: recentDate.toISOString(),
+      stoppedAt: recentDate.toISOString(),
+      stopReason: "restart" as const,
+      uptimeMs: 1000,
+      metricsSnapshot: {},
+      incidents: [
+        {
+          type: "channel_crash_loop" as const,
+          channel: "recent_channel",
+          detail: "recent error details",
+          count: 1,
+          firstAt: recentDate.toISOString(),
+          lastAt: recentDate.toISOString(),
+          lastError: "RECENT_ERROR: this should be used",
+        },
+      ],
+    }));
+
+    mockMemory.current.lifecycles = [oldLifecycle, ...recentLifecycles];
+
+    const result = await runPostRecoveryAnalysis();
+
+    // Analysis should run based on recent incidents
+    expect(result.analyzed).toBe(true);
+    // channelIncidentCount only counts incidents within the 48h window
+    // The old incident (72h ago) is filtered out, so only 4 recent incidents are counted
+    expect(result.channelIncidentCount).toBe(4);
+
+    // The recommendation should use the recent channel, not the old one
+    const budgetRec = result.recommendations.find((r) => r.configPath.includes("recoveryBudgetMs"));
+    expect(budgetRec).toBeDefined();
+    // The reason should reference "recent_channel", not "old_channel"
+    expect(budgetRec!.reason).toContain("recent_channel");
+    expect(budgetRec!.reason).not.toContain("old_channel");
+  });
+
+  it("uses most recent incident when multiple exist within 48h window", async () => {
+    const now = new Date();
+    const olderRecent = new Date(now.getTime() - 24 * 60 * 60_000); // 24h ago
+    const newerRecent = new Date(now.getTime() - 6 * 60 * 60_000); // 6h ago
+
+    // Two sets of recent lifecycles with different channels
+    mockMemory.current.lifecycles = [
+      // Older recent incidents (24h ago)
+      ...Array.from({ length: 2 }, (_, i) => ({
+        id: `older-recent-lc-${i}`,
+        startedAt: olderRecent.toISOString(),
+        stoppedAt: olderRecent.toISOString(),
+        stopReason: "restart" as const,
+        uptimeMs: 1000,
+        metricsSnapshot: {},
+        incidents: [
+          {
+            type: "channel_crash_loop" as const,
+            channel: "older_channel",
+            detail: "older recent error",
+            count: 1,
+            firstAt: olderRecent.toISOString(),
+            lastAt: olderRecent.toISOString(),
+            lastError: "OLDER_RECENT_ERROR",
+          },
+        ],
+      })),
+      // Newer recent incidents (6h ago) - should take precedence
+      ...Array.from({ length: 3 }, (_, i) => ({
+        id: `newer-recent-lc-${i}`,
+        startedAt: newerRecent.toISOString(),
+        stoppedAt: newerRecent.toISOString(),
+        stopReason: "restart" as const,
+        uptimeMs: 1000,
+        metricsSnapshot: {},
+        incidents: [
+          {
+            type: "channel_crash_loop" as const,
+            channel: "newer_channel",
+            detail: "newer recent error",
+            count: 1,
+            firstAt: newerRecent.toISOString(),
+            lastAt: newerRecent.toISOString(),
+            lastError: "NEWER_RECENT_ERROR",
+          },
+        ],
+      })),
+    ];
+
+    const result = await runPostRecoveryAnalysis();
+
+    expect(result.analyzed).toBe(true);
+    // All 5 incidents are within the window
+    expect(result.channelIncidentCount).toBe(5);
+
+    // The recommendation should use the newer channel since those incidents are more recent
+    const budgetRec = result.recommendations.find((r) => r.configPath.includes("recoveryBudgetMs"));
+    expect(budgetRec).toBeDefined();
+    // Should prefer newer_channel over older_channel
+    expect(budgetRec!.configPath).toContain("newer_channel");
+  });
+});
+
+describe("concurrency control", () => {
+  beforeEach(() => {
+    mockMemory.current = {
+      version: 1,
+      lifecycles: [],
+      evolutions: [],
+      diagnoses: [],
+      metricSeries: [],
+    };
+    mockEmitOagEvent.mockClear();
+  });
+
+  it("serializes concurrent postmortem requests instead of dropping them", async () => {
+    const now = new Date().toISOString();
+    // Set up data that triggers analysis
+    mockMemory.current.lifecycles = Array.from({ length: 4 }, (_, i) => ({
+      id: `lc-${i}`,
+      startedAt: now,
+      stoppedAt: now,
+      stopReason: "crash" as const,
+      uptimeMs: 1000,
+      metricsSnapshot: {},
+      incidents: [
+        {
+          type: "channel_crash_loop" as const,
+          channel: "telegram",
+          detail: "test",
+          count: 1,
+          firstAt: now,
+          lastAt: now,
+        },
+      ],
+    }));
+
+    // Start two concurrent analyses - they should be serialized, not dropped
+    const [result1, result2] = await Promise.all([
+      runPostRecoveryAnalysis(),
+      runPostRecoveryAnalysis(),
+    ]);
+
+    // Both should have run successfully (not dropped)
+    // With mutex.runExclusive, both complete but are serialized
+    expect(result1.analyzed).toBe(true);
+    expect(result2.analyzed).toBe(true);
+  });
+
+  it("isPostmortemRunning returns false when no analysis is running", () => {
+    expect(isPostmortemRunning()).toBe(false);
+  });
+
+  it("all concurrent requests complete successfully (mutex serializes, not drops)", async () => {
+    const now = new Date().toISOString();
+
+    // Set up data for analysis
+    mockMemory.current.lifecycles = Array.from({ length: 4 }, (_, i) => ({
+      id: `lc-${i}`,
+      startedAt: now,
+      stoppedAt: now,
+      stopReason: "crash" as const,
+      uptimeMs: 1000,
+      metricsSnapshot: {},
+      incidents: [
+        {
+          type: "channel_crash_loop" as const,
+          channel: "telegram",
+          detail: "test",
+          count: 1,
+          firstAt: now,
+          lastAt: now,
+        },
+      ],
+    }));
+
+    // Run 5 concurrent analyses
+    const results = await Promise.all([
+      runPostRecoveryAnalysis(),
+      runPostRecoveryAnalysis(),
+      runPostRecoveryAnalysis(),
+      runPostRecoveryAnalysis(),
+      runPostRecoveryAnalysis(),
+    ]);
+
+    // All should complete successfully - mutex serializes, not drops
+    for (const result of results) {
+      expect(result.analyzed).toBe(true);
+    }
   });
 });

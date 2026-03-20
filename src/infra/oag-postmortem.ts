@@ -1,3 +1,4 @@
+import { Mutex } from "async-mutex";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -400,28 +401,20 @@ function buildUserNotification(result: PostmortemResult): string | undefined {
   return parts.join(" ");
 }
 
-let postmortemRunning = false;
+const postmortemMutex = new Mutex();
+
+/**
+ * Check if a postmortem analysis is currently running.
+ * Useful for external callers to avoid queuing additional work.
+ */
+export function isPostmortemRunning(): boolean {
+  return postmortemMutex.isLocked();
+}
 
 export async function runPostRecoveryAnalysis(
   sentinelContext?: SentinelContext,
 ): Promise<PostmortemResult> {
-  if (postmortemRunning) {
-    log.info("Post-recovery: another postmortem is already running, skipping");
-    return {
-      analyzed: false,
-      crashCount: 0,
-      channelIncidentCount: 0,
-      patterns: 0,
-      recommendations: [],
-      applied: [],
-      skipped: [],
-      trends: [],
-      anomalies: [],
-      predictions: [],
-    };
-  }
-  postmortemRunning = true;
-  try {
+  return postmortemMutex.runExclusive(async () => {
     if (sentinelContext) {
       log.info(
         `Post-recovery sentinel context: channel=${sentinelContext.channel ?? "n/a"}, session=${sentinelContext.sessionKey ?? "n/a"}, reason=${sentinelContext.stopReason ?? "n/a"}`,
@@ -492,11 +485,27 @@ export async function runPostRecoveryAnalysis(
     if (recentCrashes.length < minCrashes && channelIncidentCount >= minChannelIncidents) {
       try {
         const { classifyRootCause } = await import("./oag-root-cause.js");
-        // Classify root cause from the most recent incident's lastError
+        // Classify root cause from the most recent incident's lastError within the analysis window
+        // Filter incidents to the 48h window and sort by timestamp to get the most recent
         const recentIncident = memory.lifecycles
-          .flatMap((lc) => lc.incidents ?? [])
-          .filter((i) => i.lastError)
-          .pop();
+          .filter((lc) => Date.parse(lc.stoppedAt) > cutoff)
+          .flatMap((lc) =>
+            (lc.incidents ?? []).map((i) => ({
+              ...i,
+              lifecycleChannel: lc.sentinelContext?.channel,
+              lifecycleStoppedAt: lc.stoppedAt,
+            })),
+          )
+          .filter((i) => {
+            // Check incident's own timestamp (lastAt) in addition to lifecycle's stoppedAt
+            const incidentTime = i.lastAt ? Date.parse(i.lastAt) : Date.parse(i.lifecycleStoppedAt);
+            return incidentTime > cutoff && i.lastError;
+          })
+          .toSorted((a, b) => {
+            const aTs = a.lastAt ? Date.parse(a.lastAt) : Date.parse(a.lifecycleStoppedAt);
+            const bTs = b.lastAt ? Date.parse(b.lastAt) : Date.parse(b.lifecycleStoppedAt);
+            return bTs - aTs;
+          })[0];
         const rootCause = classifyRootCause(recentIncident?.lastError);
         rootCauseLabel = rootCause?.category;
         if (rootCauseLabel) {
@@ -655,9 +664,7 @@ export async function runPostRecoveryAnalysis(
     }
 
     return result;
-  } finally {
-    postmortemRunning = false;
-  }
+  });
 }
 
 /**

@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockFiles = vi.hoisted(() => new Map<string, string>());
+const mockReadFileDelay = vi.hoisted(() => vi.fn<() => number>(() => 0));
 
 vi.mock("node:fs/promises", () => ({
   default: {
     readFile: vi.fn(async (p: string) => {
+      const delay = mockReadFileDelay();
+      if (delay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
       if (!mockFiles.has(p)) {
         throw new Error("ENOENT");
       }
@@ -59,6 +64,7 @@ const {
 describe("oag-memory", () => {
   beforeEach(() => {
     mockFiles.clear();
+    mockReadFileDelay.mockReset();
   });
 
   it("returns empty memory when file does not exist", async () => {
@@ -545,5 +551,80 @@ describe("oag-memory", () => {
     const memory = await loadOagMemory();
     expect(memory.lifecycles).toHaveLength(1);
     expect(memory.lifecycles[0].sentinelContext).toBeUndefined();
+  });
+
+  it("returns empty memory when main file is missing and backup read times out", async () => {
+    const mainPath = "/tmp/oag-test/oag-memory.json";
+    const backupPath = `${mainPath}.bak`;
+
+    // Only set up backup file (main file missing)
+    const validMemory = {
+      version: 1,
+      lifecycles: [],
+      evolutions: [],
+      diagnoses: [],
+      auditLog: [],
+      metricSeries: [],
+    };
+    mockFiles.set(backupPath, JSON.stringify(validMemory));
+
+    // Main file read throws ENOENT immediately (no delay needed)
+    // Backup file read times out (10s delay > 5s timeout)
+    mockReadFileDelay.mockReturnValueOnce(0).mockReturnValueOnce(10000);
+
+    const memory = await loadOagMemory();
+    // Should return empty memory after backup timeout
+    expect(memory.version).toBe(1);
+    expect(memory.lifecycles).toEqual([]);
+  });
+
+  it("returns empty memory when both main and backup reads time out", async () => {
+    const mainPath = "/tmp/oag-test/oag-memory.json";
+    const backupPath = `${mainPath}.bak`;
+
+    // Set up valid files (they exist but reads will time out)
+    const validMemory = {
+      version: 1,
+      lifecycles: [],
+      evolutions: [],
+      diagnoses: [],
+      auditLog: [],
+      metricSeries: [],
+    };
+    mockFiles.set(mainPath, JSON.stringify(validMemory));
+    mockFiles.set(backupPath, JSON.stringify(validMemory));
+
+    // Both reads time out (10s delay > 5s timeout)
+    mockReadFileDelay.mockReturnValueOnce(10000).mockReturnValueOnce(10000);
+
+    const memory = await loadOagMemory();
+    // Should return empty memory after both timeouts
+    expect(memory.version).toBe(1);
+    expect(memory.lifecycles).toEqual([]);
+  });
+
+  it("returns empty memory on main file read timeout", async () => {
+    const mainPath = "/tmp/oag-test/oag-memory.json";
+    const backupPath = `${mainPath}.bak`;
+
+    // Set up valid files
+    const validMemory = {
+      version: 1,
+      lifecycles: [],
+      evolutions: [],
+      diagnoses: [],
+      auditLog: [],
+      metricSeries: [],
+    };
+    mockFiles.set(mainPath, JSON.stringify(validMemory));
+    mockFiles.set(backupPath, JSON.stringify(validMemory));
+
+    // Simulate a slow read that exceeds the 5s timeout
+    mockReadFileDelay.mockReturnValueOnce(10000);
+
+    const memory = await loadOagMemory();
+    // Should fall through to empty memory after timeout
+    expect(memory.version).toBe(1);
+    expect(memory.lifecycles).toEqual([]);
   });
 });

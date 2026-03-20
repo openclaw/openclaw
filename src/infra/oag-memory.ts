@@ -6,6 +6,20 @@ import { resolveOagMemoryMaxLifecycleAgeDays } from "./oag-config.js";
 import type { OagMetricCounters } from "./oag-metrics.js";
 import { resolveRestartSentinelPath } from "./restart-sentinel.js";
 
+const OAG_MEMORY_READ_TIMEOUT_MS = 5000;
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<T>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export type SentinelContext = {
   sessionKey?: string;
   channel?: string;
@@ -183,23 +197,31 @@ export async function loadOagMemory(): Promise<OagMemory> {
   const filePath = resolveMemoryPath();
   // Try main file first
   try {
-    const raw = await fs.readFile(filePath, "utf8");
+    const raw = await withTimeout(
+      fs.readFile(filePath, "utf8"),
+      OAG_MEMORY_READ_TIMEOUT_MS,
+      "OAG memory read timeout after 5s",
+    );
     const parsed = JSON.parse(raw) as OagMemory;
     if (parsed.version && Array.isArray(parsed.lifecycles)) {
       return ensureAuditLog(parsed);
     }
   } catch {
-    // Main file missing or corrupt
+    // Main file missing, corrupt, or timeout
   }
   // Fallback to backup
   try {
-    const raw = await fs.readFile(`${filePath}.bak`, "utf8");
+    const raw = await withTimeout(
+      fs.readFile(`${filePath}.bak`, "utf8"),
+      OAG_MEMORY_READ_TIMEOUT_MS,
+      "OAG memory backup read timeout after 5s",
+    );
     const parsed = JSON.parse(raw) as OagMemory;
     if (parsed.version && Array.isArray(parsed.lifecycles)) {
       return ensureAuditLog(parsed);
     }
   } catch {
-    // Backup also missing or corrupt
+    // Backup also missing, corrupt, or timeout
   }
   return createEmptyMemory();
 }
