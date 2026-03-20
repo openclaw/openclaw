@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
@@ -330,6 +331,36 @@ describe("detectAndLoadPromptImages", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(allowedDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows prompt image refs inside default media roots when workspaceOnly is enabled", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-ws-"));
+    const defaultRoot = resolvePreferredOpenClawTmpDir();
+    await fs.mkdir(defaultRoot, { recursive: true });
+    const imageDir = await fs.mkdtemp(
+      path.join(defaultRoot, "openclaw-native-image-default-root-"),
+    );
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    const imagePath = path.join(imageDir, "generated.png");
+    await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `Inspect ${imagePath}`,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(1);
+      expect(result.skippedCount).toBe(0);
+      expect(result.images).toHaveLength(1);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(imageDir, { recursive: true, force: true });
     }
   });
 });

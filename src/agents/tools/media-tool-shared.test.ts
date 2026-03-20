@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { getDefaultLocalRoots } from "../../plugin-sdk/web-media.js";
 import { resolveMediaToolLocalRoots } from "./media-tool-shared.js";
 
 describe("resolveMediaToolLocalRoots", () => {

@@ -227,13 +227,20 @@ export async function loadImageFromRef(
     } else if (!path.isAbsolute(targetPath)) {
       targetPath = path.resolve(workspaceDir, targetPath);
     }
+    const localRoots = options?.sandbox
+      ? undefined
+      : resolveMediaToolLocalRoots(workspaceDir, {
+          workspaceOnly: options?.workspaceOnly,
+          allowedRoots: options?.allowedRoots,
+        });
+
     if (options?.workspaceOnly && !options?.sandbox) {
       const root = options?.sandbox?.root ?? workspaceDir;
       await assertSandboxPath({
         filePath: targetPath,
         cwd: root,
         root,
-        additionalRoots: options.allowedRoots,
+        additionalRoots: localRoots,
       });
     }
 
@@ -246,10 +253,7 @@ export async function loadImageFromRef(
         })
       : await loadWebMedia(targetPath, {
           maxBytes: options?.maxBytes,
-          localRoots: resolveMediaToolLocalRoots(workspaceDir, {
-            workspaceOnly: options?.workspaceOnly,
-            allowedRoots: options?.allowedRoots,
-          }),
+          localRoots,
         });
 
     if (media.kind !== "image") {
