@@ -168,6 +168,254 @@
     "target": "凭证：存储位置（重要）"
   },
   {
+    "source": "Standing Orders",
+    "target": "Standing Orders"
+  },
+  {
+    "source": "Cron Jobs",
+    "target": "Cron Jobs"
+  },
+  {
+    "source": "Agent Workspace",
+    "target": "Agent Workspace"
+  },
+  {
+    "source": "/channels/imessage#troubleshooting",
+    "target": "/channels/imessage#troubleshooting"
+  },
+  {
+    "source": "Delegate Architecture",
+    "target": "Delegate Architecture"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "OpenShell",
+    "target": "OpenShell"
+  },
+  {
+    "source": "Sandbox vs Tool Policy vs Elevated",
+    "target": "Sandbox vs Tool Policy vs Elevated"
+  },
+  {
+    "source": "Multi-Agent Sandbox and Tools",
+    "target": "Multi-Agent Sandbox and Tools"
+  },
+  {
+    "source": "Sandbox CLI",
+    "target": "Sandbox CLI"
+  },
+  {
+    "source": "Multi-Agent Sandbox & Tools",
+    "target": "Multi-Agent Sandbox & Tools"
+  },
+  {
+    "source": "Elevated Mode",
+    "target": "Elevated Mode"
+  },
+  {
+    "source": "Trusted Proxy Auth",
+    "target": "Trusted Proxy Auth"
+  },
+  {
+    "source": "Azure",
+    "target": "Azure"
+  },
+  {
+    "source": "Release Channels",
+    "target": "Release Channels"
+  },
+  {
+    "source": "DigitalOcean",
+    "target": "DigitalOcean"
+  },
+  {
+    "source": "Channels",
+    "target": "Channels"
+  },
+  {
+    "source": "Gateway configuration",
+    "target": "Gateway configuration"
+  },
+  {
+    "source": "Updating",
+    "target": "Updating"
+  },
+  {
+    "source": "Matrix migration",
+    "target": "Matrix migration"
+  },
+  {
+    "source": "Matrix",
+    "target": "Matrix"
+  },
+  {
+    "source": "Migrating",
+    "target": "Migrating"
+  },
+  {
+    "source": "Plugins",
+    "target": "Plugins"
+  },
+  {
+    "source": "Northflank",
+    "target": "Northflank"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "All channels",
+    "target": "All channels"
+  },
+  {
+    "source": "Oracle Cloud",
+    "target": "Oracle Cloud"
+  },
+  {
+    "source": "Railway",
+    "target": "Railway"
+  },
+  {
+    "source": "Raspberry Pi",
+    "target": "Raspberry Pi"
+  },
+  {
+    "source": "Render",
+    "target": "Render"
+  },
+  {
+    "source": "Windows",
+    "target": "Windows"
+  },
+  {
+    "source": "Plugin Architecture",
+    "target": "Plugin Architecture"
+  },
+  {
+    "source": "Building Extensions",
+    "target": "Building Extensions"
+  },
+  {
+    "source": "Building extensions",
+    "target": "Building extensions"
+  },
+  {
+    "source": "Plugin SDK Migration",
+    "target": "Plugin SDK Migration"
+  },
+  {
+    "source": "Plugin Manifest",
+    "target": "Plugin Manifest"
+  },
+  {
+    "source": "Plugin manifest",
+    "target": "Plugin manifest"
+  },
+  {
+    "source": "Google (Gemini)",
+    "target": "Google (Gemini)"
+  },
+  {
+    "source": "Groq",
+    "target": "Groq"
+  },
+  {
+    "source": "Groq (LPU inference)",
+    "target": "Groq (LPU inference)"
+  },
+  {
+    "source": "Model Studio",
+    "target": "Model Studio"
+  },
+  {
+    "source": "Model Studio (Alibaba Cloud)",
+    "target": "Model Studio (Alibaba Cloud)"
+  },
+  {
+    "source": "Perplexity (web search)",
+    "target": "Perplexity (web search)"
+  },
+  {
+    "source": "SGLang (local models)",
+    "target": "SGLang (local models)"
+  },
+  {
+    "source": "Volcengine (Doubao)",
+    "target": "Volcengine (Doubao)"
+  },
+  {
+    "source": "Perplexity (Provider)",
+    "target": "Perplexity (Provider)"
+  },
+  {
+    "source": "Memory configuration reference",
+    "target": "Memory configuration reference"
+  },
+  {
+    "source": "Plugins overview",
+    "target": "Plugins overview"
+  },
+  {
+    "source": "Agent tools",
+    "target": "Agent tools"
+  },
+  {
+    "source": "Plugin bundles",
+    "target": "Plugin bundles"
+  },
+  {
+    "source": "Community plugins",
+    "target": "Community plugins"
+  },
+  {
+    "source": "Capability cookbook",
+    "target": "Capability cookbook"
+  },
+  {
+    "source": "Voice call plugin",
+    "target": "Voice call plugin"
+  },
+  {
+    "source": "Zalo user plugin",
+    "target": "Zalo user plugin"
+  },
+  {
+    "source": "Brave Search",
+    "target": "Brave Search"
+  },
+  {
+    "source": "Perplexity Search",
+    "target": "Perplexity Search"
+  },
+  {
+    "source": "Plugin architecture and internals",
+    "target": "Plugin architecture and internals"
+  },
+  {
+    "source": "Plugin agent tools",
+    "target": "Plugin agent tools"
+  },
+  {
+    "source": "Tavily",
+    "target": "Tavily"
+  },
+  {
+    "source": "Text-to-Speech",
+    "target": "Text-to-Speech"
+  },
+  {
+    "source": "Linux Server",
+    "target": "Linux Server"
+  },
+  {
     "source": "agent",
     "target": "智能体"
   },
