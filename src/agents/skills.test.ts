@@ -353,6 +353,103 @@ describe("buildWorkspaceSkillsPrompt", () => {
     ).toThrow(/Skill alias collision detected for skills\.policy/);
   });
 
+  it("keeps explicitly disabled skills excluded when host checks are skipped", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      agentId: "ops",
+      applyEligibility: false,
+      config: {
+        agents: {
+          list: [{ id: "ops" }],
+        },
+        skills: {
+          policy: {
+            globalEnabled: ["alpha"],
+          },
+          entries: {
+            alpha: {
+              enabled: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(entries).toEqual([]);
+  });
+
+  it("keeps bundled allowlist exclusions when host checks are skipped", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, ".bundled", "bundled-alpha"),
+      name: "bundled-alpha",
+      description: "Bundled alpha",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      agentId: "ops",
+      applyEligibility: false,
+      config: {
+        agents: {
+          list: [{ id: "ops" }],
+        },
+        skills: {
+          allowBundled: ["other-skill"],
+          policy: {
+            globalEnabled: ["bundled-alpha"],
+          },
+        },
+      },
+    });
+
+    expect(entries).toEqual([]);
+  });
+
+  it("can keep runtime-missing skills when only host checks are skipped", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "needs-bin"),
+      name: "needs-bin",
+      description: "Needs binary",
+      metadata: '{"openclaw":{"requires":{"bins":["definitely-not-present-openclaw-test-bin"]}}}',
+    });
+
+    const baseConfig = {
+      agents: {
+        list: [{ id: "ops" }],
+      },
+      skills: {
+        policy: {
+          globalEnabled: ["needs-bin"],
+        },
+      },
+    };
+
+    const withHostChecks = loadWorkspaceSkillEntries(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      agentId: "ops",
+      applyEligibility: true,
+      config: baseConfig,
+    });
+    const withoutHostChecks = loadWorkspaceSkillEntries(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      agentId: "ops",
+      applyEligibility: false,
+      config: baseConfig,
+    });
+
+    expect(withHostChecks.map((entry) => entry.skill.name)).toEqual([]);
+    expect(withoutHostChecks.map((entry) => entry.skill.name)).toEqual(["needs-bin"]);
+  });
+
   it("keeps legacy behavior when no skills policy is configured", async () => {
     const workspaceDir = await makeWorkspace();
     await writeSkill({
