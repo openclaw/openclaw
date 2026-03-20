@@ -6,7 +6,6 @@ import {
 import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
-import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
@@ -102,10 +101,11 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = loadConfig();
-    const workspaceDirs = listAgentWorkspaceDirs(cfg);
+    const agentIds = listAgentIds(cfg);
     const bins = new Set<string>();
-    for (const workspaceDir of workspaceDirs) {
-      const entries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg });
+    for (const agentId of agentIds) {
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      const entries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg, agentId });
       for (const bin of collectSkillBins(entries)) {
         bins.add(bin);
       }

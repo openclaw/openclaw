@@ -116,4 +116,20 @@ describe("skills entries config schema", () => {
       ),
     ).toBe(true);
   });
+
+  it("accepts test-agent override keys for isolated test harnesses", () => {
+    const res = OpenClawSchema.safeParse({
+      skills: {
+        policy: {
+          agentOverrides: {
+            "test-agent-smoke": {
+              enabled: ["jira"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
 });

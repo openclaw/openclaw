@@ -966,9 +966,10 @@ export const OpenClawSchema = z
     const agents = cfg.agents?.list ?? [];
     const agentIds = new Set(agents.map((agent) => agent.id));
     const agentOverrides = cfg.skills?.policy?.agentOverrides;
+    const isTestAgentOverrideKey = (agentId: string) => /^test-agent(?:[-_:].*)?$/i.test(agentId);
     if (agentOverrides && typeof agentOverrides === "object") {
       for (const overrideAgentId of Object.keys(agentOverrides)) {
-        if (!agentIds.has(overrideAgentId)) {
+        if (!agentIds.has(overrideAgentId) && !isTestAgentOverrideKey(overrideAgentId)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["skills", "policy", "agentOverrides", overrideAgentId],

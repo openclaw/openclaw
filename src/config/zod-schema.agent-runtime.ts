@@ -151,7 +151,8 @@ export const SandboxDockerSchema = z
         }
         const firstColon = bind.indexOf(":");
         const source = (firstColon <= 0 ? bind : bind.slice(0, firstColon)).trim();
-        if (!source.startsWith("/")) {
+        const normalizedSource = source.replace(/\\/g, "/");
+        if (!normalizedSource.startsWith("/")) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["binds", i],

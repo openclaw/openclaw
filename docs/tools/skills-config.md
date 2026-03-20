@@ -63,6 +63,8 @@ Examples:
 - `policy.globalEnabled`: global runtime baseline of enabled skills.
 - `policy.agentOverrides.<agentId>.enabled`: per-agent additive enable list.
 - `policy.agentOverrides.<agentId>.disabled`: per-agent subtractive disable list.
+- `policy.agentOverrides.<agentId>` key must match a configured `agents.list[].id`.
+  For isolated test harnesses, `test-agent*` keys are also accepted.
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
 - `load.watch`: watch skill folders and refresh the skills snapshot (default: true).
 - `load.watchDebounceMs`: debounce for skill watcher events in milliseconds (default: 250).

@@ -35,6 +35,11 @@ let cachedLightModule: WhatsAppLightModule | null = null;
 
 const jitiLoaders = new Map<boolean, ReturnType<typeof createJiti>>();
 
+function normalizeModulePathForCache(modulePath: string): string {
+  const normalized = path.normalize(path.resolve(modulePath)).replace(/\\/g, "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
 function readConfigSafely() {
   try {
     return loadConfig();
@@ -65,13 +70,14 @@ function resolveWhatsAppRuntimeModulePath(
   record: WhatsAppPluginRecord,
   entryBaseName: "light-runtime-api" | "runtime-api",
 ): string {
+  const normalizeAbsolutePath = (value: string) => path.normalize(path.resolve(value));
   const candidates = [
-    path.join(path.dirname(record.source), `${entryBaseName}.js`),
-    path.join(path.dirname(record.source), `${entryBaseName}.ts`),
+    normalizeAbsolutePath(path.join(path.dirname(record.source), `${entryBaseName}.js`)),
+    normalizeAbsolutePath(path.join(path.dirname(record.source), `${entryBaseName}.ts`)),
     ...(record.rootDir
       ? [
-          path.join(record.rootDir, `${entryBaseName}.js`),
-          path.join(record.rootDir, `${entryBaseName}.ts`),
+          normalizeAbsolutePath(path.join(record.rootDir, `${entryBaseName}.js`)),
+          normalizeAbsolutePath(path.join(record.rootDir, `${entryBaseName}.ts`)),
         ]
       : []),
   ];
@@ -122,11 +128,12 @@ function loadWhatsAppLightModule(): WhatsAppLightModule {
     resolveWhatsAppPluginRecord(),
     "light-runtime-api",
   );
-  if (cachedLightModule && cachedLightModulePath === modulePath) {
+  const cachePath = normalizeModulePathForCache(modulePath);
+  if (cachedLightModule && cachedLightModulePath === cachePath) {
     return cachedLightModule;
   }
   const loaded = loadWithJiti<WhatsAppLightModule>(modulePath);
-  cachedLightModulePath = modulePath;
+  cachedLightModulePath = cachePath;
   cachedLightModule = loaded;
   return loaded;
 }
@@ -134,11 +141,12 @@ function loadWhatsAppLightModule(): WhatsAppLightModule {
 async function loadWhatsAppHeavyModule(): Promise<WhatsAppHeavyModule> {
   const record = resolveWhatsAppPluginRecord();
   const modulePath = resolveWhatsAppRuntimeModulePath(record, "runtime-api");
-  if (cachedHeavyModule && cachedHeavyModulePath === modulePath) {
+  const cachePath = normalizeModulePathForCache(modulePath);
+  if (cachedHeavyModule && cachedHeavyModulePath === cachePath) {
     return cachedHeavyModule;
   }
   const loaded = loadWithJiti<WhatsAppHeavyModule>(modulePath);
-  cachedHeavyModulePath = modulePath;
+  cachedHeavyModulePath = cachePath;
   cachedHeavyModule = loaded;
   return loaded;
 }
