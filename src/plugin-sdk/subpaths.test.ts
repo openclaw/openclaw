@@ -66,6 +66,7 @@ describe("plugin-sdk subpath exports", () => {
     expect(pluginSdkSubpaths).not.toContain("pairing-access");
     expect(pluginSdkSubpaths).not.toContain("qwen-portal-auth");
     expect(pluginSdkSubpaths).not.toContain("reply-prefix");
+    expect(pluginSdkSubpaths).not.toContain("signal-core");
     expect(pluginSdkSubpaths).not.toContain("synology-chat");
     expect(pluginSdkSubpaths).not.toContain("typing");
     expect(pluginSdkSubpaths).not.toContain("zai");

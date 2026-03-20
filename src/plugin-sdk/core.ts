@@ -51,6 +51,8 @@ export type {
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthMethod,
   ProviderAuthResult,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
   OpenClawPluginCommandDefinition,
   OpenClawPluginDefinition,
   PluginCommandContext,
