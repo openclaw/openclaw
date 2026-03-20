@@ -705,7 +705,12 @@ describe("AcpxRuntime", () => {
     process.env.MOCK_ACPX_PROMPT_HANG = "1";
     try {
       const events: AcpRuntimeEvent[] = [];
-      for await (const event of runtime.runTurn({ handle, text: "hang-test", mode: "prompt", requestId: "req-hang-test" })) {
+      for await (const event of runtime.runTurn({
+        handle,
+        text: "hang-test",
+        mode: "prompt",
+        requestId: "req-hang-test",
+      })) {
         events.push(event);
       }
 
