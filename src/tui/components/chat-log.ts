@@ -10,6 +10,7 @@ export class ChatLog extends Container {
   private readonly maxComponents: number;
   private viewportHeight: number | null = null;
   private scrollOffset = 0;
+  private lastRenderWidth = 120;
   private toolById = new Map<string, ToolExecutionComponent>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
   private btwMessage: BtwInlineMessage | null = null;
@@ -68,13 +69,19 @@ export class ChatLog extends Container {
 
   scrollPageUp() {
     const page = this.viewportHeight ?? 10;
-    this.scrollOffset += page;
-    this.clampScrollOffset();
+    this.scrollLines(page);
   }
 
   scrollPageDown() {
     const page = this.viewportHeight ?? 10;
-    this.scrollOffset -= page;
+    this.scrollLines(-page);
+  }
+
+  scrollLines(delta: number) {
+    if (!Number.isFinite(delta) || delta === 0) {
+      return;
+    }
+    this.scrollOffset += Math.trunc(delta);
     this.clampScrollOffset();
   }
 
@@ -93,7 +100,7 @@ export class ChatLog extends Container {
     return Math.max(0, this.getRenderedLineCount(width) - this.viewportHeight);
   }
 
-  private clampScrollOffset(width = 120) {
+  private clampScrollOffset(width = this.lastRenderWidth) {
     this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, this.getMaxScrollOffset(width)));
   }
 
@@ -235,13 +242,15 @@ export class ChatLog extends Container {
   }
 
   override render(width: number) {
+    this.lastRenderWidth = width;
     const lines = super.render(width);
     if (!this.viewportHeight || lines.length <= this.viewportHeight) {
       this.scrollOffset = 0;
       return lines;
     }
 
-    this.clampScrollOffset(width);
+    const maxOffset = Math.max(0, lines.length - this.viewportHeight);
+    this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, maxOffset));
     const start = Math.max(0, lines.length - this.viewportHeight - this.scrollOffset);
     const end = start + this.viewportHeight;
     return lines.slice(start, end);

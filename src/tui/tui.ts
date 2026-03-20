@@ -560,9 +560,9 @@ export async function runTui(opts: TuiOptions) {
       return undefined;
     }
     if (mouse.direction === "up") {
-      chatLog.scrollPageUp();
+      chatLog.scrollLines(3);
     } else {
-      chatLog.scrollPageDown();
+      chatLog.scrollLines(-3);
     }
     tui.requestRender();
     return { consume: true };
@@ -917,6 +917,7 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
     exitRequested = true;
+    tui.terminal.write("\x1b[?1000l\x1b[?1002l\x1b[?1006l");
     client.stop();
     stopTuiSafely(() => tui.stop());
     process.exit(0);
