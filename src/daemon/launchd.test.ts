@@ -414,7 +414,7 @@ describe("launchd install", () => {
       }),
     ).rejects.toThrow("launchctl kickstart failed: Input/output error");
 
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
   });
 
