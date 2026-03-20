@@ -127,6 +127,10 @@ describe("registerStatusHealthSessionsCommands", () => {
       "/tmp/sessions.json",
       "--active",
       "120",
+      "--kind",
+      "group",
+      "--kind",
+      "global",
     ]);
 
     expect(setVerbose).toHaveBeenCalledWith(true);
@@ -135,6 +139,7 @@ describe("registerStatusHealthSessionsCommands", () => {
         json: true,
         store: "/tmp/sessions.json",
         active: "120",
+        kind: ["group", "global"],
       }),
       runtime,
     );
