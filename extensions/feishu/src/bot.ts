@@ -61,7 +61,7 @@ const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const groupNameCache = new Map<string, { name: string; expiresAt: number }>();
 const GROUP_NAME_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
-async function resolveGroupName(params: {
+export async function resolveGroupName(params: {
   account: ReturnType<typeof resolveFeishuAccount>;
   chatId: string;
   log: (...args: unknown[]) => void;
@@ -363,13 +363,14 @@ export async function handleFeishuMessage(params: {
     }
   }
 
-  log(
 
     // Resolve human-readable group name for session labeling
     let groupName: string | undefined;
     if (isGroup) {
       groupName = await resolveGroupName({ account, chatId: ctx.chatId, log });
     }
+
+  log(
 
     `feishu[${account.accountId}]: received message from ${ctx.senderOpenId} in ${ctx.chatId} (${ctx.chatType})`,
   );
