@@ -60,6 +60,44 @@ function isPathInside(baseDir: string, targetPath: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function isRuntimeOverlayForwardImport(params: {
+  rootDir: string;
+  importerPath: string;
+  specifier: string;
+}): boolean {
+  const normalizedRoot = toPosixPath(params.rootDir);
+  if (!normalizedRoot.includes("/dist-runtime/extensions/")) {
+    return false;
+  }
+  if (!isPathInside(params.rootDir, params.importerPath)) {
+    return false;
+  }
+  return params.specifier.startsWith("../../../dist/");
+}
+
+function resolveRuntimeOverlayCanonicalDistRoot(rootDir: string): string | null {
+  const normalizedRoot = toPosixPath(rootDir);
+  const marker = "/dist-runtime/extensions/";
+  const markerIndex = normalizedRoot.lastIndexOf(marker);
+  if (markerIndex === -1) {
+    return null;
+  }
+
+  const pluginId = normalizedRoot.slice(markerIndex + marker.length).split("/")[0];
+  if (!pluginId) {
+    return null;
+  }
+
+  const packageRoot = normalizedRoot.slice(0, markerIndex);
+  const canonicalRoot = path.join(packageRoot, "dist");
+  try {
+    return fs.realpathSync(canonicalRoot);
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 function isBareSpecifier(specifier: string): boolean {
   return !specifier.startsWith(".") && !specifier.startsWith("/") && !specifier.startsWith("file:");
 }
@@ -346,13 +384,27 @@ function classifyLocalSpecifierViolation(params: {
   specifier: string;
   resolvedPath: string | null;
   rootDir: string;
+  canonicalDistRoot: string | null;
 }): string | null {
+  if (
+    isRuntimeOverlayForwardImport({
+      rootDir: params.rootDir,
+      importerPath: params.importerPath,
+      specifier: params.specifier,
+    })
+  ) {
+    return null;
+  }
+
   const rawResolved = params.specifier.startsWith("file:")
     ? path.normalize(new URL(params.specifier).pathname)
     : path.resolve(path.dirname(params.importerPath), params.specifier);
   const effectiveResolved = params.resolvedPath ?? rawResolved;
 
-  if (!isPathInside(params.rootDir, effectiveResolved)) {
+  const insidePrimaryRoot = isPathInside(params.rootDir, effectiveResolved);
+  const insideCanonicalRoot =
+    params.canonicalDistRoot !== null && isPathInside(params.canonicalDistRoot, effectiveResolved);
+  if (!insidePrimaryRoot && !insideCanonicalRoot) {
     return "imports path outside the plugin root";
   }
 
@@ -366,6 +418,7 @@ function classifyLocalSpecifierViolation(params: {
 function validateFile(params: {
   filePath: string;
   rootDir: string;
+  canonicalDistRoot: string | null;
   packageName?: string;
   allowedPackages: Set<string>;
   visited: Set<string>;
@@ -408,6 +461,7 @@ function validateFile(params: {
       specifier: use.specifier,
       resolvedPath,
       rootDir: params.rootDir,
+      canonicalDistRoot: params.canonicalDistRoot,
     });
     if (reason) {
       params.violations.push({
@@ -420,9 +474,17 @@ function validateFile(params: {
       continue;
     }
     if (resolvedPath) {
+      const shouldSkipCanonicalTraversal =
+        params.canonicalDistRoot !== null &&
+        isPathInside(params.canonicalDistRoot, resolvedPath) &&
+        !isPathInside(params.rootDir, params.filePath);
+      if (shouldSkipCanonicalTraversal) {
+        continue;
+      }
       validateFile({
         filePath: resolvedPath,
         rootDir: params.rootDir,
+        canonicalDistRoot: params.canonicalDistRoot,
         packageName: params.packageName,
         allowedPackages: params.allowedPackages,
         visited: params.visited,
@@ -437,6 +499,7 @@ export function validatePluginImportPolicy(
 ): PluginImportPolicyResult {
   const rootDir = fs.realpathSync(params.rootDir);
   const entryPath = fs.realpathSync(params.entryPath);
+  const canonicalDistRoot = resolveRuntimeOverlayCanonicalDistRoot(rootDir);
   const { packageName, allowedPackages } = collectAllowedBarePackages(rootDir);
   const visited = new Set<string>();
   const violations: PluginImportPolicyViolation[] = [];
@@ -444,6 +507,7 @@ export function validatePluginImportPolicy(
   validateFile({
     filePath: entryPath,
     rootDir,
+    canonicalDistRoot,
     packageName,
     allowedPackages,
     visited,
