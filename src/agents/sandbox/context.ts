@@ -21,6 +21,7 @@ import { ensureSandboxWorkspace } from "./workspace.js";
 async function ensureSandboxWorkspaceLayout(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
   rawSessionKey: string;
+  agentId?: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
 }): Promise<{
@@ -48,10 +49,13 @@ async function ensureSandboxWorkspaceLayout(params: {
     );
     if (cfg.workspaceAccess !== "rw") {
       try {
+        const resolvedAgentId = params.agentId?.trim() || undefined;
+        const syncAgentId = cfg.scope === "shared" ? undefined : resolvedAgentId;
         await syncSkillsToWorkspace({
           sourceWorkspaceDir: agentWorkspaceDir,
           targetWorkspaceDir: sandboxWorkspaceDir,
           config: params.config,
+          ...(syncAgentId ? { agentId: syncAgentId } : {}),
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
@@ -122,6 +126,7 @@ export async function resolveSandboxContext(params: {
   const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
     cfg,
     rawSessionKey,
+    agentId: resolved.runtime.agentId,
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
@@ -226,6 +231,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
   const { workspaceDir } = await ensureSandboxWorkspaceLayout({
     cfg,
     rawSessionKey,
+    agentId: resolved.runtime.agentId,
     config: params.config,
     workspaceDir: params.workspaceDir,
   });

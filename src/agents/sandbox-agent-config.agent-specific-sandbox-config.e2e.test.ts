@@ -3,6 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { syncSkillsToWorkspace } from "./skills.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
 type SpawnCall = {
@@ -53,6 +54,7 @@ vi.mock("./skills.js", async (importOriginal) => {
 let resolveSandboxContext: typeof import("./sandbox/context.js").resolveSandboxContext;
 let resolveSandboxConfigForAgent: typeof import("./sandbox/config.js").resolveSandboxConfigForAgent;
 let resolveSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").resolveSandboxRuntimeStatus;
+const syncSkillsToWorkspaceMock = vi.mocked(syncSkillsToWorkspace);
 
 async function resolveContext(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
   return resolveSandboxContext({
@@ -132,6 +134,7 @@ describe("Agent-specific sandbox config", () => {
 
   beforeEach(() => {
     spawnCalls.length = 0;
+    syncSkillsToWorkspaceMock.mockClear();
   });
 
   it("should use agent-specific workspaceRoot", async () => {
@@ -275,6 +278,28 @@ describe("Agent-specific sandbox config", () => {
       expectDockerSetupCommand(scenario.expectedSetup);
       spawnCalls.length = 0;
     }
+  });
+
+  it("passes runtime agentId to skill sync for non-shared sandboxes", async () => {
+    const cfg = createWorkSetupCommandConfig("agent");
+    const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work-agent-sync");
+
+    expect(context).toBeDefined();
+    expect(syncSkillsToWorkspaceMock).toHaveBeenCalledTimes(1);
+    const call = syncSkillsToWorkspaceMock.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    expect(call?.agentId).toBe("work");
+  });
+
+  it("does not pass agentId to skill sync for shared sandboxes", async () => {
+    const cfg = createWorkSetupCommandConfig("shared");
+    const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work-shared-sync");
+
+    expect(context).toBeDefined();
+    expect(syncSkillsToWorkspaceMock).toHaveBeenCalledTimes(1);
+    const call = syncSkillsToWorkspaceMock.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    expect(call?.agentId).toBeUndefined();
   });
 
   it("should allow agent-specific docker settings beyond setupCommand", () => {
