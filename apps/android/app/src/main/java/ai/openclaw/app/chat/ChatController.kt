@@ -75,7 +75,7 @@ class ChatController(
   fun load(sessionKey: String) {
     val key = sessionKey.trim().ifEmpty { "main" }
     _sessionKey.value = key
-    scope.launch { bootstrap(forceHealth = true) }
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
   }
 
   fun applyMainSessionKey(mainSessionKey: String) {
@@ -84,11 +84,11 @@ class ChatController(
     if (_sessionKey.value == trimmed) return
     if (_sessionKey.value != "main") return
     _sessionKey.value = trimmed
-    scope.launch { bootstrap(forceHealth = true) }
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
   }
 
   fun refresh() {
-    scope.launch { bootstrap(forceHealth = true) }
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
   }
 
   fun refreshSessions(limit: Int? = null) {
@@ -106,7 +106,9 @@ class ChatController(
     if (key.isEmpty()) return
     if (key == _sessionKey.value) return
     _sessionKey.value = key
-    scope.launch { bootstrap(forceHealth = true) }
+    // Keep the thread switch path lean: history + health are needed immediately,
+    // but the session list is usually unchanged and can refresh on explicit pull-to-refresh.
+    scope.launch { bootstrap(forceHealth = true, refreshSessions = false) }
   }
 
   fun sendMessage(
@@ -249,7 +251,7 @@ class ChatController(
     }
   }
 
-  private suspend fun bootstrap(forceHealth: Boolean) {
+  private suspend fun bootstrap(forceHealth: Boolean, refreshSessions: Boolean) {
     _errorText.value = null
     _healthOk.value = false
     clearPendingRuns()
@@ -271,7 +273,9 @@ class ChatController(
       history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
 
       pollHealthIfNeeded(force = forceHealth)
-      fetchSessions(limit = 50)
+      if (refreshSessions) {
+        fetchSessions(limit = 50)
+      }
     } catch (err: Throwable) {
       _errorText.value = err.message
     }

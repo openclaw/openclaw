@@ -25,7 +25,7 @@ import ai.openclaw.app.MainViewModel
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
+fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier = Modifier) {
   val context = LocalContext.current
   val isDebuggable = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
   val webViewRef = remember { mutableStateOf<WebView?>(null) }
@@ -45,6 +45,7 @@ fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     modifier = modifier,
     factory = {
       WebView(context).apply {
+        visibility = if (visible) View.VISIBLE else View.INVISIBLE
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
@@ -125,6 +126,16 @@ fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         addJavascriptInterface(bridge, CanvasA2UIActionBridge.interfaceName)
         viewModel.canvas.attach(this)
         webViewRef.value = this
+      }
+    },
+    update = { webView ->
+      webView.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+      if (visible) {
+        webView.resumeTimers()
+        webView.onResume()
+      } else {
+        webView.onPause()
+        webView.pauseTimers()
       }
     },
   )
