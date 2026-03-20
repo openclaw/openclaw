@@ -45,7 +45,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "whatsapp",
-    sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) => {
+    sendText: async ({ cfg, to, text, accountId, deps, gifPlayback, replyToId }) => {
       const normalizedText = trimLeadingWhitespace(text);
       if (!normalizedText) {
         return createEmptyChannelResult("whatsapp");
@@ -58,6 +58,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
         cfg,
         accountId: accountId ?? undefined,
         gifPlayback,
+        replyToId: replyToId ?? undefined,
       });
     },
     sendMedia: async ({
@@ -69,6 +70,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       accountId,
       deps,
       gifPlayback,
+      replyToId,
     }) => {
       const normalizedText = trimLeadingWhitespace(text);
       const send =
@@ -81,6 +83,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
         mediaLocalRoots,
         accountId: accountId ?? undefined,
         gifPlayback,
+        replyToId: replyToId ?? undefined,
       });
     },
     sendPoll: async ({ cfg, to, poll, accountId }) =>

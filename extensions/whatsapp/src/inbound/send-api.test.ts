@@ -1,3 +1,4 @@
+import type { WAMessage } from "@whiskeysockets/baileys";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const recordChannelActivity = vi.fn();
@@ -60,6 +61,29 @@ describe("createWebSendApi", () => {
       accountId: "main",
       direction: "outbound",
     });
+  });
+
+  it("attaches a quoted message when replyToId resolves", async () => {
+    const quotedMessage = {
+      key: { id: "msg-quoted", remoteJid: "1555@s.whatsapp.net", fromMe: false },
+      message: { conversation: "hello there" },
+    } satisfies WAMessage;
+    const apiWithQuoted = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      resolveQuotedMessage: ({ jid, replyToId }) =>
+        jid === "1555@s.whatsapp.net" && replyToId === "msg-quoted" ? quotedMessage : undefined,
+    });
+
+    await apiWithQuoted.sendMessage("+1555", "reply", undefined, undefined, {
+      replyToId: "msg-quoted",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      { text: "reply" },
+      { quoted: quotedMessage },
+    );
   });
 
   it("supports image media with caption", async () => {

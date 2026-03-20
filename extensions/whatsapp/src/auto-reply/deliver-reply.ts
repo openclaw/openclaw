@@ -46,6 +46,11 @@ export async function deliverWebReply(params: {
 }) {
   const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
+  const replyToId = replyResult.replyToId?.trim() || undefined;
+  const replyOptions = replyToId ? { replyToId } : undefined;
+  const reply = (text: string) => (replyOptions ? msg.reply(text, replyOptions) : msg.reply(text));
+  const sendMedia = (payload: Parameters<WebInboundMsg["sendMedia"]>[0]) =>
+    replyOptions ? msg.sendMedia(payload, replyOptions) : msg.sendMedia(payload);
   if (shouldSuppressReasoningReply(replyResult)) {
     whatsappOutboundLog.debug(`Suppressed reasoning payload to ${msg.from}`);
     return;
@@ -86,7 +91,7 @@ export async function deliverWebReply(params: {
     const totalChunks = textChunks.length;
     for (const [index, chunk] of textChunks.entries()) {
       const chunkStarted = Date.now();
-      await sendWithRetry(() => msg.reply(chunk), "text");
+      await sendWithRetry(() => reply(chunk), "text");
       if (!skipLog) {
         const durationMs = Date.now() - chunkStarted;
         whatsappOutboundLog.debug(
@@ -100,6 +105,7 @@ export async function deliverWebReply(params: {
         connectionId: connectionId ?? null,
         to: msg.from,
         from: msg.to,
+        replyToId: replyToId ?? null,
         text: elide(replyResult.text, 240),
         mediaUrl: null,
         mediaSizeBytes: null,
@@ -132,7 +138,7 @@ export async function deliverWebReply(params: {
       if (media.kind === "image") {
         await sendWithRetry(
           () =>
-            msg.sendMedia({
+            sendMedia({
               image: media.buffer,
               caption,
               mimetype: media.contentType,
@@ -142,7 +148,7 @@ export async function deliverWebReply(params: {
       } else if (media.kind === "audio") {
         await sendWithRetry(
           () =>
-            msg.sendMedia({
+            sendMedia({
               audio: media.buffer,
               ptt: true,
               mimetype: media.contentType,
@@ -153,7 +159,7 @@ export async function deliverWebReply(params: {
       } else if (media.kind === "video") {
         await sendWithRetry(
           () =>
-            msg.sendMedia({
+            sendMedia({
               video: media.buffer,
               caption,
               mimetype: media.contentType,
@@ -165,7 +171,7 @@ export async function deliverWebReply(params: {
         const mimetype = media.contentType ?? "application/octet-stream";
         await sendWithRetry(
           () =>
-            msg.sendMedia({
+            sendMedia({
               document: media.buffer,
               fileName,
               caption,
@@ -183,6 +189,7 @@ export async function deliverWebReply(params: {
           connectionId: connectionId ?? null,
           to: msg.from,
           from: msg.to,
+          replyToId: replyToId ?? null,
           text: caption ?? null,
           mediaUrl,
           mediaSizeBytes: media.buffer.length,
@@ -206,12 +213,12 @@ export async function deliverWebReply(params: {
         return;
       }
       whatsappOutboundLog.warn(`Media skipped; sent text-only to ${msg.from}`);
-      await msg.reply(fallbackText);
+      await reply(fallbackText);
     },
   });
 
   // Remaining text chunks after media
   for (const chunk of remainingText) {
-    await msg.reply(chunk);
+    await reply(chunk);
   }
 }

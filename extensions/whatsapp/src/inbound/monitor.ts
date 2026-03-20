@@ -7,6 +7,7 @@ import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { jidToE164, resolveJidToE164 } from "openclaw/plugin-sdk/text-runtime";
+import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
@@ -18,6 +19,7 @@ import {
   extractText,
 } from "./extract.js";
 import { downloadInboundMedia } from "./media.js";
+import { createQuotedMessageCache } from "./quoted-message-cache.js";
 import { createWebSendApi } from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
@@ -117,6 +119,7 @@ export async function monitorWebInbox(options: {
   >();
   const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
   const lidLookup = sock.signalRepository?.lidMapping;
+  const quotedMessageCache = createQuotedMessageCache();
 
   const resolveInboundJid = async (jid: string | null | undefined): Promise<string | null> =>
     resolveJidToE164(jid, { authDir: options.authDir, lidLookup });
@@ -326,10 +329,90 @@ export async function monitorWebInbox(options: {
         logVerbose(`Presence update failed: ${String(err)}`);
       }
     };
-    const reply = async (text: string) => {
-      await sock.sendMessage(chatJid, { text });
+    const reply = async (text: string, options?: { replyToId?: string }) => {
+      await sendApi.sendMessage(chatJid, text, undefined, undefined, {
+        ...(options?.replyToId ? { replyToId: options.replyToId } : {}),
+      });
     };
-    const sendMedia = async (payload: AnyMessageContent) => {
+    const sendMedia = async (payload: AnyMessageContent, options?: { replyToId?: string }) => {
+      const caption =
+        "caption" in payload && typeof payload.caption === "string" ? payload.caption : "";
+      const toBuffer = (value: unknown): Buffer | null => {
+        if (Buffer.isBuffer(value)) {
+          return value;
+        }
+        return value instanceof Uint8Array ? Buffer.from(value) : null;
+      };
+      if ("image" in payload && payload.image) {
+        const imageBuffer = toBuffer(payload.image);
+        if (!imageBuffer) {
+          await sock.sendMessage(chatJid, payload);
+          return;
+        }
+        await sendApi.sendMessage(
+          chatJid,
+          caption,
+          imageBuffer,
+          typeof payload.mimetype === "string" ? payload.mimetype : "image/jpeg",
+          {
+            ...(options?.replyToId ? { replyToId: options.replyToId } : {}),
+          },
+        );
+        return;
+      }
+      if ("audio" in payload && payload.audio) {
+        const audioBuffer = toBuffer(payload.audio);
+        if (!audioBuffer) {
+          await sock.sendMessage(chatJid, payload);
+          return;
+        }
+        await sendApi.sendMessage(
+          chatJid,
+          caption,
+          audioBuffer,
+          typeof payload.mimetype === "string" ? payload.mimetype : "audio/ogg",
+          {
+            ...(options?.replyToId ? { replyToId: options.replyToId } : {}),
+          },
+        );
+        return;
+      }
+      if ("video" in payload && payload.video) {
+        const videoBuffer = toBuffer(payload.video);
+        if (!videoBuffer) {
+          await sock.sendMessage(chatJid, payload);
+          return;
+        }
+        await sendApi.sendMessage(
+          chatJid,
+          caption,
+          videoBuffer,
+          typeof payload.mimetype === "string" ? payload.mimetype : "video/mp4",
+          {
+            ...(payload.gifPlayback ? { gifPlayback: true } : {}),
+            ...(options?.replyToId ? { replyToId: options.replyToId } : {}),
+          },
+        );
+        return;
+      }
+      if ("document" in payload && payload.document) {
+        const documentBuffer = toBuffer(payload.document);
+        if (!documentBuffer) {
+          await sock.sendMessage(chatJid, payload);
+          return;
+        }
+        await sendApi.sendMessage(
+          chatJid,
+          caption,
+          documentBuffer,
+          typeof payload.mimetype === "string" ? payload.mimetype : "application/octet-stream",
+          {
+            ...(typeof payload.fileName === "string" ? { fileName: payload.fileName } : {}),
+            ...(options?.replyToId ? { replyToId: options.replyToId } : {}),
+          },
+        );
+        return;
+      }
       await sock.sendMessage(chatJid, payload);
     };
     const timestamp = inbound.messageTimestampMs;
@@ -366,7 +449,7 @@ export async function monitorWebInbox(options: {
       replyToBody: enriched.replyContext?.body,
       replyToSender: enriched.replyContext?.sender,
       replyToSenderJid: enriched.replyContext?.senderJid,
-      replyToSenderE164: enriched.replyContext?.senderE164,
+      replyToSenderE164: enriched.replyContext?.senderE164 ?? undefined,
       groupSubject: inbound.groupSubject,
       groupParticipants: inbound.groupParticipants,
       mentionedJids: mentionedJids ?? undefined,
@@ -426,6 +509,15 @@ export async function monitorWebInbox(options: {
         continue;
       }
 
+      quotedMessageCache.remember({
+        message: msg,
+        messageId: inbound.id,
+        remoteJid: inbound.remoteJid,
+        normalizedJid: inbound.group ? inbound.remoteJid : toWhatsappJid(inbound.from),
+        participantJid: msg.key?.participant ?? undefined,
+        isGroup: inbound.group,
+      });
+
       await enqueueInboundMessage(msg, inbound, enriched);
     }
   };
@@ -452,10 +544,12 @@ export async function monitorWebInbox(options: {
 
   const sendApi = createWebSendApi({
     sock: {
-      sendMessage: (jid: string, content: AnyMessageContent) => sock.sendMessage(jid, content),
+      sendMessage: (jid: string, content: AnyMessageContent, options?: { quoted?: WAMessage }) =>
+        options ? sock.sendMessage(jid, content, options) : sock.sendMessage(jid, content),
       sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
     },
     defaultAccountId: options.accountId,
+    resolveQuotedMessage: quotedMessageCache.resolve,
   });
 
   return {

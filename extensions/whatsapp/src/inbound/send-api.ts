@@ -1,4 +1,4 @@
-import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
+import type { AnyMessageContent, WAMessage, WAPresence } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import type { ActiveWebSendOptions } from "../active-listener.js";
@@ -19,10 +19,15 @@ function resolveOutboundMessageId(result: unknown): string {
 
 export function createWebSendApi(params: {
   sock: {
-    sendMessage: (jid: string, content: AnyMessageContent) => Promise<unknown>;
+    sendMessage: (
+      jid: string,
+      content: AnyMessageContent,
+      options?: { quoted?: WAMessage },
+    ) => Promise<unknown>;
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
   };
   defaultAccountId: string;
+  resolveQuotedMessage?: (params: { jid: string; replyToId: string }) => WAMessage | undefined;
 }) {
   return {
     sendMessage: async (
@@ -33,6 +38,13 @@ export function createWebSendApi(params: {
       sendOptions?: ActiveWebSendOptions,
     ): Promise<{ messageId: string }> => {
       const jid = toWhatsappJid(to);
+      const replyToId = sendOptions?.replyToId?.trim() || undefined;
+      const quoted = replyToId
+        ? params.resolveQuotedMessage?.({
+            jid,
+            replyToId,
+          })
+        : undefined;
       let payload: AnyMessageContent;
       if (mediaBuffer && mediaType) {
         if (mediaType.startsWith("image/")) {
@@ -63,7 +75,9 @@ export function createWebSendApi(params: {
       } else {
         payload = { text };
       }
-      const result = await params.sock.sendMessage(jid, payload);
+      const result = quoted
+        ? await params.sock.sendMessage(jid, payload, { quoted })
+        : await params.sock.sendMessage(jid, payload);
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       recordWhatsAppOutbound(accountId);
       const messageId = resolveOutboundMessageId(result);

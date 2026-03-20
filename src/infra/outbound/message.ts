@@ -283,6 +283,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,
       agentId: params.agentId,
+      replyTo: params.replyToId,
+      replyToId: params.replyToId,
       channel,
       sessionKey: params.mirror?.sessionKey,
       idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),

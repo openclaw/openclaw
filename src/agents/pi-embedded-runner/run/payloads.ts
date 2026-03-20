@@ -104,6 +104,7 @@ export function buildEmbeddedRunPayloads(params: {
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
+  currentMessageId?: string;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -176,7 +177,7 @@ export function buildEmbeddedRunPayloads(params: {
         replyToId,
         replyToTag,
         replyToCurrent,
-      } = parseReplyDirectives(agg);
+      } = parseReplyDirectives(agg, { currentMessageId: params.currentMessageId });
       if (cleanedText) {
         replyItems.push({
           text: cleanedText,
@@ -184,7 +185,7 @@ export function buildEmbeddedRunPayloads(params: {
           audioAsVoice,
           replyToId,
           replyToTag,
-          replyToCurrent,
+          replyToCurrent: replyToCurrent || undefined,
         });
       }
     }
@@ -268,7 +269,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
-    } = parseReplyDirectives(text);
+    } = parseReplyDirectives(text, { currentMessageId: params.currentMessageId });
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
     }
@@ -278,7 +279,7 @@ export function buildEmbeddedRunPayloads(params: {
       audioAsVoice,
       replyToId,
       replyToTag,
-      replyToCurrent,
+      replyToCurrent: replyToCurrent || undefined,
     });
     hasUserFacingAssistantReply = true;
   }

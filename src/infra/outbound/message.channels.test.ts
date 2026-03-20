@@ -303,6 +303,25 @@ describe("gateway url override hardening", () => {
     };
     expect(call.params?.agentId).toBe("work");
   });
+
+  it("forwards replyToId into gateway send params", async () => {
+    setMattermostGatewayRegistry();
+
+    callGatewayMock.mockResolvedValueOnce({ messageId: "m-reply" });
+    await sendMessage({
+      cfg: {},
+      to: "channel:town-square",
+      content: "thread reply",
+      channel: "mattermost",
+      replyToId: "post-root",
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: Record<string, unknown>;
+    };
+    expect(call.params?.replyTo).toBe("post-root");
+    expect(call.params?.replyToId).toBe("post-root");
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);

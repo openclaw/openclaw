@@ -114,7 +114,7 @@ describe("deliverWebReply", () => {
     const msg = makeMsg();
 
     await deliverWebReply({
-      replyResult: { text: "aaaaaa" },
+      replyResult: { text: "aaaaaa", replyToId: "quoted-1" },
       msg,
       maxMediaBytes: 1024 * 1024,
       textLimit: 3,
@@ -123,8 +123,8 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(2);
-    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa");
-    expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa");
+    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa", { replyToId: "quoted-1" });
+    expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa", { replyToId: "quoted-1" });
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
   });
 
@@ -155,7 +155,11 @@ describe("deliverWebReply", () => {
     mockLoadedImageMedia();
 
     await deliverWebReply({
-      replyResult: { text: "aaaaaa", mediaUrl: "http://example.com/img.jpg" },
+      replyResult: {
+        text: "aaaaaa",
+        mediaUrl: "http://example.com/img.jpg",
+        replyToId: "quoted-2",
+      },
       msg,
       mediaLocalRoots,
       maxMediaBytes: 1024 * 1024,
@@ -175,8 +179,9 @@ describe("deliverWebReply", () => {
         caption: "aaa",
         mimetype: "image/jpeg",
       }),
+      { replyToId: "quoted-2" },
     );
-    expect(msg.reply).toHaveBeenCalledWith("aaa");
+    expect(msg.reply).toHaveBeenCalledWith("aaa", { replyToId: "quoted-2" });
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (media)");
     expect(logVerbose).toHaveBeenCalled();
   });

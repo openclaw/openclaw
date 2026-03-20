@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildReplyPayloads } from "../../../auto-reply/reply/agent-runner-payloads.js";
 import { buildPayloads, expectSingleToolErrorPayload } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
@@ -89,5 +90,43 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       assistantTexts: ["Approval is needed. Please run /approve abc allow-once"],
       didSendDeterministicApprovalPrompt: true,
     });
+  });
+
+  it("resolves [[reply_to_current]] using currentMessageId", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["[[reply_to_current]] quoted hello"],
+      currentMessageId: "wa-msg-123",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("quoted hello");
+    expect(payloads[0]?.replyToId).toBe("wa-msg-123");
+    expect(payloads[0]?.replyToCurrent).toBe(true);
+    expect(payloads[0]?.replyToTag).toBe(true);
+  });
+
+  it("does not stamp plain assistant replies with replyToCurrent=false", async () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["plain hello"],
+      currentMessageId: "wa-msg-123",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("plain hello");
+    expect(payloads[0]?.replyToCurrent).toBeUndefined();
+
+    const { replyPayloads } = await buildReplyPayloads({
+      payloads,
+      isHeartbeat: false,
+      didLogHeartbeatStrip: false,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      replyToMode: "all",
+      replyToChannel: "whatsapp",
+      currentMessageId: "wa-msg-123",
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.replyToId).toBe("wa-msg-123");
   });
 });
