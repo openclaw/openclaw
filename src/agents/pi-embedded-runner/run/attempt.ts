@@ -689,7 +689,13 @@ function resolveReplayToolCallName(
   if (!trimmed || trimmed.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS || /\s/.test(trimmed)) {
     return null;
   }
-  return trimmed;
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return trimmed;
+  }
+  return (
+    resolveExactAllowedToolName(trimmed, allowedToolNames) ??
+    resolveStructuredAllowedToolName(trimmed, allowedToolNames)
+  );
 }
 
 function sanitizeReplayToolCallInputs(
@@ -717,22 +723,23 @@ function sanitizeReplayToolCallInputs(
         nextContent.push(block);
         continue;
       }
+      const replayBlock = block as ReplayToolCallBlock;
 
-      if (!replayToolCallHasInput(block) || !replayToolCallNonEmptyString(block.id)) {
+      if (!replayToolCallHasInput(replayBlock) || !replayToolCallNonEmptyString(replayBlock.id)) {
         changed = true;
         messageChanged = true;
         continue;
       }
 
-      const rawName = typeof block.name === "string" ? block.name : "";
-      const resolvedName = resolveReplayToolCallName(rawName, block.id, allowedToolNames);
+      const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
+      const resolvedName = resolveReplayToolCallName(rawName, replayBlock.id, allowedToolNames);
       if (!resolvedName) {
         changed = true;
         messageChanged = true;
         continue;
       }
 
-      if (block.name !== resolvedName) {
+      if (replayBlock.name !== resolvedName) {
         nextContent.push({ ...(block as object), name: resolvedName } as typeof block);
         changed = true;
         messageChanged = true;
