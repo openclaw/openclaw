@@ -49,23 +49,6 @@ const listConfiguredWebSearchProviders = vi.hoisted(() =>
   vi.fn<(params?: { config?: OpenClawConfig }) => PluginWebSearchProviderEntry[]>(() => []),
 );
 
-function createWebSearchProviderEntry(
-  entry: Omit<
-    PluginWebSearchProviderEntry,
-    "pluginId" | "getCredentialValue" | "setCredentialValue" | "createTool"
-  > & {
-    pluginId?: string;
-  },
-): PluginWebSearchProviderEntry {
-  return {
-    ...entry,
-    pluginId: entry.pluginId ?? entry.id,
-    getCredentialValue: () => undefined,
-    setCredentialValue: () => {},
-    createTool: () => null,
-  };
-}
-
 vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
