@@ -1615,70 +1615,59 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           // complete text, or fall back to a new message (with orphan cleanup).
           // (When replyTargetDiverged the preview is cleaned up further below.)
           if (isFinal && streamMessageId && payload.text && !replyTargetDiverged) {
-            const text = core.channel.text.convertMarkdownTables(payload.text, tableMode);
-            try {
-              await patchMattermostPost(blockStreamingClient!, {
-                postId: streamMessageId,
-                message: text,
-              });
-              runtime.log?.(`stream-patch final edit ${streamMessageId}`);
-            } catch (err) {
-              logVerboseMessage(
-                `mattermost stream-patch final edit failed: ${String(err)}, sending new message`,
-              );
-              const orphanId = streamMessageId;
-              streamMessageId = null;
-              // Deliver the fallback message first. Only delete the orphaned
-              // stream post after we know the replacement was successfully sent —
-              // if delivery also fails the user keeps the partial preview rather
-              // than losing all visible output.
-              await deliverMattermostReplyPayload({
-                core,
-                cfg,
-                payload,
-                to,
-                accountId: account.accountId,
-                agentId: route.agentId,
-                replyToId: resolveMattermostReplyRootId({
-                  threadRootId: effectiveReplyToId,
-                  replyToId: payload.replyToId,
-                }),
-                textLimit,
-                tableMode,
-                sendMessage: sendMessageMattermost,
-              });
-              // Fallback succeeded — now clean up the orphaned partial.
+            const hasMedia = payload.mediaUrls?.length || payload.mediaUrl;
+            // When the payload also has media, skip the in-place patch: patching
+            // the preview with only the text and then posting captionless media
+            // separately splits a single captioned-file reply into two posts.
+            // Fall through to deliverMattermostReplyPayload which sends
+            // text+media together in the correct Mattermost format (ID=2965096969).
+            if (!hasMedia) {
+              const text = core.channel.text.convertMarkdownTables(payload.text, tableMode);
               try {
-                await deleteMattermostPost(blockStreamingClient!, orphanId);
-              } catch {
-                // Ignore — the complete message was already delivered.
+                await patchMattermostPost(blockStreamingClient!, {
+                  postId: streamMessageId,
+                  message: text,
+                });
+                runtime.log?.(`stream-patch final edit ${streamMessageId}`);
+                // Successful text-only patch. Reset streaming state and return.
+                streamMessageId = null;
+                pendingPatchText = "";
+                lastSentText = "";
+                patchSending = false;
+                return;
+              } catch (err) {
+                logVerboseMessage(
+                  `mattermost stream-patch final edit failed: ${String(err)}, sending new message`,
+                );
+                // Fall through to deliverMattermostReplyPayload below.
               }
-              return;
             }
-            // Successful final patch: reset all streaming state.
+            // Media payload or patch failure: deliver the full payload via the
+            // normal path (handles text+media together, chunking, etc.).
+            // Delete the preview only after successful delivery.
+            const orphanId = streamMessageId;
             streamMessageId = null;
             pendingPatchText = "";
             lastSentText = "";
             patchSending = false;
-            // If the payload also has media attachments, deliver them now via the
-            // normal path. The patch only updates text; deliverMattermostReplyPayload
-            // is the only code that actually uploads/sends media (ID=2965023940).
-            if (payload.mediaUrls?.length || payload.mediaUrl) {
-              await deliverMattermostReplyPayload({
-                core,
-                cfg,
-                payload: { ...payload, text: undefined },
-                to,
-                accountId: account.accountId,
-                agentId: route.agentId,
-                replyToId: resolveMattermostReplyRootId({
-                  threadRootId: effectiveReplyToId,
-                  replyToId: payload.replyToId,
-                }),
-                textLimit,
-                tableMode,
-                sendMessage: sendMessageMattermost,
-              });
+            await deliverMattermostReplyPayload({
+              core,
+              cfg,
+              payload,
+              to,
+              accountId: account.accountId,
+              agentId: route.agentId,
+              replyToId: resolveMattermostReplyRootId({
+                threadRootId: effectiveReplyToId,
+                replyToId: payload.replyToId,
+              }),
+              textLimit,
+              tableMode,
+              sendMessage: sendMessageMattermost,
+            });
+            // Delivery succeeded — clean up the orphaned preview.
+            if (orphanId) {
+              void deleteMattermostPost(blockStreamingClient!, orphanId).catch(() => {});
             }
             return;
           }
