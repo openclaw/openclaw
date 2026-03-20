@@ -190,6 +190,9 @@ export async function loadControlUiBootstrapConfig(
         : null;
     applyControlUiSeamColor(parsed.seamColor);
     setUiTimeFormatPreference(parsed.timeFormat);
+    if (parsed.title) {
+      document.title = parsed.title;
+    }
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }

@@ -997,6 +997,7 @@ export async function handleControlUiHttpRequest(
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
       seamColor: config?.ui?.seamColor,
       timeFormat: config?.agents?.defaults?.timeFormat,
+      title: config?.gateway?.controlUi?.title,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

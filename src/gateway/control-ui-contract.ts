@@ -23,4 +23,5 @@ export type ControlUiBootstrapConfig = {
   seamColor?: string;
   /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
   timeFormat?: "auto" | "12" | "24";
+  title?: string;
 };
