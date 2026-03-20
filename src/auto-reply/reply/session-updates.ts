@@ -286,8 +286,9 @@ export async function incrementCompactionCount(params: {
   if (tokensAfter != null && tokensAfter > 0) {
     updates.totalTokens = tokensAfter;
     updates.totalTokensFresh = true;
-    // Clear input/output breakdown since we only have the total estimate after compaction
-    updates.inputTokens = undefined;
+    // Set inputTokens to the post-compaction estimate so the UI context
+    // percentage reflects the compacted context size, not the pre-compaction value.
+    updates.inputTokens = tokensAfter;
     updates.outputTokens = undefined;
     updates.cacheRead = undefined;
     updates.cacheWrite = undefined;

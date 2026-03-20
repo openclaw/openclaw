@@ -300,7 +300,7 @@ async function executeUsage(
     if (!session) {
       return { content: "No active session." };
     }
-    const input = session.inputTokens ?? 0;
+    const input = session.inputTokens ?? session.totalTokens ?? 0;
     const output = session.outputTokens ?? 0;
     const total = session.totalTokens ?? input + output;
     const ctx = session.contextTokens ?? 0;

@@ -58,6 +58,7 @@ export type SessionListRow = {
   updatedAt?: number | null;
   sessionId?: string;
   model?: string;
+  inputTokens?: number;
   contextTokens?: number | null;
   totalTokens?: number | null;
   estimatedCostUsd?: number;

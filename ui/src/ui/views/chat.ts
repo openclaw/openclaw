@@ -255,7 +255,9 @@ function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ) {
-  const used = session?.inputTokens ?? 0;
+  // After compaction inputTokens is cleared; fall back to totalTokens which
+  // reflects the post-compaction context estimate.
+  const used = session?.inputTokens ?? session?.totalTokens ?? 0;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (!used || !limit) {
     return nothing;
