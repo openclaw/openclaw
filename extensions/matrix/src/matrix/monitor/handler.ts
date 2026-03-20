@@ -836,7 +836,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         channel: "matrix",
         accountId: _route.accountId,
       });
-      const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+      const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, _route.agentId);
       let finalReplyDeliveryFailed = false;
       let nonFinalReplyDeliveryFailed = false;
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
@@ -922,13 +922,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       });
       if (finalReplyDeliveryFailed) {
         logVerboseMessage(
-          `matrix: final reply delivery failed room=${roomId} id=${messageId}; leaving event uncommitted`,
+          `matrix: final reply delivery failed room=${roomId} id=${_messageId}; leaving event uncommitted`,
         );
         return;
       }
       if (!queuedFinal && nonFinalReplyDeliveryFailed) {
         logVerboseMessage(
-          `matrix: non-final reply delivery failed room=${roomId} id=${messageId}; leaving event uncommitted`,
+          `matrix: non-final reply delivery failed room=${roomId} id=${_messageId}; leaving event uncommitted`,
         );
         return;
       }
