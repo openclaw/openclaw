@@ -221,7 +221,7 @@ interface OllamaChatResponse {
 type InputContentPart =
   | { type: "text"; text: string }
   | { type: "image"; data: string }
-  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }
+  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> | string }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> };
 
 function extractTextContent(content: unknown): string {
@@ -246,6 +246,27 @@ function extractOllamaImages(content: unknown): string[] {
     .map((part) => part.data);
 }
 
+/**
+ * Normalize tool call arguments to a plain object.
+ *
+ * OpenAI-compatible providers serialize `arguments` as a JSON string, while
+ * Ollama's native API expects a plain object in the `function.arguments` field.
+ * Passing a string directly causes Ollama to fail with a JSON parse error
+ * ("Value looks like object, but can't find closing '}' symbol").
+ */
+function normalizeToolCallArguments(
+  args: Record<string, unknown> | string | undefined | null,
+): Record<string, unknown> {
+  if (typeof args === "string") {
+    try {
+      return JSON.parse(args) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  return args ?? {};
+}
+
 function extractToolCalls(content: unknown): OllamaToolCall[] {
   if (!Array.isArray(content)) {
     return [];
@@ -254,9 +275,14 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
-      result.push({ function: { name: part.name, arguments: part.arguments } });
+      result.push({
+        function: {
+          name: part.name,
+          arguments: normalizeToolCallArguments(part.arguments),
+        },
+      });
     } else if (part.type === "tool_use") {
-      result.push({ function: { name: part.name, arguments: part.input } });
+      result.push({ function: { name: part.name, arguments: part.input ?? {} } });
     }
   }
   return result;
