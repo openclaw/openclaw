@@ -105,7 +105,13 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const bins = new Set<string>();
     for (const agentId of agentIds) {
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-      const entries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg, agentId });
+      const entries = loadWorkspaceSkillEntries(workspaceDir, {
+        config: cfg,
+        agentId,
+        // skills.bins powers remote node-host trust bootstrap; keep policy scoping but
+        // avoid host-local eligibility pruning so remote-only bins are preserved.
+        applyEligibility: false,
+      });
       for (const bin of collectSkillBins(entries)) {
         bins.add(bin);
       }

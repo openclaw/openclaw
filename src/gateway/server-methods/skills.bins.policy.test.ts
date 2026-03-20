@@ -17,8 +17,10 @@ vi.mock("../../agents/skills.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/skills.js")>();
   return {
     ...actual,
-    loadWorkspaceSkillEntries: (workspaceDir: string, options?: { agentId?: string }) =>
-      loadWorkspaceSkillEntriesMock(workspaceDir, options),
+    loadWorkspaceSkillEntries: (
+      workspaceDir: string,
+      options?: { agentId?: string; applyEligibility?: boolean },
+    ) => loadWorkspaceSkillEntriesMock(workspaceDir, options),
   };
 });
 
@@ -70,10 +72,12 @@ describe("skills.bins", () => {
     expect(loadWorkspaceSkillEntriesMock).toHaveBeenCalledWith("/tmp/ops", {
       config: {},
       agentId: "ops",
+      applyEligibility: false,
     });
     expect(loadWorkspaceSkillEntriesMock).toHaveBeenCalledWith("/tmp/qa", {
       config: {},
       agentId: "qa",
+      applyEligibility: false,
     });
     expect(payload).toEqual({ bins: ["git", "jq"] });
   });

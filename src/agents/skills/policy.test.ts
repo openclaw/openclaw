@@ -78,6 +78,31 @@ describe("skills policy resolution", () => {
     });
   });
 
+  it("does not conflate separator-free names with dashed aliases", () => {
+    const resolved = resolveEffectiveSkillPolicy(
+      {
+        skills: {
+          policy: {
+            globalEnabled: ["foobar", "foo.bar"],
+            agentOverrides: {
+              ops: {
+                disabled: ["foo-bar"],
+              },
+            },
+          },
+        },
+      },
+      "ops",
+    );
+
+    expect(resolved).toMatchObject({
+      agentId: "ops",
+      globalEnabled: ["foo.bar", "foobar"],
+      agentDisabled: ["foo-bar"],
+      effective: ["foobar"],
+    });
+  });
+
   it("matches entries by skillKey or skill name", () => {
     const resolved = resolveEffectiveSkillPolicy(
       {

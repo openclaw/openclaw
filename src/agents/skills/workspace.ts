@@ -21,6 +21,7 @@ import {
 } from "./frontmatter.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import {
+  canonicalizeSkillAlias,
   isSkillAllowedByPolicy,
   resolveEffectiveSkillPolicy,
   type EffectiveSkillPolicy,
@@ -76,12 +77,18 @@ function filterSkillEntries(
   skillFilter?: string[],
   eligibility?: SkillEligibilityContext,
   agentId?: string,
+  applyEligibility = true,
 ): { entries: SkillEntry[]; policy?: EffectiveSkillPolicy } {
+  if (config?.skills?.policy && typeof config.skills.policy === "object") {
+    assertNoCanonicalSkillAliasCollisions(entries);
+  }
   const policy =
     typeof agentId === "string" && agentId.trim().length > 0
       ? resolveEffectiveSkillPolicy(config, agentId)
       : undefined;
-  let filtered = entries.filter((entry) => shouldIncludeSkill({ entry, config, eligibility }));
+  let filtered = applyEligibility
+    ? entries.filter((entry) => shouldIncludeSkill({ entry, config, eligibility }))
+    : entries;
   if (policy) {
     filtered = filtered.filter((entry) => isSkillAllowedByPolicy(entry, policy));
   }
@@ -99,6 +106,73 @@ function filterSkillEntries(
     );
   }
   return { entries: filtered, policy };
+}
+
+type CanonicalSkillAliasOwner = {
+  skillName: string;
+  source: string;
+  filePath: string;
+  identifiers: Set<string>;
+};
+
+function assertNoCanonicalSkillAliasCollisions(entries: SkillEntry[]): void {
+  const ownersByAlias = new Map<string, Map<string, CanonicalSkillAliasOwner>>();
+  for (const entry of entries) {
+    const identifiers = new Set<string>([entry.skill.name]);
+    const skillKey = entry.metadata?.skillKey?.trim();
+    if (skillKey) {
+      identifiers.add(skillKey);
+    }
+    for (const identifier of identifiers) {
+      const alias = canonicalizeSkillAlias(identifier);
+      if (!alias) {
+        continue;
+      }
+      let owners = ownersByAlias.get(alias);
+      if (!owners) {
+        owners = new Map();
+        ownersByAlias.set(alias, owners);
+      }
+      let owner = owners.get(entry.skill.filePath);
+      if (!owner) {
+        owner = {
+          skillName: entry.skill.name,
+          source: entry.skill.source,
+          filePath: entry.skill.filePath,
+          identifiers: new Set<string>(),
+        };
+        owners.set(entry.skill.filePath, owner);
+      }
+      owner.identifiers.add(identifier);
+    }
+  }
+
+  const collisions: string[] = [];
+  for (const [alias, ownersByPath] of ownersByAlias.entries()) {
+    if (ownersByPath.size <= 1) {
+      continue;
+    }
+    const owners = [...ownersByPath.values()]
+      .sort((left, right) => {
+        const byName = left.skillName.localeCompare(right.skillName);
+        return byName !== 0 ? byName : left.filePath.localeCompare(right.filePath);
+      })
+      .map(
+        (owner) =>
+          `${owner.skillName} (${[...owner.identifiers].toSorted().join(", ")}) [${owner.source}] @ ${owner.filePath}`,
+      );
+    collisions.push(`"${alias}" => ${owners.join("; ")}`);
+  }
+
+  if (collisions.length === 0) {
+    return;
+  }
+
+  collisions.sort((left, right) => left.localeCompare(right));
+  throw new Error(
+    "Skill alias collision detected for skills.policy. Rename colliding skills or assign distinct openclaw.skillKey values.\n" +
+      collisions.map((line) => `- ${line}`).join("\n"),
+  );
 }
 
 const SKILL_COMMAND_MAX_LENGTH = 32;
@@ -751,6 +825,7 @@ export function loadWorkspaceSkillEntries(
     bundledSkillsDir?: string;
     agentId?: string;
     applyPolicy?: boolean;
+    applyEligibility?: boolean;
   },
 ): SkillEntry[] {
   const entries = loadSkillEntries(workspaceDir, opts);
@@ -758,7 +833,14 @@ export function loadWorkspaceSkillEntries(
   if (!opts?.config || !opts.agentId || opts.applyPolicy === false) {
     return entries;
   }
-  return filterSkillEntries(entries, opts.config, undefined, undefined, opts.agentId).entries;
+  return filterSkillEntries(
+    entries,
+    opts.config,
+    undefined,
+    undefined,
+    opts.agentId,
+    opts.applyEligibility !== false,
+  ).entries;
 }
 
 function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): string {

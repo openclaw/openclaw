@@ -11,11 +11,8 @@ function normalizeSkillNames(input: unknown): string[] {
   return Array.from(new Set(normalizeStringEntries(input))).toSorted();
 }
 
-function normalizeSkillAlias(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s._-]+/g, "");
+export function canonicalizeSkillAlias(value: string): string {
+  return value.trim().toLowerCase().replace(/[._]/g, "-");
 }
 
 function normalizeAgentOverride(input: unknown): {
@@ -57,10 +54,10 @@ function buildEffectiveSkills(params: {
   disabled: string[];
 }): string[] {
   const disabled = new Set(params.disabled);
-  const disabledAliases = new Set(params.disabled.map((name) => normalizeSkillAlias(name)));
+  const disabledAliases = new Set(params.disabled.map((name) => canonicalizeSkillAlias(name)));
   const effective = new Set<string>();
   for (const name of params.globalEnabled) {
-    if (!disabled.has(name) && !disabledAliases.has(normalizeSkillAlias(name))) {
+    if (!disabled.has(name) && !disabledAliases.has(canonicalizeSkillAlias(name))) {
       effective.add(name);
     }
   }
