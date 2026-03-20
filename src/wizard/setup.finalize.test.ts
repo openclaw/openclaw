@@ -154,6 +154,21 @@ function createRuntime(): RuntimeEnv {
   };
 }
 
+function createWebSearchProviderEntry(
+  provider: Pick<
+    PluginWebSearchProviderEntry,
+    "id" | "label" | "hint" | "envVars" | "placeholder" | "signupUrl" | "credentialPath"
+  >,
+): PluginWebSearchProviderEntry {
+  return {
+    pluginId: `plugin-${provider.id}`,
+    getCredentialValue: () => undefined,
+    setCredentialValue: () => {},
+    createTool: () => null,
+    ...provider,
+  };
+}
+
 function expectFirstOnboardingInstallPlanCallOmitsToken() {
   const [firstArg] =
     (buildGatewayInstallPlan.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
@@ -414,7 +429,7 @@ describe("finalizeSetupWizard", () => {
 
   it("only reports legacy auto-detect for runtime-visible providers", async () => {
     listConfiguredWebSearchProviders.mockReturnValue([
-      {
+      createWebSearchProviderEntry({
         id: "perplexity",
         label: "Perplexity Search",
         hint: "Fast web answers",
@@ -422,7 +437,7 @@ describe("finalizeSetupWizard", () => {
         placeholder: "pplx-...",
         signupUrl: "https://www.perplexity.ai/",
         credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
-      },
+      }),
     ]);
     hasExistingKey.mockImplementation((_config, provider) => provider === "perplexity");
 
@@ -463,7 +478,7 @@ describe("finalizeSetupWizard", () => {
 
   it("uses configured provider resolution instead of the active runtime registry", async () => {
     listConfiguredWebSearchProviders.mockReturnValue([
-      {
+      createWebSearchProviderEntry({
         id: "firecrawl",
         label: "Firecrawl Search",
         hint: "Structured results",
@@ -471,7 +486,7 @@ describe("finalizeSetupWizard", () => {
         placeholder: "fc-...",
         signupUrl: "https://www.firecrawl.dev/",
         credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
-      },
+      }),
     ]);
     hasExistingKey.mockImplementation((_config, provider) => provider === "firecrawl");
 
