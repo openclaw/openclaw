@@ -947,29 +947,30 @@ Now write the full SUMMARY.md document with the sections above:`;
       const currentSessionBasename = currentSessionFile
         ? path.basename(currentSessionFile)
         : undefined;
+      // Also include .jsonl.reset.* files (sessions preserved on /new or /reset)
       const jsonlFiles = files
-        .filter((f) => f.endsWith(".jsonl") && f !== currentSessionBasename)
+        .filter(
+          (f) =>
+            (f.endsWith(".jsonl") || f.includes(".jsonl.reset.")) && f !== currentSessionBasename,
+        )
         .map((f) => path.join(sessionsDir, f));
       if (currentSessionBasename) {
         this.log(`   Excluding current session: ${currentSessionBasename}`);
       }
 
-      // Sort by mtime descending (newest first), skip empty/stub sessions, take top 5 non-empty
+      // Sort by mtime descending (newest first), skip empty/stub sessions.
+      // Strategy: include ALL non-empty sessions from the last 6h, then fill up to 5 with older ones.
       const recentFiles = [...jsonlFiles].map(async (f) => ({ path: f, stat: await fs.stat(f) }));
       const settledFiles = await Promise.all(recentFiles);
-      const candidateFiles = settledFiles
-        .toSorted((a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime())
-        .slice(0, 20); // read up to 20 candidates to find 5 with real content
+      const allSorted = settledFiles.toSorted(
+        (a, b) => b.stat.mtime.getTime() - a.stat.mtime.getTime(),
+      );
+      const sixHoursAgo = Date.now() - 6 * 60 * 60 * 1000;
 
-      // Filter out sessions with no user messages (e.g. empty restart sessions)
-      const nonEmptyFiles: typeof candidateFiles = [];
-      for (const f of candidateFiles) {
-        if (nonEmptyFiles.length >= 5) {
-          break;
-        }
+      const hasUserMessages = async (filePath: string): Promise<boolean> => {
         try {
-          const raw = await fs.readFile(f.path, "utf-8");
-          const hasUserMsg = raw.split("\n").some((line) => {
+          const raw = await fs.readFile(filePath, "utf-8");
+          return raw.split("\n").some((line) => {
             const t = line.trim();
             if (!t) {
               return false;
@@ -981,11 +982,29 @@ Now write the full SUMMARY.md document with the sections above:`;
               return false;
             }
           });
-          if (hasUserMsg) {
-            nonEmptyFiles.push(f);
-          }
         } catch {
-          // skip unreadable
+          return false;
+        }
+      };
+
+      // Include all non-empty sessions from last 6h
+      const recentWindow = allSorted.filter((f) => f.stat.mtime.getTime() >= sixHoursAgo);
+      const olderCandidates = allSorted.filter((f) => f.stat.mtime.getTime() < sixHoursAgo);
+
+      const recentNonEmpty = (
+        await Promise.all(recentWindow.map(async (f) => ({ f, ok: await hasUserMessages(f.path) })))
+      )
+        .filter((r) => r.ok)
+        .map((r) => r.f);
+
+      // Fill remaining slots (up to 5 total) with older non-empty sessions
+      const nonEmptyFiles = [...recentNonEmpty];
+      for (const f of olderCandidates) {
+        if (nonEmptyFiles.length >= 5) {
+          break;
+        }
+        if (await hasUserMessages(f.path)) {
+          nonEmptyFiles.push(f);
         }
       }
       const sortedFiles = nonEmptyFiles;
