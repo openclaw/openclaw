@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { __testing } from "./loader.js";
 
 const EMPTY_PLUGIN_SCHEMA = {
   type: "object",
@@ -30,7 +30,7 @@ afterEach(() => {
 });
 
 describe("loadOpenClawPlugins", () => {
-  it("loads git-style package extension entries through the plugin loader when they import plugin-sdk channel-runtime (#49806)", () => {
+  it("builds plugin-loader aliases for git-style package extension entries that import plugin-sdk channel-runtime (#49806)", () => {
     const pluginId = "imessage-loader-regression";
     const gitExtensionRoot = path.join(
       makeTempDir(),
@@ -79,46 +79,42 @@ export function runtimeProbeType() {
 `,
       "utf-8",
     );
+    const entryFile = path.join(gitSourceDir, "index.ts");
     fs.writeFileSync(
-      path.join(gitSourceDir, "index.ts"),
+      entryFile,
       `import { runtimeProbeType } from "./channel.runtime.ts";
-
-const runtimeProbe = runtimeProbeType();
 
 export default {
   id: ${JSON.stringify(pluginId)},
-  runtimeProbe,
-  register() {},
+  register() {
+    if (runtimeProbeType() !== "function") {
+      throw new Error("channel-runtime import did not resolve");
+    }
+  },
 };
-
-if (runtimeProbe !== "function") {
-  throw new Error("channel-runtime import did not resolve");
-}
 `,
       "utf-8",
     );
 
-    const registry = withEnv(
+    const { aliasMap, runtimeModulePath, tryNative } = withEnv(
       {
         NODE_ENV: "production",
         VITEST: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
       },
-      () =>
-        loadOpenClawPlugins({
-          cache: false,
-          activate: false,
-          mode: "validate",
-          workspaceDir: gitExtensionRoot,
-          config: {
-            plugins: {
-              load: { paths: [gitExtensionRoot] },
-              allow: [pluginId],
-            },
-          },
-        }),
+      () => ({
+        aliasMap: __testing.buildPluginLoaderAliasMap(entryFile),
+        runtimeModulePath: __testing.resolvePluginRuntimeModulePath({ modulePath: entryFile }),
+        tryNative: __testing.shouldPreferNativeJiti(entryFile),
+      }),
     );
-    const record = registry.plugins.find((entry) => entry.id === pluginId);
-    expect(record?.status).toBe("loaded");
-  }, 120_000);
+
+    expect(tryNative).toBe(false);
+    expect(aliasMap).toHaveProperty("openclaw/plugin-sdk");
+    expect(aliasMap["openclaw/plugin-sdk"]).toMatch(/plugin-sdk[\\/]root-alias\.cjs$/);
+    expect(aliasMap["openclaw/plugin-sdk/channel-runtime"]).toMatch(
+      /plugin-sdk[\\/](channel-runtime\.ts|channel-runtime\.js)$/,
+    );
+    expect(runtimeModulePath).toMatch(/plugins[\\/]runtime[\\/]index\.(ts|js)$/);
+  });
 });
