@@ -18,6 +18,7 @@ Supports direct messages and groups with text, images, and files.
 - A local PyWxDump checkout on the same host as the gateway.
 - A readable WeChat key file and decrypted database access prepared for PyWxDump.
 - `xdotool` available on the gateway host.
+- `silk-python` installed in the same Python environment as PyWxDump when you want SILK voice messages to reach ASR.
 
 ## Quick setup
 
@@ -270,6 +271,8 @@ Inbound rich media is converted before the OpenClaw agent sees it:
 - Links: URL extraction plus optional local document bundle generation through `link_doc_hook.py`
 
 The converted summary is appended to the inbound body together with useful local artifact paths, so the agent can both read the extracted text and access the downloaded file when needed.
+
+For Linux desktop WeChat voice messages, the most common missing dependency is `silk-python` in the PyWxDump virtual environment. When that dependency is missing, `voiceAsr` can still be enabled in config, but SILK attachments cannot be decoded into WAV for the ASR service. `openclaw channels status --probe` now reports this as `silk_python_available`.
 
 ## Search tools
 

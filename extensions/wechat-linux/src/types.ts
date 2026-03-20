@@ -143,6 +143,7 @@ export type BridgeProbe = {
   image_analysis?: boolean;
   video_analysis?: boolean;
   voice_asr?: boolean;
+  silk_python_available?: boolean | null;
   link_docs?: boolean;
   error?: string;
 };

@@ -637,6 +637,7 @@ def probe_command(args: argparse.Namespace) -> int:
         modules = ensure_pywxdump_importable(args.pywxdump_root)
         db_dir = resolve_db_dir(modules, args)
         output_dir = expand_path(args.output_dir or DEFAULT_OUTPUT_DIR)
+        silk_python_available = bool(getattr(modules["monitor"], "HAS_PYSILK", False))
         emit_json(
             {
                 "ok": True,
@@ -659,6 +660,7 @@ def probe_command(args: argparse.Namespace) -> int:
                 "image_analysis": resolve_bool_arg(args, "image_analysis", True),
                 "video_analysis": resolve_bool_arg(args, "video_analysis", True),
                 "voice_asr": resolve_bool_arg(args, "voice_asr", True),
+                "silk_python_available": silk_python_available,
                 "link_docs": resolve_bool_arg(args, "link_docs", True),
             }
         )
@@ -685,6 +687,7 @@ def probe_command(args: argparse.Namespace) -> int:
                 "image_analysis": resolve_bool_arg(args, "image_analysis", True),
                 "video_analysis": resolve_bool_arg(args, "video_analysis", True),
                 "voice_asr": resolve_bool_arg(args, "voice_asr", True),
+                "silk_python_available": None,
                 "link_docs": resolve_bool_arg(args, "link_docs", True),
                 "error": str(exc),
             }
