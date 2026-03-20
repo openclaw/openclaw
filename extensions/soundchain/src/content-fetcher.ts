@@ -99,17 +99,10 @@ async function safeFetch(url: string, options?: RequestInit, hops = 0): Promise<
     // DNS failure — proceed with hostname (will fail at fetch if unreachable)
   }
 
-  // Pin to resolved IP to prevent DNS rebinding between check and fetch
-  const fetchUrl = resolvedIp
-    ? url.replace(parsed.hostname, resolvedIp)
-    : url;
-  const fetchHeaders = resolvedIp
-    ? { ...((options?.headers as Record<string, string>) ?? {}), Host: parsed.hostname }
-    : (options?.headers as Record<string, string> | undefined);
-
-  const res = await fetch(fetchUrl, {
+  // DNS validated — proceed with original URL (IP pinning breaks TLS/SNI)
+  // The validation + short timeout window is sufficient for non-targeted SSRF
+  const res = await fetch(url, {
     ...options,
-    headers: fetchHeaders,
     redirect: "manual",
     signal: options?.signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
