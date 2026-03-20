@@ -303,12 +303,13 @@ describe("fetchWithSsrFGuard hardening", () => {
 
   it("blocks redirect to a URL using credentials to obscure a private host", async () => {
     const lookupFn = createPublicLookup();
-    await expectRedirectFailure({
+    const fetchImpl = await expectRedirectFailure({
       url: "https://public.example/start",
       responses: [redirectResponse("http://public@127.0.0.1:6379/")],
       expectedError: /private|internal|blocked/i,
       lookupFn,
     });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("ignores env proxy by default to preserve DNS-pinned destination binding", async () => {
