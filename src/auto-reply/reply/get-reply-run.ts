@@ -178,6 +178,10 @@ type RunPreparedReplyParams = {
   storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
+  configuredThinkLevel?: ThinkLevel | "auto";
+  generatingSource?: import("../../infra/generating-metadata.js").GeneratingSource;
+  autoReasoningEnabled?: boolean;
+  autoReasoningConfig?: import("../../config/types.agent-defaults.js").AutoReasoningConfig;
 };
 
 export async function runPreparedReply(

@@ -5,6 +5,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { GeneratingSelector, GeneratingSource } from "../../infra/generating-metadata.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -63,6 +64,11 @@ export type ReplyDirectiveContinuation = {
     cap?: number;
     dropPolicy?: InlineDirectives["dropPolicy"];
   };
+  configuredThinkLevel?: ThinkLevel | "auto";
+  generatingSource?: GeneratingSource;
+  autoReasoningEnabled?: boolean;
+  generatingSelector?: GeneratingSelector;
+  emitGeneratingField?: boolean;
 };
 
 function resolveExecOverrides(params: {
