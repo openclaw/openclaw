@@ -1,7 +1,12 @@
 import { CHANNEL_IDS } from "../channels/registry.js";
 import { VERSION } from "../version.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
-import { applySensitiveHints, buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
+import {
+  applySensitiveHints,
+  buildBaseHints,
+  mapSensitivePaths,
+  registerSchemaSensitivePaths,
+} from "./schema.hints.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -329,6 +334,17 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   });
   schema.title = "OpenClawConfig";
   const hints = applyDerivedTags(mapSensitivePaths(OpenClawSchema, "", buildBaseHints()));
+
+  // Register schema-derived sensitive paths so that isSensitiveConfigPath()
+  // can consult them for RBAC redaction (not just name-heuristic patterns).
+  const schemaPaths = new Set<string>();
+  for (const [path, hint] of Object.entries(hints)) {
+    if (hint.sensitive) {
+      schemaPaths.add(path);
+    }
+  }
+  registerSchemaSensitivePaths(schemaPaths);
+
   const next = {
     schema: stripChannelSchema(schema),
     uiHints: hints,

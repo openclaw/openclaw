@@ -111,6 +111,25 @@ const NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES = SENSITIVE_KEY_WHITELIST_SUFF
 
 const SENSITIVE_PATTERNS = [/token$/i, /password/i, /secret/i, /api.?key/i];
 
+/**
+ * Schema-derived sensitive paths populated by `registerSchemaSensitivePaths`.
+ * These come from Zod fields explicitly marked via `.register(sensitive)` and
+ * are discovered by `mapSensitivePaths` when the schema is first built.
+ * This set supplements the name-heuristic patterns so that fields like
+ * `cron.webhookToken` or `gateway.local.token` are caught even if the
+ * heuristic regex alone wouldn't flag them (and vice-versa).
+ */
+let schemaSensitivePaths: ReadonlySet<string> | null = null;
+
+/**
+ * Register the set of config paths that the Zod schema marks as sensitive
+ * (via the `sensitive` registry). Called once from `schema.ts` after
+ * `mapSensitivePaths` produces the hints map.
+ */
+export function registerSchemaSensitivePaths(paths: ReadonlySet<string>): void {
+  schemaSensitivePaths = paths;
+}
+
 function isWhitelistedSensitivePath(path: string): boolean {
   const lowerPath = path.toLowerCase();
   return NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
@@ -120,8 +139,39 @@ function matchesSensitivePattern(path: string): boolean {
   return SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
 }
 
+/**
+ * Check whether a config path should be treated as sensitive for redaction.
+ *
+ * Two sources are consulted:
+ * 1. **Name heuristics** — regex patterns matching common secret key names
+ *    (token, password, secret, apiKey) minus whitelisted suffixes.
+ * 2. **Schema metadata** — paths derived from Zod fields explicitly marked
+ *    with `.register(sensitive)`. These are registered at startup via
+ *    `registerSchemaSensitivePaths`.
+ */
 export function isSensitiveConfigPath(path: string): boolean {
-  return !isWhitelistedSensitivePath(path) && matchesSensitivePattern(path);
+  if (isWhitelistedSensitivePath(path)) {
+    return false;
+  }
+  if (matchesSensitivePattern(path)) {
+    return true;
+  }
+  // Check schema-derived sensitivity (exact match or wildcard ancestor match)
+  if (schemaSensitivePaths) {
+    if (schemaSensitivePaths.has(path)) {
+      return true;
+    }
+    // Support wildcard paths from schema (e.g. "plugins.*.apiKey"):
+    // walk up the dot-path and check for wildcard patterns.
+    const segments = path.split(".");
+    for (let i = segments.length - 1; i >= 1; i--) {
+      const wildcardPath = [...segments.slice(0, i), "*", ...segments.slice(i + 1)].join(".");
+      if (schemaSensitivePaths.has(wildcardPath)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function buildBaseHints(): ConfigUiHints {

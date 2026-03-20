@@ -4,6 +4,7 @@ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/intern
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
+import { rejectGuestCommand } from "./command-gates.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
@@ -187,6 +188,17 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     surface: params.command.surface,
     commandSource: params.ctx.CommandSource,
   });
+
+  // Guest role: "AI only, no commands" — block all slash commands early.
+  if (allowTextCommands && params.command.commandBodyNormalized.startsWith("/")) {
+    const guestBlock = rejectGuestCommand(
+      params,
+      params.command.commandBodyNormalized.split(" ")[0],
+    );
+    if (guestBlock) {
+      return guestBlock;
+    }
+  }
 
   for (const handler of HANDLERS) {
     const result = await handler(params, allowTextCommands);

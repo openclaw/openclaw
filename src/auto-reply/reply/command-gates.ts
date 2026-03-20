@@ -39,6 +39,29 @@ export function rejectNonAdminCommand(
   };
 }
 
+/**
+ * Gate that blocks guest users from running ANY slash command.
+ * The "guest" role contract is "AI only, no commands" — guests may only
+ * send messages and receive AI replies.
+ * Returns a result (blocking the command) when the sender is a guest;
+ * returns null when the sender is allowed to proceed.
+ */
+export function rejectGuestCommand(
+  params: HandleCommandsParams,
+  commandLabel: string,
+): CommandHandlerResult | null {
+  if (params.command.role !== "guest") {
+    return null;
+  }
+  logVerbose(
+    `Blocking ${commandLabel} from guest sender: ${params.command.senderId || "<unknown>"}`,
+  );
+  return {
+    shouldContinue: false,
+    reply: { text: `⛔ Commands are not available for guest users.` },
+  };
+}
+
 export function buildDisabledCommandReply(params: {
   label: string;
   configKey: CommandFlagKey;
