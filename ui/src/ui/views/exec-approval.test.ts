@@ -55,7 +55,9 @@ describe("exec approval modal", () => {
     expect(actions).not.toBeNull();
     expect(card?.children[1]).toBe(body);
     expect(card?.lastElementChild).toBe(actions);
-    expect(body?.querySelector(".exec-approval-command")?.textContent).toContain("very long command");
+    expect(body?.querySelector(".exec-approval-command")?.textContent).toContain(
+      "very long command",
+    );
     expect(body?.querySelector(".exec-approval-error")?.textContent).toContain("Approval failed");
   });
 
