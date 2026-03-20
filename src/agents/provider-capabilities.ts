@@ -35,6 +35,10 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
 };
 
 const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
+  "anthropic-vertex": {
+    providerFamily: "anthropic",
+    dropThinkingBlockModelHints: ["claude"],
+  },
   "amazon-bedrock": {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],

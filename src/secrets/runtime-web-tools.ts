@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import {
-  BUNDLED_WEB_SEARCH_PLUGIN_IDS,
+  listBundledWebSearchPluginIds,
   resolveBundledWebSearchPluginId,
 } from "../plugins/bundled-web-search.js";
 import type {
@@ -82,7 +82,7 @@ function hasCustomWebSearchPluginRisk(config: OpenClawConfig): boolean {
     return true;
   }
 
-  const bundledPluginIds = new Set<string>(BUNDLED_WEB_SEARCH_PLUGIN_IDS);
+  const bundledPluginIds = new Set<string>(listBundledWebSearchPluginIds());
   const hasNonBundledPluginId = (pluginId: string) => !bundledPluginIds.has(pluginId.trim());
   if (Array.isArray(plugins.allow) && plugins.allow.some(hasNonBundledPluginId)) {
     return true;
