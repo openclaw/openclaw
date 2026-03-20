@@ -3,7 +3,7 @@ import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { shouldHandleTextCommands } from "../commands-registry.js";
+import { getCommandDetection, shouldHandleTextCommands } from "../commands-registry.js";
 import { rejectGuestCommand } from "./command-gates.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import { handleApproveCommand } from "./commands-approve.js";
@@ -189,12 +189,16 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     commandSource: params.ctx.CommandSource,
   });
 
-  for (const handler of HANDLERS) {
-    const result = await handler(params, allowTextCommands);
-    if (result) {
-      // Guest role: "AI only, no commands" — block recognized commands but
-      // let non-command messages (e.g. "/usr/bin/env", "!important") fall
-      // through to the AI.
+  // Guest role: "AI only, no commands" — block recognized commands BEFORE
+  // handler execution so side-effect-producing handlers (session activation,
+  // stop, abort, etc.) never run for guests.  Non-command messages (e.g.
+  // "/usr/bin/env", "!important") still fall through to the AI because the
+  // detection check only matches registered command aliases.
+  if (params.command.role === "guest") {
+    const normalized = params.command.commandBodyNormalized.trim().toLowerCase();
+    const detection = getCommandDetection(params.cfg);
+    const isKnownCommand = detection.exact.has(normalized) || detection.regex.test(normalized);
+    if (isKnownCommand) {
       const guestBlock = rejectGuestCommand(
         params,
         params.command.commandBodyNormalized.split(" ")[0],
@@ -202,6 +206,12 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       if (guestBlock) {
         return guestBlock;
       }
+    }
+  }
+
+  for (const handler of HANDLERS) {
+    const result = await handler(params, allowTextCommands);
+    if (result) {
       return result;
     }
   }

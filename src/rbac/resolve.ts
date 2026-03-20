@@ -8,23 +8,37 @@ const IMPLICIT_DEFAULT_ROLE: RbacRole = "user";
 
 const VALID_ROLES = new Set<RbacRole>(["admin", "user", "guest"]);
 
+// All known extension channel IDs (those registered via api.registerChannel
+// in each extension's index.ts).  Keep in sync when adding new channel extensions.
+const EXTENSION_CHANNEL_IDS: readonly string[] = [
+  "bluebubbles",
+  "feishu",
+  "line",
+  "matrix",
+  "mattermost",
+  "msteams",
+  "nextcloud-talk",
+  "nostr",
+  "synology-chat",
+  "tlon",
+  "twitch",
+  "voice-call",
+  "voicecall", // alias used by voice-call extension
+  "web",
+  "zalo",
+  "zalouser",
+];
+
 /**
  * Set of known channel prefixes used to distinguish channel-qualified config
  * entries (e.g. "telegram:12345") from IDs that happen to contain colons
  * (e.g. Signal UUIDs "uuid:abc-def" or Matrix IDs "@user:server").
  *
- * Includes core channels plus common extension channel IDs.
+ * Combines core channels from CHANNEL_IDS with extension channel IDs.
  */
 const KNOWN_CHANNEL_PREFIXES: ReadonlySet<string> = new Set<string>([
   ...CHANNEL_IDS.map((id) => id.toLowerCase()),
-  // Extension channels not in CHANNEL_IDS
-  "matrix",
-  "msteams",
-  "zalo",
-  "zalouser",
-  "web",
-  "voice-call",
-  "voicecall",
+  ...EXTENSION_CHANNEL_IDS,
 ]);
 
 /**
