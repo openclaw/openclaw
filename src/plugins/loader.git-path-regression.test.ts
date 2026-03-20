@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { __testing } from "./loader.js";
 
@@ -70,9 +71,9 @@ export const copiedRuntimeMarker = {
     );
 
     const copiedChannelRuntime = path.join(copiedExtensionRoot, "src", "channel.runtime.ts");
-    const jitiBasePath = jitiBaseFile;
+    const jitiBaseUrl = pathToFileURL(jitiBaseFile).href;
     const createJiti = await getCreateJiti();
-    const withoutAlias = createJiti(jitiBasePath, {
+    const withoutAlias = createJiti(jitiBaseUrl, {
       ...__testing.buildPluginLoaderJitiOptions({}),
       tryNative: false,
     });
@@ -80,7 +81,7 @@ export const copiedRuntimeMarker = {
     // should exercise the same seam instead of Jiti's async import helper.
     expect(() => withoutAlias(copiedChannelRuntime)).toThrow();
 
-    const withAlias = createJiti(jitiBasePath, {
+    const withAlias = createJiti(jitiBaseUrl, {
       ...__testing.buildPluginLoaderJitiOptions({
         "openclaw/plugin-sdk/channel-runtime": copiedChannelRuntimeShim,
       }),
