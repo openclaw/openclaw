@@ -9,8 +9,13 @@ import {
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectTelegramAccount } from "./account-inspect.js";
-import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+import {
+  listTelegramAccountIds,
+  mergeTelegramAccountConfig,
+  resolveTelegramAccount,
+} from "./accounts.js";
 import {
   parseTelegramAllowFromId,
   promptTelegramAllowFromForAccount,
@@ -104,6 +109,24 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         patch: { dmPolicy: "allowlist", allowFrom },
       }),
   }),
+  completionNote: {
+    title: "Telegram DM access warning",
+    lines: [
+      "Your bot is using the default DM policy (pairing).",
+      "Any Telegram user who discovers the bot can send pairing requests.",
+      "For private use, configure an allowlist with your Telegram user id:",
+      `  ${formatCliCommand('openclaw config set channels.telegram.dmPolicy "allowlist"')}`,
+      `  ${formatCliCommand('openclaw config set channels.telegram.allowFrom "[YOUR_USER_ID]"')}`,
+      `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
+    ],
+    shouldShow: ({ cfg, accountId }) => {
+      const merged = mergeTelegramAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
+      const policy = merged.dmPolicy ?? "pairing";
+      const hasAllowFrom =
+        Array.isArray(merged.allowFrom) && merged.allowFrom.some((e) => String(e).trim());
+      return policy === "pairing" && !hasAllowFrom;
+    },
+  },
   dmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
