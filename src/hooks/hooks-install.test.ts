@@ -49,6 +49,7 @@ describe("hooks install (e2e)", () => {
         {
           name: "@acme/hello-hooks",
           version: "0.0.0",
+          type: "module",
           openclaw: { hooks: ["./hooks/hello-hook"] },
         },
         null,

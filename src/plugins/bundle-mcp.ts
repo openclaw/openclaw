@@ -44,6 +44,14 @@ const MANIFEST_PATH_BY_FORMAT: Record<PluginBundleFormat, string> = {
 };
 const CLAUDE_PLUGIN_ROOT_PLACEHOLDER = "${CLAUDE_PLUGIN_ROOT}";
 
+function canonicalizeExistingDir(dir: string): string {
+  try {
+    return fs.realpathSync.native(dir);
+  } catch {
+    return dir;
+  }
+}
+
 function readPluginJsonObject(params: {
   rootDir: string;
   relativePath: string;
@@ -121,37 +129,43 @@ function expandBundleRootPlaceholders(value: string, rootDir: string): string {
   return value.split(CLAUDE_PLUGIN_ROOT_PLACEHOLDER).join(rootDir);
 }
 
+function resolveBundlePath(value: string, rootDir: string, baseDir: string): string {
+  const expanded = expandBundleRootPlaceholders(value, rootDir);
+  if (path.isAbsolute(expanded)) {
+    return path.normalize(expanded);
+  }
+  if (isExplicitRelativePath(expanded)) {
+    return path.resolve(baseDir, expanded);
+  }
+  return expanded;
+}
+
 function absolutizeBundleMcpServer(params: {
   rootDir: string;
   baseDir: string;
   server: BundleMcpServerConfig;
 }): BundleMcpServerConfig {
+  const rootDir = canonicalizeExistingDir(params.rootDir);
+  const baseDir = canonicalizeExistingDir(params.baseDir);
   const next: BundleMcpServerConfig = { ...params.server };
 
   if (typeof next.cwd !== "string" && typeof next.workingDirectory !== "string") {
-    next.cwd = params.baseDir;
+    next.cwd = baseDir;
   }
 
   const command = next.command;
   if (typeof command === "string") {
-    const expanded = expandBundleRootPlaceholders(command, params.rootDir);
-    next.command = isExplicitRelativePath(expanded)
-      ? path.resolve(params.baseDir, expanded)
-      : expanded;
+    next.command = resolveBundlePath(command, rootDir, baseDir);
   }
 
   const cwd = next.cwd;
   if (typeof cwd === "string") {
-    const expanded = expandBundleRootPlaceholders(cwd, params.rootDir);
-    next.cwd = path.isAbsolute(expanded) ? expanded : path.resolve(params.baseDir, expanded);
+    next.cwd = resolveBundlePath(cwd, rootDir, baseDir);
   }
 
   const workingDirectory = next.workingDirectory;
   if (typeof workingDirectory === "string") {
-    const expanded = expandBundleRootPlaceholders(workingDirectory, params.rootDir);
-    next.workingDirectory = path.isAbsolute(expanded)
-      ? expanded
-      : path.resolve(params.baseDir, expanded);
+    next.workingDirectory = resolveBundlePath(workingDirectory, rootDir, baseDir);
   }
 
   if (Array.isArray(next.args)) {
@@ -159,11 +173,7 @@ function absolutizeBundleMcpServer(params: {
       if (typeof entry !== "string") {
         return entry;
       }
-      const expanded = expandBundleRootPlaceholders(entry, params.rootDir);
-      if (!isExplicitRelativePath(expanded)) {
-        return expanded;
-      }
-      return path.resolve(params.baseDir, expanded);
+      return resolveBundlePath(entry, rootDir, baseDir);
     });
   }
 
@@ -171,7 +181,7 @@ function absolutizeBundleMcpServer(params: {
     next.env = Object.fromEntries(
       Object.entries(next.env).map(([key, value]) => [
         key,
-        typeof value === "string" ? expandBundleRootPlaceholders(value, params.rootDir) : value,
+        typeof value === "string" ? resolveBundlePath(value, rootDir, baseDir) : value,
       ]),
     );
   }

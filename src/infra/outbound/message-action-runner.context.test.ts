@@ -117,17 +117,17 @@ describe("runMessageAction context isolation", () => {
       cfg: slackConfig,
       actionParams: {
         channel: "slack",
-        target: "#C12345678",
+        target: "channel:C12345678",
         message: "hi",
       },
-      toolContext: { currentChannelId: "C12345678" },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
     },
     {
       name: "accepts legacy to parameter for send",
       cfg: slackConfig,
       actionParams: {
         channel: "slack",
-        to: "#C12345678",
+        to: "channel:C12345678",
         message: "hi",
       },
     },
@@ -145,7 +145,7 @@ describe("runMessageAction context isolation", () => {
       cfg: slackConfig,
       actionParams: {
         channel: "slack",
-        target: "#C12345678",
+        target: "channel:C12345678",
         media: "https://example.com/note.ogg",
       },
       toolContext: { currentChannelId: "C12345678" },
@@ -155,7 +155,7 @@ describe("runMessageAction context isolation", () => {
       cfg: slackConfig,
       actionParams: {
         channel: "slack",
-        target: "#C12345678",
+        target: "channel:C12345678",
         message: "hi",
         pollMulti: false,
         pollAnonymous: false,
@@ -179,7 +179,7 @@ describe("runMessageAction context isolation", () => {
         cfg: slackConfig,
         actionParams: {
           channel: "slack",
-          target: "#C12345678",
+          target: "channel:C12345678",
         },
         toolContext: { currentChannelId: "C12345678" },
       }),
@@ -217,7 +217,7 @@ describe("runMessageAction context isolation", () => {
       cfg: slackConfig,
       actionParams: {
         channel: "slack",
-        target: "#C12345678",
+        target: "channel:C12345678",
         blocks: [{ type: "divider" }],
       },
       toolContext: { currentChannelId: "C12345678" },

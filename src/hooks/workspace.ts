@@ -122,14 +122,28 @@ function loadHookFromDir(params: {
       // keep the discovered path when realpath is unavailable
     }
 
+    let hookFilePath = hookMdPath;
+    try {
+      hookFilePath = fs.realpathSync.native(hookMdPath);
+    } catch {
+      hookFilePath = hookMdPath;
+    }
+
+    let resolvedHandlerPath = handlerPath;
+    try {
+      resolvedHandlerPath = fs.realpathSync.native(handlerPath);
+    } catch {
+      resolvedHandlerPath = handlerPath;
+    }
+
     return {
       name,
       description,
       source: params.source,
       pluginId: params.pluginId,
-      filePath: hookMdPath,
+      filePath: hookFilePath,
       baseDir,
-      handlerPath,
+      handlerPath: resolvedHandlerPath,
     };
   } catch (err) {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);

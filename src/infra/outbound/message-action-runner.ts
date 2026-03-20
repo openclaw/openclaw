@@ -318,14 +318,16 @@ async function handleBroadcastAction(
     throw new Error("Broadcast requires at least one target in --targets.");
   }
   const channelHint = readStringParam(params, "channel");
-  const configured = await listConfiguredMessageChannels(input.cfg);
-  if (configured.length === 0) {
-    throw new Error("Broadcast requires at least one configured channel.");
+  let targetChannels: ChannelId[];
+  if (channelHint && channelHint.trim().toLowerCase() !== "all") {
+    targetChannels = [await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)];
+  } else {
+    const configured = await listConfiguredMessageChannels(input.cfg);
+    if (configured.length === 0) {
+      throw new Error("Broadcast requires at least one configured channel.");
+    }
+    targetChannels = configured;
   }
-  const targetChannels =
-    channelHint && channelHint.trim().toLowerCase() !== "all"
-      ? [await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)]
-      : configured;
   const results: Array<{
     channel: ChannelId;
     to: string;
@@ -475,7 +477,6 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     message,
     preferComponents: true,
   });
-
   const mediaUrl = readStringParam(params, "media", { trim: false });
   if (
     !hasReplyPayloadContent(

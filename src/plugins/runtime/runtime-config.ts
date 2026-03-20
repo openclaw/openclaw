@@ -1,9 +1,14 @@
-import { loadConfig, writeConfigFile } from "../../config/config.js";
+import * as configRuntime from "../../config/config.js";
 import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeConfig(): PluginRuntime["config"] {
   return {
-    loadConfig,
-    writeConfigFile,
+    loadConfig: configRuntime.loadConfig,
+    writeConfigFile:
+      typeof configRuntime.writeConfigFile === "function"
+        ? configRuntime.writeConfigFile
+        : async () => {
+            throw new Error("writeConfigFile is unavailable in the current runtime");
+          },
   };
 }

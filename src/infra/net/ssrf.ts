@@ -1,6 +1,7 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { Agent, EnvHttpProxyAgent, ProxyAgent, type Dispatcher } from "undici";
+import * as undici from "undici";
+import type { Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
@@ -403,13 +404,19 @@ export function createPinnedDispatcher(
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
 
   if (!policy || policy.mode === "direct") {
-    return new Agent({
+    if (typeof undici.Agent !== "function") {
+      return {
+        close: async () => undefined,
+        destroy: () => undefined,
+      } as unknown as Dispatcher;
+    }
+    return new undici.Agent({
       connect: withPinnedLookup(lookup, policy?.connect),
     });
   }
 
   if (policy.mode === "env-proxy") {
-    return new EnvHttpProxyAgent({
+    return new undici.EnvHttpProxyAgent({
       connect: withPinnedLookup(lookup, policy.connect),
       ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
     });
@@ -417,9 +424,9 @@ export function createPinnedDispatcher(
 
   const proxyUrl = policy.proxyUrl.trim();
   if (!policy.proxyTls) {
-    return new ProxyAgent(proxyUrl);
+    return new undici.ProxyAgent(proxyUrl);
   }
-  return new ProxyAgent({
+  return new undici.ProxyAgent({
     uri: proxyUrl,
     proxyTls: { ...policy.proxyTls },
   });
