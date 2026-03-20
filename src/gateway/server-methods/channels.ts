@@ -13,6 +13,7 @@ import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { withTimeout } from "../../utils/with-timeout.js";
 import {
   ErrorCodes,
   errorShape,
@@ -81,13 +82,46 @@ export const channelsHandlers: GatewayRequestHandlers = {
     }
     const probe = (params as { probe?: boolean }).probe === true;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
-    const timeoutMs = typeof timeoutMsRaw === "number" ? Math.max(1000, timeoutMsRaw) : 10_000;
+    const timeoutMs =
+      typeof timeoutMsRaw === "number" ? Math.max(1000, timeoutMsRaw) : probe ? 20_000 : 10_000;
+    const requestStartedAt = Date.now();
     const cfg = loadConfig();
     const runtime = context.getRuntimeSnapshot();
     const plugins = listChannelPlugins();
     const pluginMap = new Map<ChannelId, ChannelPlugin>(
       plugins.map((plugin) => [plugin.id, plugin]),
     );
+
+    const formatStepFailure = (err: unknown, stepLabel: string) => {
+      const detail =
+        err instanceof Error && err.message === "timeout"
+          ? `${stepLabel} timed out after ${timeoutMs}ms`
+          : formatForLog(err);
+      return detail;
+    };
+
+    const runProbeStep = async <T>(params: {
+      stepLabel: string;
+      run: () => Promise<T>;
+    }): Promise<{ value?: T; error?: string; elapsedMs: number }> => {
+      const stepStartedAt = Date.now();
+      try {
+        const value = await withTimeout(params.run(), timeoutMs);
+        return {
+          value,
+          elapsedMs: Date.now() - stepStartedAt,
+        };
+      } catch (err) {
+        const error = formatStepFailure(err, params.stepLabel);
+        context.logGateway.warn(
+          `[channels.status] ${params.stepLabel} failed after ${Date.now() - stepStartedAt}ms: ${error}`,
+        );
+        return {
+          error,
+          elapsedMs: Date.now() - stepStartedAt,
+        };
+      }
+    };
 
     const resolveRuntimeSnapshot = (
       channelId: ChannelId,
@@ -127,67 +161,125 @@ export const channelsHandlers: GatewayRequestHandlers = {
         cfg,
         accountIds,
       });
-      const accounts: ChannelAccountSnapshot[] = [];
       const resolvedAccounts: Record<string, unknown> = {};
-      for (const accountId of accountIds) {
-        const account = plugin.config.resolveAccount(cfg, accountId);
-        const enabled = isAccountEnabled(plugin, account);
-        resolvedAccounts[accountId] = account;
-        let probeResult: unknown;
-        let lastProbeAt: number | null = null;
-        if (probe && enabled && plugin.status?.probeAccount) {
+      const accounts = await Promise.all(
+        accountIds.map(async (accountId) => {
+          const account = plugin.config.resolveAccount(cfg, accountId);
+          const enabled = isAccountEnabled(plugin, account);
+          resolvedAccounts[accountId] = account;
           let configured = true;
+          let configuredError: string | undefined;
           if (plugin.config.isConfigured) {
-            configured = await plugin.config.isConfigured(account, cfg);
+            try {
+              configured = await plugin.config.isConfigured(account, cfg);
+            } catch (err) {
+              configured = false;
+              configuredError = `config check failed: ${formatForLog(err)}`;
+              context.logGateway.warn(
+                `[channels.status] ${channelId}:${accountId} config check failed: ${configuredError}`,
+              );
+            }
           }
-          if (configured) {
-            probeResult = await plugin.status.probeAccount({
-              account,
-              timeoutMs,
+          let probeResult: unknown;
+          let lastProbeAt: number | null = null;
+          if (probe && enabled && plugin.status?.probeAccount) {
+            if (configured) {
+              const probeStep = await runProbeStep({
+                stepLabel: `${channelId}:${accountId} probe`,
+                run: async () =>
+                  await plugin.status!.probeAccount!({
+                    account,
+                    timeoutMs,
+                    cfg,
+                  }),
+              });
+              probeResult =
+                probeStep.error !== undefined
+                  ? {
+                      ok: false,
+                      error: probeStep.error,
+                      elapsedMs: probeStep.elapsedMs,
+                    }
+                  : probeStep.value;
+              lastProbeAt = Date.now();
+            }
+          }
+          let auditResult: unknown;
+          if (probe && enabled && plugin.status?.auditAccount) {
+            if (configured) {
+              const auditStep = await runProbeStep({
+                stepLabel: `${channelId}:${accountId} audit`,
+                run: async () =>
+                  await plugin.status!.auditAccount!({
+                    account,
+                    timeoutMs,
+                    cfg,
+                    probe: probeResult,
+                  }),
+              });
+              auditResult =
+                auditStep.error !== undefined
+                  ? {
+                      ok: false,
+                      error: auditStep.error,
+                      elapsedMs: auditStep.elapsedMs,
+                    }
+                  : auditStep.value;
+            }
+          }
+          const runtimeSnapshot = resolveRuntimeSnapshot(channelId, accountId, defaultAccountId);
+          try {
+            const snapshot = await buildChannelAccountSnapshot({
+              plugin,
               cfg,
-            });
-            lastProbeAt = Date.now();
-          }
-        }
-        let auditResult: unknown;
-        if (probe && enabled && plugin.status?.auditAccount) {
-          let configured = true;
-          if (plugin.config.isConfigured) {
-            configured = await plugin.config.isConfigured(account, cfg);
-          }
-          if (configured) {
-            auditResult = await plugin.status.auditAccount({
-              account,
-              timeoutMs,
-              cfg,
+              accountId,
+              runtime: runtimeSnapshot,
               probe: probeResult,
+              audit: auditResult,
             });
+            // Preserve probe/audit visibility even when a plugin snapshot only
+            // reports stable account metadata. Without this, probe mode can do
+            // real work and then silently drop the result from the RPC payload.
+            if (probeResult !== undefined && snapshot.probe === undefined) {
+              snapshot.probe = probeResult;
+            }
+            if (auditResult !== undefined && snapshot.audit === undefined) {
+              snapshot.audit = auditResult;
+            }
+            if (lastProbeAt) {
+              snapshot.lastProbeAt = lastProbeAt;
+            }
+            if (configuredError && !snapshot.lastError) {
+              snapshot.lastError = configuredError;
+            }
+            const activity = getChannelActivity({
+              channel: channelId as never,
+              accountId,
+            });
+            if (snapshot.lastInboundAt == null) {
+              snapshot.lastInboundAt = activity.inboundAt;
+            }
+            if (snapshot.lastOutboundAt == null) {
+              snapshot.lastOutboundAt = activity.outboundAt;
+            }
+            return snapshot;
+          } catch (err) {
+            const lastError = `status snapshot failed: ${formatForLog(err)}`;
+            context.logGateway.warn(
+              `[channels.status] ${channelId}:${accountId} snapshot failed: ${lastError}`,
+            );
+            return {
+              accountId,
+              enabled,
+              configured,
+              lastError: configuredError ?? lastError,
+              probe: probeResult,
+              audit: auditResult,
+              ...(lastProbeAt ? { lastProbeAt } : {}),
+            } satisfies ChannelAccountSnapshot;
           }
-        }
-        const runtimeSnapshot = resolveRuntimeSnapshot(channelId, accountId, defaultAccountId);
-        const snapshot = await buildChannelAccountSnapshot({
-          plugin,
-          cfg,
-          accountId,
-          runtime: runtimeSnapshot,
-          probe: probeResult,
-          audit: auditResult,
-        });
-        if (lastProbeAt) {
-          snapshot.lastProbeAt = lastProbeAt;
-        }
-        const activity = getChannelActivity({
-          channel: channelId as never,
-          accountId,
-        });
-        if (snapshot.lastInboundAt == null) {
-          snapshot.lastInboundAt = activity.inboundAt;
-        }
-        if (snapshot.lastOutboundAt == null) {
-          snapshot.lastOutboundAt = activity.outboundAt;
-        }
-        accounts.push(snapshot);
-      }
+        }),
+      );
       const defaultAccount =
         accounts.find((entry) => entry.accountId === defaultAccountId) ?? accounts[0];
       return { accounts, defaultAccountId, defaultAccount, resolvedAccounts };
@@ -213,25 +305,40 @@ export const channelsHandlers: GatewayRequestHandlers = {
         await buildChannelAccounts(plugin.id);
       const fallbackAccount =
         resolvedAccounts[defaultAccountId] ?? plugin.config.resolveAccount(cfg, defaultAccountId);
-      const summary = plugin.status?.buildChannelSummary
-        ? await plugin.status.buildChannelSummary({
-            account: fallbackAccount,
-            cfg,
-            defaultAccountId,
-            snapshot:
-              defaultAccount ??
-              ({
-                accountId: defaultAccountId,
-              } as ChannelAccountSnapshot),
-          })
-        : {
-            configured: defaultAccount?.configured ?? false,
-          };
+      let summary: Record<string, unknown>;
+      try {
+        summary = plugin.status?.buildChannelSummary
+          ? await plugin.status.buildChannelSummary({
+              account: fallbackAccount,
+              cfg,
+              defaultAccountId,
+              snapshot:
+                defaultAccount ??
+                ({
+                  accountId: defaultAccountId,
+                } as ChannelAccountSnapshot),
+            })
+          : {
+              configured: defaultAccount?.configured ?? false,
+            };
+      } catch (err) {
+        const lastError = `channel summary failed: ${formatForLog(err)}`;
+        context.logGateway.warn(`[channels.status] ${plugin.id} summary failed: ${lastError}`);
+        summary = {
+          configured: defaultAccount?.configured ?? false,
+          lastError,
+        };
+      }
       channelsMap[plugin.id] = summary;
       accountsMap[plugin.id] = accounts;
       defaultAccountIdMap[plugin.id] = defaultAccountId;
     }
 
+    if (probe) {
+      context.logGateway.info(
+        `[channels.status] probe completed in ${Date.now() - requestStartedAt}ms across ${plugins.length} channel(s)`,
+      );
+    }
     respond(true, payload, undefined);
   },
   "channels.logout": async ({ params, respond, context }) => {
