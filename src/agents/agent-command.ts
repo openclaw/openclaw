@@ -1303,6 +1303,7 @@ async function agentCommandInternal(
       const lastCallTotal =
         lastCallUsage?.total ??
         (lastCallUsage ? (lastCallUsage.input ?? 0) + (lastCallUsage.output ?? 0) : undefined);
+      const attemptPromptTokens = result.meta.agentMeta?.promptTokens;
       emitDiagnosticEvent({
         type: "model.usage",
         sessionKey: sessionKey ?? sessionId,
@@ -1321,7 +1322,7 @@ async function agentCommandInternal(
         lastCallUsage,
         context: {
           limit: contextTokensUsed,
-          used: lastCallTotal ?? totalTokens,
+          used: lastCallTotal ?? attemptPromptTokens ?? totalTokens,
         },
         costUsd,
         durationMs: Date.now() - startedAt,
