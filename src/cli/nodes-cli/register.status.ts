@@ -304,54 +304,89 @@ export function registerNodesStatusCommands(nodes: Command) {
         await runNodesCommand("list", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
-          const result = await callGatewayCli("node.pair.list", opts, {});
-          const { pending, paired } = parsePairingList(result);
+          // Call both sources in parallel:
+          // - node.list: device pairing (always returns known nodes)
+          // - node.pair.list: gateway-owned node-pairing store — needed because `nodes approve`
+          //   writes here and those nodes may not appear in the device pairing list (k8s volumes,
+          //   separate data directories). Showing both sources fixes the "Paired: 0" bug.
+          const [nodeListResult, pairingResult] = await Promise.all([
+            callGatewayCli("node.list", opts, {}),
+            callGatewayCli("node.pair.list", opts, {}),
+          ]);
+          const { pending, paired: pairingPaired } = parsePairingList(pairingResult);
+          const deviceNodes = parseNodeList(nodeListResult);
+
+          // Build lookup maps keyed by nodeId
+          const pairingById = new Map(pairingPaired.map((n) => [n.nodeId, n]));
+          const deviceById = new Map(deviceNodes.map((n) => [n.nodeId, n]));
+
+          // Merge both sources: start with device nodes, then add pairing-only nodes
+          const allNodesMap = new Map(deviceById);
+          for (const pNode of pairingPaired) {
+            if (!allNodesMap.has(pNode.nodeId)) {
+              allNodesMap.set(pNode.nodeId, {
+                nodeId: pNode.nodeId,
+                displayName: pNode.displayName,
+                platform: pNode.platform,
+                version: pNode.version,
+                coreVersion: pNode.coreVersion,
+                uiVersion: pNode.uiVersion,
+                remoteIp: pNode.remoteIp,
+                paired: true,
+                connected: false,
+                connectedAtMs: pNode.lastConnectedAtMs,
+              });
+            }
+          }
+          const allNodes = Array.from(allNodesMap.values());
+
           const { heading, muted, warn } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
-          const connectedById = hasFilters
-            ? new Map(
-                parseNodeList(await callGatewayCli("node.list", opts, {})).map((node) => [
-                  node.nodeId,
-                  node,
-                ]),
-              )
-            : null;
-          const filteredPaired = paired.filter((node) => {
-            if (connectedOnly) {
-              const live = connectedById?.get(node.nodeId);
-              if (!live?.connected) {
-                return false;
-              }
-            }
+
+          const filteredPaired = allNodes.filter((node) => {
+            if (!node.paired && !pairingById.has(node.nodeId)) return false;
+            if (connectedOnly && !node.connected) return false;
             if (sinceMs !== undefined) {
-              const live = connectedById?.get(node.nodeId);
+              const pData = pairingById.get(node.nodeId);
               const lastConnectedAtMs =
-                typeof node.lastConnectedAtMs === "number"
-                  ? node.lastConnectedAtMs
-                  : typeof live?.connectedAtMs === "number"
-                    ? live.connectedAtMs
+                typeof pData?.lastConnectedAtMs === "number"
+                  ? pData.lastConnectedAtMs
+                  : typeof node.connectedAtMs === "number"
+                    ? node.connectedAtMs
                     : undefined;
-              if (typeof lastConnectedAtMs !== "number") {
-                return false;
-              }
-              if (now - lastConnectedAtMs > sinceMs) {
-                return false;
-              }
+              if (typeof lastConnectedAtMs !== "number") return false;
+              if (now - lastConnectedAtMs > sinceMs) return false;
             }
             return true;
           });
+
+          const totalPairedCount = allNodes.filter(
+            (n) => n.paired || pairingById.has(n.nodeId),
+          ).length;
           const filteredLabel =
-            hasFilters && filteredPaired.length !== paired.length ? ` (of ${paired.length})` : "";
+            hasFilters && filteredPaired.length !== totalPairedCount
+              ? ` (of ${totalPairedCount})`
+              : "";
           defaultRuntime.log(
             `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
           );
 
           if (opts.json) {
             defaultRuntime.log(
-              JSON.stringify({ pending: pendingRows, paired: filteredPaired }, null, 2),
+              JSON.stringify(
+                {
+                  pending: pendingRows,
+                  paired: filteredPaired.map((n) => ({
+                    ...n,
+                    ...(pairingById.get(n.nodeId) ?? {}),
+                  })),
+                },
+                null,
+                2,
+              ),
             );
             return;
           }
@@ -370,12 +405,12 @@ export function registerNodesStatusCommands(nodes: Command) {
 
           if (filteredPaired.length > 0) {
             const pairedRows = filteredPaired.map((n) => {
-              const live = connectedById?.get(n.nodeId);
+              const pData = pairingById.get(n.nodeId);
               const lastConnectedAtMs =
-                typeof n.lastConnectedAtMs === "number"
-                  ? n.lastConnectedAtMs
-                  : typeof live?.connectedAtMs === "number"
-                    ? live.connectedAtMs
+                typeof pData?.lastConnectedAtMs === "number"
+                  ? pData.lastConnectedAtMs
+                  : typeof n.connectedAtMs === "number"
+                    ? n.connectedAtMs
                     : undefined;
               return {
                 Node: n.displayName?.trim() ? n.displayName.trim() : n.nodeId,
@@ -402,6 +437,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               }).trimEnd(),
             );
           }
+        }
         });
       }),
   );
