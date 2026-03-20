@@ -509,6 +509,7 @@ async function handleDiscordComponentEvent(params: {
     interaction: params.interaction,
     label: params.label,
     componentLabel: params.componentLabel,
+    defer: false,
   });
   if (!interactionCtx) {
     return;
@@ -814,6 +815,7 @@ export class AgentComponentButton extends Button {
       interaction,
       label: "agent button",
       componentLabel: "button",
+      defer: false,
     });
     if (!interactionCtx) {
       return;
@@ -903,6 +905,7 @@ export class AgentSelectMenu extends StringSelectMenu {
       interaction,
       label: "agent select",
       componentLabel: "select menu",
+      defer: false,
     });
     if (!interactionCtx) {
       return;

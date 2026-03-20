@@ -108,6 +108,7 @@ export {
   createScheduledEventDiscord,
   createThreadDiscord,
   deleteChannelDiscord,
+  editDiscordComponentMessage,
   deleteMessageDiscord,
   editChannelDiscord,
   editMessageDiscord,

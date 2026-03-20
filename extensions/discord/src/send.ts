@@ -44,7 +44,7 @@ export {
   sendWebhookMessageDiscord,
   sendVoiceMessageDiscord,
 } from "./send.outbound.js";
-export { sendDiscordComponentMessage } from "./send.components.js";
+export { editDiscordComponentMessage, sendDiscordComponentMessage } from "./send.components.js";
 export { sendTypingDiscord } from "./send.typing.js";
 export {
   fetchChannelPermissionsDiscord,

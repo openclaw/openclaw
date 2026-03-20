@@ -199,7 +199,7 @@ describe("agent components", () => {
 
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
+    expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledTimes(1);
     const pairingText = String(reply.mock.calls[0]?.[0]?.content ?? "");
     expect(pairingText).toContain("Pairing code:");
@@ -220,8 +220,11 @@ describe("agent components", () => {
 
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+      ephemeral: true,
+    });
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -237,8 +240,8 @@ describe("agent components", () => {
 
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
@@ -255,8 +258,8 @@ describe("agent components", () => {
 
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -272,8 +275,11 @@ describe("agent components", () => {
 
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "DM interactions are disabled." });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({
+      content: "DM interactions are disabled.",
+      ephemeral: true,
+    });
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -290,8 +296,8 @@ describe("agent components", () => {
 
     await select.run(interaction, { componentId: "hello" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalled();
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -307,8 +313,8 @@ describe("agent components", () => {
 
     await button.run(interaction, { cid: "hello_cid" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       expect.stringContaining("hello_cid"),
       expect.any(Object),
@@ -327,8 +333,8 @@ describe("agent components", () => {
 
     await button.run(interaction, { cid: "hello%2G" } as ComponentData);
 
-    expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       expect.stringContaining("hello%2G"),
       expect.any(Object),
@@ -537,7 +543,7 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
@@ -554,7 +560,7 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe("/codex_resume --browse-projects");
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
@@ -583,7 +589,7 @@ describe("discord component interactions", () => {
 
     await select.run(interaction, { cid: "sel_1" } as ComponentData);
 
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Selected Alpha from "Pick".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
@@ -621,7 +627,10 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+      ephemeral: true,
+    });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
     expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
   });
@@ -885,7 +894,7 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
 

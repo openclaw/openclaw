@@ -54,38 +54,29 @@ type DiscordComponentSendOpts = {
   filename?: string;
 };
 
-export async function sendDiscordComponentMessage(
-  to: string,
-  spec: DiscordComponentMessageSpec,
-  opts: DiscordComponentSendOpts = {},
-): Promise<DiscordSendResult> {
-  const cfg = opts.cfg ?? loadConfig();
-  const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
-  const { token, rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
-  const { channelId } = await resolveChannelId(rest, recipient, request);
-
-  const channelType = await resolveDiscordChannelType(rest, channelId);
-
-  if (channelType && DISCORD_FORUM_LIKE_TYPES.has(channelType)) {
-    throw new Error("Discord components are not supported in forum-style channels");
-  }
-
+async function buildDiscordComponentPayload(params: {
+  spec: DiscordComponentMessageSpec;
+  opts: DiscordComponentSendOpts;
+  accountId: string;
+}): Promise<{
+  body: ReturnType<typeof stripUndefinedFields>;
+  buildResult: ReturnType<typeof buildDiscordComponentMessage>;
+}> {
   const buildResult = buildDiscordComponentMessage({
-    spec,
-    sessionKey: opts.sessionKey,
-    agentId: opts.agentId,
-    accountId: accountInfo.accountId,
+    spec: params.spec,
+    sessionKey: params.opts.sessionKey,
+    agentId: params.opts.agentId,
+    accountId: params.accountId,
   });
   const flags = buildDiscordComponentMessageFlags(buildResult.components);
-  const finalFlags = opts.silent
+  const finalFlags = params.opts.silent
     ? (flags ?? 0) | SUPPRESS_NOTIFICATIONS_FLAG
     : (flags ?? undefined);
-  const messageReference = opts.replyTo
-    ? { message_id: opts.replyTo, fail_if_not_exists: false }
+  const messageReference = params.opts.replyTo
+    ? { message_id: params.opts.replyTo, fail_if_not_exists: false }
     : undefined;
 
-  const attachmentNames = extractComponentAttachmentNames(spec);
+  const attachmentNames = extractComponentAttachmentNames(params.spec);
   const uniqueAttachmentNames = [...new Set(attachmentNames)];
   if (uniqueAttachmentNames.length > 1) {
     throw new Error(
@@ -94,9 +85,11 @@ export async function sendDiscordComponentMessage(
   }
   const expectedAttachmentName = uniqueAttachmentNames[0];
   let files: MessagePayloadFile[] | undefined;
-  if (opts.mediaUrl) {
-    const media = await loadWebMedia(opts.mediaUrl, { localRoots: opts.mediaLocalRoots });
-    const filenameOverride = opts.filename?.trim();
+  if (params.opts.mediaUrl) {
+    const media = await loadWebMedia(params.opts.mediaUrl, {
+      localRoots: params.opts.mediaLocalRoots,
+    });
+    const filenameOverride = params.opts.filename?.trim();
     const fileName = filenameOverride || media.fileName || "upload";
     if (expectedAttachmentName && expectedAttachmentName !== fileName) {
       throw new Error(
@@ -121,6 +114,32 @@ export async function sendDiscordComponentMessage(
     ...(messageReference ? { message_reference: messageReference } : {}),
   });
 
+  return { body, buildResult };
+}
+
+export async function sendDiscordComponentMessage(
+  to: string,
+  spec: DiscordComponentMessageSpec,
+  opts: DiscordComponentSendOpts = {},
+): Promise<DiscordSendResult> {
+  const cfg = opts.cfg ?? loadConfig();
+  const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
+  const { token, rest, request } = createDiscordClient(opts, cfg);
+  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
+  const { channelId } = await resolveChannelId(rest, recipient, request);
+
+  const channelType = await resolveDiscordChannelType(rest, channelId);
+
+  if (channelType && DISCORD_FORUM_LIKE_TYPES.has(channelType)) {
+    throw new Error("Discord components are not supported in forum-style channels");
+  }
+
+  const { body, buildResult } = await buildDiscordComponentPayload({
+    spec,
+    opts,
+    accountId: accountInfo.accountId,
+  });
+
   let result: { id: string; channel_id: string };
   try {
     result = (await request(
@@ -135,7 +154,7 @@ export async function sendDiscordComponentMessage(
       channelId,
       rest,
       token,
-      hasMedia: Boolean(files?.length),
+      hasMedia: Boolean(opts.mediaUrl),
     });
   }
 
@@ -153,6 +172,59 @@ export async function sendDiscordComponentMessage(
 
   return {
     messageId: result.id ?? "unknown",
+    channelId: result.channel_id ?? channelId,
+  };
+}
+
+export async function editDiscordComponentMessage(
+  to: string,
+  messageId: string,
+  spec: DiscordComponentMessageSpec,
+  opts: DiscordComponentSendOpts = {},
+): Promise<DiscordSendResult> {
+  const cfg = opts.cfg ?? loadConfig();
+  const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
+  const { token, rest, request } = createDiscordClient(opts, cfg);
+  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
+  const { channelId } = await resolveChannelId(rest, recipient, request);
+  const { body, buildResult } = await buildDiscordComponentPayload({
+    spec,
+    opts,
+    accountId: accountInfo.accountId,
+  });
+
+  let result: { id: string; channel_id: string };
+  try {
+    result = (await request(
+      () =>
+        rest.patch(Routes.channelMessage(channelId, messageId), {
+          body,
+        }) as Promise<{ id: string; channel_id: string }>,
+      "components",
+    )) as { id: string; channel_id: string };
+  } catch (err) {
+    throw await buildDiscordSendError(err, {
+      channelId,
+      rest,
+      token,
+      hasMedia: Boolean(opts.mediaUrl),
+    });
+  }
+
+  registerDiscordComponentEntries({
+    entries: buildResult.entries,
+    modals: buildResult.modals,
+    messageId: result.id ?? messageId,
+  });
+
+  recordChannelActivity({
+    channel: "discord",
+    accountId: accountInfo.accountId,
+    direction: "outbound",
+  });
+
+  return {
+    messageId: result.id ?? messageId,
     channelId: result.channel_id ?? channelId,
   };
 }

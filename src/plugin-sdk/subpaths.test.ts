@@ -221,6 +221,7 @@ describe("plugin-sdk subpath exports", () => {
   it("exports Discord component helpers from the dedicated subpath", async () => {
     const discordSdk = await import("openclaw/plugin-sdk/discord");
     expect(typeof discordSdk.buildDiscordComponentMessage).toBe("function");
+    expect(typeof discordSdk.editDiscordComponentMessage).toBe("function");
     expect(typeof discordSdk.resolveDiscordAccount).toBe("function");
   });
 
