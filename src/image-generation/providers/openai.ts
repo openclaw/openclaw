@@ -58,6 +58,13 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProviderPlu
         throw new Error("OpenAI API key missing");
       }
 
+      const controller = new AbortController();
+      const timeoutMs = req.timeoutMs;
+      const timeout =
+        typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+          ? setTimeout(() => controller.abort(), timeoutMs)
+          : undefined;
+
       const response = await fetch(`${resolveOpenAIBaseUrl(req.cfg)}/images/generations`, {
         method: "POST",
         headers: {
@@ -70,6 +77,9 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProviderPlu
           n: req.count ?? 1,
           size: req.size ?? DEFAULT_SIZE,
         }),
+        signal: controller.signal,
+      }).finally(() => {
+        clearTimeout(timeout);
       });
 
       if (!response.ok) {
