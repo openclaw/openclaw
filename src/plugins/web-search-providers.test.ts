@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import {
+  resolveBundledPluginWebSearchProviders,
   resolvePluginWebSearchProviders,
   resolveRuntimeWebSearchProviders,
 } from "./web-search-providers.js";
@@ -168,6 +169,43 @@ describe("resolvePluginWebSearchProviders", () => {
     });
 
     expect(providers).toEqual([]);
+  });
+
+  it("can resolve bundled providers without the plugin loader", () => {
+    const providers = resolveBundledPluginWebSearchProviders({
+      bundledAllowlistCompat: true,
+    });
+
+    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+      "brave:brave",
+      "google:gemini",
+      "xai:grok",
+      "moonshot:kimi",
+      "perplexity:perplexity",
+      "firecrawl:firecrawl",
+    ]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("can scope bundled resolution to one plugin id", () => {
+    const providers = resolveBundledPluginWebSearchProviders({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "gemini",
+            },
+          },
+        },
+      },
+      bundledAllowlistCompat: true,
+      onlyPluginIds: ["google"],
+    });
+
+    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+      "google:gemini",
+    ]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("prefers the active plugin registry for runtime resolution", () => {
