@@ -1,0 +1,25 @@
+{
+  "id": "duckduckgo",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "region": {
+            "type": "string",
+            "description": "DuckDuckGo region code (e.g., 'us-en', 'br-pt', 'de-de'). Default: none (international)."
+          },
+          "safeSearch": {
+            "type": "string",
+            "enum": ["strict", "moderate", "off"],
+            "description": "SafeSearch level. Default: moderate."
+          }
+        }
+      }
+    }
+  }
+}

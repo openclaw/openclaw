@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/duckduckgo",
+  "version": "2026.3.20",
+  "private": true,
+  "description": "OpenClaw DuckDuckGo web search plugin — free, no API key required",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

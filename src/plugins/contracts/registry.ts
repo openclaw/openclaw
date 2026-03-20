@@ -5,6 +5,7 @@ import byteplusPlugin from "../../../extensions/byteplus/index.js";
 import chutesPlugin from "../../../extensions/chutes/index.js";
 import cloudflareAiGatewayPlugin from "../../../extensions/cloudflare-ai-gateway/index.js";
 import copilotProxyPlugin from "../../../extensions/copilot-proxy/index.js";
+import duckduckgoPlugin from "../../../extensions/duckduckgo/index.js";
 import elevenLabsPlugin from "../../../extensions/elevenlabs/index.js";
 import falPlugin from "../../../extensions/fal/index.js";
 import firecrawlPlugin from "../../../extensions/firecrawl/index.js";
@@ -81,6 +82,7 @@ type PluginRegistrationContractEntry = {
 
 const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unknown }> = [
   { ...bravePlugin, credentialValue: "BSA-test" },
+  { ...duckduckgoPlugin, credentialValue: "duckduckgo-no-key-needed" },
   { ...firecrawlPlugin, credentialValue: "fc-test" },
   { ...googlePlugin, credentialValue: "AIza-test" },
   { ...moonshotPlugin, credentialValue: "sk-test" },

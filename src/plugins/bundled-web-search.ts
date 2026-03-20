@@ -206,6 +206,21 @@ const BUNDLED_WEB_SEARCH_PROVIDER_DESCRIPTORS = [
     credentialScope: { kind: "scoped", key: "tavily" },
     applySelectionConfig: (config) => enablePluginInConfig(config, "tavily").config,
   },
+  {
+    pluginId: "duckduckgo",
+    id: "duckduckgo",
+    label: "DuckDuckGo Search",
+    hint: "Free web search — no API key required",
+    envVars: [],
+    placeholder: "(no key needed)",
+    signupUrl: "https://duckduckgo.com/",
+    docsUrl: "https://docs.openclaw.ai/tools/duckduckgo",
+    autoDetectOrder: 100,
+    credentialPath: "plugins.entries.duckduckgo.config.webSearch.apiKey",
+    inactiveSecretPaths: [],
+    credentialScope: { kind: "scoped", key: "duckduckgo" },
+    applySelectionConfig: (config) => enablePluginInConfig(config, "duckduckgo").config,
+  },
 ] as const satisfies ReadonlyArray<BundledWebSearchProviderDescriptor>;
 
 export const BUNDLED_WEB_SEARCH_PLUGIN_IDS = [
