@@ -202,18 +202,7 @@ export async function runServiceStart(params: {
   if (loaded === null) {
     return;
   }
-  if (!loaded) {
-    await handleServiceNotLoaded({
-      serviceNoun: params.serviceNoun,
-      service: params.service,
-      loaded,
-      renderStartHints: params.renderStartHints,
-      json,
-      emit,
-    });
-    return;
-  }
-  // Pre-flight config validation (#35862)
+  // Pre-flight config validation (#35862) — check before any start/restart action.
   {
     const configError = await getConfigValidationError();
     if (configError) {
@@ -224,6 +213,9 @@ export async function runServiceStart(params: {
     }
   }
 
+  // When the service is not loaded (e.g. after `stop` which uses launchctl
+  // bootout), attempt `restart` which handles re-bootstrap internally, rather
+  // than requiring the user to manually run `install` first. (#50869)
   try {
     const restartResult = await params.service.restart({ env: process.env, stdout });
     const restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
@@ -232,7 +224,7 @@ export async function runServiceStart(params: {
         ok: true,
         result: restartStatus.daemonActionResult,
         message: restartStatus.message,
-        service: buildDaemonServiceSnapshot(params.service, loaded),
+        service: buildDaemonServiceSnapshot(params.service, loaded || true),
       });
       if (!json) {
         defaultRuntime.log(restartStatus.message);
@@ -240,6 +232,19 @@ export async function runServiceStart(params: {
       return;
     }
   } catch (err) {
+    if (!loaded) {
+      // Service was not loaded and restart recovery (bootstrap) also failed.
+      // Fall back to friendly install hints.
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
+      return;
+    }
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
     return;

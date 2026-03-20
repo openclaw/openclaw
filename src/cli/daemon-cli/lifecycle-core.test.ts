@@ -190,4 +190,41 @@ describe("runServiceRestart token drift", () => {
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });
+
+  it("auto-bootstraps when service start finds service not loaded (#50869)", async () => {
+    service.isLoaded
+      .mockResolvedValueOnce(false) // initial check: not loaded
+      .mockResolvedValueOnce(true); // post-restart check: now loaded
+    service.restart.mockResolvedValue({ outcome: "completed" });
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    const payload = readJsonLog<{ ok?: boolean; result?: string }>();
+    expect(payload.ok).toBe(true);
+    expect(payload.result).toBe("started");
+  });
+
+  it("falls back to install hints when not-loaded restart recovery fails (#50869)", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    service.restart.mockRejectedValue(new Error("bootstrap failed"));
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["openclaw gateway install"],
+      opts: { json: true },
+    });
+
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    const payload = readJsonLog<{ ok?: boolean; result?: string; hints?: string[] }>();
+    expect(payload.ok).toBe(true);
+    expect(payload.result).toBe("not-loaded");
+    expect(payload.hints).toEqual(expect.arrayContaining(["openclaw gateway install"]));
+  });
 });
