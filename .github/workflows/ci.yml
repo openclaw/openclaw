@@ -972,10 +972,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - task: test
-            command: ./gradlew --no-daemon :app:testDebugUnitTest
-          - task: build
-            command: ./gradlew --no-daemon :app:assembleDebug
+          - task: test-play
+            command: ./gradlew --no-daemon :app:testPlayDebugUnitTest
+          - task: test-third-party
+            command: ./gradlew --no-daemon :app:testThirdPartyDebugUnitTest
+          - task: build-play
+            command: ./gradlew --no-daemon :app:assemblePlayDebug
+          - task: build-third-party
+            command: ./gradlew --no-daemon :app:assembleThirdPartyDebug
     steps:
       - name: Checkout
         uses: actions/checkout@v6
