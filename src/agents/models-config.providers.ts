@@ -503,7 +503,7 @@ export function buildGoogleGeminiCliProvider(): ProviderConfig {
       {
         id: "gemini-3.1-flash-preview",
         name: "Gemini 3.1 Flash",
-        reasoning: true,
+        reasoning: false,
         input: ["text", "image"],
         cost: GOOGLE_GEMINI_CLI_DEFAULT_COST,
         contextWindow: GOOGLE_GEMINI_CLI_DEFAULT_CONTEXT_WINDOW,

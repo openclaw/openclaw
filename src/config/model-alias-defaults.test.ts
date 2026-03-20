@@ -78,7 +78,7 @@ describe("applyModelDefaults", () => {
 
     expect(next.agents?.defaults?.models?.["google/gemini-3-pro-preview"]?.alias).toBe("");
     expect(next.agents?.defaults?.models?.["google/gemini-3-flash-preview"]?.alias).toBe(
-      "gemini-flash",
+      "gemini-3-flash",
     );
   });
 
