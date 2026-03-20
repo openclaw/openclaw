@@ -85,10 +85,31 @@ const MAX_REDIRECTS = 5;
 
 async function safeFetch(url: string, options?: RequestInit, hops = 0): Promise<Response> {
   if (hops > MAX_REDIRECTS) throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
-  if (await isBlockedAfterResolve(url)) throw new Error("Blocked URL (hostname or resolved IP)");
 
-  const res = await fetch(url, {
+  // Resolve DNS and validate BEFORE fetching (prevents DNS rebinding)
+  const parsed = new URL(url);
+  if (isBlockedHostname(parsed.hostname)) throw new Error("Blocked hostname");
+  let resolvedIp: string | undefined;
+  try {
+    const { address } = await lookup(parsed.hostname);
+    resolvedIp = address;
+    if (isBlockedHostname(address)) throw new Error("Blocked resolved IP");
+  } catch (e: any) {
+    if (e.message?.includes("Blocked")) throw e;
+    // DNS failure — proceed with hostname (will fail at fetch if unreachable)
+  }
+
+  // Pin to resolved IP to prevent DNS rebinding between check and fetch
+  const fetchUrl = resolvedIp
+    ? url.replace(parsed.hostname, resolvedIp)
+    : url;
+  const fetchHeaders = resolvedIp
+    ? { ...((options?.headers as Record<string, string>) ?? {}), Host: parsed.hostname }
+    : (options?.headers as Record<string, string> | undefined);
+
+  const res = await fetch(fetchUrl, {
     ...options,
+    headers: fetchHeaders,
     redirect: "manual",
     signal: options?.signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });

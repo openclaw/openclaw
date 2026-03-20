@@ -459,7 +459,7 @@ const plugin = {
         label: "SoundChain Discovery",
         async execute() {
           try {
-            const res = await fetch("https://soundchain.io/skill.md");
+            const res = await fetch("https://soundchain.io/skill.md", { signal: AbortSignal.timeout(15_000) });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const text = await res.text();
             return json({
