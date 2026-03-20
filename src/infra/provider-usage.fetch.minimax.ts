@@ -290,7 +290,9 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
       // Count-derived usage is more stable across provider percent field variations.
       return fromCounts;
     }
-    return normalized;
+    // MiniMax's "remains" endpoint reports percent fields as the *remaining*
+    // share of the quota, not the *used* share.  Invert so callers see used%.
+    return clampPercent(100 - normalized);
   }
 
   return fromCounts;

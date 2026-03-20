@@ -96,7 +96,7 @@ describe("fetchMinimaxUsage", () => {
       expected: {
         plan: "Starter",
         windows: [
-          { label: "30m", usedPercent: 25, resetAt: new Date("2026-01-08T00:00:00Z").getTime() },
+          { label: "30m", usedPercent: 75, resetAt: new Date("2026-01-08T00:00:00Z").getTime() },
         ],
       },
     },
@@ -127,7 +127,7 @@ describe("fetchMinimaxUsage", () => {
       },
       expected: {
         plan: "Payload Plan",
-        windows: [{ label: "2h", usedPercent: 40, resetAt: 1_700_000_100_000 }],
+        windows: [{ label: "2h", usedPercent: 60, resetAt: 1_700_000_100_000 }],
       },
     },
   ])("$name", async ({ payload, expected }) => {

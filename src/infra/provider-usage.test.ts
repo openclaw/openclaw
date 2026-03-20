@@ -234,7 +234,7 @@ describe("provider usage loading", () => {
           },
         },
       },
-      expected: { usedPercent: 40, plan: "Payload Plan", label: "2h" },
+      expected: { usedPercent: 60, plan: "Payload Plan", label: "2h" },
     },
   ])("$name", async ({ payload, expected }) => {
     await expectMinimaxUsage(payload, expected);
