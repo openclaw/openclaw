@@ -40,8 +40,8 @@ describe("plugin loader git path regression", () => {
     mkdirSafe(copiedSourceDir);
     mkdirSafe(copiedPluginSdkDir);
 
-    const jitiBaseFile = path.join(copiedSourceDir, "__jiti-base__.mjs");
-    fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
+    const jitiBaseFile = path.join(copiedSourceDir, "__jiti-base__.cjs");
+    fs.writeFileSync(jitiBaseFile, "module.exports = {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
       `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
