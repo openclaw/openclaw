@@ -20,6 +20,9 @@ async function request(baseUrl: string, path: string, options?: RequestInit): Pr
       ...options?.headers,
     },
   });
+  if (!res.ok) {
+    throw new Error(`SoundChain API error ${res.status}: ${res.statusText}`);
+  }
   return res.json();
 }
 

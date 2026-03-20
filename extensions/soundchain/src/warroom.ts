@@ -104,6 +104,9 @@ async function fetchJson(url: string, options?: RequestInit): Promise<unknown> {
     ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
   });
+  if (!res.ok) {
+    throw new Error(`War Room API error ${res.status}: ${res.statusText} (${url})`);
+  }
   return res.json();
 }
 

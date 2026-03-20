@@ -30,6 +30,31 @@ const MAX_URLS = 3;
 const MAX_TRANSCRIPT_CHARS = 15_000;
 const MAX_WEBPAGE_CHARS = 10_000;
 
+// Block private/internal network URLs to prevent SSRF
+const BLOCKED_HOST_PATTERNS = [
+  /^localhost$/i,
+  /^127\.\d+\.\d+\.\d+$/,
+  /^10\.\d+\.\d+\.\d+$/,
+  /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/,
+  /^192\.168\.\d+\.\d+$/,
+  /^169\.254\.\d+\.\d+$/, // Link-local
+  /^0\.0\.0\.0$/,
+  /^\[::1?\]$/,
+  /\.internal$/i,
+  /\.local$/i,
+  /metadata\.google/i, // Cloud metadata
+  /169\.254\.169\.254/, // AWS/GCP metadata
+];
+
+function isBlockedUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return BLOCKED_HOST_PATTERNS.some((p) => p.test(parsed.hostname));
+  } catch {
+    return true; // Block unparseable URLs
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -69,6 +94,9 @@ export async function enrichMessageWithUrlContent(message: string): Promise<stri
 // ---------------------------------------------------------------------------
 
 async function extractContent(url: string): Promise<string | null> {
+  // Block private/internal network URLs (SSRF prevention)
+  if (isBlockedUrl(url)) return null;
+
   const ytMatch = url.match(YOUTUBE_REGEX);
   if (ytMatch) {
     return fetchYouTubeTranscript(ytMatch[1], url);

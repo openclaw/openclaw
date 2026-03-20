@@ -450,9 +450,9 @@ const plugin = {
     // the full SoundChain platform capabilities, API endpoints, and architecture.
     api.registerTool(
       ((ctx) => ({
-        name: "soundchain_discover" as const,
+        name: "soundchain_platform_docs" as const,
         async description() {
-          return "Discover SoundChain platform capabilities, API endpoints, and architecture. Returns the live skill.md — the complete agent gateway documentation.";
+          return "Fetch SoundChain platform documentation (skill.md) — API endpoints, architecture, and agent gateway capabilities.";
         },
         inputSchema: Type.Object({}),
         label: "SoundChain Discovery",
