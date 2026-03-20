@@ -110,6 +110,70 @@
       {
         "file": "src/memory/manager.readonly-recovery.test.ts",
         "reason": "Readonly recovery coverage exercises sqlite reopen flows and is safer outside shared unit-fast forks."
+      },
+      {
+        "file": "src/acp/persistent-bindings.test.ts",
+        "reason": "Persistent bindings coverage retained a large unit-fast heap spike on Linux CI and is safer outside the shared lane."
+      },
+      {
+        "file": "src/channels/plugins/setup-wizard-helpers.test.ts",
+        "reason": "Setup wizard helper coverage retained the largest shared unit-fast heap spike on Linux Node 24 CI."
+      },
+      {
+        "file": "src/cli/config-cli.integration.test.ts",
+        "reason": "Config CLI integration coverage retained a large shared unit-fast heap spike on Linux CI."
+      },
+      {
+        "file": "src/cli/config-cli.test.ts",
+        "reason": "Config CLI coverage retained a large shared unit-fast heap spike on Linux Node 24 CI."
+      },
+      {
+        "file": "src/cli/plugins-cli.test.ts",
+        "reason": "Plugins CLI coverage retained a broad plugin graph in shared unit-fast forks on Linux CI."
+      },
+      {
+        "file": "src/config/plugin-auto-enable.test.ts",
+        "reason": "Plugin auto-enable coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
+      },
+      {
+        "file": "src/cron/isolated-agent/run.sandbox-config-preserved.test.ts",
+        "reason": "Isolated-agent sandbox config coverage retained a large shared unit-fast heap spike on Linux CI."
+      },
+      {
+        "file": "src/cron/store.test.ts",
+        "reason": "Cron store coverage retained a large shared unit-fast heap spike on Linux Node 24 CI."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.respects-ackmaxchars-heartbeat-acks.test.ts",
+        "reason": "Heartbeat ack max chars coverage retained a recurring shared unit-fast heap spike across Linux CI lanes."
+      },
+      {
+        "file": "src/infra/heartbeat-runner.returns-default-unset.test.ts",
+        "reason": "Heartbeat default-unset coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
+      },
+      {
+        "file": "src/infra/outbound/outbound-session.test.ts",
+        "reason": "Outbound session coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
+      },
+      {
+        "file": "src/infra/outbound/payloads.test.ts",
+        "reason": "Outbound payload coverage retained a large shared unit-fast heap spike on Linux Node 24 CI."
+      },
+      {
+        "file": "src/memory/manager.mistral-provider.test.ts",
+        "reason": "Mistral provider coverage retained a large shared unit-fast heap spike on Linux Node 24 CI."
+      },
+      {
+        "file": "src/memory/qmd-manager.test.ts",
+        "reason": "QMD manager coverage retained recurring shared unit-fast heap spikes across Linux CI lanes."
+      },
+      {
+        "file": "src/plugins/contracts/auth.contract.test.ts",
+        "reason": "Plugin auth contract coverage retained a large shared unit-fast heap spike on Linux Node 24 CI."
+      },
+      {
+        "file": "src/secrets/apply.test.ts",
+        "reason": "Secrets apply coverage retained a large shared unit-fast heap spike on Linux Node 22 CI."
       }
     ],
     "threadSingleton": [
