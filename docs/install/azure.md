@@ -279,7 +279,7 @@ This guide sets up an Azure Linux VM with the Azure CLI, applies Network Securit
 
 ## Cost considerations
 
-Azure Bastion Standard SKU runs approximately **\$140/month** and the VM (Standard\_B2as\_v2) runs approximately **\$55/month**.
+Azure Bastion Standard SKU runs approximately **\$140/month** and the VM (Standard_B2as_v2) runs approximately **\$55/month**.
 
 To reduce costs:
 
