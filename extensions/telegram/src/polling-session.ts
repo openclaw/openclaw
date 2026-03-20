@@ -50,6 +50,7 @@ type TelegramPollingSessionOpts = {
   log: (line: string) => void;
   /** Pre-resolved Telegram transport to reuse across bot instances */
   telegramTransport?: TelegramTransport;
+  setStatus?: (status: Record<string, unknown>) => void;
 };
 
 export class TelegramPollingSession {
@@ -139,6 +140,7 @@ export class TelegramPollingSession {
           onUpdateId: this.opts.persistUpdateId,
         },
         telegramTransport: this.opts.telegramTransport,
+        setStatus: this.opts.setStatus,
       });
     } catch (err) {
       await this.#waitBeforeRetryOnRecoverableSetupError(err, "Telegram setup network error");
