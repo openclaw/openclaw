@@ -22,6 +22,8 @@ const sendMessageMatrixMock = vi.hoisted(() =>
     roomId: "!room:example",
   })),
 );
+const actualRename = fs.rename.bind(fs);
+const renameMock = vi.spyOn(fs, "rename");
 
 vi.mock("./send.js", async () => {
   const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
@@ -64,6 +66,8 @@ describe("matrix thread bindings", () => {
     __testing.resetSessionBindingAdaptersForTests();
     resetMatrixThreadBindingsForTests();
     sendMessageMatrixMock.mockClear();
+    renameMock.mockReset();
+    renameMock.mockImplementation(actualRename);
     setMatrixRuntime({
       state: {
         resolveStateDir: () => stateDir,
@@ -270,7 +274,7 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
 
-      await fs.chmod(path.dirname(resolveBindingsFilePath()), 0o500);
+      renameMock.mockRejectedValueOnce(new Error("disk full"));
       await vi.advanceTimersByTimeAsync(61_000);
       await Promise.resolve();
 
@@ -299,7 +303,6 @@ describe("matrix thread bindings", () => {
         }),
       ).toBeNull();
     } finally {
-      await fs.chmod(path.dirname(resolveBindingsFilePath()), 0o700).catch(() => undefined);
       vi.useRealTimers();
     }
   });
