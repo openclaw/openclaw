@@ -4,7 +4,7 @@ services:
     runtime: docker
     plan: standard
     healthCheckPath: /health
-    dockerCommand: "node openclaw.mjs gateway --allow-unconfigured --bind lan --port 8080"
+    dockerCommand: "node openclaw.mjs gateway --bind lan --port 8080 --config /app/sophia/openclaw.render.json"
     envVars:
       - key: NODE_OPTIONS
         value: "--max-old-space-size=1536"

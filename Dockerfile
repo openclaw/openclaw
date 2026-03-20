@@ -145,6 +145,7 @@ COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
 COPY --from=runtime-assets --chown=node:node /app/extensions ./extensions
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
+COPY --from=runtime-assets --chown=node:node /app/sophia ./sophia
 
 # In npm-installed Docker images, prefer the copied source extension tree for
 # bundled discovery so package metadata that points at source entries stays valid.

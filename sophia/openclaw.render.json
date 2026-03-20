@@ -31,11 +31,16 @@
   "cron": {
     "enabled": true
   },
+  "gateway": {
+    "controlUi": {
+      "dangerouslyAllowHostHeaderOriginFallback": true
+    }
+  },
   "channels": {
     "whatsapp": {
       "enabled": true,
       "dmPolicy": "pairing",
-"allowFrom": ["+393894991082"]
+      "allowFrom": ["+393894991082"],
       "groupPolicy": "allowlist"
     }
   }
