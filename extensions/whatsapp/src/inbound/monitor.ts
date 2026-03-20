@@ -322,6 +322,29 @@ export async function monitorWebInbox(options: {
     enriched: EnrichedInboundMessage,
   ) => {
     const chatJid = inbound.remoteJid;
+    const createAutoReplySendOptions = (replyToId?: string) => {
+      const normalizedReplyToId = replyToId?.trim();
+      return normalizedReplyToId
+        ? { replyToId: normalizedReplyToId, recordActivity: false }
+        : { recordActivity: false };
+    };
+    const resolveRawQuotedSendOptions = (replyToId?: string) => {
+      const normalizedReplyToId = replyToId?.trim();
+      if (!normalizedReplyToId) {
+        return undefined;
+      }
+      const quoted = quotedMessageCache.resolve({
+        jid: chatJid,
+        replyToId: normalizedReplyToId,
+      });
+      return quoted ? { quoted } : undefined;
+    };
+    const sendRawMessage = async (payload: AnyMessageContent, options?: { replyToId?: string }) => {
+      const quotedOptions = resolveRawQuotedSendOptions(options?.replyToId);
+      await (quotedOptions
+        ? sock.sendMessage(chatJid, payload, quotedOptions)
+        : sock.sendMessage(chatJid, payload));
+    };
     const sendComposing = async () => {
       try {
         await sock.sendPresenceUpdate("composing", chatJid);
@@ -330,9 +353,13 @@ export async function monitorWebInbox(options: {
       }
     };
     const reply = async (text: string, options?: { replyToId?: string }) => {
-      await sendApi.sendMessage(chatJid, text, undefined, undefined, {
-        ...(options?.replyToId ? { replyToId: options.replyToId } : {}),
-      });
+      await sendApi.sendMessage(
+        chatJid,
+        text,
+        undefined,
+        undefined,
+        createAutoReplySendOptions(options?.replyToId),
+      );
     };
     const sendMedia = async (payload: AnyMessageContent, options?: { replyToId?: string }) => {
       const caption =
@@ -346,7 +373,7 @@ export async function monitorWebInbox(options: {
       if ("image" in payload && payload.image) {
         const imageBuffer = toBuffer(payload.image);
         if (!imageBuffer) {
-          await sock.sendMessage(chatJid, payload);
+          await sendRawMessage(payload, options);
           return;
         }
         await sendApi.sendMessage(
@@ -354,16 +381,14 @@ export async function monitorWebInbox(options: {
           caption,
           imageBuffer,
           typeof payload.mimetype === "string" ? payload.mimetype : "image/jpeg",
-          {
-            ...(options?.replyToId ? { replyToId: options.replyToId } : {}),
-          },
+          createAutoReplySendOptions(options?.replyToId),
         );
         return;
       }
       if ("audio" in payload && payload.audio) {
         const audioBuffer = toBuffer(payload.audio);
         if (!audioBuffer) {
-          await sock.sendMessage(chatJid, payload);
+          await sendRawMessage(payload, options);
           return;
         }
         await sendApi.sendMessage(
@@ -371,16 +396,14 @@ export async function monitorWebInbox(options: {
           caption,
           audioBuffer,
           typeof payload.mimetype === "string" ? payload.mimetype : "audio/ogg",
-          {
-            ...(options?.replyToId ? { replyToId: options.replyToId } : {}),
-          },
+          createAutoReplySendOptions(options?.replyToId),
         );
         return;
       }
       if ("video" in payload && payload.video) {
         const videoBuffer = toBuffer(payload.video);
         if (!videoBuffer) {
-          await sock.sendMessage(chatJid, payload);
+          await sendRawMessage(payload, options);
           return;
         }
         await sendApi.sendMessage(
@@ -390,7 +413,7 @@ export async function monitorWebInbox(options: {
           typeof payload.mimetype === "string" ? payload.mimetype : "video/mp4",
           {
             ...(payload.gifPlayback ? { gifPlayback: true } : {}),
-            ...(options?.replyToId ? { replyToId: options.replyToId } : {}),
+            ...createAutoReplySendOptions(options?.replyToId),
           },
         );
         return;
@@ -398,7 +421,7 @@ export async function monitorWebInbox(options: {
       if ("document" in payload && payload.document) {
         const documentBuffer = toBuffer(payload.document);
         if (!documentBuffer) {
-          await sock.sendMessage(chatJid, payload);
+          await sendRawMessage(payload, options);
           return;
         }
         await sendApi.sendMessage(
@@ -408,12 +431,12 @@ export async function monitorWebInbox(options: {
           typeof payload.mimetype === "string" ? payload.mimetype : "application/octet-stream",
           {
             ...(typeof payload.fileName === "string" ? { fileName: payload.fileName } : {}),
-            ...(options?.replyToId ? { replyToId: options.replyToId } : {}),
+            ...createAutoReplySendOptions(options?.replyToId),
           },
         );
         return;
       }
-      await sock.sendMessage(chatJid, payload);
+      await sendRawMessage(payload, options);
     };
     const timestamp = inbound.messageTimestampMs;
     const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);

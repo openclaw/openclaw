@@ -1,7 +1,18 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import "./monitor-inbox.test-harness.js";
+import type { AnyMessageContent } from "@whiskeysockets/baileys";
 import { describe, expect, it, vi } from "vitest";
+
+const recordChannelActivity = vi.fn();
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
+  };
+});
+
+import "./monitor-inbox.test-harness.js";
 import { monitorWebInbox } from "./inbound.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -137,6 +148,39 @@ describe("web monitor inbox", () => {
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("composing", "999@s.whatsapp.net");
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: "pong",
+    });
+
+    await listener.close();
+  });
+
+  it("does not record outbound activity for inbox auto-replies", async () => {
+    const inlineImagePayload = {
+      image: Buffer.from("img"),
+      caption: "cap",
+      mimetype: "image/jpeg",
+    } satisfies AnyMessageContent;
+    const onMessage = vi.fn(async (msg) => {
+      await msg.reply("pong");
+      await msg.sendMedia(inlineImagePayload, { replyToId: msg.id });
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const upsert = buildMessageUpsert({
+      id: "abc",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(recordChannelActivity).toHaveBeenCalledTimes(1);
+    expect(recordChannelActivity).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      accountId: DEFAULT_ACCOUNT_ID,
+      direction: "inbound",
     });
 
     await listener.close();
@@ -300,5 +344,41 @@ describe("web monitor inbox", () => {
         message: { conversation: "original" },
       },
     });
+  });
+
+  it("keeps quoted reply context when media falls back to a raw Baileys send", async () => {
+    const fallbackImagePayload = {
+      image: { url: "file:///tmp/openclaw-fallback.jpg" },
+      caption: "pong",
+      mimetype: "image/jpeg",
+    } satisfies AnyMessageContent;
+    const onMessage = vi.fn(async (msg) => {
+      await msg.sendMedia(fallbackImagePayload, { replyToId: msg.id });
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage);
+    const upsert = buildMessageUpsert({
+      id: "abc",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(sock.sendMessage).toHaveBeenLastCalledWith("999@s.whatsapp.net", fallbackImagePayload, {
+      quoted: expect.objectContaining({
+        key: expect.objectContaining({
+          id: "abc",
+          remoteJid: "999@s.whatsapp.net",
+          fromMe: false,
+        }),
+        message: { conversation: "ping" },
+      }),
+    });
+
+    await listener.close();
   });
 });

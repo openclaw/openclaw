@@ -7,6 +7,7 @@ export type ActiveWebSendOptions = {
   accountId?: string;
   fileName?: string;
   replyToId?: string;
+  recordActivity?: boolean;
 };
 
 export type ActiveWebListener = {

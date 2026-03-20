@@ -11,6 +11,10 @@ function recordWhatsAppOutbound(accountId: string) {
   });
 }
 
+function shouldRecordOutboundActivity(sendOptions?: ActiveWebSendOptions): boolean {
+  return sendOptions?.recordActivity !== false;
+}
+
 function resolveOutboundMessageId(result: unknown): string {
   return typeof result === "object" && result && "key" in result
     ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
@@ -78,8 +82,10 @@ export function createWebSendApi(params: {
       const result = quoted
         ? await params.sock.sendMessage(jid, payload, { quoted })
         : await params.sock.sendMessage(jid, payload);
-      const accountId = sendOptions?.accountId ?? params.defaultAccountId;
-      recordWhatsAppOutbound(accountId);
+      if (shouldRecordOutboundActivity(sendOptions)) {
+        const accountId = sendOptions?.accountId ?? params.defaultAccountId;
+        recordWhatsAppOutbound(accountId);
+      }
       const messageId = resolveOutboundMessageId(result);
       return { messageId };
     },

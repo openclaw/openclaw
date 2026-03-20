@@ -86,6 +86,12 @@ describe("createWebSendApi", () => {
     );
   });
 
+  it("skips outbound activity recording when recordActivity is false", async () => {
+    await api.sendMessage("+1555", "hello", undefined, undefined, { recordActivity: false });
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", { text: "hello" });
+    expect(recordChannelActivity).not.toHaveBeenCalled();
+  });
+
   it("supports image media with caption", async () => {
     const payload = Buffer.from("img");
     await api.sendMessage("+1555", "cap", payload, "image/jpeg");

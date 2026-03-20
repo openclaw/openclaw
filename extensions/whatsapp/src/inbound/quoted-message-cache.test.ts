@@ -131,6 +131,52 @@ describe("createQuotedMessageCache", () => {
     });
   });
 
+  it("counts one direct-chat message with two JID aliases as one remembered entry", () => {
+    const cache = createQuotedMessageCache({ limit: 1 });
+    cache.remember({
+      message: {
+        key: {
+          id: "msg-1",
+          remoteJid: "1234567890@lid",
+          fromMe: false,
+        },
+        message: { conversation: "hello there" },
+      },
+      messageId: "msg-1",
+      remoteJid: "1234567890@lid",
+      normalizedJid: "1555@s.whatsapp.net",
+      isGroup: false,
+    });
+
+    expect(
+      cache.resolve({
+        jid: "1234567890@lid",
+        replyToId: "msg-1",
+      }),
+    ).toEqual({
+      key: {
+        id: "msg-1",
+        remoteJid: "1234567890@lid",
+        fromMe: false,
+      },
+      message: { conversation: "hello there" },
+    });
+    expect(
+      cache.resolve({
+        jid: "1555@s.whatsapp.net",
+        replyToId: "msg-1",
+      }),
+    ).toEqual({
+      key: {
+        id: "msg-1",
+        remoteJid: "1555@s.whatsapp.net",
+        remoteJidAlt: "1234567890@lid",
+        fromMe: false,
+      },
+      message: { conversation: "hello there" },
+    });
+  });
+
   it("keeps group quotes on the group jid when resolving", () => {
     const cache = createQuotedMessageCache();
     cache.remember({
@@ -189,5 +235,66 @@ describe("createQuotedMessageCache", () => {
         replyToId: "msg-1",
       }),
     ).toBeUndefined();
+  });
+
+  it("removes every alias when an older message is evicted", () => {
+    const cache = createQuotedMessageCache({ limit: 1 });
+    cache.remember({
+      message: {
+        key: {
+          id: "msg-1",
+          remoteJid: "1234567890@lid",
+          fromMe: false,
+        },
+        message: { conversation: "hello there" },
+      },
+      messageId: "msg-1",
+      remoteJid: "1234567890@lid",
+      normalizedJid: "1555@s.whatsapp.net",
+      isGroup: false,
+    });
+    cache.remember({
+      message: {
+        key: {
+          id: "msg-2",
+          remoteJid: "120363158967464097@g.us",
+          fromMe: false,
+          participant: "1555@s.whatsapp.net",
+        },
+        message: { conversation: "group hello" },
+      },
+      messageId: "msg-2",
+      remoteJid: "120363158967464097@g.us",
+      normalizedJid: "120363158967464097@g.us",
+      participantJid: "1555@s.whatsapp.net",
+      isGroup: true,
+    });
+
+    expect(
+      cache.resolve({
+        jid: "1234567890@lid",
+        replyToId: "msg-1",
+      }),
+    ).toBeUndefined();
+    expect(
+      cache.resolve({
+        jid: "1555@s.whatsapp.net",
+        replyToId: "msg-1",
+      }),
+    ).toBeUndefined();
+    expect(
+      cache.resolve({
+        jid: "120363158967464097@g.us",
+        replyToId: "msg-2",
+      }),
+    ).toEqual({
+      key: {
+        id: "msg-2",
+        remoteJid: "120363158967464097@g.us",
+        fromMe: false,
+        participant: "1555@s.whatsapp.net",
+      },
+      message: { conversation: "group hello" },
+    });
   });
 });

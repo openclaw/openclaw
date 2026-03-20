@@ -6,7 +6,12 @@ const DEFAULT_QUOTED_MESSAGE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 type CachedQuotedMessage = {
   message: WAMessage;
   storedAt: number;
+  aliasKeys: Set<string>;
 };
+
+function createQuotedMessageAliasKey(jid: string, messageId: string): string {
+  return `${jid}:${messageId}`;
+}
 
 export function normalizeQuotedMessage(params: {
   message: WAMessage;
@@ -60,23 +65,50 @@ function alignQuotedMessageToJid(message: WAMessage, jid: string): WAMessage {
 }
 
 export function createQuotedMessageCache(options?: { limit?: number; ttlMs?: number }) {
-  const cache = new Map<string, CachedQuotedMessage>();
+  const entries = new Map<string, CachedQuotedMessage>();
+  const aliasIndex = new Map<string, string>();
   const limit = options?.limit ?? DEFAULT_QUOTED_MESSAGE_CACHE_LIMIT;
   const ttlMs = options?.ttlMs ?? DEFAULT_QUOTED_MESSAGE_CACHE_TTL_MS;
 
-  const prune = () => {
-    const now = Date.now();
-    for (const [key, entry] of cache.entries()) {
-      if (now - entry.storedAt > ttlMs) {
-        cache.delete(key);
+  const deleteEntry = (entryKey: string) => {
+    const entry = entries.get(entryKey);
+    if (!entry) {
+      return;
+    }
+    entries.delete(entryKey);
+    for (const aliasKey of entry.aliasKeys) {
+      if (aliasIndex.get(aliasKey) === entryKey) {
+        aliasIndex.delete(aliasKey);
       }
     }
-    while (cache.size > limit) {
-      const oldestKey = cache.keys().next().value;
-      if (!oldestKey) {
+  };
+
+  const detachAlias = (entryKey: string, aliasKey: string) => {
+    const entry = entries.get(entryKey);
+    if (!entry) {
+      aliasIndex.delete(aliasKey);
+      return;
+    }
+    entry.aliasKeys.delete(aliasKey);
+    aliasIndex.delete(aliasKey);
+    if (entry.aliasKeys.size === 0) {
+      entries.delete(entryKey);
+    }
+  };
+
+  const prune = () => {
+    const now = Date.now();
+    for (const [entryKey, entry] of entries.entries()) {
+      if (now - entry.storedAt > ttlMs) {
+        deleteEntry(entryKey);
+      }
+    }
+    while (entries.size > limit) {
+      const oldestEntryKey = entries.keys().next().value;
+      if (!oldestEntryKey) {
         break;
       }
-      cache.delete(oldestKey);
+      deleteEntry(oldestEntryKey);
     }
   };
 
@@ -102,21 +134,38 @@ export function createQuotedMessageCache(options?: { limit?: number; ttlMs?: num
     const storedAt = Date.now();
     // Index by both the stored inbound JID and the normalized outbound JID so
     // direct-chat replies can resolve the same message from either shape.
-    const candidateJids = [params.remoteJid, params.normalizedJid]
+    const candidateJids = [params.remoteJid, params.normalizedJid, normalizedMessage.key?.remoteJid]
       .map((value) => value?.trim())
       .filter((value): value is string => Boolean(value));
-    for (const jid of candidateJids) {
-      cache.set(`${jid}:${messageId}`, {
-        message: normalizedMessage,
-        storedAt,
-      });
+    const aliasKeys = Array.from(
+      new Set(candidateJids.map((jid) => createQuotedMessageAliasKey(jid, messageId))),
+    );
+    const entryKey = aliasKeys[0];
+    if (!entryKey) {
+      return;
+    }
+    deleteEntry(entryKey);
+    for (const aliasKey of aliasKeys) {
+      const existingEntryKey = aliasIndex.get(aliasKey);
+      if (existingEntryKey && existingEntryKey !== entryKey) {
+        detachAlias(existingEntryKey, aliasKey);
+      }
+    }
+    entries.set(entryKey, {
+      message: normalizedMessage,
+      storedAt,
+      aliasKeys: new Set(aliasKeys),
+    });
+    for (const aliasKey of aliasKeys) {
+      aliasIndex.set(aliasKey, entryKey);
     }
     prune();
   };
 
   const resolve = (params: { jid: string; replyToId: string }): WAMessage | undefined => {
     prune();
-    const message = cache.get(`${params.jid}:${params.replyToId}`)?.message;
+    const entryKey = aliasIndex.get(createQuotedMessageAliasKey(params.jid, params.replyToId));
+    const message = entryKey ? entries.get(entryKey)?.message : undefined;
     return message ? alignQuotedMessageToJid(message, params.jid) : undefined;
   };
 
