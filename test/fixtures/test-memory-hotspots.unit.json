@@ -1,0 +1,79 @@
+{
+  "config": "vitest.unit.config.ts",
+  "generatedAt": "2026-03-20T00:00:00.000Z",
+  "defaultMinDeltaKb": 262144,
+  "lane": "unit-fast",
+  "files": {
+    "src/config/schema.help.quality.test.ts": {
+      "deltaKb": 1111491,
+      "sources": [
+        "gha-23328306205-compat-node22:unit-fast",
+        "gha-23328306205-node-test-2-2:unit-fast"
+      ]
+    },
+    "src/cron/isolated-agent.uses-last-non-empty-agent-text-as.test.ts": {
+      "deltaKb": 652288,
+      "sources": ["gha-23328306205-node-test-1-2:unit-fast"]
+    },
+    "src/plugins/install.test.ts": {
+      "deltaKb": 545485,
+      "sources": ["gha-23328306205-compat-node22:unit-fast"]
+    },
+    "src/infra/update-runner.test.ts": {
+      "deltaKb": 474726,
+      "sources": ["gha-23328306205-node-test-1-2:unit-fast"]
+    },
+    "src/cron/isolated-agent/run.cron-model-override.test.ts": {
+      "deltaKb": 469914,
+      "sources": ["gha-23328306205-node-test-2-2:unit-fast"]
+    },
+    "src/cron/isolated-agent.skips-delivery-without-whatsapp-recipient-besteffortdeliver-true.test.ts": {
+      "deltaKb": 457421,
+      "sources": ["gha-23328306205-node-test-1-2:unit-fast"]
+    },
+    "src/cron/isolated-agent/run.skill-filter.test.ts": {
+      "deltaKb": 446054,
+      "sources": ["gha-23328306205-compat-node22:unit-fast"]
+    },
+    "src/infra/run-node.test.ts": {
+      "deltaKb": 427213,
+      "sources": ["gha-23328306205-node-test-2-2:unit-fast"]
+    },
+    "src/cron/isolated-agent.delivers-response-has-heartbeat-ok-but-includes.test.ts": {
+      "deltaKb": 377446,
+      "sources": ["gha-23328306205-compat-node22:unit-fast"]
+    },
+    "src/infra/state-migrations.test.ts": {
+      "deltaKb": 345805,
+      "sources": ["gha-23328306205-node-test-1-2:unit-fast"]
+    },
+    "src/config/sessions/store.pruning.integration.test.ts": {
+      "deltaKb": 342221,
+      "sources": ["gha-23328306205-node-test-1-2:unit-fast"]
+    },
+    "src/acp/translator.cancel-scoping.test.ts": {
+      "deltaKb": 324403,
+      "sources": ["gha-23328306205-node-test-1-2:unit-fast"]
+    },
+    "src/tui/tui-session-actions.test.ts": {
+      "deltaKb": 319898,
+      "sources": ["gha-23328306205-compat-node22:unit-fast"]
+    },
+    "src/infra/outbound/message-action-runner.context.test.ts": {
+      "deltaKb": 318157,
+      "sources": ["gha-23328306205-compat-node22:unit-fast"]
+    },
+    "src/cron/service.store-load-invalid-main-job.test.ts": {
+      "deltaKb": 308019,
+      "sources": ["gha-23328306205-node-test-2-2:unit-fast"]
+    },
+    "src/cron/service.store-migration.test.ts": {
+      "deltaKb": 282931,
+      "sources": ["gha-23328306205-node-test-2-2:unit-fast"]
+    },
+    "src/media-understanding/providers/google/video.test.ts": {
+      "deltaKb": 274022,
+      "sources": ["gha-23328306205-node-test-2-2:unit-fast"]
+    }
+  }
+}
