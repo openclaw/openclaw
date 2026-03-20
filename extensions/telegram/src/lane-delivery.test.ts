@@ -175,7 +175,7 @@ describe("createLaneTextDeliverer", () => {
 
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
-    expect(result).toBe("preview-finalized");
+    expect(result.kind).toBe("preview-finalized");
     expect(harness.editPreview).toHaveBeenCalledTimes(3);
     expect(harness.sendPayload).not.toHaveBeenCalled();
     expect(computeBackoff).toHaveBeenCalledTimes(2);
@@ -201,7 +201,7 @@ describe("createLaneTextDeliverer", () => {
 
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
-    expect(result).toBe("sent");
+    expect(result.kind).toBe("sent");
     expect(harness.editPreview).toHaveBeenCalledTimes(1);
     expect(computeBackoff).not.toHaveBeenCalled();
     expect(sleepWithAbort).not.toHaveBeenCalled();
