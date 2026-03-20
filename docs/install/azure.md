@@ -231,7 +231,7 @@ This guide sets up an Azure Linux VM with the Azure CLI, applies Network Securit
       --sku Standard --enable-tunneling true
     ```
 
-    Bastion provisioning takes a few minutes.
+    Bastion provisioning typically takes 5-10 minutes but can take up to 15-30 minutes in some regions.
 
   </Step>
 </Steps>
