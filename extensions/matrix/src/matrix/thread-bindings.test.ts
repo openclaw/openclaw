@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { PluginRuntime } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getSessionBindingService,
   __testing,
 } from "../../../../src/infra/outbound/session-binding-service.js";
+import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
 import { resolveMatrixStoragePaths } from "./client/storage.js";
 import {
@@ -30,10 +30,9 @@ const writeJsonFileAtomicallyMock = vi.hoisted(() =>
   vi.fn<(filePath: string, value: unknown) => Promise<void>>(),
 );
 
-vi.mock("openclaw/plugin-sdk/matrix", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/matrix")>(
-    "openclaw/plugin-sdk/matrix",
-  );
+vi.mock("../../runtime-api.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../runtime-api.js")>("../../runtime-api.js");
   pluginSdkActual.writeJsonFileAtomically = actual.writeJsonFileAtomically;
   return {
     ...actual,

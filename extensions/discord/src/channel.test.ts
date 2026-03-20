@@ -1,13 +1,13 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ChannelAccountSnapshot,
   ChannelGatewayContext,
-  OpenClawConfig,
-  PluginRuntime,
-} from "openclaw/plugin-sdk/discord";
-import { afterEach, describe, expect, it, vi } from "vitest";
+} from "../../../src/channels/plugins/types.js";
+import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import { discordPlugin } from "./channel.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { setDiscordRuntime } from "./runtime.js";
 
 const probeDiscordMock = vi.hoisted(() => vi.fn());

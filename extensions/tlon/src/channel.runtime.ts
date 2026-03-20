@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
-import type {
-  ChannelAccountSnapshot,
-  ChannelOutboundAdapter,
-} from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLoggerBackedRuntime } from "openclaw/plugin-sdk/runtime";

@@ -4,7 +4,7 @@ export {
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "../../../src/plugin-sdk/discord.js";
 export {
   buildChannelConfigSchema,
   getChatChannelMeta,
@@ -19,15 +19,15 @@ export {
   type DiscordActionConfig,
   type DiscordConfig,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/discord-core";
-export { DiscordConfigSchema } from "openclaw/plugin-sdk/discord-core";
+} from "../../../src/plugin-sdk/discord-core.js";
+export { DiscordConfigSchema } from "../../../src/plugin-sdk/discord-core.js";
 export { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 export {
   assertMediaNotDataUrl,
   parseAvailableTags,
   readReactionParams,
   withNormalizedTimestamp,
-} from "openclaw/plugin-sdk/discord-core";
+} from "../../../src/plugin-sdk/discord-core.js";
 export {
   createHybridChannelConfigAdapter,
   createScopedChannelConfigAdapter,
@@ -44,9 +44,9 @@ export { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-contract";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/secret-input";

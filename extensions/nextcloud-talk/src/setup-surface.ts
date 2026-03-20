@@ -1,7 +1,7 @@
-import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { setSetupChannelEnabled } from "openclaw/plugin-sdk/setup";
 import { type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup";

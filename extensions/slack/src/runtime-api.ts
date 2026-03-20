@@ -9,7 +9,7 @@ export {
   type ChannelPlugin,
   type OpenClawConfig,
   type SlackAccountConfig,
-} from "openclaw/plugin-sdk/slack";
+} from "../../../src/plugin-sdk/slack.js";
 export {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
@@ -25,5 +25,5 @@ export {
   readStringParam,
   SlackConfigSchema,
   withNormalizedTimestamp,
-} from "openclaw/plugin-sdk/slack-core";
+} from "../../../src/plugin-sdk/slack-core.js";
 export { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";

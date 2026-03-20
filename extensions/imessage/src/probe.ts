@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-runtime";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";

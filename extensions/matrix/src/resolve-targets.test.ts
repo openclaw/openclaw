@@ -1,5 +1,5 @@
-import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/matrix";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { ChannelDirectoryEntry } from "../runtime-api.js";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
 

@@ -1,3 +1,3 @@
-import { buildChannelConfigSchema, WhatsAppConfigSchema } from "openclaw/plugin-sdk/whatsapp-core";
+import { buildChannelConfigSchema, WhatsAppConfigSchema } from "./runtime-api.js";
 
 export const WhatsAppChannelConfigSchema = buildChannelConfigSchema(WhatsAppConfigSchema);

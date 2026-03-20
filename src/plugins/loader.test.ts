@@ -3683,7 +3683,7 @@ module.exports = {
     fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
 
 export const syntheticRuntimeMarker = {
   resolveOutboundSendDep,
@@ -3691,7 +3691,7 @@ export const syntheticRuntimeMarker = {
 `,
       "utf-8",
     );
-    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "channel-runtime.ts");
+    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "infra-runtime.ts");
     fs.writeFileSync(
       copiedChannelRuntimeShim,
       `export function resolveOutboundSendDep() {
@@ -3714,7 +3714,7 @@ export const syntheticRuntimeMarker = {
 
     const withAlias = createJiti(jitiBaseUrl, {
       ...__testing.buildPluginLoaderJitiOptions({
-        "openclaw/plugin-sdk/channel-runtime": copiedChannelRuntimeShim,
+        "openclaw/plugin-sdk/infra-runtime": copiedChannelRuntimeShim,
       }),
       tryNative: false,
     });

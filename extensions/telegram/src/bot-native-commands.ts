@@ -1,8 +1,19 @@
 import type { Bot, Context } from "grammy";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/channel-runtime";
-import { recordInboundSessionMetaSafe } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  resolveCommandAuthorization,
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveNativeCommandSessionTargets,
+} from "openclaw/plugin-sdk/command-auth";
+import {
+  buildCommandTextFromArgs,
+  findCommandByNativeName,
+  listNativeCommandSpecs,
+  listNativeCommandSpecsForConfig,
+  parseCommandArgs,
+  resolveCommandArgMenu,
+  type CommandArgs,
+} from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
@@ -18,7 +29,10 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
-import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  ensureConfiguredBindingRouteReady,
+  recordInboundSessionMetaSafe,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   executePluginCommand,
@@ -26,16 +40,6 @@ import {
   matchPluginCommand,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveCommandAuthorization } from "openclaw/plugin-sdk/reply-runtime";
-import type { CommandArgs } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  buildCommandTextFromArgs,
-  findCommandByNativeName,
-  listNativeCommandSpecs,
-  listNativeCommandSpecsForConfig,
-  parseCommandArgs,
-  resolveCommandArgMenu,
-} from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";

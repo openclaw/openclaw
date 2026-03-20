@@ -7,4 +7,4 @@ export {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
 } from "./src/directory-config.js";
-export { resolveWhatsAppGroupIntroHint } from "openclaw/plugin-sdk/whatsapp-core";
+export { resolveWhatsAppGroupIntroHint } from "./src/runtime-api.js";

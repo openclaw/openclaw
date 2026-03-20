@@ -1,10 +1,10 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ChannelAccountSnapshot,
   ChannelGatewayContext,
-  OpenClawConfig,
-  PluginRuntime,
-} from "openclaw/plugin-sdk/telegram";
-import { afterEach, describe, expect, it, vi } from "vitest";
+} from "../../../src/channels/plugins/types.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import * as auditModule from "./audit.js";

@@ -1,10 +1,10 @@
 import { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
-import { shouldAckReaction as shouldAckReactionGate } from "openclaw/plugin-sdk/channel-runtime";
-import { logInboundDrop } from "openclaw/plugin-sdk/channel-runtime";
 import {
   createStatusReactionController,
+  shouldAckReaction as shouldAckReactionGate,
   type StatusReactionController,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-feedback";
+import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-runtime";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";

@@ -2,7 +2,7 @@ import {
   compileAllowlist,
   resolveCompiledAllowlistMatch,
   type AllowlistMatch,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/allow-from";
 import {
   normalizeHyphenSlug,
   normalizeStringEntries,

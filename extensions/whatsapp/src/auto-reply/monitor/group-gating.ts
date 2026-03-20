@@ -1,8 +1,8 @@
-import { resolveMentionGating } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveMentionGating } from "openclaw/plugin-sdk/channel-inbound";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
+import { recordPendingHistoryEntryIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { parseActivationCommand } from "openclaw/plugin-sdk/reply-runtime";
-import { recordPendingHistoryEntryIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";

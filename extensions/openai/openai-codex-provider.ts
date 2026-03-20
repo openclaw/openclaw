@@ -9,6 +9,7 @@ import {
   listProfilesForProvider,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/provider-auth";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
 import {
   DEFAULT_CONTEXT_TOKENS,
@@ -16,7 +17,6 @@ import {
   normalizeProviderId,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-models";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-oauth";
 import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";

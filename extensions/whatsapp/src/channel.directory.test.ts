@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/whatsapp";
 import { describe, expect, it } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
 } from "../../../test/helpers/extensions/directory.ts";
 import { whatsappPlugin } from "./channel.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 describe("whatsapp directory", () => {
   const runtimeEnv = createDirectoryTestRuntime() as never;
