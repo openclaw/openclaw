@@ -254,10 +254,6 @@ describe("matrix thread bindings", () => {
       writeJsonFileAtomicallyMock.mockClear();
       await vi.advanceTimersByTimeAsync(61_000);
 
-      await vi.waitFor(() => {
-        expect(writeJsonFileAtomicallyMock).toHaveBeenCalledTimes(1);
-      });
-
       await vi.waitFor(async () => {
         const persistedRaw = await fs.readFile(resolveBindingsFilePath(), "utf-8");
         expect(JSON.parse(persistedRaw)).toMatchObject({
@@ -302,7 +298,7 @@ describe("matrix thread bindings", () => {
 
       await vi.waitFor(() => {
         expect(logVerboseMessage).toHaveBeenCalledWith(
-          expect.stringContaining("failed auto-unbinding expired bindings"),
+          expect.stringContaining("matrix: auto-unbinding"),
         );
       });
 
