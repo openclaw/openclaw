@@ -10,15 +10,15 @@ import {
 } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
-import { resolveMatrixAccount } from "../accounts.js";
+import { resolveConfiguredMatrixBotUserIds, resolveMatrixAccount } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
   isBunRuntime,
   resolveMatrixAuth,
   resolveMatrixAuthContext,
   resolveSharedMatrixClient,
-  stopSharedClientInstance,
 } from "../client.js";
+import { releaseSharedClientInstance } from "../client/shared.js";
 import { createMatrixThreadBindingManager } from "../thread-bindings.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { resolveMatrixMonitorConfig } from "./config.js";
@@ -80,10 +80,15 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const accountConfig = account.config;
 
   const allowlistOnly = accountConfig.allowlistOnly === true;
+  const accountAllowBots = accountConfig.allowBots;
   let allowFrom: string[] = (accountConfig.dm?.allowFrom ?? []).map(String);
   let groupAllowFrom: string[] = (accountConfig.groupAllowFrom ?? []).map(String);
   let roomsConfig = accountConfig.groups ?? accountConfig.rooms;
   let needsRoomAliasesForConfig = false;
+  const configuredBotUserIds = resolveConfiguredMatrixBotUserIds({
+    cfg,
+    accountId: effectiveAccountId,
+  });
 
   ({ allowFrom, groupAllowFrom, roomsConfig } = await resolveMatrixMonitorConfig({
     cfg,
@@ -131,7 +136,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   setActiveMatrixClient(client, auth.accountId);
   let cleanedUp = false;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
-  const cleanup = () => {
+  const cleanup = async () => {
     if (cleanedUp) {
       return;
     }
@@ -139,7 +144,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     try {
       threadBindingManager?.stop();
     } finally {
-      stopSharedClientInstance(client);
+      await releaseSharedClientInstance(client, "persist");
       setActiveMatrixClient(null, auth.accountId);
     }
   };
@@ -201,6 +206,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     allowFrom,
     groupAllowFrom,
     roomsConfig,
+    accountAllowBots,
+    configuredBotUserIds,
     mentionRegexes,
     groupPolicy,
     replyToMode,
@@ -273,19 +280,32 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     });
 
     await new Promise<void>((resolve) => {
-      const onAbort = () => {
-        logVerboseMessage("matrix: stopping client");
-        cleanup();
-        resolve();
+      const stopAndResolve = async () => {
+        try {
+          logVerboseMessage("matrix: stopping client");
+          await cleanup();
+        } catch (err) {
+          logger.warn("matrix: failed during monitor shutdown cleanup", {
+            error: String(err),
+          });
+        } finally {
+          resolve();
+        }
       };
       if (opts.abortSignal?.aborted) {
-        onAbort();
+        void stopAndResolve();
         return;
       }
-      opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
+      opts.abortSignal?.addEventListener(
+        "abort",
+        () => {
+          void stopAndResolve();
+        },
+        { once: true },
+      );
     });
   } catch (err) {
-    cleanup();
+    await cleanup();
     throw err;
   }
 }

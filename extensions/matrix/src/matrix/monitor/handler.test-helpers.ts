@@ -24,6 +24,8 @@ type MatrixHandlerTestHarnessOptions = {
   allowFrom?: string[];
   groupAllowFrom?: string[];
   roomsConfig?: Record<string, MatrixRoomConfig>;
+  accountAllowBots?: boolean | "mentions";
+  configuredBotUserIds?: Set<string>;
   mentionRegexes?: MatrixMonitorHandlerParams["mentionRegexes"];
   groupPolicy?: "open" | "allowlist" | "disabled";
   replyToMode?: ReplyToMode;
@@ -35,6 +37,7 @@ type MatrixHandlerTestHarnessOptions = {
   startupMs?: number;
   startupGraceMs?: number;
   dropPreStartupMessages?: boolean;
+  needsRoomAliasesForConfig?: boolean;
   isDirectMessage?: boolean;
   readAllowFromStore?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   upsertPairingRequest?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
@@ -163,6 +166,8 @@ export function createMatrixHandlerTestHarness(
     allowFrom: options.allowFrom ?? [],
     groupAllowFrom: options.groupAllowFrom ?? [],
     roomsConfig: options.roomsConfig,
+    accountAllowBots: options.accountAllowBots,
+    configuredBotUserIds: options.configuredBotUserIds,
     mentionRegexes: options.mentionRegexes ?? [],
     groupPolicy: options.groupPolicy ?? "open",
     replyToMode: options.replyToMode ?? "off",
@@ -179,7 +184,7 @@ export function createMatrixHandlerTestHarness(
     },
     getRoomInfo: options.getRoomInfo ?? (async () => ({ altAliases: [] })),
     getMemberDisplayName: options.getMemberDisplayName ?? (async () => "sender"),
-    needsRoomAliasesForConfig: false,
+    needsRoomAliasesForConfig: options.needsRoomAliasesForConfig ?? false,
   });
 
   return {
