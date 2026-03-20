@@ -1470,14 +1470,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const flushPendingPatch = async () => {
       stopPatchInterval();
       if (!blockStreamingClient) return;
-      // Wait for any in-flight interval tick to settle before flushing.
-      // Without this, an interval tick that set lastSentText synchronously but hasn't
-      // completed the async send yet would cause flushPendingPatch to exit early
-      // (text === lastSentText guard), leaving streamMessageId null and causing
-      // final delivery to fall through to a new post instead of patching in place.
-      const deadline = Date.now() + 2000;
-      while (patchSending && Date.now() < deadline) {
-        await new Promise<void>((r) => setTimeout(r, 20));
+      // Await the in-flight promise directly so we never miss a late-resolving
+      // POST/PATCH — the busy-wait on patchSending had a race where patchSending
+      // could clear before the network request settled (ID=2965256849).
+      if (patchInflight) {
+        await patchInflight.catch(() => {});
       }
       const rawText = pendingPatchText;
       if (!rawText) return;
@@ -1601,9 +1598,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               // first sendMessageMattermost resolves during this window, so the orphan
               // cleanup below can capture and delete it.
               stopPatchInterval();
-              const deadline = Date.now() + 2000;
-              while (patchSending && Date.now() < deadline) {
-                await new Promise<void>((r) => setTimeout(r, 20));
+              if (patchInflight) {
+                await patchInflight.catch(() => {});
               }
             } else {
               // Same thread: flush pending patches normally.
