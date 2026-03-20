@@ -54,6 +54,7 @@ type GatewayRunOpts = {
   rawStreamPath?: unknown;
   dev?: boolean;
   reset?: boolean;
+  lightweight?: boolean;
 };
 
 const gatewayLog = createSubsystemLogger("gateway");
@@ -80,6 +81,7 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "claudeCliLogs",
   "compact",
   "rawStream",
+  "lightweight",
 ] as const;
 
 const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
@@ -427,6 +429,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           bind,
           auth: authOverride,
           tailscale: tailscaleOverride,
+          lightweight: Boolean(opts.lightweight),
         }),
     });
   } catch (err) {
@@ -502,6 +505,7 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option("--compact", 'Alias for "--ws-log compact"', false)
     .option("--raw-stream", "Log raw model stream events to jsonl", false)
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
+    .option("--lightweight", "Only load configured channel plugins to reduce memory", false)
     .action(async (opts, command) => {
       await runGatewayCommand(resolveGatewayRunOptions(opts, command));
     });

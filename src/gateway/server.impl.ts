@@ -346,6 +346,11 @@ export type GatewayServerOptions = {
    */
   tailscale?: import("../config/config.js").GatewayTailscaleConfig;
   /**
+   * When true, only load channel plugins that are configured and enabled in
+   * the config file.  Reduces memory on constrained hosts.
+   */
+  lightweight?: boolean;
+  /**
    * Test-only: allow canvas host startup even when NODE_ENV/VITEST would disable it.
    */
   allowCanvasHostInTests?: boolean;
@@ -568,6 +573,7 @@ export async function startGatewayServer(
       coreGatewayHandlers,
       baseMethods,
       preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
+      lightweight: opts.lightweight,
     }));
   }
   const channelLogs = Object.fromEntries(
@@ -1191,6 +1197,7 @@ export async function startGatewayServer(
         coreGatewayHandlers,
         baseMethods,
         logDiagnostics: false,
+        lightweight: opts.lightweight,
       }));
     }
     ({ browserControl, pluginServices } = await startGatewaySidecars({
