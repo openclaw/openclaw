@@ -132,7 +132,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         await retryTelegramPreConnectSend({
           operationLabel: "error fallback send",
           log: runtime.log,
-          abortSignal: opts.fetchAbortSignal,
           deliver: () =>
             bot.api.sendMessage(
               context.chatId,

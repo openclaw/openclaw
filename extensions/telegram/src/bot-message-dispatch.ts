@@ -870,7 +870,6 @@ export const dispatchTelegramMessage = async ({
       replies: [{ text: fallbackText }],
       ...deliveryBaseOptions,
       silent: silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip),
-      abortSignal: opts.fetchAbortSignal,
     });
     sentFallback = result.delivered;
   }
