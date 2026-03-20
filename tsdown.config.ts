@@ -186,6 +186,8 @@ const coreDistEntries = buildCoreDistEntries();
 function buildUnifiedDistEntries(): Record<string, string> {
   return {
     ...coreDistEntries,
+    // Internal compat artifact for the root-alias.cjs lazy loader.
+    "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     ...Object.fromEntries(
       Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
         `plugin-sdk/${entry}`,
