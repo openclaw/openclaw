@@ -173,13 +173,31 @@ static const gchar* discover_canonical_unit_name(void) {
          * 5. Otherwise, deterministically select the first lexical candidate.
          */
         gchar *env_override = NULL;
-        const gchar *env_unit = g_getenv("OPENCLAW_SYSTEMD_UNIT");
-        const gchar *env_profile = g_getenv("OPENCLAW_PROFILE");
+        const gchar *raw_unit = g_getenv("OPENCLAW_SYSTEMD_UNIT");
+        const gchar *raw_profile = g_getenv("OPENCLAW_PROFILE");
         
-        if (env_unit) {
-            env_override = g_strdup(env_unit);
-        } else if (env_profile) {
-            env_override = g_strdup_printf("openclaw-gateway-%s.service", env_profile);
+        if (raw_unit) {
+            gchar *trimmed = g_strstrip(g_strdup(raw_unit));
+            if (strlen(trimmed) > 0) {
+                if (g_str_has_suffix(trimmed, ".service")) {
+                    env_override = trimmed;
+                } else {
+                    env_override = g_strdup_printf("%s.service", trimmed);
+                    g_free(trimmed);
+                }
+            } else {
+                g_free(trimmed);
+            }
+        }
+        
+        if (!env_override && raw_profile) {
+            gchar *trimmed = g_strstrip(g_strdup(raw_profile));
+            if (strlen(trimmed) == 0 || g_strcmp0(trimmed, "default") == 0) {
+                env_override = g_strdup("openclaw-gateway.service");
+            } else {
+                env_override = g_strdup_printf("openclaw-gateway-%s.service", trimmed);
+            }
+            g_free(trimmed);
         }
         
         if (env_override) {

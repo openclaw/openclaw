@@ -305,6 +305,12 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
 void health_probe_gateway(void) {
     if (state_get_health()->in_flight) return;
     
+    // Gate periodic probes on an installed supported user service
+    AppState st = state_get_current();
+    if (st == STATE_NOT_INSTALLED || st == STATE_SYSTEM_UNSUPPORTED) {
+        return;
+    }
+    
     g_autoptr(GError) error = NULL;
     
     GSubprocess *subprocess = spawn_gateway_subprocess("status", &error);
@@ -399,6 +405,12 @@ static void on_deep_probe_finished(GObject *source_object, GAsyncResult *res, gp
 
 void health_run_deep_probe(void) {
     if (state_get_probe()->in_flight) return;
+
+    // Gate periodic probes on an installed supported user service
+    AppState st = state_get_current();
+    if (st == STATE_NOT_INSTALLED || st == STATE_SYSTEM_UNSUPPORTED) {
+        return;
+    }
 
     g_autoptr(GError) error = NULL;
     
