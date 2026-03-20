@@ -199,9 +199,11 @@ export function createSlackPluginBase(params: {
               "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",
             ]
         ).concat([
-          "- Slack uses mrkdwn (not Markdown). Use *bold* (not **bold**), _italic_ (not *italic*), and ~strikethrough~ (not ~~strikethrough~~).",
-          "- Slack does not support headings (#). Use *bold* text instead.",
-          "- Slack links use `<url|display text>` syntax (not `[display text](url)`).",
+          "",
+          "### Slack Formatting",
+          "Use standard Markdown formatting (e.g., **bold**, *italic*, ~~strikethrough~~, `code`).",
+          "Do not use Slack mrkdwn syntax directly — OpenClaw converts Markdown to Slack-compatible formatting automatically.",
+          "In particular, do not use single *asterisks* for bold; use double **asterisks**.",
         ]),
     },
     streaming: {

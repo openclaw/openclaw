@@ -358,11 +358,10 @@ describe("slackPlugin agentPrompt", () => {
       "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",
     );
     expect(hints).toContain(
-      "- Slack uses mrkdwn (not Markdown). Use *bold* (not **bold**), _italic_ (not *italic*), and ~strikethrough~ (not ~~strikethrough~~).",
+      "Use standard Markdown formatting (e.g., **bold**, *italic*, ~~strikethrough~~, `code`).",
     );
-    expect(hints).toContain("- Slack does not support headings (#). Use *bold* text instead.");
     expect(hints).toContain(
-      "- Slack links use `<url|display text>` syntax (not `[display text](url)`).",
+      "In particular, do not use single *asterisks* for bold; use double **asterisks**.",
     );
   });
 
@@ -386,7 +385,7 @@ describe("slackPlugin agentPrompt", () => {
       "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
     );
     expect(hints).toContain(
-      "- Slack uses mrkdwn (not Markdown). Use *bold* (not **bold**), _italic_ (not *italic*), and ~strikethrough~ (not ~~strikethrough~~).",
+      "Use standard Markdown formatting (e.g., **bold**, *italic*, ~~strikethrough~~, `code`).",
     );
   });
 });
