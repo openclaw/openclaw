@@ -48,6 +48,11 @@ export type HostExecEnvSanitizationResult = {
   rejectedOverrideInvalidKeys: string[];
 };
 
+export type HostExecEnvOverrideDiagnostics = {
+  rejectedOverrideBlockedKeys: string[];
+  rejectedOverrideInvalidKeys: string[];
+};
+
 export function normalizeEnvVarKey(
   rawKey: string,
   options?: { portable?: boolean },
@@ -86,15 +91,16 @@ export function isDangerousHostEnvOverrideVarName(rawKey: string): boolean {
   return HOST_DANGEROUS_OVERRIDE_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
 }
 
-function listNormalizedPortableEnvEntries(
+function listNormalizedEnvEntries(
   source: Record<string, string | undefined>,
+  options?: { portable?: boolean },
 ): Array<[string, string]> {
   const entries: Array<[string, string]> = [];
   for (const [rawKey, value] of Object.entries(source)) {
     if (typeof value !== "string") {
       continue;
     }
-    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    const key = normalizeEnvVarKey(rawKey, options);
     if (!key) {
       continue;
     }
@@ -168,7 +174,7 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
   const baseEnv = params?.baseEnv ?? process.env;
 
   const merged: Record<string, string> = {};
-  for (const [key, value] of listNormalizedPortableEnvEntries(baseEnv)) {
+  for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
     if (isDangerousHostEnvVarName(key)) {
       continue;
     }
@@ -192,6 +198,17 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
   };
 }
 
+export function inspectHostExecEnvOverrides(params?: {
+  overrides?: Record<string, string> | null;
+  blockPathOverrides?: boolean;
+}): HostExecEnvOverrideDiagnostics {
+  const result = sanitizeHostEnvOverridesWithDiagnostics(params);
+  return {
+    rejectedOverrideBlockedKeys: result.rejectedOverrideBlockedKeys,
+    rejectedOverrideInvalidKeys: result.rejectedOverrideInvalidKeys,
+  };
+}
+
 export function sanitizeHostExecEnv(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
@@ -212,7 +229,7 @@ export function sanitizeSystemRunEnvOverrides(params?: {
     return overrides;
   }
   const filtered: Record<string, string> = {};
-  for (const [key, value] of listNormalizedPortableEnvEntries(overrides)) {
+  for (const [key, value] of listNormalizedEnvEntries(overrides, { portable: true })) {
     if (!HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS.has(key.toUpperCase())) {
       continue;
     }

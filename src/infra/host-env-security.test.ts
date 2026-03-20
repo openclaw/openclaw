@@ -192,7 +192,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
   });
 
-  it("drops non-string inherited values and non-portable inherited keys", () => {
+  it("drops non-string inherited values while preserving non-portable inherited keys", () => {
     const env = sanitizeHostExecEnv({
       baseEnv: {
         PATH: "/usr/bin:/bin",
@@ -200,6 +200,7 @@ describe("sanitizeHostExecEnv", () => {
         // oxlint-disable-next-line typescript/no-explicit-any
         BAD_NUMBER: 1 as any,
         "NOT-PORTABLE": "x",
+        "ProgramFiles(x86)": "C:\\Program Files (x86)",
       },
     });
 
@@ -207,6 +208,8 @@ describe("sanitizeHostExecEnv", () => {
       OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
       PATH: "/usr/bin:/bin",
       GOOD: "1",
+      "NOT-PORTABLE": "x",
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
     });
   });
 });

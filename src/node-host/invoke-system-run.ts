@@ -15,7 +15,7 @@ import {
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
-  sanitizeHostExecEnvWithDiagnostics,
+  inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
@@ -247,29 +247,23 @@ async function parseSystemRunPhase(
   const sessionKey = opts.params.sessionKey?.trim() || "node";
   const runId = opts.params.runId?.trim() || crypto.randomUUID();
   const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
-  const envOverrides = sanitizeSystemRunEnvOverrides({
+  const envOverrideDiagnostics = inspectHostExecEnvOverrides({
     overrides: opts.params.env ?? undefined,
-    shellWrapper: shellPayload !== null,
-  });
-  const envSanitizeResult = sanitizeHostExecEnvWithDiagnostics({
-    overrides: envOverrides,
     blockPathOverrides: true,
   });
   if (
-    envSanitizeResult.rejectedOverrideBlockedKeys.length > 0 ||
-    envSanitizeResult.rejectedOverrideInvalidKeys.length > 0
+    envOverrideDiagnostics.rejectedOverrideBlockedKeys.length > 0 ||
+    envOverrideDiagnostics.rejectedOverrideInvalidKeys.length > 0
   ) {
     const details: string[] = [];
-    if (envSanitizeResult.rejectedOverrideBlockedKeys.length > 0) {
+    if (envOverrideDiagnostics.rejectedOverrideBlockedKeys.length > 0) {
       details.push(
-        `blocked override keys: ${envSanitizeResult.rejectedOverrideBlockedKeys.join(", ")}`,
+        `blocked override keys: ${envOverrideDiagnostics.rejectedOverrideBlockedKeys.join(", ")}`,
       );
     }
-    if (envSanitizeResult.rejectedOverrideInvalidKeys.length > 0) {
+    if (envOverrideDiagnostics.rejectedOverrideInvalidKeys.length > 0) {
       details.push(
-        `invalid non-portable override keys: ${envSanitizeResult.rejectedOverrideInvalidKeys.join(
-          ", ",
-        )}`,
+        `invalid non-portable override keys: ${envOverrideDiagnostics.rejectedOverrideInvalidKeys.join(", ")}`,
       );
     }
     await opts.sendInvokeResult({
@@ -281,6 +275,10 @@ async function parseSystemRunPhase(
     });
     return null;
   }
+  const envOverrides = sanitizeSystemRunEnvOverrides({
+    overrides: opts.params.env ?? undefined,
+    shellWrapper: shellPayload !== null,
+  });
   return {
     argv: command.argv,
     shellPayload,
