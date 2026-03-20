@@ -217,6 +217,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
     },
   },
   directory: createChannelDirectoryAdapter({
+    self: async ({ cfg }) => {
+      const creds = resolveMSTeamsCredentials(cfg.channels?.msteams);
+      if (!creds) {
+        return null;
+      }
+      return { kind: "user" as const, id: creds.appId, name: creds.appId };
+    },
     listPeers: async ({ cfg, query, limit }) =>
       listDirectoryEntriesFromSources({
         kind: "user",
