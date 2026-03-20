@@ -908,12 +908,21 @@ export async function syncSkillsToWorkspace(params: {
   await serializeByKey(`syncSkills:${targetDir}`, async () => {
     const targetSkillsDir = path.join(targetDir, "skills");
 
-    const entries = loadWorkspaceSkillEntries(sourceDir, {
+    const rawEntries = loadSkillEntries(sourceDir, {
       config: params.config,
-      agentId: params.agentId,
       managedSkillsDir: params.managedSkillsDir,
       bundledSkillsDir: params.bundledSkillsDir,
     });
+    if (params.config?.skills?.policy && typeof params.config.skills.policy === "object") {
+      assertNoCanonicalSkillAliasCollisions(rawEntries);
+    }
+    const policy =
+      typeof params.agentId === "string" && params.agentId.trim().length > 0
+        ? resolveEffectiveSkillPolicy(params.config, params.agentId)
+        : undefined;
+    const entries = policy
+      ? rawEntries.filter((entry) => isSkillAllowedByPolicy(entry, policy))
+      : rawEntries;
 
     await fsp.rm(targetSkillsDir, { recursive: true, force: true });
     await fsp.mkdir(targetSkillsDir, { recursive: true });

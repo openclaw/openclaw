@@ -166,6 +166,38 @@ describe("buildWorkspaceSkillsPrompt", () => {
       false,
     );
   });
+  it("keeps policy-allowed skills during sync even when host eligibility would fail", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "container-only"),
+      name: "container-only",
+      description: "Container-only skill",
+      metadata: '{"openclaw":{"requires":{"bins":["definitely-not-present-openclaw-test-bin"]}}}',
+    });
+
+    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
+      syncSkillsToWorkspace({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        agentId: "ops",
+        config: {
+          agents: {
+            list: [{ id: "ops" }],
+          },
+          skills: {
+            policy: {
+              globalEnabled: ["container-only"],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(
+      await pathExists(path.join(targetWorkspace, "skills", "container-only", "SKILL.md")),
+    ).toBe(true);
+  });
   it.runIf(process.platform !== "win32")(
     "does not sync workspace skills that resolve outside the source workspace root",
     async () => {
