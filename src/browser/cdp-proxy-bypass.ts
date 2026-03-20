@@ -13,8 +13,20 @@ import { isLoopbackHost } from "../gateway/net.js";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 
 /** HTTP agent that never uses a proxy — for localhost CDP connections. */
-const directHttpAgent = new http.Agent();
-const directHttpsAgent = new https.Agent();
+const directHttpAgent = new http.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30000,
+  maxSockets: 50,
+  maxFreeSockets: 10,
+  timeout: 60000,
+});
+const directHttpsAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30000,
+  maxSockets: 50,
+  maxFreeSockets: 10,
+  timeout: 60000,
+});
 
 /**
  * Returns a plain (non-proxy) agent for WebSocket or HTTP connections

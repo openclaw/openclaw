@@ -26,7 +26,7 @@ const DEFAULT_RETRY_CONFIG = {
   attempts: 3,
   minDelayMs: 300,
   maxDelayMs: 30_000,
-  jitter: 0,
+  jitter: 0.2,
 };
 
 const asFiniteNumber = (value: unknown): number | undefined =>

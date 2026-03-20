@@ -32,9 +32,15 @@ function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
 }
 
 const BACKSPACE_CHAR = "\u0008";
-const mentionMatchRegexCompileCache = new Map<string, RegExp[]>();
-const mentionStripRegexCompileCache = new Map<string, RegExp[]>();
+// LRU cache implementation: Map stores the data, array tracks access order
+interface LRUCache<T> {
+  cache: Map<string, T>;
+  keys: string[];
+}
+const mentionMatchRegexCompileCache: LRUCache<RegExp[]> = { cache: new Map(), keys: [] };
+const mentionStripRegexCompileCache: LRUCache<RegExp[]> = { cache: new Map(), keys: [] };
 const MAX_MENTION_REGEX_COMPILE_CACHE_KEYS = 512;
+const LRU_EVICT_BATCH_SIZE = 128; // Number of entries to evict at once
 const mentionPatternWarningCache = new Set<string>();
 const MAX_MENTION_PATTERN_WARNING_KEYS = 512;
 const log = createSubsystemLogger("mentions");
@@ -74,15 +80,30 @@ function warnRejectedMentionPattern(
 }
 
 function cacheMentionRegexes(
-  cache: Map<string, RegExp[]>,
+  cache: LRUCache<RegExp[]>,
   cacheKey: string,
   regexes: RegExp[],
 ): RegExp[] {
-  cache.set(cacheKey, regexes);
-  if (cache.size > MAX_MENTION_REGEX_COMPILE_CACHE_KEYS) {
-    cache.clear();
-    cache.set(cacheKey, regexes);
+  // If key already exists, remove it from keys array (it will be re-added to end)
+  const existingIndex = cache.keys.indexOf(cacheKey);
+  if (existingIndex !== -1) {
+    cache.keys.splice(existingIndex, 1);
+  } else {
+    // New entry - check if we need to evict
+    if (cache.cache.size >= MAX_MENTION_REGEX_COMPILE_CACHE_KEYS) {
+      // Evict oldest entries (batch evict for efficiency)
+      const evictCount = Math.min(LRU_EVICT_BATCH_SIZE, cache.keys.length);
+      for (let i = 0; i < evictCount; i++) {
+        const evictKey = cache.keys.shift();
+        if (evictKey) {
+          cache.cache.delete(evictKey);
+        }
+      }
+    }
   }
+  // Add to end of keys array (most recently used)
+  cache.keys.push(cacheKey);
+  cache.cache.set(cacheKey, regexes);
   return [...regexes];
 }
 
@@ -121,7 +142,7 @@ function unicodeizePattern(pattern: string): string {
 function compileMentionPatternsCached(params: {
   patterns: string[];
   flags: string;
-  cache: Map<string, RegExp[]>;
+  cache: LRUCache<RegExp[]>;
   warnRejected: boolean;
 }): RegExp[] {
   if (params.patterns.length === 0) {
@@ -132,8 +153,14 @@ function compileMentionPatternsCached(params: {
   const processedPatterns = params.patterns.map(p => unicodeizePattern(p));
 
   const cacheKey = `${params.flags}\u001e${processedPatterns.join("\u001f")}`;
-  const cached = params.cache.get(cacheKey);
+  const cached = params.cache.cache.get(cacheKey);
   if (cached) {
+    // Update access order for LRU: move to end of keys array (most recently used)
+    const index = params.cache.keys.indexOf(cacheKey);
+    if (index !== -1) {
+      params.cache.keys.splice(index, 1);
+      params.cache.keys.push(cacheKey);
+    }
     return [...cached];
   }
 

@@ -23,6 +23,8 @@ export class DirectoryCache<T> {
   private readonly cache = new Map<string, CacheEntry<T>>();
   private lastConfigRef: OpenClawConfig | null = null;
   private readonly maxSize: number;
+  private lastPruneTime = 0;
+  private static readonly PRUNE_INTERVAL_MS = 1000;
 
   constructor(
     private readonly ttlMs: number,
@@ -79,6 +81,12 @@ export class DirectoryCache<T> {
     if (this.ttlMs <= 0) {
       return;
     }
+    // Throttle pruning to at most once per PRUNE_INTERVAL_MS
+    // This avoids O(n) overhead on every get/set operation
+    if (now - this.lastPruneTime < DirectoryCache.PRUNE_INTERVAL_MS) {
+      return;
+    }
+    this.lastPruneTime = now;
     for (const [cacheKey, entry] of this.cache.entries()) {
       if (now - entry.fetchedAt > this.ttlMs) {
         this.cache.delete(cacheKey);
