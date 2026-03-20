@@ -37,6 +37,7 @@ export type AcpServerOptions = {
   resetSession?: boolean;
   prefixCwd?: boolean;
   provenanceMode?: AcpProvenanceMode;
+  noDeviceIdentity?: boolean;
   sessionCreateRateLimit?: {
     maxRequests?: number;
     windowMs?: number;

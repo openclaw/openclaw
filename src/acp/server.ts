@@ -71,6 +71,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     clientDisplayName: "ACP",
     clientVersion: "acp",
     mode: GATEWAY_CLIENT_MODES.CLI,
+    deviceIdentity: opts.noDeviceIdentity ? null : undefined,
     onEvent: (evt) => {
       void agent?.handleGatewayEvent(evt);
     },
@@ -199,6 +200,10 @@ function parseArgs(args: string[]): AcpServerOptions {
       opts.verbose = true;
       continue;
     }
+    if (arg === "--no-device-identity") {
+      opts.noDeviceIdentity = true;
+      continue;
+    }
     if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -236,6 +241,7 @@ Options:
   --reset-session         Reset the session key before first use
   --no-prefix-cwd         Do not prefix prompts with the working directory
   --provenance <mode>     ACP provenance mode: off, meta, or meta+receipt
+  --no-device-identity    Skip device identity (use token-only auth)
   --verbose, -v           Verbose logging to stderr
   --help, -h              Show this help message
 `);
