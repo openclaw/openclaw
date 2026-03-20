@@ -63,14 +63,11 @@ describe("sandbox explain command", () => {
       };
 
       const logs: string[] = [];
-      await sandboxExplainCommand(
-        { json: true, session: "telegram:slash:200" },
-        {
-          log: (msg: string) => logs.push(msg),
-          error: (msg: string) => logs.push(msg),
-          exit: (_code: number) => {},
-        } as unknown as Parameters<typeof sandboxExplainCommand>[1],
-      );
+      await sandboxExplainCommand({ json: true, session: "telegram:slash:200" }, {
+        log: (msg: string) => logs.push(msg),
+        error: (msg: string) => logs.push(msg),
+        exit: (_code: number) => {},
+      } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
       const out = logs.join("");
       const parsed = JSON.parse(out);
@@ -96,14 +93,11 @@ describe("sandbox explain command", () => {
       };
 
       const logs: string[] = [];
-      await sandboxExplainCommand(
-        { json: true, session: "agent:main:telegram:slash:200" },
-        {
-          log: (msg: string) => logs.push(msg),
-          error: (msg: string) => logs.push(msg),
-          exit: (_code: number) => {},
-        } as unknown as Parameters<typeof sandboxExplainCommand>[1],
-      );
+      await sandboxExplainCommand({ json: true, session: "agent:main:telegram:slash:200" }, {
+        log: (msg: string) => logs.push(msg),
+        error: (msg: string) => logs.push(msg),
+        exit: (_code: number) => {},
+      } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
       const out = logs.join("");
       const parsed = JSON.parse(out);
