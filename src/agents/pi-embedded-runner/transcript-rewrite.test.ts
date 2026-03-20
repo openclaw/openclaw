@@ -95,6 +95,84 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       { type: "text", text: "[externalized file_123]" },
     ]);
   });
+
+  it("preserves active-branch labels after rewritten entries are re-appended", () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "read file",
+        timestamp: 1,
+      }),
+    );
+    sessionManager.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        timestamp: 2,
+      }),
+    );
+    const toolResultEntryId = sessionManager.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "x".repeat(8_000) }],
+        isError: false,
+        timestamp: 3,
+      }),
+    );
+    sessionManager.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "summarized" }],
+        timestamp: 4,
+      }),
+    );
+
+    const summaryEntry = sessionManager
+      .getBranch()
+      .find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "assistant" &&
+          Array.isArray(entry.message.content) &&
+          entry.message.content.some((part) => part.type === "text" && part.text === "summarized"),
+      );
+    expect(summaryEntry).toBeDefined();
+    sessionManager.appendLabelChange(summaryEntry!.id, "bookmark");
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: toolResultEntryId,
+          message: {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read",
+            content: [{ type: "text", text: "[externalized file_123]" }],
+            isError: false,
+            timestamp: 3,
+          },
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    const rewrittenSummaryEntry = sessionManager
+      .getBranch()
+      .find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "assistant" &&
+          Array.isArray(entry.message.content) &&
+          entry.message.content.some((part) => part.type === "text" && part.text === "summarized"),
+      );
+    expect(rewrittenSummaryEntry).toBeDefined();
+    expect(sessionManager.getLabel(rewrittenSummaryEntry!.id)).toBe("bookmark");
+    expect(sessionManager.getBranch().some((entry) => entry.type === "label")).toBe(true);
+  });
 });
 
 describe("rewriteTranscriptEntriesInSessionFile", () => {

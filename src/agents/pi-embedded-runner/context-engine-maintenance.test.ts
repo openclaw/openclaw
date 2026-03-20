@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const rewriteTranscriptEntriesInSessionManagerMock = vi.fn((_params?: unknown) => ({
+  changed: true,
+  bytesFreed: 77,
+  rewrittenEntries: 1,
+}));
 const rewriteTranscriptEntriesInSessionFileMock = vi.fn(async (_params?: unknown) => ({
   changed: true,
   bytesFreed: 123,
@@ -7,6 +12,8 @@ const rewriteTranscriptEntriesInSessionFileMock = vi.fn(async (_params?: unknown
 }));
 
 vi.mock("./transcript-rewrite.js", () => ({
+  rewriteTranscriptEntriesInSessionManager: (...args: unknown[]) =>
+    rewriteTranscriptEntriesInSessionManagerMock(...args),
   rewriteTranscriptEntriesInSessionFile: (...args: unknown[]) =>
     rewriteTranscriptEntriesInSessionFileMock(...args),
 }));
@@ -18,6 +25,7 @@ import {
 
 describe("buildContextEngineMaintenanceRuntimeContext", () => {
   beforeEach(() => {
+    rewriteTranscriptEntriesInSessionManagerMock.mockClear();
     rewriteTranscriptEntriesInSessionFileMock.mockClear();
   });
 
@@ -54,10 +62,42 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       },
     });
   });
+
+  it("reuses the active session manager when one is provided", async () => {
+    const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
+      typeof buildContextEngineMaintenanceRuntimeContext
+    >[0]["sessionManager"];
+    const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      sessionManager,
+    });
+
+    const result = await runtimeContext.rewriteTranscriptEntries?.({
+      replacements: [
+        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
+      ],
+    });
+
+    expect(result).toEqual({
+      changed: true,
+      bytesFreed: 77,
+      rewrittenEntries: 1,
+    });
+    expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
+      sessionManager,
+      replacements: [
+        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
+      ],
+    });
+    expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("runContextEngineMaintenance", () => {
   beforeEach(() => {
+    rewriteTranscriptEntriesInSessionManagerMock.mockClear();
     rewriteTranscriptEntriesInSessionFileMock.mockClear();
   });
 

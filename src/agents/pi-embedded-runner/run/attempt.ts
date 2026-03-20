@@ -2049,6 +2049,7 @@ export async function runEmbeddedAttempt(
             sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
             reason: "bootstrap",
+            sessionManager,
             runtimeContext: buildAfterTurnRuntimeContext({
               attempt: params,
               workspaceDir: effectiveWorkspace,
@@ -2991,6 +2992,7 @@ export async function runEmbeddedAttempt(
             workspaceDir: effectiveWorkspace,
             agentDir,
           });
+          let postTurnFinalizationSucceeded = true;
 
           if (typeof params.contextEngine.afterTurn === "function") {
             try {
@@ -3004,6 +3006,7 @@ export async function runEmbeddedAttempt(
                 runtimeContext: afterTurnRuntimeContext,
               });
             } catch (afterTurnErr) {
+              postTurnFinalizationSucceeded = false;
               log.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
             }
           } else {
@@ -3018,6 +3021,7 @@ export async function runEmbeddedAttempt(
                     messages: newMessages,
                   });
                 } catch (ingestErr) {
+                  postTurnFinalizationSucceeded = false;
                   log.warn(`context engine ingest failed: ${String(ingestErr)}`);
                 }
               } else {
@@ -3029,6 +3033,7 @@ export async function runEmbeddedAttempt(
                       message: msg,
                     });
                   } catch (ingestErr) {
+                    postTurnFinalizationSucceeded = false;
                     log.warn(`context engine ingest failed: ${String(ingestErr)}`);
                   }
                 }
@@ -3036,13 +3041,14 @@ export async function runEmbeddedAttempt(
             }
           }
 
-          if (!promptError && !aborted && !yieldAborted) {
+          if (!promptError && !aborted && !yieldAborted && postTurnFinalizationSucceeded) {
             await runContextEngineMaintenance({
               contextEngine: params.contextEngine,
               sessionId: sessionIdUsed,
               sessionKey: params.sessionKey,
               sessionFile: params.sessionFile,
               reason: "turn",
+              sessionManager,
               runtimeContext: afterTurnRuntimeContext,
             });
           }

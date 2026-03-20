@@ -15,54 +15,71 @@ function estimateMessageBytes(message: AgentMessage): number {
   return Buffer.byteLength(JSON.stringify(message), "utf8");
 }
 
-function appendBranchEntry(sessionManager: SessionManagerLike, entry: SessionBranchEntry): void {
+function remapEntryId(
+  entryId: string | null | undefined,
+  rewrittenEntryIds: ReadonlyMap<string, string>,
+): string | null {
+  if (!entryId) {
+    return null;
+  }
+  return rewrittenEntryIds.get(entryId) ?? entryId;
+}
+
+function appendBranchEntry(params: {
+  sessionManager: SessionManagerLike;
+  entry: SessionBranchEntry;
+  rewrittenEntryIds: ReadonlyMap<string, string>;
+}): string {
+  const { sessionManager, entry, rewrittenEntryIds } = params;
   if (entry.type === "message") {
-    sessionManager.appendMessage(
+    return sessionManager.appendMessage(
       entry.message as Parameters<typeof sessionManager.appendMessage>[0],
     );
-    return;
   }
   if (entry.type === "compaction") {
-    sessionManager.appendCompaction(
+    return sessionManager.appendCompaction(
       entry.summary,
       entry.firstKeptEntryId,
       entry.tokensBefore,
       entry.details,
       entry.fromHook,
     );
-    return;
   }
   if (entry.type === "thinking_level_change") {
-    sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
-    return;
+    return sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
   }
   if (entry.type === "model_change") {
-    sessionManager.appendModelChange(entry.provider, entry.modelId);
-    return;
+    return sessionManager.appendModelChange(entry.provider, entry.modelId);
   }
   if (entry.type === "custom") {
-    sessionManager.appendCustomEntry(entry.customType, entry.data);
-    return;
+    return sessionManager.appendCustomEntry(entry.customType, entry.data);
   }
   if (entry.type === "custom_message") {
-    sessionManager.appendCustomMessageEntry(
+    return sessionManager.appendCustomMessageEntry(
       entry.customType,
       entry.content,
       entry.display,
       entry.details,
     );
-    return;
   }
   if (entry.type === "session_info") {
     if (entry.name) {
-      sessionManager.appendSessionInfo(entry.name);
+      return sessionManager.appendSessionInfo(entry.name);
     }
-    return;
+    return sessionManager.appendSessionInfo("");
   }
-  if (entry.type === "branch_summary" || entry.type === "label") {
-    // These entries reference branch-specific ids and cannot be replayed safely.
-    return;
+  if (entry.type === "branch_summary") {
+    return sessionManager.branchWithSummary(
+      remapEntryId(entry.parentId, rewrittenEntryIds),
+      entry.summary,
+      entry.details,
+      entry.fromHook,
+    );
   }
+  return sessionManager.appendLabelChange(
+    remapEntryId(entry.targetId, rewrittenEntryIds) ?? entry.targetId,
+    entry.label,
+  );
 }
 
 /**
@@ -124,8 +141,11 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     };
   }
 
-  const firstMatchedEntry = branch[matchedIndices[0]];
-  if (!firstMatchedEntry || firstMatchedEntry.type !== "message") {
+  const firstMatchedEntry = branch[matchedIndices[0]] as
+    | Extract<SessionBranchEntry, { type: "message" }>
+    | undefined;
+  // matchedIndices only contains indices of branch "message" entries.
+  if (!firstMatchedEntry) {
     return {
       changed: false,
       bytesFreed: 0,
@@ -140,20 +160,21 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     params.sessionManager.branch(firstMatchedEntry.parentId);
   }
 
+  const rewrittenEntryIds = new Map<string, string>();
   for (let index = matchedIndices[0]; index < branch.length; index++) {
     const entry = branch[index];
-    if (entry.type !== "message") {
-      appendBranchEntry(params.sessionManager, entry);
-      continue;
-    }
-    const replacement = replacementsById.get(entry.id);
-    if (replacement) {
-      params.sessionManager.appendMessage(
-        replacement as Parameters<typeof params.sessionManager.appendMessage>[0],
-      );
-      continue;
-    }
-    appendBranchEntry(params.sessionManager, entry);
+    const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
+    const newEntryId =
+      replacement === undefined
+        ? appendBranchEntry({
+            sessionManager: params.sessionManager,
+            entry,
+            rewrittenEntryIds,
+          })
+        : params.sessionManager.appendMessage(
+            replacement as Parameters<typeof params.sessionManager.appendMessage>[0],
+          );
+    rewrittenEntryIds.set(entry.id, newEntryId);
   }
 
   return {

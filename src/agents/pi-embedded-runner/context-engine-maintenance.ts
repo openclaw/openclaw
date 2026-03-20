@@ -4,7 +4,10 @@ import type {
   ContextEngineRuntimeContext,
 } from "../../context-engine/types.js";
 import { log } from "./logger.js";
-import { rewriteTranscriptEntriesInSessionFile } from "./transcript-rewrite.js";
+import {
+  rewriteTranscriptEntriesInSessionFile,
+  rewriteTranscriptEntriesInSessionManager,
+} from "./transcript-rewrite.js";
 
 /**
  * Attach runtime-owned transcript rewrite helpers to an existing
@@ -14,17 +17,25 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionId: string;
   sessionKey?: string;
   sessionFile: string;
+  sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
 }): ContextEngineRuntimeContext {
   return {
     ...params.runtimeContext,
-    rewriteTranscriptEntries: async (request) =>
-      await rewriteTranscriptEntriesInSessionFile({
+    rewriteTranscriptEntries: async (request) => {
+      if (params.sessionManager) {
+        return rewriteTranscriptEntriesInSessionManager({
+          sessionManager: params.sessionManager,
+          replacements: request.replacements,
+        });
+      }
+      return await rewriteTranscriptEntriesInSessionFile({
         sessionFile: params.sessionFile,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         request,
-      }),
+      });
+    },
   };
 }
 
@@ -37,6 +48,7 @@ export async function runContextEngineMaintenance(params: {
   sessionKey?: string;
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
+  sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine?.maintain !== "function") {
@@ -52,6 +64,7 @@ export async function runContextEngineMaintenance(params: {
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         sessionFile: params.sessionFile,
+        sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
       }),
     });
